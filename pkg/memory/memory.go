@@ -2,8 +2,8 @@ package memory
 
 import (
 	"fmt"
-	"io/ioutil"
-	"path/filepath"
+
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 const (
@@ -35,11 +35,19 @@ type Memory struct {
 	PagingEnabled bool
 	// ScreenPage is the RAM page currently used for the display (5 or 7).
 	ScreenPage int
+
+	// ROM manager for handling multiple ROM types
+	romManager *roms.ROMManager
+	// Current Spectrum model
+	currentModel roms.SpectrumModel
 }
 
 // New creates a new Memory instance for a given machine model.
-func New(romPath string, is128k bool) (*Memory, error) {
-	m := &Memory{}
+func New(romPath string, model roms.SpectrumModel) (*Memory, error) {
+	m := &Memory{
+		romManager:   roms.NewROMManager(romPath),
+		currentModel: model,
+	}
 
 	// Initialize RAM pages
 	for i := 0; i < 8; i++ {
@@ -51,55 +59,166 @@ func New(romPath string, is128k bool) (*Memory, error) {
 		m.rom[i] = make([]byte, PageSize)
 	}
 
-	// Load ROMs
-	if err := m.loadROMs(romPath); err != nil {
-		return nil, err
+	// Load ROMs for the specified model
+	if err := m.romManager.LoadROMsForModel(model); err != nil {
+		return nil, fmt.Errorf("failed to load ROMs for model %s: %w", roms.GetModelName(model), err)
 	}
 
-	if is128k {
-		m.SetModel128K()
-	} else {
-		m.SetModel48K()
+	// Load peripheral ROMs (optional)
+	m.romManager.LoadPeripheralROMs()
+
+	// Set up memory mapping for the model
+	if err := m.setupModel(model); err != nil {
+		return nil, err
 	}
 
 	return m, nil
 }
 
-func (m *Memory) loadROMs(romPath string) error {
-	var err error
-	m.rom[0], err = ioutil.ReadFile(filepath.Join(romPath, "128-0.rom"))
-	if err != nil {
-		return fmt.Errorf("failed to load 128-0.rom: %w", err)
+// NewLegacy creates a Memory instance with the legacy interface for compatibility
+func NewLegacy(romPath string, is128k bool) (*Memory, error) {
+	model := roms.Model48K
+	if is128k {
+		model = roms.Model128K
 	}
-	m.rom[1], err = ioutil.ReadFile(filepath.Join(romPath, "128-1.rom"))
-	if err != nil {
-		return fmt.Errorf("failed to load 128-1.rom: %w", err)
+	return New(romPath, model)
+}
+
+// setupModel configures memory layout and loads ROMs for the specified model
+func (m *Memory) setupModel(model roms.SpectrumModel) error {
+	switch model {
+	case roms.Model48K:
+		return m.setup48K()
+	case roms.Model128K:
+		return m.setup128K()
+	case roms.ModelPlus2:
+		return m.setupPlus2()
+	case roms.ModelPlus2A:
+		return m.setupPlus2A()
+	case roms.ModelPlus3:
+		return m.setupPlus3()
+	default:
+		return fmt.Errorf("unsupported model: %d", model)
 	}
-	m.rom[2], err = ioutil.ReadFile(filepath.Join(romPath, "48.rom"))
-	if err != nil {
-		return fmt.Errorf("failed to load 48.rom: %w", err)
+}
+
+// setup48K configures memory for 48K model
+func (m *Memory) setup48K() error {
+	if rom, exists := m.romManager.GetROM(roms.ROM48K); exists {
+		copy(m.rom[0], rom)
+	} else {
+		return fmt.Errorf("48K ROM not found")
 	}
-	// Placeholder for Pentagon ROM if needed later
-	// m.rom[3], err = ioutil.ReadFile(filepath.Join(romPath, "pentagon-0.rom"))
+	
+	// 48K memory layout
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}  // ROM 0, RAM 5, RAM 2, RAM 0
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM not writable
+	m.PagingEnabled = false
+	m.ScreenPage = 5
 	return nil
 }
 
-// SetModel48K configures memory for the 48K Spectrum.
-func (m *Memory) SetModel48K() {
-	// ROM is in the first 16K
-	m.memoryPageReadMap = [4]int{18, 5, 2, 0} // ROM 2 (48.rom), RAM 5, RAM 2, RAM 0
-	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM is not writable
-	m.PagingEnabled = false
-	m.ScreenPage = 5
-}
-
-// SetModel128K configures memory for the 128K Spectrum.
-func (m *Memory) SetModel128K() {
-	// Default to ROM 0 in the first 16K
-	m.memoryPageReadMap = [4]int{16, 5, 2, 0} // ROM 0 (128-0.rom), RAM 5, RAM 2, RAM 0
-	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM is not writable
+// setup128K configures memory for 128K model
+func (m *Memory) setup128K() error {
+	if rom, exists := m.romManager.GetROM(roms.ROM128K_0); exists {
+		copy(m.rom[0], rom)
+	} else {
+		return fmt.Errorf("128K ROM 0 not found")
+	}
+	
+	if rom, exists := m.romManager.GetROM(roms.ROM128K_1); exists {
+		copy(m.rom[1], rom)
+	} else {
+		return fmt.Errorf("128K ROM 1 not found")
+	}
+	
+	// 128K memory layout
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}  // ROM 0, RAM 5, RAM 2, RAM 0
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM not writable
 	m.PagingEnabled = true
 	m.ScreenPage = 5
+	return nil
+}
+
+// setupPlus2 configures memory for +2 model
+func (m *Memory) setupPlus2() error {
+	if rom, exists := m.romManager.GetROM(roms.ROMPLUS2_0); exists {
+		copy(m.rom[0], rom)
+	} else {
+		return fmt.Errorf("+2 ROM 0 not found")
+	}
+	
+	if rom, exists := m.romManager.GetROM(roms.ROMPLUS2_1); exists {
+		copy(m.rom[1], rom)
+	} else {
+		return fmt.Errorf("+2 ROM 1 not found")
+	}
+	
+	// +2 memory layout (similar to 128K)
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0}
+	m.PagingEnabled = true
+	m.ScreenPage = 5
+	return nil
+}
+
+// setupPlus2A configures memory for +2A model
+func (m *Memory) setupPlus2A() error {
+	for i := 0; i < 4; i++ {
+		romType := roms.ROMType(int(roms.ROMPLUS2A_0) + i)
+		if rom, exists := m.romManager.GetROM(romType); exists {
+			copy(m.rom[i], rom)
+		} else {
+			return fmt.Errorf("+2A ROM %d not found", i)
+		}
+	}
+	
+	// +2A memory layout
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0}
+	m.PagingEnabled = true
+	m.ScreenPage = 5
+	return nil
+}
+
+// setupPlus3 configures memory for +3 model  
+func (m *Memory) setupPlus3() error {
+	for i := 0; i < 4; i++ {
+		romType := roms.ROMType(int(roms.ROMPLUS3_0) + i)
+		if rom, exists := m.romManager.GetROM(romType); exists {
+			copy(m.rom[i], rom)
+		} else {
+			return fmt.Errorf("+3 ROM %d not found", i)
+		}
+	}
+	
+	// +3 memory layout
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0}
+	m.PagingEnabled = true
+	m.ScreenPage = 5
+	return nil
+}
+
+// GetCurrentModel returns the current Spectrum model
+func (m *Memory) GetCurrentModel() roms.SpectrumModel {
+	return m.currentModel
+}
+
+// GetROMManager returns the ROM manager
+func (m *Memory) GetROMManager() *roms.ROMManager {
+	return m.romManager
+}
+
+// SwitchModel changes the current Spectrum model and reconfigures memory
+func (m *Memory) SwitchModel(model roms.SpectrumModel) error {
+	// Load ROMs for the new model if not already loaded
+	if err := m.romManager.LoadROMsForModel(model); err != nil {
+		return fmt.Errorf("failed to load ROMs for model %s: %w", roms.GetModelName(model), err)
+	}
+	
+	m.currentModel = model
+	return m.setupModel(model)
 }
 
 // Read returns the byte at the given address.
