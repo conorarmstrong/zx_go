@@ -24,6 +24,7 @@ const (
 	ROMPLUS3_1
 	ROMPLUS3_2
 	ROMPLUS3_3
+	ROMMULTIFACE1
 	ROMMULTIFACE128
 	ROMMULTIFACE3
 	ROMDISCIPLE
@@ -142,8 +143,9 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 // LoadPeripheralROMs loads ROMs for peripheral devices
 func (rm *ROMManager) LoadPeripheralROMs() error {
 	peripheralROMs := map[ROMType]string{
-		ROMMULTIFACE128: "multiface128.rom",
-		ROMMULTIFACE3:   "multiface3.rom",
+		ROMMULTIFACE1:   "mf1_official.rom",
+		ROMMULTIFACE128: "mf128_official.rom",
+		ROMMULTIFACE3:   "mf3_official.rom",
 		ROMDISCIPLE:     "gdos.rom",
 		ROMTRDOS:        "trdos.rom",
 		ROMPENTAGON:     "pentagon.rom",
@@ -226,6 +228,8 @@ func GetROMTypeName(romType ROMType) string {
 		return "+3 ROM 2"
 	case ROMPLUS3_3:
 		return "+3 ROM 3"
+	case ROMMULTIFACE1:
+		return "Multiface 1"
 	case ROMMULTIFACE128:
 		return "Multiface 128"
 	case ROMMULTIFACE3:

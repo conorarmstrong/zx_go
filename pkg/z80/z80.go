@@ -1255,6 +1255,11 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		}
 		c.tstates += 12
 
+	// Output instructions
+	case 0x79: // OUT (C), A
+		c.ula.WritePort(c.bc(), c.A)
+		c.tstates += 12
+
 	// Return from interrupt
 	case 0x4D: // RETI
 		c.PC = c.pop()
@@ -1276,6 +1281,21 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 	case 0x21: // LD IX,nn
 		c.IX = c.fetch16()
 		c.tstates += 14
+	case 0x22: // LD (nn),IX
+		addr := c.fetch16()
+		c.mem.Write(addr, byte(c.IX))
+		c.mem.Write(addr+1, byte(c.IX>>8))
+		c.tstates += 20
+	case 0x2A: // LD IX,(nn)
+		addr := c.fetch16()
+		c.IX = uint16(c.mem.Read(addr)) | (uint16(c.mem.Read(addr+1)) << 8)
+		c.tstates += 20
+	case 0x36: // LD (IX+d),n
+		d := int8(c.fetch())
+		n := c.fetch()
+		addr := uint16(int32(c.IX) + int32(d))
+		c.mem.Write(addr, n)
+		c.tstates += 19
 	case 0x09: // ADD IX,BC
 		result := uint32(c.IX) + uint32(c.bc())
 		c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_PV)) // Preserve S, Z, PV
@@ -1960,4 +1980,21 @@ func (c *CPU) interrupt() {
 		c.PC = uint16(high)<<8 | uint16(low)
 		c.tstates += 19
 	}
+}
+
+// NMI (Non-Maskable Interrupt) handling - for Multiface red button
+func (c *CPU) NMI() {
+	// NMI cannot be disabled and always executes
+	
+	// Copy IFF1 to IFF2 and disable IFF1
+	c.IFF2 = c.IFF1
+	c.IFF1 = false
+	
+	// Exit halt state if in it
+	c.Halted = false
+	
+	// NMI always jumps to 0x0066
+	c.push(c.PC)
+	c.PC = 0x0066
+	c.tstates += 11
 }

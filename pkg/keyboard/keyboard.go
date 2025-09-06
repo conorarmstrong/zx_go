@@ -1,12 +1,19 @@
 package keyboard
 
-import "fyne.io/fyne/v2"
+import (
+	"fyne.io/fyne/v2"
+	"log"
+)
 
 // Keyboard handles keyboard input by mapping modern keys to the Spectrum's 8x5 matrix.
 type Keyboard struct {
 	// Matrix state: 8 rows, 5 bits per row. A bit is 0 when a key is pressed.
 	matrix [8]byte
 	keyMap map[fyne.KeyName][]keyMapping
+	
+	// Special key states
+	breakPressed bool
+	nmiCallback  func() // Callback for NMI (Multiface red button simulation)
 }
 
 type keyMapping struct {
@@ -25,6 +32,28 @@ func New() *Keyboard {
 
 // HandleKeyEvent processes a Fyne key event.
 func (k *Keyboard) HandleKeyEvent(ev *fyne.KeyEvent, isPressed bool) {
+	// Handle special keys first
+	switch ev.Name {
+	case fyne.KeyF11: // F11 = BREAK (CAPS SHIFT + SPACE)
+		k.breakPressed = isPressed
+		if isPressed {
+			k.matrix[0] &= ^byte(0x01) // CAPS SHIFT
+			k.matrix[7] &= ^byte(0x01) // SPACE
+		} else {
+			k.matrix[0] |= byte(0x01) // CAPS SHIFT
+			k.matrix[7] |= byte(0x01) // SPACE
+		}
+		log.Printf("BREAK key %s", map[bool]string{true: "pressed", false: "released"}[isPressed])
+		return
+		
+	case fyne.KeyF12: // F12 = NMI (Multiface red button)
+		if isPressed && k.nmiCallback != nil {
+			log.Println("NMI triggered (Multiface red button)")
+			k.nmiCallback()
+		}
+		return
+	}
+	
 	if mappings, ok := k.keyMap[ev.Name]; ok {
 		for _, m := range mappings {
 			if isPressed {
@@ -33,6 +62,9 @@ func (k *Keyboard) HandleKeyEvent(ev *fyne.KeyEvent, isPressed bool) {
 				k.matrix[m.row] |= m.mask
 			}
 		}
+	} else {
+		// Log unmapped keys for debugging
+		log.Printf("Unmapped key: %s", ev.Name)
 	}
 }
 
@@ -55,11 +87,11 @@ func (k *Keyboard) Scan(addr uint16) byte {
 func (k *Keyboard) initKeyMap() {
 	k.keyMap = map[fyne.KeyName][]keyMapping{
 		// Row 0: CAPS SHIFT, Z, X, C, V
-		"ShiftLeft":  {{0, 0x01}},
-		fyne.KeyZ:          {{0, 0x02}},
-		fyne.KeyX:          {{0, 0x04}},
-		fyne.KeyC:          {{0, 0x08}},
-		fyne.KeyV:          {{0, 0x10}},
+		"LeftShift": {{0, 0x01}}, // CAPS SHIFT
+		fyne.KeyZ:   {{0, 0x02}},
+		fyne.KeyX:   {{0, 0x04}},
+		fyne.KeyC:   {{0, 0x08}},
+		fyne.KeyV:   {{0, 0x10}},
 
 		// Row 1: A, S, D, F, G
 		fyne.KeyA: {{1, 0x01}},
@@ -105,16 +137,71 @@ func (k *Keyboard) initKeyMap() {
 		fyne.KeyH:      {{6, 0x10}},
 
 		// Row 7: SPACE, SYMBOL SHIFT, M, N, B
-		fyne.KeySpace:      {{7, 0x01}},
-		"ShiftRight": {{7, 0x02}}, // Symbol Shift
-		fyne.KeyM:          {{7, 0x04}},
-		fyne.KeyN:          {{7, 0x08}},
-		fyne.KeyB:          {{7, 0x10}},
+		fyne.KeySpace: {{7, 0x01}},
+		"RightShift":  {{7, 0x02}}, // Symbol Shift
+		fyne.KeyM:     {{7, 0x04}},
+		fyne.KeyN:     {{7, 0x08}},
+		fyne.KeyB:     {{7, 0x10}},
 
-		// Arrow keys as 5,6,7,8 with CAPS SHIFT
-		fyne.KeyLeft:  {{3, 0x10}, {0, 0x01}}, // 5
-		fyne.KeyDown:  {{4, 0x10}, {0, 0x01}}, // 6
-		fyne.KeyUp:    {{4, 0x08}, {0, 0x01}}, // 7
-		fyne.KeyRight: {{4, 0x04}, {0, 0x01}}, // 8
+		// Arrow keys as 5,6,7,8 with CAPS SHIFT  
+		fyne.KeyLeft:  {{3, 0x10}, {0, 0x01}}, // 5 + CAPS SHIFT
+		fyne.KeyDown:  {{4, 0x10}, {0, 0x01}}, // 6 + CAPS SHIFT
+		fyne.KeyUp:    {{4, 0x08}, {0, 0x01}}, // 7 + CAPS SHIFT
+		fyne.KeyRight: {{4, 0x04}, {0, 0x01}}, // 8 + CAPS SHIFT
+		
+		// Mac-specific key mappings (using string keys for compatibility)
+		"LeftCommand":  {{0, 0x01}}, // Map Cmd to CAPS SHIFT
+		"RightCommand": {{7, 0x02}}, // Map Cmd to Symbol Shift
+		"LeftControl":  {{0, 0x01}}, // Map Ctrl to CAPS SHIFT
+		"RightControl": {{7, 0x02}}, // Map Ctrl to Symbol Shift
+		"LeftAlt":      {{7, 0x02}}, // Map Alt to Symbol Shift
+		"RightAlt":     {{7, 0x02}}, // Map Alt to Symbol Shift
+		
+		// Additional useful keys
+		fyne.KeyTab:    {{0, 0x01}, {7, 0x01}}, // CAPS SHIFT + SPACE (BREAK)
+		fyne.KeyEscape: {{0, 0x01}, {7, 0x01}}, // CAPS SHIFT + SPACE (BREAK)
+	}
+}
+
+// SetNMICallback sets the callback function for NMI (Non-Maskable Interrupt)
+// This is used for Multiface red button simulation
+func (k *Keyboard) SetNMICallback(callback func()) {
+	k.nmiCallback = callback
+}
+
+// IsBreakPressed returns whether the BREAK key is currently pressed
+func (k *Keyboard) IsBreakPressed() bool {
+	return k.breakPressed
+}
+
+// GetKeyStatus returns a human-readable status of special keys
+func (k *Keyboard) GetKeyStatus() string {
+	status := ""
+	if k.breakPressed {
+		status += "BREAK "
+	}
+	
+	// Check if CAPS SHIFT is pressed (any key in row 0, bit 0)
+	if (k.matrix[0] & 0x01) == 0 {
+		status += "CAPS_SHIFT "
+	}
+	
+	// Check if Symbol Shift is pressed (row 7, bit 1)
+	if (k.matrix[7] & 0x02) == 0 {
+		status += "SYMBOL_SHIFT "
+	}
+	
+	if status == "" {
+		status = "None"
+	}
+	
+	return status
+}
+
+// SimulateNMI manually triggers an NMI (for testing or programmatic use)
+func (k *Keyboard) SimulateNMI() {
+	if k.nmiCallback != nil {
+		log.Println("NMI triggered programmatically")
+		k.nmiCallback()
 	}
 }

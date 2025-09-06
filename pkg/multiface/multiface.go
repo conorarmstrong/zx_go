@@ -73,12 +73,14 @@ func NewMultiface(variant MultifaceType, romPath string, memory *memory.Memory) 
 	
 	// Set ROM filename based on variant
 	switch variant {
+	case Multiface1:
+		mf.romFile = "mf1_official.rom"
 	case Multiface128:
-		mf.romFile = "multiface128.rom"
+		mf.romFile = "mf128_official.rom"
 	case Multiface3:
-		mf.romFile = "multiface3.rom"
+		mf.romFile = "mf3_official.rom"
 	default:
-		mf.romFile = "multiface1.rom"
+		mf.romFile = "mf1_official.rom"
 	}
 	
 	// Load ROM
