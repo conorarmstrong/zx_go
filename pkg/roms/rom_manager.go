@@ -111,9 +111,17 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 		return fmt.Errorf("failed to load ROM %s: %w", filename, err)
 	}
 	
-	// Ensure ROM is exactly 16KB
-	if len(data) != 16384 {
-		return fmt.Errorf("ROM %s has invalid size: %d bytes (expected 16384)", filename, len(data))
+	// Determine expected size based on ROM type
+	var expectedSize int
+	switch romType {
+	case ROMMULTIFACE1, ROMMULTIFACE128, ROMMULTIFACE3, ROMDISCIPLE:
+		expectedSize = 8192 // 8KB for peripherals
+	default:
+		expectedSize = 16384 // 16KB for system ROMs
+	}
+	
+	if len(data) != expectedSize {
+		return fmt.Errorf("ROM %s has invalid size: %d bytes (expected %d)", filename, len(data), expectedSize)
 	}
 	
 	rm.roms[romType] = data

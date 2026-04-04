@@ -1133,6 +1133,16 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		c.E = c.mem.Read(addr)
 		c.D = c.mem.Read(addr + 1)
 		c.tstates += 20
+	case 0x63: // LD (nn),HL
+		addr := c.fetch16()
+		c.mem.Write(addr, c.L)
+		c.mem.Write(addr+1, c.H)
+		c.tstates += 20
+	case 0x6B: // LD HL,(nn)
+		addr := c.fetch16()
+		c.L = c.mem.Read(addr)
+		c.H = c.mem.Read(addr + 1)
+		c.tstates += 20
 
 	// ALU operations with carry/borrow
 	case 0x42: // SBC HL,BC
@@ -1143,6 +1153,18 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		c.tstates += 15
 	case 0x62: // SBC HL,HL
 		c.sbc16(c.hl(), c.hl())
+		c.tstates += 15
+	case 0x4A: // ADC HL,BC
+		c.adc16(c.hl(), c.bc())
+		c.tstates += 15
+	case 0x5A: // ADC HL,DE
+		c.adc16(c.hl(), c.de())
+		c.tstates += 15
+	case 0x6A: // ADC HL,HL
+		c.adc16(c.hl(), c.hl())
+		c.tstates += 15
+	case 0x7A: // ADC HL,SP
+		c.adc16(c.hl(), c.SP)
 		c.tstates += 15
 	case 0x72: // SBC HL,SP
 		c.sbc16(c.hl(), c.SP)
@@ -1172,6 +1194,57 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 	case 0xA8: // LDD - Load and decrement
 		c.ldd()
 		c.tstates += 16
+	case 0xA1: // CPI - Compare and increment
+		c.cpi()
+		c.tstates += 16
+	case 0xA9: // CPD - Compare and decrement
+		c.cpd()
+		c.tstates += 16
+	case 0xB1: // CPIR - Compare, increment and repeat
+		c.cpir()
+		c.tstates += 16
+	case 0xB9: // CPDR - Compare, decrement and repeat
+		c.cpdr()
+		c.tstates += 16
+	case 0xA3: // OUTI - Output and increment
+		c.outi()
+		c.tstates += 16
+	case 0xAB: // OUTD - Output and decrement
+		c.outd()
+		c.tstates += 16
+	case 0xB3: // OTIR - Output, increment and repeat
+		c.otir()
+		c.tstates += 16
+	case 0xBB: // OTDR - Output, decrement and repeat
+		c.otdr()
+		c.tstates += 16
+	case 0x67: // RRD - Rotate right decimal
+		c.rrd()
+		c.tstates += 18
+	case 0x6F: // RLD - Rotate left decimal
+		c.rld()
+		c.tstates += 18
+
+	// NOP instructions (undocumented but present in hardware)
+	case 0x4C, 0x54, 0x5C, 0x64, 0x6C, 0x74, 0x7C: // NOPs
+		c.tstates += 8
+
+	// Arithmetic operations
+	case 0x44: // NEG - Negate accumulator (two's complement)
+		c.F = 0
+		if c.A == 0x80 {
+			c.F |= FLAG_PV // Overflow if A was 0x80
+		}
+		if c.A != 0x00 {
+			c.F |= FLAG_C // Carry if A was not zero
+		}
+		c.A = -c.A // Two's complement negation
+		c.F |= c.sz53Table[c.A]
+		if (c.A & 0x0F) != 0 {
+			c.F |= FLAG_H // Half-carry if there's a borrow from bit 4
+		}
+		c.F |= FLAG_N // Subtraction flag is always set for NEG
+		c.tstates += 8
 
 	// Interrupt mode and register operations
 	case 0x47: // LD I,A
@@ -1256,6 +1329,27 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		c.tstates += 12
 
 	// Output instructions
+	case 0x41: // OUT (C), B
+		c.ula.WritePort(c.bc(), c.B)
+		c.tstates += 12
+	case 0x49: // OUT (C), C
+		c.ula.WritePort(c.bc(), c.C)
+		c.tstates += 12
+	case 0x51: // OUT (C), D
+		c.ula.WritePort(c.bc(), c.D)
+		c.tstates += 12
+	case 0x59: // OUT (C), E
+		c.ula.WritePort(c.bc(), c.E)
+		c.tstates += 12
+	case 0x61: // OUT (C), H
+		c.ula.WritePort(c.bc(), c.H)
+		c.tstates += 12
+	case 0x69: // OUT (C), L
+		c.ula.WritePort(c.bc(), c.L)
+		c.tstates += 12
+	case 0x71: // OUT (C), 0 - outputs zero
+		c.ula.WritePort(c.bc(), 0)
+		c.tstates += 12
 	case 0x79: // OUT (C), A
 		c.ula.WritePort(c.bc(), c.A)
 		c.tstates += 12
@@ -1278,6 +1372,17 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 
 func (c *CPU) executeDDInstruction(opcode byte) {
 	switch opcode {
+	// ADD IX,rr instructions
+	case 0x09: // ADD IX,BC
+		c.addIX(c.bc())
+	case 0x19: // ADD IX,DE  
+		c.addIX(c.de())
+	case 0x29: // ADD IX,IX
+		c.addIX(c.IX)
+	case 0x39: // ADD IX,SP
+		c.addIX(c.SP)
+		
+	// LD IX,nn / LD (nn),IX / LD IX,(nn)
 	case 0x21: // LD IX,nn
 		c.IX = c.fetch16()
 		c.tstates += 14
@@ -1290,35 +1395,274 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		addr := c.fetch16()
 		c.IX = uint16(c.mem.Read(addr)) | (uint16(c.mem.Read(addr+1)) << 8)
 		c.tstates += 20
+		
+	// INC/DEC IX
+	case 0x23: // INC IX
+		c.IX++
+		c.tstates += 10
+	case 0x2B: // DEC IX
+		c.IX--
+		c.tstates += 10
+		
+	// INC/DEC (IX+d)
+	case 0x34: // INC (IX+d)
+		d := int8(c.fetch())
+		addr := uint16(int32(c.IX) + int32(d))
+		val := c.inc(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 23
+	case 0x35: // DEC (IX+d)
+		d := int8(c.fetch())
+		addr := uint16(int32(c.IX) + int32(d))
+		val := c.dec(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 23
+		
+	// LD (IX+d),n
 	case 0x36: // LD (IX+d),n
 		d := int8(c.fetch())
 		n := c.fetch()
 		addr := uint16(int32(c.IX) + int32(d))
 		c.mem.Write(addr, n)
 		c.tstates += 19
-	case 0x09: // ADD IX,BC
-		result := uint32(c.IX) + uint32(c.bc())
-		c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_PV)) // Preserve S, Z, PV
-		if result > 0xFFFF {
-			c.F |= FLAG_C
-		}
-		if ((c.IX & 0x0FFF) + (c.bc() & 0x0FFF)) > 0x0FFF {
-			c.F |= FLAG_H
-		}
-		c.IX = uint16(result)
-		c.F |= byte(c.IX>>8) & (FLAG_F3 | FLAG_F5) // Set undocumented flags
+		
+	// LD r,(IX+d) instructions - Load from (IX+d) to register
+	case 0x46: // LD B,(IX+d)
+		c.B = c.loadIXd()
+	case 0x4E: // LD C,(IX+d)
+		c.C = c.loadIXd()
+	case 0x56: // LD D,(IX+d)
+		c.D = c.loadIXd()
+	case 0x5E: // LD E,(IX+d)
+		c.E = c.loadIXd()
+	case 0x66: // LD H,(IX+d)
+		c.H = c.loadIXd()
+	case 0x6E: // LD L,(IX+d)
+		c.L = c.loadIXd()
+	case 0x7E: // LD A,(IX+d)
+		c.A = c.loadIXd()
+		
+	// LD (IX+d),r instructions - Store register to (IX+d)
+	case 0x70: // LD (IX+d),B
+		c.storeIXd(c.B)
+	case 0x71: // LD (IX+d),C
+		c.storeIXd(c.C)
+	case 0x72: // LD (IX+d),D
+		c.storeIXd(c.D)
+	case 0x73: // LD (IX+d),E
+		c.storeIXd(c.E)
+	case 0x74: // LD (IX+d),H
+		c.storeIXd(c.H)
+	case 0x75: // LD (IX+d),L
+		c.storeIXd(c.L)
+	case 0x77: // LD (IX+d),A
+		c.storeIXd(c.A)
+		
+	// Arithmetic/Logic operations with (IX+d)
+	case 0x86: // ADD A,(IX+d)
+		c.add(c.loadIXd())
+		c.tstates += 4 // loadIXd already adds 15, need 4 more for total 19
+	case 0x8E: // ADC A,(IX+d)
+		c.adc(c.loadIXd())
+		c.tstates += 4
+	case 0x96: // SUB (IX+d)
+		c.sub(c.loadIXd())
+		c.tstates += 4
+	case 0x9E: // SBC A,(IX+d)
+		c.sbc(c.loadIXd())
+		c.tstates += 4
+	case 0xA6: // AND (IX+d)
+		c.and(c.loadIXd())
+		c.tstates += 4
+	case 0xAE: // XOR (IX+d)
+		c.xor(c.loadIXd())
+		c.tstates += 4
+	case 0xB6: // OR (IX+d)
+		c.or(c.loadIXd())
+		c.tstates += 4
+	case 0xBE: // CP (IX+d)
+		c.cp(c.loadIXd())
+		c.tstates += 4
+		
+	// Stack operations
+	case 0xE1: // POP IX
+		c.IX = c.pop()
+		c.tstates += 14
+	case 0xE5: // PUSH IX
+		c.push(c.IX)
 		c.tstates += 15
+		
+	// Jump
 	case 0xE9: // JP (IX)
 		c.PC = c.IX
 		c.tstates += 8
+		
+	// Exchange
+	case 0xE3: // EX (SP),IX
+		temp := c.IX
+		c.IX = uint16(c.mem.Read(c.SP)) | (uint16(c.mem.Read(c.SP+1)) << 8)
+		c.mem.Write(c.SP, byte(temp))
+		c.mem.Write(c.SP+1, byte(temp>>8))
+		c.tstates += 23
+		
+	// DD CB prefix (IX bit operations)
+	case 0xCB: // DD CB prefix
+		d := int8(c.fetch()) // Displacement comes first
+		opcode := c.fetch()  // Then the CB opcode
+		addr := uint16(int32(c.IX) + int32(d))
+		c.executeDDCBInstruction(opcode, addr)
+		c.tstates += 8 // Base timing, individual instructions add more
+		
 	default:
 		fmt.Printf("DD instruction not implemented: 0x%02X\n", opcode)
 		c.tstates += 8
 	}
 }
 
+// Helper functions for IX operations
+func (c *CPU) addIX(value uint16) {
+	result := uint32(c.IX) + uint32(value)
+	c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_PV)) // Preserve S, Z, PV
+	if result > 0xFFFF {
+		c.F |= FLAG_C
+	}
+	if ((c.IX & 0x0FFF) + (value & 0x0FFF)) > 0x0FFF {
+		c.F |= FLAG_H
+	}
+	c.IX = uint16(result)
+	c.F |= byte(c.IX>>8) & (FLAG_F3 | FLAG_F5) // Set undocumented flags
+	c.tstates += 15
+}
+
+func (c *CPU) loadIXd() byte {
+	d := int8(c.fetch())
+	addr := uint16(int32(c.IX) + int32(d))
+	c.tstates += 15 // Base timing for IX+d operations
+	return c.mem.Read(addr)
+}
+
+func (c *CPU) storeIXd(value byte) {
+	d := int8(c.fetch())
+	addr := uint16(int32(c.IX) + int32(d))
+	c.mem.Write(addr, value)
+	c.tstates += 19
+}
+
+// Helper functions for IY operations
+func (c *CPU) addIY(value uint16) {
+	result := uint32(c.IY) + uint32(value)
+	c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_PV)) // Preserve S, Z, PV
+	if result > 0xFFFF {
+		c.F |= FLAG_C
+	}
+	if ((c.IY & 0x0FFF) + (value & 0x0FFF)) > 0x0FFF {
+		c.F |= FLAG_H
+	}
+	c.IY = uint16(result)
+	c.F |= byte(c.IY>>8) & (FLAG_F3 | FLAG_F5) // Set undocumented flags
+	c.tstates += 15
+}
+
+func (c *CPU) loadIYd() byte {
+	d := int8(c.fetch())
+	addr := uint16(int32(c.IY) + int32(d))
+	c.tstates += 15 // Base timing for IY+d operations
+	return c.mem.Read(addr)
+}
+
+func (c *CPU) storeIYd(value byte) {
+	d := int8(c.fetch())
+	addr := uint16(int32(c.IY) + int32(d))
+	c.mem.Write(addr, value)
+	c.tstates += 19
+}
+
+// executeDDCBInstruction handles DD CB prefixed instructions (IX bit operations)
+func (c *CPU) executeDDCBInstruction(opcode byte, addr uint16) {
+	switch opcode {
+	// Rotate left circular
+	case 0x06: // RLC (IX+d)
+		val := c.rlc(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Rotate right circular
+	case 0x0E: // RRC (IX+d)
+		val := c.rrc(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Rotate left through carry
+	case 0x16: // RL (IX+d)
+		val := c.rl(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Rotate right through carry
+	case 0x1E: // RR (IX+d)
+		val := c.rr(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Shift left arithmetic
+	case 0x26: // SLA (IX+d)
+		val := c.sla(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Shift right arithmetic
+	case 0x2E: // SRA (IX+d)
+		val := c.sra(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Shift left logical (same as SLA)
+	case 0x36: // SLL (IX+d) - undocumented
+		val := c.sla(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Shift right logical
+	case 0x3E: // SRL (IX+d)
+		val := c.srl(c.mem.Read(addr))
+		c.mem.Write(addr, val)
+		c.tstates += 15
+	// Bit test instructions
+	default:
+		if opcode >= 0x40 && opcode <= 0x7F { // BIT n,(IX+d)
+			bit := (opcode - 0x40) / 8
+			val := c.mem.Read(addr)
+			c.F = (c.F & FLAG_C) | FLAG_H | (val & (FLAG_F3 | FLAG_F5))
+			if (val & (1 << bit)) == 0 {
+				c.F |= FLAG_Z | FLAG_PV
+			}
+			if bit == 7 && (val&0x80) != 0 {
+				c.F |= FLAG_S
+			}
+			c.tstates += 12
+		} else if opcode >= 0x80 && opcode <= 0xBF { // RES n,(IX+d)
+			bit := (opcode - 0x80) / 8
+			val := c.mem.Read(addr) & ^(1 << bit)
+			c.mem.Write(addr, val)
+			c.tstates += 15
+		} else if opcode >= 0xC0 && opcode <= 0xFF { // SET n,(IX+d)
+			bit := (opcode - 0xC0) / 8
+			val := c.mem.Read(addr) | (1 << bit)
+			c.mem.Write(addr, val)
+			c.tstates += 15
+		} else {
+			fmt.Printf("DD CB instruction not implemented: 0x%02X\n", opcode)
+			c.tstates += 15
+		}
+	}
+}
+
 func (c *CPU) executeFDInstruction(opcode byte) {
 	switch opcode {
+	// ADD IY,rr instructions
+	case 0x09: // ADD IY,BC
+		c.addIY(c.bc())
+	case 0x19: // ADD IY,DE  
+		c.addIY(c.de())
+	case 0x29: // ADD IY,IY
+		c.addIY(c.IY)
+	case 0x39: // ADD IY,SP
+		c.addIY(c.SP)
+		
+	// LD IY,nn / LD (nn),IY / LD IY,(nn)
 	case 0x21: // LD IY,nn
 		c.IY = c.fetch16()
 		c.tstates += 14
@@ -1331,12 +1675,16 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		addr := c.fetch16()
 		c.IY = uint16(c.mem.Read(addr)) | (uint16(c.mem.Read(addr+1)) << 8)
 		c.tstates += 20
+		
+	// INC/DEC IY
 	case 0x23: // INC IY
 		c.IY++
 		c.tstates += 10
 	case 0x2B: // DEC IY
 		c.IY--
 		c.tstates += 10
+		
+	// INC/DEC (IY+d)
 	case 0x34: // INC (IY+d)
 		d := int8(c.fetch())
 		addr := uint16(int32(c.IY) + int32(d))
@@ -1349,139 +1697,105 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		val := c.dec(c.mem.Read(addr))
 		c.mem.Write(addr, val)
 		c.tstates += 23
+		
+	// LD (IY+d),n
 	case 0x36: // LD (IY+d),n
 		d := int8(c.fetch())
 		n := c.fetch()
 		addr := uint16(int32(c.IY) + int32(d))
 		c.mem.Write(addr, n)
 		c.tstates += 19
+		
+	// LD r,(IY+d) instructions - Load from (IY+d) to register
 	case 0x46: // LD B,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.B = c.mem.Read(addr)
-		c.tstates += 19
+		c.B = c.loadIYd()
 	case 0x4E: // LD C,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.C = c.mem.Read(addr)
-		c.tstates += 19
+		c.C = c.loadIYd()
 	case 0x56: // LD D,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.D = c.mem.Read(addr)
-		c.tstates += 19
+		c.D = c.loadIYd()
 	case 0x5E: // LD E,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.E = c.mem.Read(addr)
-		c.tstates += 19
+		c.E = c.loadIYd()
 	case 0x66: // LD H,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.H = c.mem.Read(addr)
-		c.tstates += 19
+		c.H = c.loadIYd()
 	case 0x6E: // LD L,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.L = c.mem.Read(addr)
-		c.tstates += 19
-	case 0x70: // LD (IY+d),B
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.B)
-		c.tstates += 19
-	case 0x71: // LD (IY+d),C
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.C)
-		c.tstates += 19
-	case 0x72: // LD (IY+d),D
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.D)
-		c.tstates += 19
-	case 0x73: // LD (IY+d),E
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.E)
-		c.tstates += 19
-	case 0x74: // LD (IY+d),H
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.H)
-		c.tstates += 19
-	case 0x75: // LD (IY+d),L
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.L)
-		c.tstates += 19
-	case 0x77: // LD (IY+d),A
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.mem.Write(addr, c.A)
-		c.tstates += 19
+		c.L = c.loadIYd()
 	case 0x7E: // LD A,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.A = c.mem.Read(addr)
-		c.tstates += 19
+		c.A = c.loadIYd()
+		
+	// LD (IY+d),r instructions - Store register to (IY+d)
+	case 0x70: // LD (IY+d),B
+		c.storeIYd(c.B)
+	case 0x71: // LD (IY+d),C
+		c.storeIYd(c.C)
+	case 0x72: // LD (IY+d),D
+		c.storeIYd(c.D)
+	case 0x73: // LD (IY+d),E
+		c.storeIYd(c.E)
+	case 0x74: // LD (IY+d),H
+		c.storeIYd(c.H)
+	case 0x75: // LD (IY+d),L
+		c.storeIYd(c.L)
+	case 0x77: // LD (IY+d),A
+		c.storeIYd(c.A)
+		
+	// Arithmetic/Logic operations with (IY+d)
 	case 0x86: // ADD A,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.add(c.mem.Read(addr))
-		c.tstates += 19
+		c.add(c.loadIYd())
+		c.tstates += 4 // loadIYd already adds 15, need 4 more for total 19
 	case 0x8E: // ADC A,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.adc(c.mem.Read(addr))
-		c.tstates += 19
-	case 0x96: // SUB (IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.sub(c.mem.Read(addr))
-		c.tstates += 19
-	case 0x9E: // SBC A,(IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.sbc(c.mem.Read(addr))
-		c.tstates += 19
-	case 0xA6: // AND (IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.and(c.mem.Read(addr))
-		c.tstates += 19
-	case 0xAE: // XOR (IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.xor(c.mem.Read(addr))
-		c.tstates += 19
-	case 0xB6: // OR (IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.or(c.mem.Read(addr))
-		c.tstates += 19
-	case 0xBE: // CP (IY+d)
-		d := int8(c.fetch())
-		addr := uint16(int32(c.IY) + int32(d))
-		c.cp(c.mem.Read(addr))
-		c.tstates += 19
-	case 0xCB: // FD CB prefix (IY bit operations)
-		d := int8(c.fetch())
-		opcode2 := c.fetch()
-		c.executeFDCBInstruction(opcode2, d)
+		c.adc(c.loadIYd())
 		c.tstates += 4
+	case 0x96: // SUB (IY+d)
+		c.sub(c.loadIYd())
+		c.tstates += 4
+	case 0x9E: // SBC A,(IY+d)
+		c.sbc(c.loadIYd())
+		c.tstates += 4
+	case 0xA6: // AND (IY+d)
+		c.and(c.loadIYd())
+		c.tstates += 4
+	case 0xAE: // XOR (IY+d)
+		c.xor(c.loadIYd())
+		c.tstates += 4
+	case 0xB6: // OR (IY+d)
+		c.or(c.loadIYd())
+		c.tstates += 4
+	case 0xBE: // CP (IY+d)
+		c.cp(c.loadIYd())
+		c.tstates += 4
+		
+	// Stack operations
 	case 0xE1: // POP IY
 		c.IY = c.pop()
 		c.tstates += 14
 	case 0xE5: // PUSH IY
 		c.push(c.IY)
 		c.tstates += 15
+		
+	// Jump
 	case 0xE9: // JP (IY)
 		c.PC = c.IY
 		c.tstates += 8
+		
+	// Exchange
+	case 0xE3: // EX (SP),IY
+		temp := c.IY
+		c.IY = uint16(c.mem.Read(c.SP)) | (uint16(c.mem.Read(c.SP+1)) << 8)
+		c.mem.Write(c.SP, byte(temp))
+		c.mem.Write(c.SP+1, byte(temp>>8))
+		c.tstates += 23
+		
+	// Special
 	case 0xF9: // LD SP,IY
 		c.SP = c.IY
 		c.tstates += 10
+		
+	// FD CB prefix (IY bit operations)
+	case 0xCB: // FD CB prefix
+		d := int8(c.fetch()) // Displacement comes first
+		opcode := c.fetch()  // Then the CB opcode
+		c.executeFDCBInstruction(opcode, d)
+		c.tstates += 8 // Base timing, individual instructions add more
 	default:
 		fmt.Printf("FD instruction not implemented: 0x%02X\n", opcode)
 		c.tstates += 8
@@ -1894,6 +2208,33 @@ func (c *CPU) sbc16(hl, value uint16) {
 	c.setHL(uint16(result))
 }
 
+func (c *CPU) adc16(hl, value uint16) {
+	var result uint32 = uint32(hl) + uint32(value)
+	if (c.F & FLAG_C) != 0 {
+		result++
+	}
+	
+	c.F = 0
+	if (result & 0x10000) != 0 {
+		c.F |= FLAG_C
+	}
+	if ((hl ^ value ^ uint16(result)) & 0x1000) != 0 {
+		c.F |= FLAG_H
+	}
+	if ^(hl ^ value) & (hl ^ uint16(result)) & 0x8000 != 0 {
+		c.F |= FLAG_PV
+	}
+	if (result & 0x8000) != 0 {
+		c.F |= FLAG_S
+	}
+	if uint16(result) == 0 {
+		c.F |= FLAG_Z
+	}
+	c.F |= byte(result) & (FLAG_F5 | FLAG_F3)
+	
+	c.setHL(uint16(result))
+}
+
 // Block load operations
 func (c *CPU) ldi() {
 	// Load and increment
@@ -1945,6 +2286,175 @@ func (c *CPU) lddr() {
 		c.PC -= 2 // Repeat the instruction
 		c.tstates += 5 // Extra cycles for repeat
 	}
+}
+
+// Block search operations
+func (c *CPU) cpi() {
+	// Compare and increment
+	val := c.mem.Read(c.hl())
+	result := c.A - val
+	
+	c.setHL(c.hl() + 1)
+	c.setBC(c.bc() - 1)
+	
+	c.F = (c.F & FLAG_C) | FLAG_N
+	if result == 0 {
+		c.F |= FLAG_Z
+	}
+	if (result & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	if c.bc() != 0 {
+		c.F |= FLAG_PV
+	}
+	if ((c.A ^ val ^ result) & 0x10) != 0 {
+		c.F |= FLAG_H
+	}
+	
+	// F3 and F5 flags are set from (A - (HL) - H flag)
+	temp := result
+	if (c.F & FLAG_H) != 0 {
+		temp--
+	}
+	c.F |= temp & FLAG_F3
+	c.F |= ((temp << 4) & FLAG_F5)
+}
+
+func (c *CPU) cpd() {
+	// Compare and decrement
+	val := c.mem.Read(c.hl())
+	result := c.A - val
+	
+	c.setHL(c.hl() - 1)
+	c.setBC(c.bc() - 1)
+	
+	c.F = (c.F & FLAG_C) | FLAG_N
+	if result == 0 {
+		c.F |= FLAG_Z
+	}
+	if (result & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	if c.bc() != 0 {
+		c.F |= FLAG_PV
+	}
+	if ((c.A ^ val ^ result) & 0x10) != 0 {
+		c.F |= FLAG_H
+	}
+	
+	// F3 and F5 flags are set from (A - (HL) - H flag)
+	temp := result
+	if (c.F & FLAG_H) != 0 {
+		temp--
+	}
+	c.F |= temp & FLAG_F3
+	c.F |= ((temp << 4) & FLAG_F5)
+}
+
+func (c *CPU) cpir() {
+	// Compare, increment and repeat
+	c.cpi()
+	if c.bc() != 0 && (c.F & FLAG_Z) == 0 {
+		c.PC -= 2 // Repeat the instruction
+		c.tstates += 5 // Extra cycles for repeat
+	}
+}
+
+func (c *CPU) cpdr() {
+	// Compare, decrement and repeat
+	c.cpd()
+	if c.bc() != 0 && (c.F & FLAG_Z) == 0 {
+		c.PC -= 2 // Repeat the instruction
+		c.tstates += 5 // Extra cycles for repeat
+	}
+}
+
+// Block output operations
+func (c *CPU) outi() {
+	// Output and increment
+	val := c.mem.Read(c.hl())
+	c.ula.WritePort(c.bc(), val)
+	c.setHL(c.hl() + 1)
+	c.B--
+	
+	c.F = 0
+	if c.B == 0 {
+		c.F |= FLAG_Z
+	}
+	if (c.B & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	c.F |= FLAG_N
+	
+	// Complex flag calculation for block I/O
+	temp := val + c.L
+	if temp > 255 {
+		c.F |= FLAG_H | FLAG_C
+	}
+	c.F |= c.parityTable[(temp & 7) ^ c.B]
+}
+
+func (c *CPU) outd() {
+	// Output and decrement
+	val := c.mem.Read(c.hl())
+	c.ula.WritePort(c.bc(), val)
+	c.setHL(c.hl() - 1)
+	c.B--
+	
+	c.F = 0
+	if c.B == 0 {
+		c.F |= FLAG_Z
+	}
+	if (c.B & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	c.F |= FLAG_N
+	
+	// Complex flag calculation for block I/O
+	temp := val + c.L
+	if temp > 255 {
+		c.F |= FLAG_H | FLAG_C
+	}
+	c.F |= c.parityTable[(temp & 7) ^ c.B]
+}
+
+func (c *CPU) otir() {
+	// Output, increment and repeat
+	c.outi()
+	if c.B != 0 {
+		c.PC -= 2 // Repeat the instruction
+		c.tstates += 5 // Extra cycles for repeat
+	}
+}
+
+func (c *CPU) otdr() {
+	// Output, decrement and repeat
+	c.outd()
+	if c.B != 0 {
+		c.PC -= 2 // Repeat the instruction
+		c.tstates += 5 // Extra cycles for repeat
+	}
+}
+
+// Rotate decimal operations
+func (c *CPU) rrd() {
+	// Rotate right decimal
+	val := c.mem.Read(c.hl())
+	temp := c.A
+	c.A = (c.A & 0xF0) | (val & 0x0F)
+	c.mem.Write(c.hl(), (val >> 4) | (temp << 4))
+	
+	c.F = (c.F & FLAG_C) | c.sz53Table[c.A] | c.parityTable[c.A]
+}
+
+func (c *CPU) rld() {
+	// Rotate left decimal
+	val := c.mem.Read(c.hl())
+	temp := c.A
+	c.A = (c.A & 0xF0) | (val >> 4)
+	c.mem.Write(c.hl(), (val << 4) | (temp & 0x0F))
+	
+	c.F = (c.F & FLAG_C) | c.sz53Table[c.A] | c.parityTable[c.A]
 }
 
 // Interrupt handling

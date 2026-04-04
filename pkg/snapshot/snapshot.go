@@ -1,23 +1,128 @@
 package snapshot
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// SnapshotFormat represents different snapshot file formats
+type SnapshotFormat int
+
+const (
+	FormatSNA SnapshotFormat = iota
+	FormatZ80
+	FormatSZX
+	FormatUnknown
+)
+
+// CPUState represents the Z80 CPU state in a snapshot
+type CPUState struct {
+	// 8-bit registers
+	A, F, B, C, D, E, H, L byte
+	// Shadow registers
+	A_, F_, B_, C_, D_, E_, H_, L_ byte
+	// 16-bit registers
+	IX, IY, SP, PC uint16
+	// Special registers
+	I, R byte
+	// Interrupt state
+	IFF1, IFF2 bool
+	IM         byte
+	// Border color
+	BorderColor byte
+}
+
+// MemoryState represents the memory contents
+type MemoryState struct {
+	RAM     [8][]byte // 8 banks of 16KB each
+	Is128K  bool
+	Port7FFD byte // 128K paging register
+}
+
 // Snapshot handles loading and saving of emulator snapshots.
 type Snapshot struct {
-	// TODO: Add snapshot data structure
+	CPU    CPUState
+	Memory MemoryState
+	Format SnapshotFormat
 }
 
 // New creates a new Snapshot instance.
 func New() *Snapshot {
-	return &Snapshot{}
+	s := &Snapshot{
+		Format: FormatUnknown,
+	}
+	// Initialize RAM banks
+	for i := 0; i < 8; i++ {
+		s.Memory.RAM[i] = make([]byte, 16384)
+	}
+	return s
+}
+
+// DetectFormat detects the snapshot format based on file extension and content
+func DetectFormat(path string) SnapshotFormat {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".sna":
+		return FormatSNA
+	case ".z80":
+		return FormatZ80
+	case ".szx":
+		return FormatSZX
+	default:
+		return FormatUnknown
+	}
 }
 
 // Load loads a snapshot from a file.
 func (s *Snapshot) Load(path string) error {
-	// TODO: Implement snapshot loading
-	return nil
+	format := DetectFormat(path)
+	if format == FormatUnknown {
+		return fmt.Errorf("unsupported snapshot format: %s", path)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open snapshot file: %w", err)
+	}
+	defer file.Close()
+
+	s.Format = format
+	
+	switch format {
+	case FormatSNA:
+		return s.loadSNA(file)
+	case FormatZ80:
+		return s.loadZ80(file)
+	case FormatSZX:
+		return s.loadSZX(file)
+	default:
+		return fmt.Errorf("unsupported format: %d", format)
+	}
 }
 
 // Save saves a snapshot to a file.
 func (s *Snapshot) Save(path string) error {
-	// TODO: Implement snapshot saving
-	return nil
+	format := DetectFormat(path)
+	if format == FormatUnknown {
+		return fmt.Errorf("unsupported snapshot format: %s", path)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot file: %w", err)
+	}
+	defer file.Close()
+
+	switch format {
+	case FormatSNA:
+		return s.saveSNA(file)
+	case FormatZ80:
+		return s.saveZ80(file)
+	case FormatSZX:
+		return s.saveSZX(file)
+	default:
+		return fmt.Errorf("unsupported format: %d", format)
+	}
 }

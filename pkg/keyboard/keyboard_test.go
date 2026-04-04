@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/desktop"
 )
 
 func TestKeyboardCreation(t *testing.T) {
@@ -119,7 +120,7 @@ func TestShiftKeys(t *testing.T) {
 	kbd := New()
 
 	// Test left shift (CAPS SHIFT)
-	leftShiftEv := &fyne.KeyEvent{Name: "ShiftLeft"}
+	leftShiftEv := &fyne.KeyEvent{Name: desktop.KeyShiftLeft}
 	kbd.HandleKeyEvent(leftShiftEv, true)
 
 	if (kbd.matrix[0] & 0x01) != 0 {
@@ -132,7 +133,7 @@ func TestShiftKeys(t *testing.T) {
 	}
 
 	// Test right shift (SYMBOL SHIFT)
-	rightShiftEv := &fyne.KeyEvent{Name: "ShiftRight"}
+	rightShiftEv := &fyne.KeyEvent{Name: desktop.KeyShiftRight}
 	kbd.HandleKeyEvent(rightShiftEv, true)
 
 	if (kbd.matrix[7] & 0x02) != 0 {
@@ -150,40 +151,58 @@ func TestMultiKeyMappings(t *testing.T) {
 
 	// Test arrow keys which map to multiple keys
 	testCases := []struct {
-		key         fyne.KeyName
-		expectedRows []struct{ row int; bit byte }
+		key          fyne.KeyName
+		expectedRows []struct {
+			row int
+			bit byte
+		}
 	}{
 		{
 			fyne.KeyLeft, // 5 + CAPS SHIFT
-			[]struct{ row int; bit byte }{
+			[]struct {
+				row int
+				bit byte
+			}{
 				{3, 0x10}, // 5
 				{0, 0x01}, // CAPS SHIFT
 			},
 		},
 		{
 			fyne.KeyDown, // 6 + CAPS SHIFT
-			[]struct{ row int; bit byte }{
+			[]struct {
+				row int
+				bit byte
+			}{
 				{4, 0x10}, // 6
 				{0, 0x01}, // CAPS SHIFT
 			},
 		},
 		{
 			fyne.KeyUp, // 7 + CAPS SHIFT
-			[]struct{ row int; bit byte }{
+			[]struct {
+				row int
+				bit byte
+			}{
 				{4, 0x08}, // 7
 				{0, 0x01}, // CAPS SHIFT
 			},
 		},
 		{
 			fyne.KeyRight, // 8 + CAPS SHIFT
-			[]struct{ row int; bit byte }{
+			[]struct {
+				row int
+				bit byte
+			}{
 				{4, 0x04}, // 8
 				{0, 0x01}, // CAPS SHIFT
 			},
 		},
 		{
 			fyne.KeyBackspace, // 0 + CAPS SHIFT
-			[]struct{ row int; bit byte }{
+			[]struct {
+				row int
+				bit byte
+			}{
 				{4, 0x01}, // 0
 				{0, 0x01}, // CAPS SHIFT
 			},
@@ -267,7 +286,7 @@ func TestKeyboardScanMultipleRows(t *testing.T) {
 	kbd := New()
 
 	// Press keys in different rows
-	aEv := &fyne.KeyEvent{Name: fyne.KeyA}      // Row 1, bit 0
+	aEv := &fyne.KeyEvent{Name: fyne.KeyA}         // Row 1, bit 0
 	spaceEv := &fyne.KeyEvent{Name: fyne.KeySpace} // Row 7, bit 0
 
 	kbd.HandleKeyEvent(aEv, true)
@@ -362,7 +381,7 @@ func TestKeyboardMatrix8x5Layout(t *testing.T) {
 func TestSpectrumKeyboardLayout(t *testing.T) {
 	// Test the complete Spectrum keyboard layout based on actual mapping
 	// Format: row -> {bit0, bit1, bit2, bit3, bit4}
-	spectrumLayout := map[int][]struct{
+	spectrumLayout := map[int][]struct {
 		key fyne.KeyName
 		bit byte
 	}{
@@ -373,7 +392,7 @@ func TestSpectrumKeyboardLayout(t *testing.T) {
 		4: {{fyne.Key0, 0x01}, {fyne.Key9, 0x02}, {fyne.Key8, 0x04}, {fyne.Key7, 0x08}, {fyne.Key6, 0x10}},
 		5: {{fyne.KeyP, 0x01}, {fyne.KeyO, 0x02}, {fyne.KeyI, 0x04}, {fyne.KeyU, 0x08}, {fyne.KeyY, 0x10}},
 		6: {{fyne.KeyL, 0x02}, {fyne.KeyK, 0x04}, {fyne.KeyJ, 0x08}, {fyne.KeyH, 0x10}}, // ENTER = 0x01
-		7: {{fyne.KeyM, 0x04}, {fyne.KeyN, 0x08}, {fyne.KeyB, 0x10}}, // SPACE = 0x01, SYMBOL SHIFT = 0x02
+		7: {{fyne.KeyM, 0x04}, {fyne.KeyN, 0x08}, {fyne.KeyB, 0x10}},                    // SPACE = 0x01, SYMBOL SHIFT = 0x02
 	}
 
 	kbd := New()

@@ -132,10 +132,10 @@ func (m *Memory) setup128K() error {
 		return fmt.Errorf("128K ROM 1 not found")
 	}
 	
-	// 128K memory layout
+	// 128K memory layout - paging must be enabled for 128K models
 	m.memoryPageReadMap = [4]int{16, 5, 2, 0}  // ROM 0, RAM 5, RAM 2, RAM 0
 	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM not writable
-	m.PagingEnabled = true
+	m.PagingEnabled = true   // 128K models have paging available
 	m.ScreenPage = 5
 	return nil
 }

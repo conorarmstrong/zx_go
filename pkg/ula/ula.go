@@ -3,15 +3,19 @@ package ula
 import (
 	"image"
 	"image/color"
+	"log"
 
+	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
 type ULA struct {
 	mem      *memory.Memory
 	kbd      *keyboard.Keyboard
+	audio    *audio.AudioSystem
 	img      *image.RGBA
 	palette  [16]color.RGBA
 	flash    bool
@@ -32,6 +36,24 @@ func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 		img: image.NewRGBA(image.Rect(0, 0, 320, 240)), // 256x192 screen + 32/24 border
 	}
 	u.initPalette()
+	
+	// Temporarily disable audio system to test if it's causing performance issues
+	log.Println("Audio system temporarily disabled for debugging")
+	u.audio = nil
+	
+	// Original audio initialization code (commented out):
+	// if audioSys, err := audio.New(); err == nil {
+	//     u.audio = audioSys
+	//     if err := u.audio.Start(); err != nil {
+	//         log.Printf("Warning: Failed to start audio system: %v", err)
+	//     } else {
+	//         log.Println("Audio system initialized and started successfully")
+	//     }
+	// } else {
+	//     log.Printf("Warning: Failed to initialize audio system: %v", err)
+	// }
+	// If audio initialization fails, we'll continue without sound
+	
 	return u
 }
 
@@ -138,6 +160,41 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 	if addr&0x01 == 0 { // Port 0xFE
 		u.BorderColour = val & 0x07
 		u.Mic = (val & 0x08) != 0
-		u.Speaker = (val & 0x10) != 0
+		
+		// Handle speaker state change
+		newSpeakerState := (val & 0x10) != 0
+		if newSpeakerState != u.Speaker {
+			u.Speaker = newSpeakerState
+			// Update audio system if available (but don't log every change)
+			if u.audio != nil {
+				u.audio.SetSpeakerState(newSpeakerState)
+			}
+		}
+	} else if addr == 0x7FFD { // Port 0x7FFD (128K memory paging)
+		// Only handle this on 128K+ models
+		if u.mem.GetCurrentModel() != roms.Model48K {
+			u.mem.PageMemory(val)
+		}
+	}
+}
+
+// Close properly shuts down the ULA and releases resources
+func (u *ULA) Close() {
+	if u.audio != nil {
+		u.audio.Close()
+	}
+}
+
+// Reset resets the ULA to initial state
+func (u *ULA) Reset() {
+	u.BorderColour = 0
+	u.Mic = false
+	u.TapeIn = false
+	u.Speaker = false
+	u.flash = false
+	u.flashCount = 0
+	
+	if u.audio != nil {
+		u.audio.Reset()
 	}
 }
