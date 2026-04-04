@@ -6,6 +6,7 @@ import (
 	"testing"
 	
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // Mock ULA for testing
@@ -68,7 +69,7 @@ func createTestCPU() (*CPU, *memory.Memory) {
 	testDir := "test_roms_z80"
 	createTestROMs(&testing.T{}, testDir)
 	
-	mem, err := memory.New(testDir, false)
+	mem, err := memory.New(testDir, roms.Model48K)
 	if err != nil {
 		panic(err)
 	}

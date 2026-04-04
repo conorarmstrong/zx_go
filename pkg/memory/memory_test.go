@@ -1,9 +1,11 @@
 package memory
 
 import (
-	"testing"
 	"os"
 	"path/filepath"
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // Helper to create test ROM files
@@ -48,7 +50,7 @@ func TestMemoryCreation(t *testing.T) {
 	defer cleanupTestROMs(testDir)
 	
 	// Test 48K memory creation
-	mem, err := New(testDir, false)
+	mem, err := New(testDir, roms.Model48K)
 	if err != nil {
 		t.Fatalf("Failed to create 48K memory: %v", err)
 	}
@@ -62,7 +64,7 @@ func TestMemoryCreation(t *testing.T) {
 	}
 	
 	// Test 128K memory creation
-	mem, err = New(testDir, true)
+	mem, err = New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create 128K memory: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestMemoryMapping48K(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, false)
+	mem, err := New(testDir, roms.Model48K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -116,7 +118,7 @@ func TestMemoryMapping128K(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, true)
+	mem, err := New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -141,7 +143,7 @@ func TestMemoryPaging128K(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, true)
+	mem, err := New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -181,7 +183,7 @@ func TestROMPaging128K(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, true)
+	mem, err := New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -215,7 +217,7 @@ func TestScreenPageSwitching(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, true)
+	mem, err := New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -243,7 +245,7 @@ func TestPagingDisable(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, true)
+	mem, err := New(testDir, roms.Model128K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -286,7 +288,7 @@ func TestGetPage(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, false)
+	mem, err := New(testDir, roms.Model48K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -313,7 +315,7 @@ func TestMemoryBoundaries(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, err := New(testDir, false)
+	mem, err := New(testDir, roms.Model48K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -345,7 +347,7 @@ func BenchmarkMemoryRead(b *testing.B) {
 	createTestROMs(&testing.T{}, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, _ := New(testDir, false)
+	mem, _ := New(testDir, roms.Model48K)
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -358,7 +360,7 @@ func BenchmarkMemoryWrite(b *testing.B) {
 	createTestROMs(&testing.T{}, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, _ := New(testDir, false)
+	mem, _ := New(testDir, roms.Model48K)
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -371,7 +373,7 @@ func BenchmarkMemoryPaging(b *testing.B) {
 	createTestROMs(&testing.T{}, testDir)
 	defer cleanupTestROMs(testDir)
 	
-	mem, _ := New(testDir, true)
+	mem, _ := New(testDir, roms.Model128K)
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

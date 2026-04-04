@@ -8,6 +8,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // Helper to create test ROMs
@@ -46,7 +47,7 @@ func TestULACreation(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, err := memory.New(testDir, false)
+	mem, err := memory.New(testDir, roms.Model48K)
 	if err != nil {
 		t.Fatalf("Failed to create memory: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestULAPalette(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -133,7 +134,7 @@ func TestULAPortReadWrite(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -209,7 +210,7 @@ func TestULAFlashTiming(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -250,7 +251,7 @@ func TestULARenderBorder(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -293,7 +294,7 @@ func TestULAScreenLayout(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -332,7 +333,7 @@ func TestULAFlashAttribute(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -364,7 +365,7 @@ func TestULAMemoryPageAccess(t *testing.T) {
 	defer cleanupTestROMs(testDir)
 
 	// Test with 128K memory for screen page switching
-	mem, _ := memory.New(testDir, true)
+	mem, _ := memory.New(testDir, roms.Model128K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -401,7 +402,7 @@ func TestULAImageDimensions(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -453,7 +454,7 @@ func BenchmarkULARender(b *testing.B) {
 	createTestROMs(&testing.T{}, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 
@@ -468,7 +469,7 @@ func BenchmarkULAPortIO(b *testing.B) {
 	createTestROMs(&testing.T{}, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, false)
+	mem, _ := memory.New(testDir, roms.Model48K)
 	kbd := keyboard.New()
 	ula := New(mem, kbd)
 

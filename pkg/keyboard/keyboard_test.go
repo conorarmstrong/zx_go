@@ -321,7 +321,7 @@ func TestUnmappedKeys(t *testing.T) {
 	initialMatrix := kbd.matrix
 
 	// Try to handle an unmapped key
-	unmappedEv := &fyne.KeyEvent{Name: fyne.KeyTab}
+	unmappedEv := &fyne.KeyEvent{Name: fyne.KeyF5}
 	kbd.HandleKeyEvent(unmappedEv, true)
 
 	// Matrix should be unchanged
