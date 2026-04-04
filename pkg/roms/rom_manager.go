@@ -2,7 +2,6 @@ package roms
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -97,18 +96,21 @@ func (rm *ROMManager) initMappings() {
 	}
 }
 
-// LoadROM loads a single ROM file
+// LoadROM loads a single ROM file. It tries the embedded ROMs first,
+// then falls back to the filesystem path.
 func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
+	var data []byte
+	var err error
+
+	// Try filesystem first (allows user overrides), then fall back to embedded ROMs
 	romPath := filepath.Join(rm.romPath, filename)
-	
-	// Check if file exists
-	if _, err := os.Stat(romPath); os.IsNotExist(err) {
-		return fmt.Errorf("ROM file %s does not exist", filename)
-	}
-	
-	data, err := ioutil.ReadFile(romPath)
+	data, err = os.ReadFile(romPath)
 	if err != nil {
-		return fmt.Errorf("failed to load ROM %s: %w", filename, err)
+		// Fall back to embedded ROMs
+		data, err = embeddedROMs.ReadFile("data/" + filename)
+		if err != nil {
+			return fmt.Errorf("ROM file %s not found", filename)
+		}
 	}
 	
 	// Determine expected size based on ROM type

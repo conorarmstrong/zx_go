@@ -54,6 +54,10 @@ jobs:
           CC: ${{ matrix.cc || '' }}
         run: go build -o ${{ matrix.artifact }} ./cmd/zx_go
 
+      - name: Set executable permission
+        if: matrix.goos != 'windows'
+        run: chmod +x ${{ matrix.artifact }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
