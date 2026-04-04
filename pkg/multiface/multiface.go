@@ -2,7 +2,6 @@ package multiface
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -97,7 +96,7 @@ func (mf *Multiface) loadROM(romPath string) error {
 	// Try the specific ROM file first
 	path := filepath.Join(romPath, mf.romFile)
 	
-	if data, err := ioutil.ReadFile(path); err == nil {
+	if data, err := os.ReadFile(path); err == nil {
 		if len(data) == 0x2000 { // 8KB ROM
 			mf.rom = data
 			return nil
@@ -108,7 +107,7 @@ func (mf *Multiface) loadROM(romPath string) error {
 	altNames := []string{"mf128.rom", "mf3.rom", "multiface.rom"}
 	for _, name := range altNames {
 		path := filepath.Join(romPath, name)
-		if data, err := ioutil.ReadFile(path); err == nil {
+		if data, err := os.ReadFile(path); err == nil {
 			if len(data) == 0x2000 {
 				mf.rom = data
 				return nil

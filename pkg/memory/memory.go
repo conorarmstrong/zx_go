@@ -64,8 +64,8 @@ func New(romPath string, model roms.SpectrumModel) (*Memory, error) {
 		return nil, fmt.Errorf("failed to load ROMs for model %s: %w", roms.GetModelName(model), err)
 	}
 
-	// Load peripheral ROMs (optional)
-	m.romManager.LoadPeripheralROMs()
+	// Load peripheral ROMs (optional, errors are logged as warnings)
+	_ = m.romManager.LoadPeripheralROMs()
 
 	// Set up memory mapping for the model
 	if err := m.setupModel(model); err != nil {

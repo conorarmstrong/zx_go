@@ -1093,7 +1093,7 @@ func (c *CPU) executeCBInstruction(opcode byte) {
 			} else {
 				c.tstates += 8
 			}
-		} else if opcode >= 0xC0 && opcode <= 0xFF {
+		} else { // opcode >= 0xC0
 			// Set bit operations (0xC0-0xFF)
 			bit := int((opcode - 0xC0) / 8)
 			reg := int((opcode - 0xC0) % 8)
@@ -1103,9 +1103,6 @@ func (c *CPU) executeCBInstruction(opcode byte) {
 			} else {
 				c.tstates += 8
 			}
-		} else {
-			fmt.Printf("Unknown CB instruction: 0x%02X\n", opcode)
-			c.tstates += 8
 		}
 	}
 }
@@ -1638,13 +1635,10 @@ func (c *CPU) executeDDCBInstruction(opcode byte, addr uint16) {
 			val := c.mem.Read(addr) & ^(1 << bit)
 			c.mem.Write(addr, val)
 			c.tstates += 15
-		} else if opcode >= 0xC0 && opcode <= 0xFF { // SET n,(IX+d)
+		} else { // opcode >= 0xC0: SET n,(IX+d)
 			bit := (opcode - 0xC0) / 8
 			val := c.mem.Read(addr) | (1 << bit)
 			c.mem.Write(addr, val)
-			c.tstates += 15
-		} else {
-			fmt.Printf("DD CB instruction not implemented: 0x%02X\n", opcode)
 			c.tstates += 15
 		}
 	}
@@ -1902,15 +1896,6 @@ func (c *CPU) initTables() {
 	// Initialize overflow tables for ADD operations
 	c.overflowAddTable = [8]byte{0, 0, 0, FLAG_PV, FLAG_PV, 0, 0, 0}
 	c.overflowSubTable = [8]byte{0, FLAG_PV, 0, 0, 0, 0, FLAG_PV, 0}
-}
-
-// Helper functions for flag calculation
-func (c *CPU) setSZ53(val byte) {
-	c.F = (c.F & (FLAG_C | FLAG_N | FLAG_PV | FLAG_H)) | c.sz53Table[val]
-}
-
-func (c *CPU) setSZ53P(val byte) {
-	c.F = (c.F & (FLAG_C | FLAG_N | FLAG_H)) | c.sz53Table[val] | c.parityTable[val]
 }
 
 // Stack operations
@@ -2387,11 +2372,11 @@ func (c *CPU) outi() {
 	c.F |= FLAG_N
 	
 	// Complex flag calculation for block I/O
-	temp := val + c.L
+	temp := uint16(val) + uint16(c.L)
 	if temp > 255 {
 		c.F |= FLAG_H | FLAG_C
 	}
-	c.F |= c.parityTable[(temp & 7) ^ c.B]
+	c.F |= c.parityTable[(byte(temp) & 7) ^ c.B]
 }
 
 func (c *CPU) outd() {
@@ -2411,11 +2396,11 @@ func (c *CPU) outd() {
 	c.F |= FLAG_N
 	
 	// Complex flag calculation for block I/O
-	temp := val + c.L
+	temp := uint16(val) + uint16(c.L)
 	if temp > 255 {
 		c.F |= FLAG_H | FLAG_C
 	}
-	c.F |= c.parityTable[(temp & 7) ^ c.B]
+	c.F |= c.parityTable[(byte(temp) & 7) ^ c.B]
 }
 
 func (c *CPU) otir() {

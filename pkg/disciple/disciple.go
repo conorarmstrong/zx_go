@@ -2,7 +2,6 @@ package disciple
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -91,7 +90,7 @@ func (d *Disciple) loadROM(romPath string) error {
 	for _, filename := range romFiles {
 		path := filepath.Join(romPath, filename)
 		if _, err := os.Stat(path); err == nil {
-			data, err := ioutil.ReadFile(path)
+			data, err := os.ReadFile(path)
 			if err != nil {
 				continue
 			}

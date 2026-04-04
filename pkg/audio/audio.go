@@ -37,10 +37,9 @@ type AudioSystem struct {
 
 // audioReader implements io.Reader to generate audio samples
 type audioReader struct {
-	audioSys *AudioSystem
-	buffer   []byte
-	bufferPos int
-	lastSample int16  // For low-pass filtering
+	audioSys   *AudioSystem
+	buffer     []byte
+	lastSample int16 // For low-pass filtering
 }
 
 // New creates a new AudioSystem instance
