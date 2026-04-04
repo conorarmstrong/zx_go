@@ -27,7 +27,7 @@ Pre-built binaries for macOS, Windows, and Linux are available on the [Releases]
 
 ## Screenshot
 
-*(coming soon)*
+![ZX Spectrum 128K boot screen](screenshot.png)
 
 ## Building from source
 
