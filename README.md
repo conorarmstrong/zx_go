@@ -14,11 +14,22 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 - **Snapshot support** — load and save in SNA, Z80, and SZX formats
 - **Peripheral emulation** — DISCiPLE disk interface and Multiface (1, 128, 3) with NMI trigger
 
+## Downloads
+
+Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/conorarmstrong/zx_go/releases) page.
+
+| Platform | Binary |
+|----------|--------|
+| macOS (Apple Silicon) | `zx_go-macos-arm64` |
+| macOS (Intel) | `zx_go-macos-amd64` |
+| Windows | `zx_go-windows-amd64.exe` |
+| Linux | `zx_go-linux-amd64` |
+
 ## Screenshot
 
 *(coming soon)*
 
-## Building
+## Building from source
 
 Requires Go 1.25+ and the system dependencies for [Fyne](https://fyne.io/) (OpenGL, C compiler).
 
