@@ -25,9 +25,10 @@ jobs:
             goos: darwin
             goarch: arm64
             artifact: zx_go-macos-arm64
-          - os: macos-13
+          - os: macos-latest
             goos: darwin
             goarch: amd64
+            cc: "clang -arch x86_64"
             artifact: zx_go-macos-amd64
 
     runs-on: ${{ matrix.os }}
@@ -50,6 +51,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
+          CC: ${{ matrix.cc || '' }}
         run: go build -o ${{ matrix.artifact }} ./cmd/zx_go
 
       - uses: actions/upload-artifact@v4
