@@ -206,7 +206,7 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 // Close properly shuts down the ULA and releases resources
 func (u *ULA) Close() {
 	if u.audio != nil {
-		u.audio.Close()
+		_ = u.audio.Close()
 	}
 }
 

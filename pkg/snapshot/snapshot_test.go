@@ -1499,7 +1499,7 @@ func TestSZXMachineIDDetection(t *testing.T) {
 				MachineID:    tc.machineID,
 				Flags:        0,
 			}
-			binary.Write(&buf, binary.LittleEndian, hdr)
+			_ = binary.Write(&buf, binary.LittleEndian, hdr)
 
 			dir := t.TempDir()
 			path := filepath.Join(dir, "machine.szx")
@@ -1781,7 +1781,7 @@ func TestZ80V2ExtHeaderTooShort(t *testing.T) {
 	// Extended header length < 23 should fail
 	var fileBuf bytes.Buffer
 	fileBuf.Write(header)
-	binary.Write(&fileBuf, binary.LittleEndian, uint16(10)) // too short
+	_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(10)) // too short
 	fileBuf.Write(make([]byte, 10))
 
 	dir := t.TempDir()
@@ -1913,14 +1913,14 @@ func TestSZXUnknownBlocksSkipped(t *testing.T) {
 		MinorVersion: 4,
 		MachineID:    ZXSTMID_48K,
 	}
-	binary.Write(&buf, binary.LittleEndian, hdr)
+	_ = binary.Write(&buf, binary.LittleEndian, hdr)
 
 	// Unknown block "XYZW" with 4 bytes of garbage
 	unknownBlock := szxBlockHeader{
 		ID:   [4]byte{'X', 'Y', 'Z', 'W'},
 		Size: 4,
 	}
-	binary.Write(&buf, binary.LittleEndian, unknownBlock)
+	_ = binary.Write(&buf, binary.LittleEndian, unknownBlock)
 	buf.Write([]byte{0x01, 0x02, 0x03, 0x04})
 
 	// Z80R block with known A=0x42
@@ -1972,14 +1972,14 @@ func TestZ80V2UnknownPageSkipped(t *testing.T) {
 	// Unknown page
 	unknownData := makePageData(0xFF)
 	compressed := snap.compressZ80(unknownData)
-	binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
+	_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 	fileBuf.WriteByte(99) // unknown page
 	fileBuf.Write(compressed)
 
 	// Known page 8 => bank 5
 	knownData := makePageData(0x42)
 	compressed = snap.compressZ80(knownData)
-	binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
+	_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 	fileBuf.WriteByte(8)
 	fileBuf.Write(compressed)
 

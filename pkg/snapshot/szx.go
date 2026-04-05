@@ -252,7 +252,7 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to create zlib reader: %w", err)
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 		
 		decompressed, err := io.ReadAll(reader)
 		if err != nil {

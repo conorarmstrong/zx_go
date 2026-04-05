@@ -61,7 +61,7 @@ func createTestROMs(t *testing.T, dir string) {
 }
 
 func cleanupTestROMs(dir string) {
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }
 
 // Helper to create a test CPU

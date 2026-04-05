@@ -439,7 +439,7 @@ func main() {
 
 		if err := emu.mem.SwitchModel(newModel); err != nil {
 			log.Printf("Failed to switch model: %v", err)
-			dialog.ShowError(fmt.Errorf("Failed to switch to %s: %w", roms.GetModelName(newModel), err), w)
+			dialog.ShowError(fmt.Errorf("failed to switch to %s: %w", roms.GetModelName(newModel), err), w)
 			// Restore previous state
 			if !wasPaused {
 				emu.togglePause()
@@ -498,14 +498,14 @@ func main() {
 					// Load the snapshot
 					snap := snapshot.New()
 					if err := snap.Load(reader.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("Failed to load snapshot: %w", err), w)
+						dialog.ShowError(fmt.Errorf("failed to load snapshot: %w", err), w)
 						_ = reader.Close()
 						return
 					}
 
 					// Apply snapshot to emulator
 					if err := applySnapshotToEmulator(emu, snap); err != nil {
-						dialog.ShowError(fmt.Errorf("Failed to apply snapshot: %w", err), w)
+						dialog.ShowError(fmt.Errorf("failed to apply snapshot: %w", err), w)
 						_ = reader.Close()
 						return
 					}
@@ -532,14 +532,14 @@ func main() {
 					// Create snapshot from current emulator state
 					snap, err := createSnapshotFromEmulator(emu)
 					if err != nil {
-						dialog.ShowError(fmt.Errorf("Failed to create snapshot: %w", err), w)
+						dialog.ShowError(fmt.Errorf("failed to create snapshot: %w", err), w)
 						_ = writer.Close()
 						return
 					}
 
 					// Save the snapshot
 					if err := snap.Save(writer.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("Failed to save snapshot: %w", err), w)
+						dialog.ShowError(fmt.Errorf("failed to save snapshot: %w", err), w)
 						_ = writer.Close()
 						return
 					}
@@ -563,7 +563,7 @@ func main() {
 					}
 					tp := ula.NewTapePlayer()
 					if err := tp.LoadTAP(reader.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("Failed to load TAP: %w", err), w)
+						dialog.ShowError(fmt.Errorf("failed to load TAP: %w", err), w)
 						_ = reader.Close()
 						return
 					}
@@ -592,7 +592,7 @@ func main() {
 		fyne.NewMenu("Peripherals",
 			fyne.NewMenuItem("Enable Disciple", func() {
 				if err := emu.peripherals.EnableDisciple("roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to enable Disciple: %w", err), w)
+					dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
 				} else {
 					dialog.ShowInformation("Success", "Disciple disk interface enabled", w)
 				}
@@ -604,21 +604,21 @@ func main() {
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Enable Multiface 1", func() {
 				if err := emu.peripherals.EnableMultiface(multiface.Multiface1, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to enable Multiface 1: %w", err), w)
+					dialog.ShowError(fmt.Errorf("failed to enable Multiface 1: %w", err), w)
 				} else {
 					dialog.ShowInformation("Success", "Multiface 1 enabled", w)
 				}
 			}),
 			fyne.NewMenuItem("Enable Multiface 128", func() {
 				if err := emu.peripherals.EnableMultiface(multiface.Multiface128, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to enable Multiface 128: %w", err), w)
+					dialog.ShowError(fmt.Errorf("failed to enable Multiface 128: %w", err), w)
 				} else {
 					dialog.ShowInformation("Success", "Multiface 128 enabled", w)
 				}
 			}),
 			fyne.NewMenuItem("Enable Multiface 3", func() {
 				if err := emu.peripherals.EnableMultiface(multiface.Multiface3, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to enable Multiface 3: %w", err), w)
+					dialog.ShowError(fmt.Errorf("failed to enable Multiface 3: %w", err), w)
 				} else {
 					dialog.ShowInformation("Success", "Multiface 3 enabled", w)
 				}
