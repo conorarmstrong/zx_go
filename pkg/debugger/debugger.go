@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -25,59 +26,69 @@ type Debugger struct {
 	mu     sync.Mutex
 
 	// Emulator control callbacks
-	onPause func()
-	onStep  func()
-	onRun   func()
+	onPause    func()
+	onStep     func() // Execute exactly one Z80 instruction (no interrupt check)
+	onRun      func()
+	isPaused   func() bool
 
 	// State
-	paused   bool
-	hexAddr  uint16
-	dasmAddr uint16
+	hexAddr     uint16
+	breakpoints map[uint16]bool
 
-	// Widgets that need updating
-	regEntries    map[string]*widget.Entry
-	flagLabels    map[string]*widget.Check
-	hexGrid       *widget.TextGrid
-	dasmList      *widget.List
-	dasmLines     []DisassembledLine
-	statusLabel   *widget.Label
+	// Widgets
+	regLabels     map[string]*widget.RichText
+	flagLabels    map[string]*widget.RichText
+	hexText       *widget.RichText
+	dasmText      *widget.RichText
+	statusLabel   *widget.RichText
 	hexAddrEntry  *widget.Entry
 	dasmAddrEntry *widget.Entry
+
+	// Live refresh
+	refreshTicker *time.Ticker
+	stopChan      chan struct{}
 }
 
 // New creates a new debugger attached to the given CPU and memory.
 func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
 	d := &Debugger{
-		cpu:        cpu,
-		mem:        mem,
-		regEntries: make(map[string]*widget.Entry),
-		flagLabels: make(map[string]*widget.Check),
-		hexAddr:    0x4000,
+		cpu:         cpu,
+		mem:         mem,
+		hexAddr:     0x4000,
+		breakpoints: make(map[uint16]bool),
+		regLabels:   make(map[string]*widget.RichText),
+		flagLabels:  make(map[string]*widget.RichText),
+		stopChan:    make(chan struct{}),
 	}
 
 	d.window = app.NewWindow("ZX Spectrum Debugger")
-	d.window.Resize(fyne.NewSize(1100, 700))
+	d.window.Resize(fyne.NewSize(1200, 750))
 
 	content := d.buildUI()
 	d.window.SetContent(content)
+
+	d.window.SetOnClosed(func() {
+		d.stopRefresh()
+	})
 
 	return d
 }
 
 // SetCallbacks sets the emulator control callbacks.
-func (d *Debugger) SetCallbacks(onPause, onStep, onRun func()) {
+func (d *Debugger) SetCallbacks(onPause func(), onStep func(), onRun func(), isPaused func() bool) {
 	d.onPause = onPause
 	d.onStep = onStep
 	d.onRun = onRun
+	d.isPaused = isPaused
 }
 
 // Show displays the debugger window and pauses the emulator.
 func (d *Debugger) Show() {
-	d.paused = true
 	if d.onPause != nil {
 		d.onPause()
 	}
 	d.Refresh()
+	d.startRefresh()
 	d.window.Show()
 }
 
@@ -87,65 +98,108 @@ func (d *Debugger) Refresh() {
 	defer d.mu.Unlock()
 
 	d.refreshRegisters()
-	d.refreshFlags()
 	d.refreshHexDump()
 	d.refreshDisassembly()
 	d.refreshStatus()
 }
 
+func (d *Debugger) startRefresh() {
+	d.refreshTicker = time.NewTicker(50 * time.Millisecond) // 20Hz refresh
+	go func() {
+		for {
+			select {
+			case <-d.refreshTicker.C:
+				fyne.Do(func() {
+					d.Refresh()
+				})
+			case <-d.stopChan:
+				return
+			}
+		}
+	}()
+}
+
+func (d *Debugger) stopRefresh() {
+	if d.refreshTicker != nil {
+		d.refreshTicker.Stop()
+	}
+	select {
+	case d.stopChan <- struct{}{}:
+	default:
+	}
+}
+
+func monoText(s string) *widget.RichText {
+	return widget.NewRichText(
+		&widget.TextSegment{
+			Text:  s,
+			Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}},
+		},
+	)
+}
+
+func (d *Debugger) setMonoText(rt *widget.RichText, s string) {
+	rt.Segments = []widget.RichTextSegment{
+		&widget.TextSegment{
+			Text:  s,
+			Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}},
+		},
+	}
+	rt.Refresh()
+}
+
 func (d *Debugger) buildUI() fyne.CanvasObject {
-	// Control buttons
 	controls := d.buildControls()
-
-	// Register panel
 	regPanel := d.buildRegisterPanel()
-
-	// Hex dump panel
 	hexPanel := d.buildHexPanel()
-
-	// Disassembly panel
 	dasmPanel := d.buildDisassemblyPanel()
 
-	// Status bar
-	d.statusLabel = widget.NewLabel("Paused")
-	d.statusLabel.TextStyle = fyne.TextStyle{Monospace: true}
+	d.statusLabel = monoText("Paused")
 
-	// Layout: top controls, then left=regs, center=hex, right=disasm
-	leftPanel := container.NewVBox(
-		widget.NewLabel("Registers"),
+	// Left: registers (narrow), Center: hex dump, Right: disassembly
+	leftCol := container.NewVBox(
+		widget.NewLabelWithStyle("Registers", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
 		regPanel,
 	)
 
-	centerPanel := container.NewVBox(
-		widget.NewLabel("Memory"),
-		widget.NewSeparator(),
-		hexPanel,
+	centerCol := container.NewBorder(
+		container.NewVBox(
+			widget.NewLabelWithStyle("Memory", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+			widget.NewSeparator(),
+			d.buildHexAddrBar(),
+		),
+		nil, nil, nil,
+		container.NewVScroll(hexPanel),
 	)
 
-	rightPanel := container.NewVBox(
-		widget.NewLabel("Disassembly"),
-		widget.NewSeparator(),
-		dasmPanel,
+	rightCol := container.NewBorder(
+		container.NewVBox(
+			widget.NewLabelWithStyle("Disassembly", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+			widget.NewSeparator(),
+			d.buildDasmAddrBar(),
+		),
+		nil, nil, nil,
+		container.NewVScroll(dasmPanel),
 	)
 
-	mainArea := container.NewHSplit(
-		container.NewHSplit(leftPanel, centerPanel),
-		rightPanel,
+	// Use fixed proportions: registers ~250px, rest split evenly
+	split := container.NewHSplit(
+		container.NewHSplit(leftCol, centerCol),
+		rightCol,
 	)
-	mainArea.SetOffset(0.55)
+	split.SetOffset(0.55)
 
 	return container.NewBorder(
 		container.NewVBox(controls, widget.NewSeparator()),
 		container.NewVBox(widget.NewSeparator(), d.statusLabel),
 		nil, nil,
-		mainArea,
+		split,
 	)
 }
 
 func (d *Debugger) buildControls() fyne.CanvasObject {
 	pauseBtn := widget.NewButtonWithIcon("Pause", theme.MediaPauseIcon(), func() {
-		d.paused = true
 		if d.onPause != nil {
 			d.onPause()
 		}
@@ -160,209 +214,261 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	})
 
 	runBtn := widget.NewButtonWithIcon("Run", theme.MediaPlayIcon(), func() {
-		d.paused = false
 		if d.onRun != nil {
 			d.onRun()
 		}
-		d.statusLabel.SetText("Running")
 	})
 
 	stepFrameBtn := widget.NewButton("Step Frame", func() {
-		// Execute one full frame
+		if d.onPause != nil {
+			d.onPause()
+		}
 		d.cpu.ExecuteFrame(69888)
 		d.Refresh()
 	})
 
 	goToPCBtn := widget.NewButton("Go to PC", func() {
-		d.hexAddr = d.cpu.PC
-		d.dasmAddr = d.cpu.PC
+		d.hexAddr = d.cpu.PC & 0xFFF0
 		d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
-		d.dasmAddrEntry.SetText(fmt.Sprintf("%04X", d.dasmAddr))
+		d.Refresh()
+	})
+
+	// Breakpoint entry
+	bpEntry := widget.NewEntry()
+	bpEntry.SetPlaceHolder("ADDR")
+	bpEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	bpBtn := widget.NewButton("Set BP", func() {
+		if addr, err := strconv.ParseUint(bpEntry.Text, 16, 16); err == nil {
+			d.breakpoints[uint16(addr)] = true
+			bpEntry.SetText("")
+			d.Refresh()
+		}
+	})
+	clearBPBtn := widget.NewButton("Clear BPs", func() {
+		d.breakpoints = make(map[uint16]bool)
 		d.Refresh()
 	})
 
 	return container.NewHBox(
 		pauseBtn, stepBtn, stepFrameBtn, runBtn,
-		layout.NewSpacer(),
+		widget.NewSeparator(),
 		goToPCBtn,
+		widget.NewSeparator(),
+		widget.NewLabel("BP:"), bpEntry, bpBtn, clearBPBtn,
 	)
 }
 
 func (d *Debugger) buildRegisterPanel() fyne.CanvasObject {
-	regs16 := []string{"PC", "SP", "IX", "IY"}
-	regs8pair := [][2]string{{"A", "F"}, {"B", "C"}, {"D", "E"}, {"H", "L"}}
-	regs8pairAlt := [][2]string{{"A'", "F'"}, {"B'", "C'"}, {"D'", "E'"}, {"H'", "L'"}}
-	specialRegs := []string{"I", "R"}
-
 	items := container.NewVBox()
 
-	// 16-bit registers
-	for _, name := range regs16 {
-		entry := widget.NewEntry()
-		entry.TextStyle = fyne.TextStyle{Monospace: true}
-		d.regEntries[name] = entry
-		row := container.NewHBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("%-3s", name), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			entry,
-		)
-		items.Add(row)
+	addReg := func(name string) {
+		rt := monoText("0000")
+		d.regLabels[name] = rt
+		items.Add(container.NewHBox(
+			widget.NewLabelWithStyle(fmt.Sprintf("%-3s", name), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true}),
+			rt,
+		))
 	}
 
-	items.Add(widget.NewSeparator())
-
-	// 8-bit register pairs
-	for _, pair := range regs8pair {
-		e1 := widget.NewEntry()
-		e1.TextStyle = fyne.TextStyle{Monospace: true}
-		e2 := widget.NewEntry()
-		e2.TextStyle = fyne.TextStyle{Monospace: true}
-		d.regEntries[pair[0]] = e1
-		d.regEntries[pair[1]] = e2
-		row := container.NewHBox(
-			widget.NewLabelWithStyle(pair[0], fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			e1,
-			widget.NewLabelWithStyle(pair[1], fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			e2,
-		)
-		items.Add(row)
+	addRegPair := func(n1, n2 string) {
+		rt1 := monoText("00")
+		rt2 := monoText("00")
+		d.regLabels[n1] = rt1
+		d.regLabels[n2] = rt2
+		items.Add(container.NewHBox(
+			widget.NewLabelWithStyle(fmt.Sprintf("%-2s", n1), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true}),
+			rt1,
+			layout.NewSpacer(),
+			widget.NewLabelWithStyle(fmt.Sprintf("%-2s", n2), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true}),
+			rt2,
+		))
 	}
 
+	addReg("PC")
+	addReg("SP")
+	addReg("IX")
+	addReg("IY")
+	items.Add(widget.NewSeparator())
+	addRegPair("A", "F")
+	addRegPair("B", "C")
+	addRegPair("D", "E")
+	addRegPair("H", "L")
+	items.Add(widget.NewSeparator())
+	addRegPair("A'", "F'")
+	addRegPair("B'", "C'")
+	addRegPair("D'", "E'")
+	addRegPair("H'", "L'")
+	items.Add(widget.NewSeparator())
+	addRegPair("I", "R")
 	items.Add(widget.NewSeparator())
 
-	// Alternate registers
-	for _, pair := range regs8pairAlt {
-		e1 := widget.NewEntry()
-		e1.TextStyle = fyne.TextStyle{Monospace: true}
-		e2 := widget.NewEntry()
-		e2.TextStyle = fyne.TextStyle{Monospace: true}
-		d.regEntries[pair[0]] = e1
-		d.regEntries[pair[1]] = e2
-		row := container.NewHBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("%-2s", pair[0]), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			e1,
-			widget.NewLabelWithStyle(fmt.Sprintf("%-2s", pair[1]), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			e2,
-		)
-		items.Add(row)
-	}
-
-	items.Add(widget.NewSeparator())
-
-	// Special registers
-	for _, name := range specialRegs {
-		entry := widget.NewEntry()
-		entry.TextStyle = fyne.TextStyle{Monospace: true}
-		d.regEntries[name] = entry
-		row := container.NewHBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("%-3s", name), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			entry,
-		)
-		items.Add(row)
-	}
-
-	items.Add(widget.NewSeparator())
-
-	// Flags
-	flags := []string{"S", "Z", "H", "P/V", "N", "C"}
+	// Flags as a compact row
+	flagNames := []string{"S", "Z", "H", "P/V", "N", "C"}
 	flagRow := container.NewHBox()
-	for _, f := range flags {
-		chk := widget.NewCheck(f, nil)
-		d.flagLabels[f] = chk
-		flagRow.Add(chk)
+	for _, f := range flagNames {
+		rt := monoText("-")
+		d.flagLabels[f] = rt
+		flagRow.Add(widget.NewLabelWithStyle(f, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true, Bold: true}))
+		flagRow.Add(rt)
 	}
-	items.Add(widget.NewLabel("Flags"))
 	items.Add(flagRow)
+	items.Add(widget.NewSeparator())
 
-	// IFF/IM
-	iffEntry := widget.NewEntry()
-	iffEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	d.regEntries["IFF"] = iffEntry
-	imEntry := widget.NewEntry()
-	imEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	d.regEntries["IM"] = imEntry
+	// IFF/IM/Halted
+	d.regLabels["IFF"] = monoText("0/0")
+	d.regLabels["IM"] = monoText("0")
+	d.regLabels["HALT"] = monoText("-")
 	items.Add(container.NewHBox(
-		widget.NewLabelWithStyle("IFF", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-		iffEntry,
-		widget.NewLabelWithStyle("IM", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-		imEntry,
+		widget.NewLabelWithStyle("IFF", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true}),
+		d.regLabels["IFF"],
+		layout.NewSpacer(),
+		widget.NewLabelWithStyle("IM", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true}),
+		d.regLabels["IM"],
+		layout.NewSpacer(),
+		d.regLabels["HALT"],
 	))
 
-	// Apply button
-	applyBtn := widget.NewButton("Apply Registers", func() {
-		d.applyRegisters()
+	// Edit registers
+	items.Add(widget.NewSeparator())
+	editBtn := widget.NewButton("Edit Registers...", func() {
+		d.showEditDialog()
 	})
-	items.Add(applyBtn)
+	items.Add(editBtn)
 
-	return container.NewVScroll(items)
+	return items
+}
+
+func (d *Debugger) showEditDialog() {
+	pcEntry := widget.NewEntry()
+	pcEntry.SetText(fmt.Sprintf("%04X", d.cpu.PC))
+	pcEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	spEntry := widget.NewEntry()
+	spEntry.SetText(fmt.Sprintf("%04X", d.cpu.SP))
+	spEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	aEntry := widget.NewEntry()
+	aEntry.SetText(fmt.Sprintf("%02X", d.cpu.A))
+	aEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	fEntry := widget.NewEntry()
+	fEntry.SetText(fmt.Sprintf("%02X", d.cpu.F))
+	fEntry.TextStyle = fyne.TextStyle{Monospace: true}
+
+	form := widget.NewForm(
+		widget.NewFormItem("PC", pcEntry),
+		widget.NewFormItem("SP", spEntry),
+		widget.NewFormItem("A", aEntry),
+		widget.NewFormItem("F", fEntry),
+	)
+
+	content := container.NewVBox(form)
+	dlg := widget.NewModalPopUp(content, d.window.Canvas())
+
+	applyBtn := widget.NewButton("Apply", func() {
+		if v, err := strconv.ParseUint(pcEntry.Text, 16, 16); err == nil {
+			d.cpu.PC = uint16(v)
+		}
+		if v, err := strconv.ParseUint(spEntry.Text, 16, 16); err == nil {
+			d.cpu.SP = uint16(v)
+		}
+		if v, err := strconv.ParseUint(aEntry.Text, 16, 8); err == nil {
+			d.cpu.A = byte(v)
+		}
+		if v, err := strconv.ParseUint(fEntry.Text, 16, 8); err == nil {
+			d.cpu.F = byte(v)
+		}
+		dlg.Hide()
+		d.Refresh()
+	})
+	cancelBtn := widget.NewButton("Cancel", func() { dlg.Hide() })
+	content.Add(container.NewHBox(layout.NewSpacer(), cancelBtn, applyBtn))
+	dlg.Resize(fyne.NewSize(300, 250))
+	dlg.Show()
 }
 
 func (d *Debugger) buildHexPanel() fyne.CanvasObject {
+	d.hexText = monoText("")
+	return d.hexText
+}
+
+func (d *Debugger) buildHexAddrBar() fyne.CanvasObject {
 	d.hexAddrEntry = widget.NewEntry()
 	d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
 	d.hexAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
 	d.hexAddrEntry.OnSubmitted = func(s string) {
 		if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
-			d.hexAddr = uint16(addr) & 0xFFF0 // Align to 16
-			d.refreshHexDump()
+			d.hexAddr = uint16(addr) & 0xFFF0
+			d.Refresh()
 		}
 	}
 
-	d.hexGrid = widget.NewTextGrid()
+	writeBtn := widget.NewButton("Write...", func() {
+		d.showWriteMemDialog()
+	})
 
-	addrBar := container.NewHBox(
-		widget.NewLabel("Addr:"),
-		d.hexAddrEntry,
-		widget.NewButton("Go", func() {
-			d.hexAddrEntry.OnSubmitted(d.hexAddrEntry.Text)
-		}),
-	)
-
-	return container.NewBorder(addrBar, nil, nil, nil,
-		container.NewVScroll(d.hexGrid),
+	return container.NewHBox(
+		widget.NewLabel("Addr:"), d.hexAddrEntry,
+		widget.NewButton("Go", func() { d.hexAddrEntry.OnSubmitted(d.hexAddrEntry.Text) }),
+		writeBtn,
 	)
 }
 
+func (d *Debugger) showWriteMemDialog() {
+	addrEntry := widget.NewEntry()
+	addrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
+	addrEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	valEntry := widget.NewEntry()
+	valEntry.SetPlaceHolder("00 01 02 ...")
+	valEntry.TextStyle = fyne.TextStyle{Monospace: true}
+
+	form := widget.NewForm(
+		widget.NewFormItem("Address", addrEntry),
+		widget.NewFormItem("Hex bytes", valEntry),
+	)
+	content := container.NewVBox(form)
+	dlg := widget.NewModalPopUp(content, d.window.Canvas())
+
+	applyBtn := widget.NewButton("Write", func() {
+		addr, err := strconv.ParseUint(addrEntry.Text, 16, 16)
+		if err != nil {
+			dlg.Hide()
+			return
+		}
+		parts := strings.Fields(valEntry.Text)
+		for _, p := range parts {
+			if v, err := strconv.ParseUint(p, 16, 8); err == nil {
+				d.mem.Write(uint16(addr), byte(v))
+				addr++
+			}
+		}
+		dlg.Hide()
+		d.Refresh()
+	})
+	cancelBtn := widget.NewButton("Cancel", func() { dlg.Hide() })
+	content.Add(container.NewHBox(layout.NewSpacer(), cancelBtn, applyBtn))
+	dlg.Resize(fyne.NewSize(400, 180))
+	dlg.Show()
+}
+
 func (d *Debugger) buildDisassemblyPanel() fyne.CanvasObject {
+	d.dasmText = monoText("")
+	return d.dasmText
+}
+
+func (d *Debugger) buildDasmAddrBar() fyne.CanvasObject {
 	d.dasmAddrEntry = widget.NewEntry()
 	d.dasmAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	d.dasmAddrEntry.OnSubmitted = func(s string) {
+		d.Refresh()
+	}
 
-	d.dasmList = widget.NewList(
-		func() int { return len(d.dasmLines) },
-		func() fyne.CanvasObject {
-			return widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-		},
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			label := o.(*widget.Label)
-			if i < len(d.dasmLines) {
-				line := d.dasmLines[i]
-				prefix := "  "
-				if line.Addr == d.cpu.PC {
-					prefix = "> "
-				}
-				label.SetText(prefix + line.String())
-			}
-		},
+	return container.NewHBox(
+		widget.NewLabel("From PC:"), d.dasmAddrEntry,
 	)
-
-	addrBar := container.NewHBox(
-		widget.NewLabel("Addr:"),
-		d.dasmAddrEntry,
-		widget.NewButton("Go", func() {
-			s := d.dasmAddrEntry.Text
-			if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
-				d.dasmAddr = uint16(addr)
-				d.refreshDisassembly()
-			}
-		}),
-	)
-
-	return container.NewBorder(addrBar, nil, nil, nil, d.dasmList)
 }
 
 func (d *Debugger) refreshRegisters() {
 	set := func(name, val string) {
-		if e, ok := d.regEntries[name]; ok {
-			e.SetText(val)
+		if rt, ok := d.regLabels[name]; ok {
+			d.setMonoText(rt, val)
 		}
 	}
 
@@ -390,40 +496,38 @@ func (d *Debugger) refreshRegisters() {
 	set("R", fmt.Sprintf("%02X", d.cpu.R))
 
 	iff := "0/0"
-	if d.cpu.IFF1 {
-		iff = "1/"
-	} else {
-		iff = "0/"
-	}
-	if d.cpu.IFF2 {
-		iff += "1"
-	} else {
-		iff += "0"
+	if d.cpu.IFF1 && d.cpu.IFF2 {
+		iff = "1/1"
+	} else if d.cpu.IFF1 {
+		iff = "1/0"
+	} else if d.cpu.IFF2 {
+		iff = "0/1"
 	}
 	set("IFF", iff)
 	set("IM", fmt.Sprintf("%d", d.cpu.IM))
-}
+	if d.cpu.Halted {
+		set("HALT", "HALTED")
+	} else {
+		set("HALT", "")
+	}
 
-func (d *Debugger) refreshFlags() {
+	// Flags
 	f := d.cpu.F
-	if chk, ok := d.flagLabels["S"]; ok {
-		chk.SetChecked(f&0x80 != 0)
+	setFlag := func(name string, bit byte) {
+		if rt, ok := d.flagLabels[name]; ok {
+			if f&bit != 0 {
+				d.setMonoText(rt, "1")
+			} else {
+				d.setMonoText(rt, "0")
+			}
+		}
 	}
-	if chk, ok := d.flagLabels["Z"]; ok {
-		chk.SetChecked(f&0x40 != 0)
-	}
-	if chk, ok := d.flagLabels["H"]; ok {
-		chk.SetChecked(f&0x10 != 0)
-	}
-	if chk, ok := d.flagLabels["P/V"]; ok {
-		chk.SetChecked(f&0x04 != 0)
-	}
-	if chk, ok := d.flagLabels["N"]; ok {
-		chk.SetChecked(f&0x02 != 0)
-	}
-	if chk, ok := d.flagLabels["C"]; ok {
-		chk.SetChecked(f&0x01 != 0)
-	}
+	setFlag("S", 0x80)
+	setFlag("Z", 0x40)
+	setFlag("H", 0x10)
+	setFlag("P/V", 0x04)
+	setFlag("N", 0x02)
+	setFlag("C", 0x01)
 }
 
 func (d *Debugger) refreshHexDump() {
@@ -447,65 +551,58 @@ func (d *Debugger) refreshHexDump() {
 		}
 		sb.WriteString(" |" + ascii + "|\n")
 	}
-	d.hexGrid.SetText(sb.String())
+	d.setMonoText(d.hexText, sb.String())
 }
 
 func (d *Debugger) refreshDisassembly() {
-	d.dasmAddr = d.cpu.PC
-	d.dasmAddrEntry.SetText(fmt.Sprintf("%04X", d.dasmAddr))
-	d.dasmLines = Disassemble(d.mem.Read, d.dasmAddr, 40)
-	d.dasmList.Refresh()
+	pc := d.cpu.PC
+	d.dasmAddrEntry.SetText(fmt.Sprintf("%04X", pc))
+
+	lines := Disassemble(d.mem.Read, pc, 40)
+
+	var sb strings.Builder
+	for _, line := range lines {
+		prefix := "  "
+		if line.Addr == pc {
+			prefix = "> "
+		}
+		if d.breakpoints[line.Addr] {
+			prefix = "* "
+		}
+		if line.Addr == pc && d.breakpoints[line.Addr] {
+			prefix = "*>"
+		}
+		sb.WriteString(prefix + line.String() + "\n")
+	}
+	d.setMonoText(d.dasmText, sb.String())
 }
 
 func (d *Debugger) refreshStatus() {
+	paused := "Running"
+	if d.isPaused != nil && d.isPaused() {
+		paused = "Paused"
+	}
 	halted := ""
 	if d.cpu.Halted {
 		halted = " [HALTED]"
 	}
-	d.statusLabel.SetText(fmt.Sprintf("Paused  PC=%04X  SP=%04X  IM=%d  IFF1=%v%s",
-		d.cpu.PC, d.cpu.SP, d.cpu.IM, d.cpu.IFF1, halted))
+	bpStr := ""
+	if len(d.breakpoints) > 0 {
+		addrs := []string{}
+		for addr := range d.breakpoints {
+			addrs = append(addrs, fmt.Sprintf("%04X", addr))
+		}
+		bpStr = fmt.Sprintf("  BPs: %s", strings.Join(addrs, ","))
+	}
+
+	d.setMonoText(d.statusLabel, fmt.Sprintf(
+		"%s  PC=%04X  SP=%04X  AF=%02X%02X  BC=%02X%02X  DE=%02X%02X  HL=%02X%02X  IM=%d  IFF=%v%s%s",
+		paused, d.cpu.PC, d.cpu.SP,
+		d.cpu.A, d.cpu.F, d.cpu.B, d.cpu.C, d.cpu.D, d.cpu.E, d.cpu.H, d.cpu.L,
+		d.cpu.IM, d.cpu.IFF1, halted, bpStr))
 }
 
-func (d *Debugger) applyRegisters() {
-	parse16 := func(name string) uint16 {
-		if e, ok := d.regEntries[name]; ok {
-			if v, err := strconv.ParseUint(e.Text, 16, 16); err == nil {
-				return uint16(v)
-			}
-		}
-		return 0
-	}
-	parse8 := func(name string) byte {
-		if e, ok := d.regEntries[name]; ok {
-			if v, err := strconv.ParseUint(e.Text, 16, 8); err == nil {
-				return byte(v)
-			}
-		}
-		return 0
-	}
-
-	d.cpu.PC = parse16("PC")
-	d.cpu.SP = parse16("SP")
-	d.cpu.IX = parse16("IX")
-	d.cpu.IY = parse16("IY")
-	d.cpu.A = parse8("A")
-	d.cpu.F = parse8("F")
-	d.cpu.B = parse8("B")
-	d.cpu.C = parse8("C")
-	d.cpu.D = parse8("D")
-	d.cpu.E = parse8("E")
-	d.cpu.H = parse8("H")
-	d.cpu.L = parse8("L")
-	d.cpu.A_ = parse8("A'")
-	d.cpu.F_ = parse8("F'")
-	d.cpu.B_ = parse8("B'")
-	d.cpu.C_ = parse8("C'")
-	d.cpu.D_ = parse8("D'")
-	d.cpu.E_ = parse8("E'")
-	d.cpu.H_ = parse8("H'")
-	d.cpu.L_ = parse8("L'")
-	d.cpu.I = parse8("I")
-	d.cpu.R = parse8("R")
-
-	d.Refresh()
+// CheckBreakpoint returns true if the CPU PC is at a breakpoint.
+func (d *Debugger) CheckBreakpoint() bool {
+	return d.breakpoints[d.cpu.PC]
 }

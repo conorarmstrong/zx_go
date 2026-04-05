@@ -635,15 +635,10 @@ func main() {
 			fyne.NewMenuItem("Debugger", func() {
 				dbg := debugger.New(emu.cpu, emu.mem, a)
 				dbg.SetCallbacks(
-					func() { // Pause
-						emu.paused = true
-					},
-					func() { // Step — execute one instruction
-						emu.cpu.ExecuteFrame(1)
-					},
-					func() { // Run
-						emu.paused = false
-					},
+					func() { emu.paused = true },              // Pause
+					func() { emu.cpu.StepInstruction() },       // Step one instruction (no interrupt)
+					func() { emu.paused = false },              // Run
+					func() bool { return emu.paused },          // isPaused
 				)
 				dbg.Show()
 			}),

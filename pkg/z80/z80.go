@@ -128,6 +128,16 @@ func (c *CPU) executeInstruction() {
 	c.executeBaseInstruction(opcode)
 }
 
+// StepInstruction executes exactly one Z80 instruction without
+// checking for interrupts. Used by the debugger for single-stepping.
+func (c *CPU) StepInstruction() {
+	if c.Halted {
+		c.tstates += 4
+		return
+	}
+	c.executeInstruction()
+}
+
 func (c *CPU) executeBaseInstruction(opcode byte) {
 	switch opcode {
 	// 8-bit load group
