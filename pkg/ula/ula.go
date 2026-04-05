@@ -23,6 +23,9 @@ const (
 	FlashFrames   = 16  // Number of frames between flash toggles
 )
 
+// TStatesPerLine is the number of T-states per scanline (228 for 48K/128K).
+const TStatesPerLine = 228
+
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
 type ULA struct {
 	mem         *memory.Memory
@@ -40,8 +43,17 @@ type ULA struct {
 	TapeIn       bool
 	Speaker      bool
 
+	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
+	// Allows accurate rendering of border effects that change colour during the frame.
+	borderChanges []borderChange
+
 	// Tape loading state
-	tape       *TapePlayer
+	tape *TapePlayer
+}
+
+type borderChange struct {
+	scanline int
+	colour   byte
 }
 
 // New creates a new ULA instance.
@@ -96,10 +108,37 @@ func (u *ULA) Render() *image.RGBA {
 		u.flashCount = 0
 	}
 
-	borderColor := u.palette[u.BorderColour]
+	// Build per-scanline border colour map from recorded changes.
+	// Each display scanline (0-239) maps to a border colour.
+	var borderPerLine [TotalHeight]byte
+	if len(u.borderChanges) > 0 {
+		// Start with the colour that was active before the first change in this frame.
+		// If the first change isn't on scanline 0, the previous frame's final colour applies.
+		currentBorder := u.BorderColour
+		if u.borderChanges[0].scanline == 0 {
+			currentBorder = u.borderChanges[0].colour
+		}
+		changeIdx := 0
+		for line := 0; line < TotalHeight; line++ {
+			// Advance past any border changes that apply to this scanline
+			// Map display line to frame scanline (line 0 = top border start)
+			frameScanline := line + (64 - BorderTop) // approximate: 64 lines before active display on 48K
+			for changeIdx < len(u.borderChanges) && u.borderChanges[changeIdx].scanline <= frameScanline {
+				currentBorder = u.borderChanges[changeIdx].colour
+				changeIdx++
+			}
+			borderPerLine[line] = currentBorder
+		}
+	} else {
+		for line := 0; line < TotalHeight; line++ {
+			borderPerLine[line] = u.BorderColour
+		}
+	}
+	u.borderChanges = u.borderChanges[:0] // Clear for next frame
 
-	// Draw borders
+	// Draw borders with per-scanline colours
 	for y := 0; y < TotalHeight; y++ {
+		borderColor := u.palette[borderPerLine[y]]
 		for x := 0; x < TotalWidth; x++ {
 			if x < BorderLeft || x >= BorderLeft+ScreenWidth || y < BorderTop || y >= BorderTop+ScreenHeight {
 				u.img.Set(x, y, borderColor)
@@ -174,7 +213,16 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 // WritePort handles CPU writes to ULA-controlled ports.
 func (u *ULA) WritePort(addr uint16, val byte) {
 	if addr&0x01 == 0 { // Port 0xFE
-		u.BorderColour = val & 0x07
+		newBorder := val & 0x07
+		if newBorder != u.BorderColour {
+			// Record the border change with current scanline for mid-frame rendering
+			scanline := 0
+			if u.mem.TStates != nil {
+				scanline = int(*u.mem.TStates / TStatesPerLine)
+			}
+			u.borderChanges = append(u.borderChanges, borderChange{scanline: scanline, colour: newBorder})
+			u.BorderColour = newBorder
+		}
 		u.Mic = (val & 0x08) != 0
 		
 		// Handle speaker state change

@@ -53,27 +53,81 @@ type Memory struct {
 // Contention delay pattern (repeats every 8 T-states in contended region)
 var contentionPattern = [8]uint64{6, 5, 4, 3, 2, 1, 0, 0}
 
+// isContendedAddr returns true if the address is in contended memory (screen RAM).
+func (m *Memory) isContendedAddr(addr uint16) bool {
+	// 0x4000-0x7FFF is always contended (bank 5 = screen memory).
+	// On 128K, the contended banks are 1, 3, 5, 7 when paged into 0xC000.
+	return addr >= 0x4000 && addr < 0x8000
+}
+
+// contentionDelay returns the contention delay for the current T-state position.
+func (m *Memory) contentionDelay() uint64 {
+	if m.TStates == nil {
+		return 0
+	}
+	tstate := *m.TStates
+	if tstate >= 14335 && tstate < 57344 {
+		line := (tstate - 14335) / 228
+		if line < 192 {
+			pos := (tstate - 14335) % 228
+			if pos < 128 {
+				return contentionPattern[pos%8]
+			}
+		}
+	}
+	return 0
+}
+
 // ContendMemory adds contention delay if the address is in contended memory.
-// Contended region is 0x4000-0x7FFF (bank 5) on 48K/128K.
 func (m *Memory) ContendMemory(addr uint16) {
 	if !m.ContentionEnabled || m.TStates == nil {
 		return
 	}
-	// Only contend addresses in the 0x4000-0x7FFF range (screen RAM)
-	if addr >= 0x4000 && addr < 0x8000 {
-		// Contention applies during the active display (T-states 14335-57343 for 48K)
-		tstate := *m.TStates
-		if tstate >= 14335 && tstate < 57344 {
-			line := (tstate - 14335) / 228
-			if line < 192 {
-				pos := (tstate - 14335) % 228
-				if pos < 128 { // Only during the pixel-drawing portion
-					delay := contentionPattern[pos%8]
-					*m.TStates += delay
-				}
-			}
-		}
+	if m.isContendedAddr(addr) {
+		*m.TStates += m.contentionDelay()
 	}
+}
+
+// ContendPort adds contention delay for I/O port access.
+// On 48K/128K/+2: even ports (bit 0 = 0) are ULA ports and always contended.
+// Additionally, if the port address is in contended memory range, extra contention applies.
+// On +2A/+3: no ports are treated as ULA ports (different ULA design).
+func (m *Memory) ContendPort(addr uint16) {
+	if !m.ContentionEnabled || m.TStates == nil {
+		return
+	}
+
+	// +2A/+3 have no ULA port contention
+	if m.currentModel == roms.ModelPlus3 || m.currentModel == roms.ModelPlus2A {
+		return
+	}
+
+	isULAPort := (addr & 0x01) == 0
+	isContended := m.isContendedAddr(addr)
+
+	if isContended && isULAPort {
+		// Contended address, ULA port: C:1, C:3
+		*m.TStates += m.contentionDelay()
+		*m.TStates++ // io cycle
+		*m.TStates += m.contentionDelay()
+		*m.TStates += 3
+	} else if isContended {
+		// Contended address, non-ULA port: C:1, C:1, C:1, C:1
+		*m.TStates += m.contentionDelay()
+		*m.TStates++
+		*m.TStates += m.contentionDelay()
+		*m.TStates++
+		*m.TStates += m.contentionDelay()
+		*m.TStates++
+		*m.TStates += m.contentionDelay()
+		*m.TStates++
+	} else if isULAPort {
+		// Non-contended address, ULA port: N:1, C:3
+		*m.TStates++ // io cycle
+		*m.TStates += m.contentionDelay()
+		*m.TStates += 3
+	}
+	// Non-contended, non-ULA: no contention (just the standard T-states)
 }
 
 // New creates a new Memory instance for a given machine model.

@@ -837,10 +837,12 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	// I/O
 	case 0xD3: // OUT (n),A
 		port := uint16(c.readOperand()) | (uint16(c.A) << 8)
+		c.mem.ContendPort(port)
 		c.ula.WritePort(port, c.A)
 		c.tstates += 11
 	case 0xDB: // IN A,(n)
 		port := uint16(c.readOperand()) | (uint16(c.A) << 8)
+		c.mem.ContendPort(port)
 		if val, ok := c.ula.ReadPort(port); ok {
 			c.A = val
 		}
@@ -1311,48 +1313,56 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 
 	// I/O operations
 	case 0x40: // IN B,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.B = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.B] | c.parityTable[c.B]
 		c.tstates += 12
 	case 0x48: // IN C,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.C = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.C] | c.parityTable[c.C]
 		c.tstates += 12
 	case 0x50: // IN D,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.D = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.D] | c.parityTable[c.D]
 		c.tstates += 12
 	case 0x58: // IN E,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.E = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.E] | c.parityTable[c.E]
 		c.tstates += 12
 	case 0x60: // IN H,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.H = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.H] | c.parityTable[c.H]
 		c.tstates += 12
 	case 0x68: // IN L,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.L = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.L] | c.parityTable[c.L]
 		c.tstates += 12
 	case 0x78: // IN A,(C)
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.A = val
 		}
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.A] | c.parityTable[c.A]
 		c.tstates += 12
 	case 0x70: // IN F,(C) - special case, only affects flags
+		c.mem.ContendPort(c.bc())
 		if val, ok := c.ula.ReadPort(c.bc()); ok {
 			c.F = (c.F & FLAG_C) | c.sz53Table[val] | c.parityTable[val]
 		}
@@ -1360,27 +1370,35 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 
 	// Output instructions
 	case 0x41: // OUT (C), B
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.B)
 		c.tstates += 12
 	case 0x49: // OUT (C), C
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.C)
 		c.tstates += 12
 	case 0x51: // OUT (C), D
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.D)
 		c.tstates += 12
 	case 0x59: // OUT (C), E
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.E)
 		c.tstates += 12
 	case 0x61: // OUT (C), H
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.H)
 		c.tstates += 12
 	case 0x69: // OUT (C), L
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.L)
 		c.tstates += 12
 	case 0x71: // OUT (C), 0 - outputs zero
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), 0)
 		c.tstates += 12
 	case 0x79: // OUT (C), A
+		c.mem.ContendPort(c.bc())
 		c.ula.WritePort(c.bc(), c.A)
 		c.tstates += 12
 
@@ -2404,6 +2422,7 @@ func (c *CPU) cpdr() {
 func (c *CPU) outi() {
 	// Output and increment
 	val := c.mem.Read(c.hl())
+	c.mem.ContendPort(c.bc())
 	c.ula.WritePort(c.bc(), val)
 	c.setHL(c.hl() + 1)
 	c.B--
@@ -2428,6 +2447,7 @@ func (c *CPU) outi() {
 func (c *CPU) outd() {
 	// Output and decrement
 	val := c.mem.Read(c.hl())
+	c.mem.ContendPort(c.bc())
 	c.ula.WritePort(c.bc(), val)
 	c.setHL(c.hl() - 1)
 	c.B--
@@ -2470,6 +2490,7 @@ func (c *CPU) otdr() {
 // Block input operations
 func (c *CPU) ini() {
 	// Input and increment
+	c.mem.ContendPort(c.bc())
 	val, _ := c.ula.ReadPort(c.bc())
 	c.mem.Write(c.hl(), val)
 	c.setHL(c.hl() + 1)
@@ -2493,6 +2514,7 @@ func (c *CPU) ini() {
 
 func (c *CPU) ind() {
 	// Input and decrement
+	c.mem.ContendPort(c.bc())
 	val, _ := c.ula.ReadPort(c.bc())
 	c.mem.Write(c.hl(), val)
 	c.setHL(c.hl() - 1)
