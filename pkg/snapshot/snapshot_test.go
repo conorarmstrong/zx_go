@@ -688,7 +688,7 @@ func TestZ80V2Load48K(t *testing.T) {
 
 	var fileBuf bytes.Buffer
 	fileBuf.Write(header)
-	binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
+	_ = binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
 	fileBuf.Write(extHeader)
 
 	for _, blk := range blocks {
@@ -781,7 +781,7 @@ func TestZ80V2Load128K(t *testing.T) {
 
 	var fileBuf bytes.Buffer
 	fileBuf.Write(header)
-	binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
+	_ = binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
 	fileBuf.Write(extHeader)
 
 	for _, blk := range blocks {
@@ -1563,7 +1563,7 @@ func TestZ80HardwareModeDetection(t *testing.T) {
 
 			var fileBuf bytes.Buffer
 			fileBuf.Write(header)
-			binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
+			_ = binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
 			fileBuf.Write(extHeader)
 			binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 			fileBuf.WriteByte(8)
@@ -1928,7 +1928,7 @@ func TestSZXUnknownBlocksSkipped(t *testing.T) {
 	orig.CPU.A = 0x42
 	orig.CPU.PC = 0x1000
 	var regsBuf bytes.Buffer
-	orig.saveSZXZ80Regs(&regsBuf)
+	_ = orig.saveSZXZ80Regs(&regsBuf)
 	buf.Write(regsBuf.Bytes())
 
 	dir := t.TempDir()
@@ -1966,7 +1966,7 @@ func TestZ80V2UnknownPageSkipped(t *testing.T) {
 	// Write a block with an unknown page number (99), followed by page 8 (bank 5)
 	var fileBuf bytes.Buffer
 	fileBuf.Write(header)
-	binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
+	_ = binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
 	fileBuf.Write(extHeader)
 
 	// Unknown page
