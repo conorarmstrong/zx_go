@@ -1791,7 +1791,7 @@ func TestHALT(t *testing.T) {
 }
 
 func TestDI_EI(t *testing.T) {
-	cpu, _ := createTestCPU()
+	cpu, mem := createTestCPU()
 	defer cleanupTestROMs("test_roms_z80")
 
 	// DI (0xF3)
@@ -1805,13 +1805,24 @@ func TestDI_EI(t *testing.T) {
 		t.Errorf("DI: IFF2 should be false")
 	}
 
-	// EI (0xFB)
+	// EI (0xFB) — sets eiDelay, interrupts enabled after NEXT instruction
 	cpu.executeBaseInstruction(0xFB)
+	if cpu.IFF1 {
+		t.Errorf("EI: IFF1 should still be false (delayed by one instruction)")
+	}
+	if !cpu.eiDelay {
+		t.Errorf("EI: eiDelay should be true")
+	}
+
+	// Execute one more instruction (NOP) — now interrupts should be enabled
+	cpu.PC = 0x8000
+	mem.Write(0x8000, 0x00) // NOP
+	cpu.executeInstruction()
 	if !cpu.IFF1 {
-		t.Errorf("EI: IFF1 should be true")
+		t.Errorf("After EI+NOP: IFF1 should be true")
 	}
 	if !cpu.IFF2 {
-		t.Errorf("EI: IFF2 should be true")
+		t.Errorf("After EI+NOP: IFF2 should be true")
 	}
 }
 

@@ -48,6 +48,9 @@ type CPU struct {
 	// IM2 interrupt vector low byte (0xFF on ZX Spectrum)
 	IM2Vector byte
 
+	// EI delay: interrupts aren't enabled until after the instruction following EI
+	eiDelay bool
+
 	// For debugging
 	logEnabled bool
 
@@ -124,8 +127,18 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 }
 
 func (c *CPU) executeInstruction() {
+	// EI delay: enable interrupts after executing one more instruction
+	wasEIDelay := c.eiDelay
+	if c.eiDelay {
+		c.eiDelay = false
+	}
+
 	opcode := c.fetch()
 	c.executeBaseInstruction(opcode)
+
+	if wasEIDelay {
+		c.IFF1, c.IFF2 = true, true
+	}
 }
 
 func (c *CPU) executeBaseInstruction(opcode byte) {
@@ -262,29 +275,29 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 
 	// 8-bit load immediate
 	case 0x06: // LD B,n
-		c.B = c.fetch(); c.tstates += 7
+		c.B = c.readOperand(); c.tstates += 7
 	case 0x07: // RLCA
 		c.rlca(); c.tstates += 4
 	case 0x0E: // LD C,n
-		c.C = c.fetch(); c.tstates += 7
+		c.C = c.readOperand(); c.tstates += 7
 	case 0x0F: // RRCA
 		c.rrca(); c.tstates += 4
 	case 0x16: // LD D,n
-		c.D = c.fetch(); c.tstates += 7
+		c.D = c.readOperand(); c.tstates += 7
 	case 0x17: // RLA
 		c.rla(); c.tstates += 4
 	case 0x1E: // LD E,n
-		c.E = c.fetch(); c.tstates += 7
+		c.E = c.readOperand(); c.tstates += 7
 	case 0x1F: // RRA
 		c.rra(); c.tstates += 4
 	case 0x26: // LD H,n
-		c.H = c.fetch(); c.tstates += 7
+		c.H = c.readOperand(); c.tstates += 7
 	case 0x2E: // LD L,n
-		c.L = c.fetch(); c.tstates += 7
+		c.L = c.readOperand(); c.tstates += 7
 	case 0x36: // LD (HL),n
-		c.mem.Write(c.hl(), c.fetch()); c.tstates += 10
+		c.mem.Write(c.hl(), c.readOperand()); c.tstates += 10
 	case 0x3E: // LD A,n
-		c.A = c.fetch(); c.tstates += 7
+		c.A = c.readOperand(); c.tstates += 7
 
 	// 16-bit load immediate
 	case 0x01: // LD BC,nn
@@ -338,7 +351,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0x87: // ADD A,A
 		c.add(c.A); c.tstates += 4
 	case 0xC6: // ADD A,n
-		c.add(c.fetch()); c.tstates += 7
+		c.add(c.readOperand()); c.tstates += 7
 
 	case 0x88: // ADC A,B
 		c.adc(c.B); c.tstates += 4
@@ -357,7 +370,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0x8F: // ADC A,A
 		c.adc(c.A); c.tstates += 4
 	case 0xCE: // ADC A,n
-		c.adc(c.fetch()); c.tstates += 7
+		c.adc(c.readOperand()); c.tstates += 7
 
 	case 0x90: // SUB B
 		c.sub(c.B); c.tstates += 4
@@ -376,7 +389,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0x97: // SUB A
 		c.sub(c.A); c.tstates += 4
 	case 0xD6: // SUB n
-		c.sub(c.fetch()); c.tstates += 7
+		c.sub(c.readOperand()); c.tstates += 7
 
 	case 0x98: // SBC A,B
 		c.sbc(c.B); c.tstates += 4
@@ -395,7 +408,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0x9F: // SBC A,A
 		c.sbc(c.A); c.tstates += 4
 	case 0xDE: // SBC A,n
-		c.sbc(c.fetch()); c.tstates += 7
+		c.sbc(c.readOperand()); c.tstates += 7
 
 	// Logical
 	case 0xA0: // AND B
@@ -415,7 +428,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0xA7: // AND A
 		c.and(c.A); c.tstates += 4
 	case 0xE6: // AND n
-		c.and(c.fetch()); c.tstates += 7
+		c.and(c.readOperand()); c.tstates += 7
 
 	case 0xA8: // XOR B
 		c.xor(c.B); c.tstates += 4
@@ -434,7 +447,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0xAF: // XOR A
 		c.xor(c.A); c.tstates += 4
 	case 0xEE: // XOR n
-		c.xor(c.fetch()); c.tstates += 7
+		c.xor(c.readOperand()); c.tstates += 7
 
 	case 0xB0: // OR B
 		c.or(c.B); c.tstates += 4
@@ -453,7 +466,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0xB7: // OR A
 		c.or(c.A); c.tstates += 4
 	case 0xF6: // OR n
-		c.or(c.fetch()); c.tstates += 7
+		c.or(c.readOperand()); c.tstates += 7
 
 	case 0xB8: // CP B
 		c.cp(c.B); c.tstates += 4
@@ -472,7 +485,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0xBF: // CP A
 		c.cp(c.A); c.tstates += 4
 	case 0xFE: // CP n
-		c.cp(c.fetch()); c.tstates += 7
+		c.cp(c.readOperand()); c.tstates += 7
 
 	// Inc/Dec
 	case 0x03: // INC BC
@@ -538,11 +551,11 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 
 	// Jumps
 	case 0x18: // JR n
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		c.PC = uint16(int32(c.PC) + int32(offset))
 		c.tstates += 12
 	case 0x20: // JR NZ,n
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		if (c.F & FLAG_Z) == 0 {
 			c.PC = uint16(int32(c.PC) + int32(offset))
 			c.tstates += 12
@@ -550,7 +563,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 			c.tstates += 7
 		}
 	case 0x28: // JR Z,n
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		if (c.F & FLAG_Z) != 0 {
 			c.PC = uint16(int32(c.PC) + int32(offset))
 			c.tstates += 12
@@ -558,7 +571,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 			c.tstates += 7
 		}
 	case 0x30: // JR NC,n
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		if (c.F & FLAG_C) == 0 {
 			c.PC = uint16(int32(c.PC) + int32(offset))
 			c.tstates += 12
@@ -566,7 +579,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 			c.tstates += 7
 		}
 	case 0x38: // JR C,n
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		if (c.F & FLAG_C) != 0 {
 			c.PC = uint16(int32(c.PC) + int32(offset))
 			c.tstates += 12
@@ -791,7 +804,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 		c.tstates += 4
 	case 0x10: // DJNZ n
 		c.B--
-		offset := int8(c.fetch())
+		offset := int8(c.readOperand())
 		if c.B != 0 {
 			c.PC = uint16(int32(c.PC) + int32(offset))
 			c.tstates += 13
@@ -818,16 +831,16 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	// Interrupts
 	case 0xF3: // DI
 		c.IFF1, c.IFF2 = false, false; c.tstates += 4
-	case 0xFB: // EI
-		c.IFF1, c.IFF2 = true, true; c.tstates += 4
+	case 0xFB: // EI — interrupts enabled after the NEXT instruction completes
+		c.eiDelay = true; c.tstates += 4
 
 	// I/O
 	case 0xD3: // OUT (n),A
-		port := uint16(c.fetch()) | (uint16(c.A) << 8)
+		port := uint16(c.readOperand()) | (uint16(c.A) << 8)
 		c.ula.WritePort(port, c.A)
 		c.tstates += 11
 	case 0xDB: // IN A,(n)
-		port := uint16(c.fetch()) | (uint16(c.A) << 8)
+		port := uint16(c.readOperand()) | (uint16(c.A) << 8)
 		if val, ok := c.ula.ReadPort(port); ok {
 			c.A = val
 		}
@@ -1423,13 +1436,13 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		
 	// INC/DEC (IX+d)
 	case 0x34: // INC (IX+d)
-		d := int8(c.fetch())
+		d := int8(c.readOperand())
 		addr := uint16(int32(c.IX) + int32(d))
 		val := c.inc(c.mem.Read(addr))
 		c.mem.Write(addr, val)
 		c.tstates += 23
 	case 0x35: // DEC (IX+d)
-		d := int8(c.fetch())
+		d := int8(c.readOperand())
 		addr := uint16(int32(c.IX) + int32(d))
 		val := c.dec(c.mem.Read(addr))
 		c.mem.Write(addr, val)
@@ -1437,8 +1450,8 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		
 	// LD (IX+d),n
 	case 0x36: // LD (IX+d),n
-		d := int8(c.fetch())
-		n := c.fetch()
+		d := int8(c.readOperand())
+		n := c.readOperand()
 		addr := uint16(int32(c.IX) + int32(d))
 		c.mem.Write(addr, n)
 		c.tstates += 19
@@ -1524,7 +1537,7 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		
 	// DD CB prefix (IX bit operations)
 	case 0xCB: // DD CB prefix
-		d := int8(c.fetch()) // Displacement comes first
+		d := int8(c.readOperand()) // Displacement comes first
 		opcode := c.fetch()  // Then the CB opcode
 		addr := uint16(int32(c.IX) + int32(d))
 		c.executeDDCBInstruction(opcode, addr)
@@ -1552,14 +1565,14 @@ func (c *CPU) addIX(value uint16) {
 }
 
 func (c *CPU) loadIXd() byte {
-	d := int8(c.fetch())
+	d := int8(c.readOperand())
 	addr := uint16(int32(c.IX) + int32(d))
 	c.tstates += 15 // Base timing for IX+d operations
 	return c.mem.Read(addr)
 }
 
 func (c *CPU) storeIXd(value byte) {
-	d := int8(c.fetch())
+	d := int8(c.readOperand())
 	addr := uint16(int32(c.IX) + int32(d))
 	c.mem.Write(addr, value)
 	c.tstates += 19
@@ -1581,14 +1594,14 @@ func (c *CPU) addIY(value uint16) {
 }
 
 func (c *CPU) loadIYd() byte {
-	d := int8(c.fetch())
+	d := int8(c.readOperand())
 	addr := uint16(int32(c.IY) + int32(d))
 	c.tstates += 15 // Base timing for IY+d operations
 	return c.mem.Read(addr)
 }
 
 func (c *CPU) storeIYd(value byte) {
-	d := int8(c.fetch())
+	d := int8(c.readOperand())
 	addr := uint16(int32(c.IY) + int32(d))
 	c.mem.Write(addr, value)
 	c.tstates += 19
@@ -1700,13 +1713,13 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		
 	// INC/DEC (IY+d)
 	case 0x34: // INC (IY+d)
-		d := int8(c.fetch())
+		d := int8(c.readOperand())
 		addr := uint16(int32(c.IY) + int32(d))
 		val := c.inc(c.mem.Read(addr))
 		c.mem.Write(addr, val)
 		c.tstates += 23
 	case 0x35: // DEC (IY+d)
-		d := int8(c.fetch())
+		d := int8(c.readOperand())
 		addr := uint16(int32(c.IY) + int32(d))
 		val := c.dec(c.mem.Read(addr))
 		c.mem.Write(addr, val)
@@ -1714,8 +1727,8 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		
 	// LD (IY+d),n
 	case 0x36: // LD (IY+d),n
-		d := int8(c.fetch())
-		n := c.fetch()
+		d := int8(c.readOperand())
+		n := c.readOperand()
 		addr := uint16(int32(c.IY) + int32(d))
 		c.mem.Write(addr, n)
 		c.tstates += 19
@@ -1806,7 +1819,7 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		
 	// FD CB prefix (IY bit operations)
 	case 0xCB: // FD CB prefix
-		d := int8(c.fetch()) // Displacement comes first
+		d := int8(c.readOperand()) // Displacement comes first
 		opcode := c.fetch()  // Then the CB opcode
 		c.executeFDCBInstruction(opcode, d)
 		c.tstates += 8 // Base timing, individual instructions add more
@@ -1858,6 +1871,7 @@ func (c *CPU) executeFDCBInstruction(opcode byte, d int8) {
 	c.tstates += 23
 }
 
+// fetch reads the next byte at PC and increments R (opcode fetch only).
 func (c *CPU) fetch() byte {
 	val := c.mem.Read(c.PC)
 	c.PC++
@@ -1865,10 +1879,22 @@ func (c *CPU) fetch() byte {
 	return val
 }
 
-func (c *CPU) fetch16() uint16 {
-	lo := uint16(c.fetch())
-	hi := uint16(c.fetch())
+// readOperand reads the next byte at PC without incrementing R (for immediate operands).
+func (c *CPU) readOperand() byte {
+	val := c.mem.Read(c.PC)
+	c.PC++
+	return val
+}
+
+// readOperand16 reads 2 bytes (little-endian) without incrementing R.
+func (c *CPU) readOperand16() uint16 {
+	lo := uint16(c.readOperand())
+	hi := uint16(c.readOperand())
 	return (hi << 8) | lo
+}
+
+func (c *CPU) fetch16() uint16 {
+	return c.readOperand16()
 }
 
 // Helper functions for register pairs
