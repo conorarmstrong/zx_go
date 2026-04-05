@@ -1222,6 +1222,18 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 	case 0xBB: // OTDR - Output, decrement and repeat
 		c.otdr()
 		c.tstates += 16
+	case 0xA2: // INI - Input and increment
+		c.ini()
+		c.tstates += 16
+	case 0xAA: // IND - Input and decrement
+		c.ind()
+		c.tstates += 16
+	case 0xB2: // INIR - Input, increment and repeat
+		c.inir()
+		c.tstates += 16
+	case 0xBA: // INDR - Input, decrement and repeat
+		c.indr()
+		c.tstates += 16
 	case 0x67: // RRD - Rotate right decimal
 		c.rrd()
 		c.tstates += 18
@@ -2426,6 +2438,71 @@ func (c *CPU) otdr() {
 	if c.B != 0 {
 		c.PC -= 2 // Repeat the instruction
 		c.tstates += 5 // Extra cycles for repeat
+	}
+}
+
+// Block input operations
+func (c *CPU) ini() {
+	// Input and increment
+	val, _ := c.ula.ReadPort(c.bc())
+	c.mem.Write(c.hl(), val)
+	c.setHL(c.hl() + 1)
+	c.B--
+
+	c.F = 0
+	if c.B == 0 {
+		c.F |= FLAG_Z
+	}
+	if (c.B & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	c.F |= FLAG_N
+
+	temp := uint16(val) + uint16(c.C) + 1
+	if temp > 255 {
+		c.F |= FLAG_H | FLAG_C
+	}
+	c.F |= c.parityTable[(byte(temp)&7)^c.B]
+}
+
+func (c *CPU) ind() {
+	// Input and decrement
+	val, _ := c.ula.ReadPort(c.bc())
+	c.mem.Write(c.hl(), val)
+	c.setHL(c.hl() - 1)
+	c.B--
+
+	c.F = 0
+	if c.B == 0 {
+		c.F |= FLAG_Z
+	}
+	if (c.B & 0x80) != 0 {
+		c.F |= FLAG_S
+	}
+	c.F |= FLAG_N
+
+	temp := uint16(val) + uint16(c.C) - 1
+	if temp > 255 {
+		c.F |= FLAG_H | FLAG_C
+	}
+	c.F |= c.parityTable[(byte(temp)&7)^c.B]
+}
+
+func (c *CPU) inir() {
+	// Input, increment and repeat
+	c.ini()
+	if c.B != 0 {
+		c.PC -= 2
+		c.tstates += 5
+	}
+}
+
+func (c *CPU) indr() {
+	// Input, decrement and repeat
+	c.ind()
+	if c.B != 0 {
+		c.PC -= 2
+		c.tstates += 5
 	}
 }
 

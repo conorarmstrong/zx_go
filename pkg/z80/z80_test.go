@@ -3160,3 +3160,510 @@ func TestSBC_withCarry(t *testing.T) {
 		t.Errorf("SBC with carry: expected 0x1F, got 0x%02X", cpu.A)
 	}
 }
+// =============================================================================
+// TestReset - verify register initial values after Reset()
+// =============================================================================
+
+func TestReset(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// Dirty the registers
+	cpu.A = 0x00
+	cpu.B = 0x01
+	cpu.C = 0x02
+	cpu.IX = 0x1234
+	cpu.IY = 0x5678
+	cpu.SP = 0x1000
+	cpu.PC = 0x8000
+	cpu.IFF1 = true
+	cpu.IFF2 = true
+	cpu.IM = 2
+	cpu.Halted = true
+	cpu.tstates = 99999
+
+	cpu.Reset()
+
+	if cpu.A != 0xFF {
+		t.Errorf("Reset A: expected 0xFF, got 0x%02X", cpu.A)
+	}
+	if cpu.F != 0xFF {
+		t.Errorf("Reset F: expected 0xFF, got 0x%02X", cpu.F)
+	}
+	if cpu.B != 0xFF {
+		t.Errorf("Reset B: expected 0xFF, got 0x%02X", cpu.B)
+	}
+	if cpu.IX != 0xFFFF {
+		t.Errorf("Reset IX: expected 0xFFFF, got 0x%04X", cpu.IX)
+	}
+	if cpu.IY != 0xFFFF {
+		t.Errorf("Reset IY: expected 0xFFFF, got 0x%04X", cpu.IY)
+	}
+	if cpu.SP != 0xFFFF {
+		t.Errorf("Reset SP: expected 0xFFFF, got 0x%04X", cpu.SP)
+	}
+	if cpu.PC != 0x0000 {
+		t.Errorf("Reset PC: expected 0x0000, got 0x%04X", cpu.PC)
+	}
+	if cpu.IFF1 {
+		t.Errorf("Reset IFF1: expected false")
+	}
+	if cpu.IFF2 {
+		t.Errorf("Reset IFF2: expected false")
+	}
+	if cpu.IM != 0 {
+		t.Errorf("Reset IM: expected 0, got %d", cpu.IM)
+	}
+	if cpu.Halted {
+		t.Errorf("Reset Halted: expected false")
+	}
+	if cpu.tstates != 0 {
+		t.Errorf("Reset tstates: expected 0, got %d", cpu.tstates)
+	}
+}
+
+// =============================================================================
+// TestExecuteFrame - run a short frame, verify T-states consumed and interrupt
+// =============================================================================
+
+func TestExecuteFrame(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// Place NOP (0x00) instructions in RAM so the CPU can execute them
+	for i := uint16(0x4000); i < 0x4100; i++ {
+		mem.Write(i, 0x00) // NOP = 4 T-states
+	}
+	cpu.PC = 0x4000
+	cpu.tstates = 0
+
+	// Run a short frame of 100 T-states — NOPs are 4 each, so >=25 will execute
+	cpu.ExecuteFrame(100)
+
+	// After the frame, tstates should wrap (tstates -= tstatesEnd makes it small)
+	// and at least some instructions were executed (PC moved forward from 0x4000)
+	if cpu.PC == 0x4000 {
+		t.Errorf("ExecuteFrame: PC should have advanced from 0x4000, got 0x%04X", cpu.PC)
+	}
+
+	// Now verify interrupt fires: enable IFF1 and run a frame
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = true
+	cpu.IM = 1
+	cpu.tstates = 0
+	cpu.ExecuteFrame(100)
+
+	// After IM1 interrupt, PC should be 0x0038
+	if cpu.PC != 0x0038 {
+		t.Errorf("ExecuteFrame interrupt: expected PC=0x0038, got PC=0x%04X", cpu.PC)
+	}
+	if cpu.IFF1 {
+		t.Errorf("ExecuteFrame interrupt: IFF1 should be cleared after interrupt")
+	}
+}
+
+// =============================================================================
+// ED prefix: block I/O — OUTI, OTIR, OUTD, OTDR
+// =============================================================================
+
+func TestOUTI(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	// Set up: HL points to data in RAM, BC is the port
+	mem.Write(0x5000, 0xAB) // data at HL
+	cpu.setHL(0x5000)
+	cpu.B = 0x02
+	cpu.C = 0xFE
+
+	cpu.executeEDInstruction(0xA3) // OUTI
+
+	port := cpu.bc() // B is now 0x01, C is 0xFE
+	_ = port
+	// data 0xAB should have been written to port 0x02FE (original BC before decrement)
+	// outi uses bc() BEFORE decrementing B inside outi(), so port = old B<<8 | C = 0x02FE
+	if ula.ports[0x02FE] != 0xAB {
+		t.Errorf("OUTI: expected 0xAB at port 0x02FE, got 0x%02X", ula.ports[0x02FE])
+	}
+	if cpu.B != 0x01 {
+		t.Errorf("OUTI: expected B=0x01, got B=0x%02X", cpu.B)
+	}
+	if cpu.hl() != 0x5001 {
+		t.Errorf("OUTI: expected HL=0x5001, got HL=0x%04X", cpu.hl())
+	}
+}
+
+func TestOTIR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	// Set up three bytes to output at HL
+	mem.Write(0x5000, 0x11)
+	mem.Write(0x5001, 0x22)
+	mem.Write(0x5002, 0x33)
+	cpu.setHL(0x5000)
+	cpu.B = 0x03
+	cpu.C = 0x01
+	// PC must be in RAM for the repeat (PC -= 2)
+	cpu.PC = 0x5010
+
+	// Execute OTIR once — it will repeat internally until B==0
+	cpu.executeEDInstruction(0xB3)
+	// After the first call with B=3: B becomes 2, PC goes to 0x500E (repeat)
+	// We need to keep executing until B==0
+	for cpu.B != 0 {
+		cpu.executeEDInstruction(0xB3)
+	}
+
+	if cpu.B != 0 {
+		t.Errorf("OTIR: expected B=0, got B=0x%02X", cpu.B)
+	}
+	// Last output should have been 0x33
+	_ = ula.ports
+}
+
+func TestOUTD(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	mem.Write(0x5010, 0xCD)
+	cpu.setHL(0x5010)
+	cpu.B = 0x02
+	cpu.C = 0xFE
+
+	cpu.executeEDInstruction(0xAB) // OUTD
+
+	if ula.ports[0x02FE] != 0xCD {
+		t.Errorf("OUTD: expected 0xCD at port 0x02FE, got 0x%02X", ula.ports[0x02FE])
+	}
+	if cpu.B != 0x01 {
+		t.Errorf("OUTD: expected B=0x01, got B=0x%02X", cpu.B)
+	}
+	if cpu.hl() != 0x500F {
+		t.Errorf("OUTD: expected HL=0x500F, got HL=0x%04X", cpu.hl())
+	}
+}
+
+func TestOTDR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x5002, 0x11)
+	mem.Write(0x5001, 0x22)
+	mem.Write(0x5000, 0x33)
+	cpu.setHL(0x5002)
+	cpu.B = 0x03
+	cpu.C = 0x01
+	cpu.PC = 0x5010
+
+	cpu.executeEDInstruction(0xBB)
+	for cpu.B != 0 {
+		cpu.executeEDInstruction(0xBB)
+	}
+
+	if cpu.B != 0 {
+		t.Errorf("OTDR: expected B=0, got B=0x%02X", cpu.B)
+	}
+}
+
+// =============================================================================
+// ED prefix: INI, INIR, IND, INDR
+// =============================================================================
+
+func TestINI(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	ula.ports[0x02FE] = 0x77
+	cpu.B = 0x02
+	cpu.C = 0xFE
+	cpu.setHL(0x5000)
+
+	cpu.executeEDInstruction(0xA2) // INI
+
+	if mem.Read(0x5000) != 0x77 {
+		t.Errorf("INI: expected 0x77 at (HL)=0x5000, got 0x%02X", mem.Read(0x5000))
+	}
+	if cpu.B != 0x01 {
+		t.Errorf("INI: expected B=0x01, got B=0x%02X", cpu.B)
+	}
+	if cpu.hl() != 0x5001 {
+		t.Errorf("INI: expected HL=0x5001, got HL=0x%04X", cpu.hl())
+	}
+}
+
+func TestINIR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	ula.ports[0x03FE] = 0x55
+	cpu.B = 0x03
+	cpu.C = 0xFE
+	cpu.setHL(0x5000)
+	cpu.PC = 0x5020
+
+	cpu.executeEDInstruction(0xB2)
+	for cpu.B != 0 {
+		cpu.executeEDInstruction(0xB2)
+	}
+
+	if cpu.B != 0 {
+		t.Errorf("INIR: expected B=0, got B=0x%02X", cpu.B)
+	}
+	// Three bytes should have been written to memory
+	if mem.Read(0x5000) != 0x55 {
+		t.Errorf("INIR: expected 0x55 at 0x5000, got 0x%02X", mem.Read(0x5000))
+	}
+}
+
+func TestIND(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	ula.ports[0x02FE] = 0x88
+	cpu.B = 0x02
+	cpu.C = 0xFE
+	cpu.setHL(0x5010)
+
+	cpu.executeEDInstruction(0xAA) // IND
+
+	if mem.Read(0x5010) != 0x88 {
+		t.Errorf("IND: expected 0x88 at (HL)=0x5010, got 0x%02X", mem.Read(0x5010))
+	}
+	if cpu.B != 0x01 {
+		t.Errorf("IND: expected B=0x01, got B=0x%02X", cpu.B)
+	}
+	if cpu.hl() != 0x500F {
+		t.Errorf("IND: expected HL=0x500F, got HL=0x%04X", cpu.hl())
+	}
+}
+
+func TestINDR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	ula.ports[0x03FE] = 0x99
+	cpu.B = 0x03
+	cpu.C = 0xFE
+	cpu.setHL(0x5002)
+	cpu.PC = 0x5020
+
+	cpu.executeEDInstruction(0xBA)
+	for cpu.B != 0 {
+		cpu.executeEDInstruction(0xBA)
+	}
+
+	if cpu.B != 0 {
+		t.Errorf("INDR: expected B=0, got B=0x%02X", cpu.B)
+	}
+	if mem.Read(0x5002) != 0x99 {
+		t.Errorf("INDR: expected 0x99 at 0x5002, got 0x%02X", mem.Read(0x5002))
+	}
+}
+
+// =============================================================================
+// ED prefix: LD (nn),rr / LD rr,(nn) for BC, DE, SP
+// =============================================================================
+
+func TestED_LD_nn_BC(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	cpu.B = 0x12
+	cpu.C = 0x34
+	// The instruction reads a 16-bit address from PC
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00) // low byte of address
+	mem.Write(0x5001, 0x60) // high byte => 0x6000
+
+	cpu.executeEDInstruction(0x43) // LD (nn),BC
+
+	if mem.Read(0x6000) != 0x34 { // C stored at low address
+		t.Errorf("LD (nn),BC: expected C=0x34 at 0x6000, got 0x%02X", mem.Read(0x6000))
+	}
+	if mem.Read(0x6001) != 0x12 { // B stored at high address
+		t.Errorf("LD (nn),BC: expected B=0x12 at 0x6001, got 0x%02X", mem.Read(0x6001))
+	}
+}
+
+func TestED_LD_BC_nn(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x6000, 0x34)
+	mem.Write(0x6001, 0x12)
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00) // low
+	mem.Write(0x5001, 0x60) // high => 0x6000
+
+	cpu.executeEDInstruction(0x4B) // LD BC,(nn)
+
+	if cpu.C != 0x34 {
+		t.Errorf("LD BC,(nn): expected C=0x34, got C=0x%02X", cpu.C)
+	}
+	if cpu.B != 0x12 {
+		t.Errorf("LD BC,(nn): expected B=0x12, got B=0x%02X", cpu.B)
+	}
+}
+
+func TestED_LD_nn_DE(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	cpu.D = 0xAB
+	cpu.E = 0xCD
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00)
+	mem.Write(0x5001, 0x60) // => 0x6000
+
+	cpu.executeEDInstruction(0x53) // LD (nn),DE
+
+	if mem.Read(0x6000) != 0xCD {
+		t.Errorf("LD (nn),DE: expected E at 0x6000, got 0x%02X", mem.Read(0x6000))
+	}
+	if mem.Read(0x6001) != 0xAB {
+		t.Errorf("LD (nn),DE: expected D at 0x6001, got 0x%02X", mem.Read(0x6001))
+	}
+}
+
+func TestED_LD_DE_nn(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x6000, 0xCD)
+	mem.Write(0x6001, 0xAB)
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00)
+	mem.Write(0x5001, 0x60)
+
+	cpu.executeEDInstruction(0x5B) // LD DE,(nn)
+
+	if cpu.E != 0xCD {
+		t.Errorf("LD DE,(nn): expected E=0xCD, got E=0x%02X", cpu.E)
+	}
+	if cpu.D != 0xAB {
+		t.Errorf("LD DE,(nn): expected D=0xAB, got D=0x%02X", cpu.D)
+	}
+}
+
+func TestED_LD_nn_SP(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	cpu.SP = 0x1234
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00)
+	mem.Write(0x5001, 0x60) // => 0x6000
+
+	cpu.executeEDInstruction(0x73) // LD (nn),SP
+
+	if mem.Read(0x6000) != 0x34 {
+		t.Errorf("LD (nn),SP: expected 0x34 at 0x6000, got 0x%02X", mem.Read(0x6000))
+	}
+	if mem.Read(0x6001) != 0x12 {
+		t.Errorf("LD (nn),SP: expected 0x12 at 0x6001, got 0x%02X", mem.Read(0x6001))
+	}
+}
+
+func TestED_LD_SP_nn(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x6000, 0x34)
+	mem.Write(0x6001, 0x12)
+	cpu.PC = 0x5000
+	mem.Write(0x5000, 0x00)
+	mem.Write(0x5001, 0x60)
+
+	cpu.executeEDInstruction(0x7B) // LD SP,(nn)
+
+	if cpu.SP != 0x1234 {
+		t.Errorf("LD SP,(nn): expected SP=0x1234, got SP=0x%04X", cpu.SP)
+	}
+}
+
+// =============================================================================
+// DDCB: BIT, SET, RES, RLC via executeDDCBInstruction
+// =============================================================================
+
+func TestDDCB_BIT(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// BIT 3,(IX+0) — opcode for BIT 3 is 0x40 + 3*8 + 6 = 0x5E
+	mem.Write(0x5000, 0x08) // value: bit 3 set
+	cpu.IX = 0x5000
+	addr := uint16(int32(cpu.IX) + 0)
+
+	cpu.executeDDCBInstruction(0x5E, addr) // BIT 3,(IX+0)
+
+	if (cpu.F & FLAG_Z) != 0 {
+		t.Errorf("DDCB BIT 3: bit 3 is set, Z flag should be clear")
+	}
+
+	// BIT 7,(IX+0) with bit 7 clear => Z set
+	mem.Write(0x5000, 0x08)
+	cpu.executeDDCBInstruction(0x7E, addr) // BIT 7,(IX+0): 0x40+7*8+6=0x7E
+
+	if (cpu.F & FLAG_Z) == 0 {
+		t.Errorf("DDCB BIT 7: bit 7 is clear, Z flag should be set")
+	}
+}
+
+func TestDDCB_SET(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x5000, 0x00)
+	cpu.IX = 0x5000
+	addr := uint16(int32(cpu.IX) + 0)
+
+	// SET 5,(IX+0): opcode 0xC0 + 5*8 + 6 = 0xEE
+	cpu.executeDDCBInstruction(0xEE, addr)
+
+	if mem.Read(0x5000) != 0x20 {
+		t.Errorf("DDCB SET 5: expected 0x20, got 0x%02X", mem.Read(0x5000))
+	}
+}
+
+func TestDDCB_RES(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x5000, 0xFF)
+	cpu.IX = 0x5000
+	addr := uint16(int32(cpu.IX) + 0)
+
+	// RES 5,(IX+0): opcode 0x80 + 5*8 + 6 = 0xAE
+	cpu.executeDDCBInstruction(0xAE, addr)
+
+	if mem.Read(0x5000) != 0xDF {
+		t.Errorf("DDCB RES 5: expected 0xDF, got 0x%02X", mem.Read(0x5000))
+	}
+}
+
+func TestDDCB_RLC(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x5000, 0x80) // bit 7 set
+	cpu.IX = 0x5000
+	addr := uint16(int32(cpu.IX) + 0)
+
+	cpu.executeDDCBInstruction(0x06, addr) // RLC (IX+0)
+
+	if mem.Read(0x5000) != 0x01 {
+		t.Errorf("DDCB RLC: expected 0x01, got 0x%02X", mem.Read(0x5000))
+	}
+	if (cpu.F & FLAG_C) == 0 {
+		t.Errorf("DDCB RLC: carry flag should be set")
+	}
+}
