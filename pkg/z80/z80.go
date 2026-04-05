@@ -48,9 +48,6 @@ type CPU struct {
 	// IM2 interrupt vector low byte (0xFF on ZX Spectrum)
 	IM2Vector byte
 
-	// EI delay: interrupts aren't enabled until after the instruction following EI
-	eiDelay bool
-
 	// For debugging
 	logEnabled bool
 
@@ -127,18 +124,8 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 }
 
 func (c *CPU) executeInstruction() {
-	// EI delay: enable interrupts after executing one more instruction
-	wasEIDelay := c.eiDelay
-	if c.eiDelay {
-		c.eiDelay = false
-	}
-
 	opcode := c.fetch()
 	c.executeBaseInstruction(opcode)
-
-	if wasEIDelay {
-		c.IFF1, c.IFF2 = true, true
-	}
 }
 
 func (c *CPU) executeBaseInstruction(opcode byte) {
@@ -831,8 +818,8 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	// Interrupts
 	case 0xF3: // DI
 		c.IFF1, c.IFF2 = false, false; c.tstates += 4
-	case 0xFB: // EI — interrupts enabled after the NEXT instruction completes
-		c.eiDelay = true; c.tstates += 4
+	case 0xFB: // EI
+		c.IFF1, c.IFF2 = true, true; c.tstates += 4
 
 	// I/O
 	case 0xD3: // OUT (n),A
