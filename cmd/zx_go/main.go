@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
@@ -631,6 +632,21 @@ func main() {
 		fyne.NewMenu("Emulator",
 			fyne.NewMenuItem("Reboot", emu.reboot),
 			fyne.NewMenuItem("Pause/Resume", emu.togglePause),
+			fyne.NewMenuItem("Debugger", func() {
+				dbg := debugger.New(emu.cpu, emu.mem, a)
+				dbg.SetCallbacks(
+					func() { // Pause
+						emu.paused = true
+					},
+					func() { // Step — execute one instruction
+						emu.cpu.ExecuteFrame(1)
+					},
+					func() { // Run
+						emu.paused = false
+					},
+				)
+				dbg.Show()
+			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("ROM Info", func() {
 				info := "Loaded ROMs:\n"
