@@ -397,9 +397,8 @@ func TestFilesystemROMOverridesEmbedded(t *testing.T) {
 	data, _ := rm.GetROM(ROM48K)
 
 	// Our test ROM was filled with '4' ^ byte(i&0xFF) (since "48.rom"[0] == '4')
-	// The first byte should be '4' ^ 0x00 = '4' = 0x34
-	expected := byte('4') ^ 0x00
-	if data[0] != expected {
-		t.Errorf("first byte = 0x%02X, want 0x%02X (filesystem ROM should override embedded)", data[0], expected)
+	// The first byte should be '4' (0x34)
+	if data[0] != 0x34 {
+		t.Errorf("first byte = 0x%02X, want 0x34 (filesystem ROM should override embedded)", data[0])
 	}
 }
