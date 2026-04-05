@@ -41,7 +41,7 @@ func createTestROMs(t *testing.T, dir string) {
 
 // Clean up test ROMs
 func cleanupTestROMs(dir string) {
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }
 
 func TestMemoryCreation(t *testing.T) {

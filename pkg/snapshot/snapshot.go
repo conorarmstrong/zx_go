@@ -86,7 +86,7 @@ func (s *Snapshot) Load(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open snapshot file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	s.Format = format
 	
@@ -113,7 +113,7 @@ func (s *Snapshot) Save(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	switch format {
 	case FormatSNA:

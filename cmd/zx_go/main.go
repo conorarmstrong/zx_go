@@ -478,7 +478,7 @@ func main() {
 					}
 					log.Println("ROM selected:", reader.URI().Path())
 					// TODO: Load ROM
-					reader.Close()
+					_ = reader.Close()
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
 				fd.Show()
@@ -499,20 +499,20 @@ func main() {
 					snap := snapshot.New()
 					if err := snap.Load(reader.URI().Path()); err != nil {
 						dialog.ShowError(fmt.Errorf("Failed to load snapshot: %w", err), w)
-						reader.Close()
+						_ = reader.Close()
 						return
 					}
 
 					// Apply snapshot to emulator
 					if err := applySnapshotToEmulator(emu, snap); err != nil {
 						dialog.ShowError(fmt.Errorf("Failed to apply snapshot: %w", err), w)
-						reader.Close()
+						_ = reader.Close()
 						return
 					}
 
 					log.Printf("Successfully loaded %s snapshot", getFormatName(snap.Format))
 					dialog.ShowInformation("Snapshot Loaded", fmt.Sprintf("Successfully loaded %s snapshot from:\n%s", getFormatName(snap.Format), reader.URI().Name()), w)
-					reader.Close()
+					_ = reader.Close()
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
 				fd.Show()
@@ -533,20 +533,20 @@ func main() {
 					snap, err := createSnapshotFromEmulator(emu)
 					if err != nil {
 						dialog.ShowError(fmt.Errorf("Failed to create snapshot: %w", err), w)
-						writer.Close()
+						_ = writer.Close()
 						return
 					}
 
 					// Save the snapshot
 					if err := snap.Save(writer.URI().Path()); err != nil {
 						dialog.ShowError(fmt.Errorf("Failed to save snapshot: %w", err), w)
-						writer.Close()
+						_ = writer.Close()
 						return
 					}
 
 					log.Printf("Successfully saved %s snapshot", getFormatName(snap.Format))
 					dialog.ShowInformation("Snapshot Saved", fmt.Sprintf("Successfully saved %s snapshot to:\n%s", getFormatName(snap.Format), writer.URI().Name()), w)
-					writer.Close()
+					_ = writer.Close()
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
 				fd.Show()
@@ -564,13 +564,13 @@ func main() {
 					tp := ula.NewTapePlayer()
 					if err := tp.LoadTAP(reader.URI().Path()); err != nil {
 						dialog.ShowError(fmt.Errorf("Failed to load TAP: %w", err), w)
-						reader.Close()
+						_ = reader.Close()
 						return
 					}
 					emu.ula.SetTapePlayer(tp)
 					tp.Play()
 					dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
-					reader.Close()
+					_ = reader.Close()
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
 				fd.Show()

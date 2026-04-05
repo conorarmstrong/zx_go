@@ -693,7 +693,7 @@ func TestZ80V2Load48K(t *testing.T) {
 
 	for _, blk := range blocks {
 		compressed := snap.compressZ80(blk.data)
-		binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
+		_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 		fileBuf.WriteByte(blk.pageNum)
 		fileBuf.Write(compressed)
 	}
@@ -787,7 +787,7 @@ func TestZ80V2Load128K(t *testing.T) {
 	for _, blk := range blocks {
 		pageData := makePageData(blk.fill)
 		compressed := snap.compressZ80(pageData)
-		binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
+		_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 		fileBuf.WriteByte(blk.pageNum)
 		fileBuf.Write(compressed)
 	}
@@ -1565,7 +1565,7 @@ func TestZ80HardwareModeDetection(t *testing.T) {
 			fileBuf.Write(header)
 			_ = binary.Write(&fileBuf, binary.LittleEndian, extHeaderLen)
 			fileBuf.Write(extHeader)
-			binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
+			_ = binary.Write(&fileBuf, binary.LittleEndian, uint16(len(compressed)))
 			fileBuf.WriteByte(8)
 			fileBuf.Write(compressed)
 
