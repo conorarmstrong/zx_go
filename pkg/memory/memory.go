@@ -37,6 +37,7 @@ type Memory struct {
 	ScreenPage int
 	// Plus3 special paging mode
 	specialPaging bool
+	port7FFD      byte
 	port1FFD      byte
 
 	// ROM manager for handling multiple ROM types
@@ -287,6 +288,7 @@ func (m *Memory) PageMemory(val byte) {
 	if !m.PagingEnabled {
 		return
 	}
+	m.port7FFD = val
 
 	// Bits 0-2: RAM page to map into 0xC000-0xFFFF
 	ramPage := int(val & 0x07)
@@ -301,24 +303,29 @@ func (m *Memory) PageMemory(val byte) {
 	}
 
 	// Bit 4: ROM select
-	// For +3/+2A, the ROM index is formed from two bits:
-	//   bit 4 of 0x7FFD (low bit) + bit 2 of 0x1FFD (high bit)
-	// For 128K/+2, only bit 4 of 0x7FFD is used (ROM 0 or ROM 1)
-	if m.currentModel == roms.ModelPlus3 || m.currentModel == roms.ModelPlus2A {
-		romIndex := int((val >> 4) & 1)
-		romIndex |= int((m.port1FFD >> 1) & 2) // bit 2 of 1FFD becomes bit 1 of index
-		m.memoryPageReadMap[0] = 16 + romIndex
-	} else {
-		if (val & 0x10) != 0 {
-			m.memoryPageReadMap[0] = 17 // ROM 1
-		} else {
-			m.memoryPageReadMap[0] = 16 // ROM 0
-		}
+	if !m.specialPaging {
+		m.selectROM()
 	}
 
 	// Bit 5: Paging disable
 	if (val & 0x20) != 0 {
 		m.PagingEnabled = false
+	}
+}
+
+// selectROM sets the ROM page based on the current port values.
+func (m *Memory) selectROM() {
+	if m.currentModel == roms.ModelPlus3 || m.currentModel == roms.ModelPlus2A {
+		// 4 ROMs: low bit from 7FFD bit 4, high bit from 1FFD bit 2
+		romIndex := int((m.port7FFD >> 4) & 1)
+		romIndex |= int((m.port1FFD >> 1) & 2)
+		m.memoryPageReadMap[0] = 16 + romIndex
+	} else {
+		if (m.port7FFD & 0x10) != 0 {
+			m.memoryPageReadMap[0] = 17 // ROM 1
+		} else {
+			m.memoryPageReadMap[0] = 16 // ROM 0
+		}
 	}
 }
 
@@ -355,10 +362,10 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 		m.memoryPageWriteMap[1] = 5
 		m.memoryPageReadMap[2] = 2
 		m.memoryPageWriteMap[2] = 2
-		// Update ROM selection using both port values
-		romIndex := int((m.port1FFD >> 1) & 2) // bit 2 of 1FFD → bit 1 of index
-		// bit 4 of 7FFD will be applied by the next PageMemory call, but
-		// set a reasonable default from the current mapping
-		m.memoryPageReadMap[0] = 16 + romIndex
+	}
+
+	// Update ROM selection when 0x1FFD changes (bit 2 is high bit of ROM index)
+	if !m.specialPaging {
+		m.selectROM()
 	}
 }
