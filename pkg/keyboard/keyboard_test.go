@@ -1,6 +1,7 @@
 package keyboard
 
 import (
+	"sync"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -499,5 +500,449 @@ func BenchmarkMultiKeyScan(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		kbd.Scan(0x0000) // Scan all rows
+	}
+}
+
+// ---------- HandleKeyWithModifiers ----------
+
+func TestHandleKeyWithModifiers_Shift(t *testing.T) {
+	kbd := New()
+
+	// Press 'A' with shift=true => should activate CAPS SHIFT (row 0, bit 0) + 'A' (row 1, bit 0)
+	kbd.HandleKeyWithModifiers(fyne.KeyA, true, true, false, false, false)
+
+	if (kbd.matrix[0] & 0x01) != 0 {
+		t.Error("CAPS SHIFT should be active when shift=true")
+	}
+	if (kbd.matrix[1] & 0x01) != 0 {
+		t.Error("key A should be pressed")
+	}
+
+	// Release
+	kbd.HandleKeyWithModifiers(fyne.KeyA, false, true, false, false, false)
+	if (kbd.matrix[0] & 0x01) == 0 {
+		t.Error("CAPS SHIFT should be released")
+	}
+	if (kbd.matrix[1] & 0x01) == 0 {
+		t.Error("key A should be released")
+	}
+}
+
+func TestHandleKeyWithModifiers_Ctrl(t *testing.T) {
+	kbd := New()
+
+	// Press 'S' with ctrl=true => should activate SYMBOL SHIFT (row 7, bit 1)
+	kbd.HandleKeyWithModifiers(fyne.KeyS, true, false, true, false, false)
+
+	if (kbd.matrix[7] & 0x02) != 0 {
+		t.Error("SYMBOL SHIFT should be active when ctrl=true")
+	}
+	if (kbd.matrix[1] & 0x02) != 0 {
+		t.Error("key S should be pressed")
+	}
+
+	kbd.HandleKeyWithModifiers(fyne.KeyS, false, false, true, false, false)
+	if (kbd.matrix[7] & 0x02) == 0 {
+		t.Error("SYMBOL SHIFT should be released")
+	}
+}
+
+func TestHandleKeyWithModifiers_Alt(t *testing.T) {
+	kbd := New()
+
+	// Press 'D' with alt=true => should activate SYMBOL SHIFT
+	kbd.HandleKeyWithModifiers(fyne.KeyD, true, false, false, true, false)
+
+	if (kbd.matrix[7] & 0x02) != 0 {
+		t.Error("SYMBOL SHIFT should be active when alt=true")
+	}
+	if (kbd.matrix[1] & 0x04) != 0 {
+		t.Error("key D should be pressed")
+	}
+
+	kbd.HandleKeyWithModifiers(fyne.KeyD, false, false, false, true, false)
+	if (kbd.matrix[7] & 0x02) == 0 {
+		t.Error("SYMBOL SHIFT should be released after release")
+	}
+}
+
+func TestHandleKeyWithModifiers_Cmd(t *testing.T) {
+	kbd := New()
+
+	// Press 'F' with cmd=true => should activate SYMBOL SHIFT
+	kbd.HandleKeyWithModifiers(fyne.KeyF, true, false, false, false, true)
+
+	if (kbd.matrix[7] & 0x02) != 0 {
+		t.Error("SYMBOL SHIFT should be active when cmd=true")
+	}
+	if (kbd.matrix[1] & 0x08) != 0 {
+		t.Error("key F should be pressed")
+	}
+
+	kbd.HandleKeyWithModifiers(fyne.KeyF, false, false, false, false, true)
+	if (kbd.matrix[7] & 0x02) == 0 {
+		t.Error("SYMBOL SHIFT should be released")
+	}
+}
+
+func TestHandleKeyWithModifiers_ShiftAndCtrl(t *testing.T) {
+	kbd := New()
+
+	// Both shift and ctrl => CAPS SHIFT + SYMBOL SHIFT
+	kbd.HandleKeyWithModifiers(fyne.KeyG, true, true, true, false, false)
+
+	if (kbd.matrix[0] & 0x01) != 0 {
+		t.Error("CAPS SHIFT should be active")
+	}
+	if (kbd.matrix[7] & 0x02) != 0 {
+		t.Error("SYMBOL SHIFT should be active")
+	}
+	if (kbd.matrix[1] & 0x10) != 0 {
+		t.Error("key G should be pressed")
+	}
+}
+
+// ---------- F11 (BREAK key) ----------
+
+func TestF11_BreakKey(t *testing.T) {
+	kbd := New()
+
+	// F11 should activate CAPS SHIFT + SPACE (BREAK)
+	kbd.HandleKeyWithModifiers(fyne.KeyF11, true, false, false, false, false)
+
+	// CAPS SHIFT (row 0, bit 0) should be pressed
+	if (kbd.matrix[0] & 0x01) != 0 {
+		t.Error("CAPS SHIFT should be active when F11 pressed")
+	}
+	// SPACE (row 7, bit 0) should be pressed
+	if (kbd.matrix[7] & 0x01) != 0 {
+		t.Error("SPACE should be active when F11 pressed")
+	}
+	// breakPressed flag should be true
+	if !kbd.IsBreakPressed() {
+		t.Error("IsBreakPressed should return true when F11 is pressed")
+	}
+
+	// Release F11
+	kbd.HandleKeyWithModifiers(fyne.KeyF11, false, false, false, false, false)
+
+	if (kbd.matrix[0] & 0x01) == 0 {
+		t.Error("CAPS SHIFT should be released when F11 released")
+	}
+	if (kbd.matrix[7] & 0x01) == 0 {
+		t.Error("SPACE should be released when F11 released")
+	}
+	if kbd.IsBreakPressed() {
+		t.Error("IsBreakPressed should return false when F11 is released")
+	}
+}
+
+// ---------- F12 (NMI trigger) ----------
+
+func TestF12_NMI_WithCallback(t *testing.T) {
+	kbd := New()
+
+	nmiTriggered := false
+	kbd.SetNMICallback(func() {
+		nmiTriggered = true
+	})
+
+	// Press F12
+	kbd.HandleKeyWithModifiers(fyne.KeyF12, true, false, false, false, false)
+	if !nmiTriggered {
+		t.Error("NMI callback should be triggered on F12 press")
+	}
+
+	// Matrix should not be affected by F12 (it returns early)
+	for i, row := range kbd.matrix {
+		if row != 0xFF {
+			t.Errorf("F12 should not affect matrix, but row %d = 0x%02X", i, row)
+		}
+	}
+}
+
+func TestF12_NMI_WithoutCallback(t *testing.T) {
+	kbd := New()
+
+	// F12 without callback should not panic
+	kbd.HandleKeyWithModifiers(fyne.KeyF12, true, false, false, false, false)
+	// Nothing to assert beyond no panic
+}
+
+func TestF12_NMI_ReleaseDoesNotTrigger(t *testing.T) {
+	kbd := New()
+
+	nmiCount := 0
+	kbd.SetNMICallback(func() {
+		nmiCount++
+	})
+
+	// Release event (isPressed=false) should NOT trigger NMI
+	kbd.HandleKeyWithModifiers(fyne.KeyF12, false, false, false, false, false)
+	if nmiCount != 0 {
+		t.Error("NMI should not trigger on F12 release")
+	}
+}
+
+// ---------- IsBreakPressed ----------
+
+func TestIsBreakPressed_InitiallyFalse(t *testing.T) {
+	kbd := New()
+	if kbd.IsBreakPressed() {
+		t.Error("IsBreakPressed should be false initially")
+	}
+}
+
+func TestIsBreakPressed_TogglesCycle(t *testing.T) {
+	kbd := New()
+
+	for i := 0; i < 5; i++ {
+		kbd.HandleKeyWithModifiers(fyne.KeyF11, true, false, false, false, false)
+		if !kbd.IsBreakPressed() {
+			t.Errorf("cycle %d: break should be pressed", i)
+		}
+		kbd.HandleKeyWithModifiers(fyne.KeyF11, false, false, false, false, false)
+		if kbd.IsBreakPressed() {
+			t.Errorf("cycle %d: break should be released", i)
+		}
+	}
+}
+
+// ---------- GetKeyStatus ----------
+
+func TestGetKeyStatus_None(t *testing.T) {
+	kbd := New()
+	status := kbd.GetKeyStatus()
+	if status != "None" {
+		t.Errorf("expected 'None', got %q", status)
+	}
+}
+
+func TestGetKeyStatus_Break(t *testing.T) {
+	kbd := New()
+	kbd.HandleKeyWithModifiers(fyne.KeyF11, true, false, false, false, false)
+
+	status := kbd.GetKeyStatus()
+	// BREAK activates CAPS SHIFT + SPACE, so status should contain both BREAK and CAPS_SHIFT
+	if status == "None" {
+		t.Error("status should not be 'None' when BREAK is pressed")
+	}
+	// Check for "BREAK" substring
+	found := false
+	for i := 0; i <= len(status)-5; i++ {
+		if status[i:i+5] == "BREAK" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected status to contain 'BREAK', got %q", status)
+	}
+}
+
+func TestGetKeyStatus_CapsShift(t *testing.T) {
+	kbd := New()
+	// Press left shift (CAPS SHIFT)
+	kbd.HandleKeyWithModifiers(desktop.KeyShiftLeft, true, false, false, false, false)
+
+	status := kbd.GetKeyStatus()
+	found := false
+	for i := 0; i <= len(status)-10; i++ {
+		if status[i:i+10] == "CAPS_SHIFT" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected status to contain 'CAPS_SHIFT', got %q", status)
+	}
+}
+
+func TestGetKeyStatus_SymbolShift(t *testing.T) {
+	kbd := New()
+	// Press right shift (SYMBOL SHIFT)
+	kbd.HandleKeyWithModifiers(desktop.KeyShiftRight, true, false, false, false, false)
+
+	status := kbd.GetKeyStatus()
+	found := false
+	for i := 0; i <= len(status)-12; i++ {
+		if status[i:i+12] == "SYMBOL_SHIFT" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected status to contain 'SYMBOL_SHIFT', got %q", status)
+	}
+}
+
+func TestGetKeyStatus_CtrlActivatesSymbolShift(t *testing.T) {
+	kbd := New()
+	// Pressing any key with ctrl=true should activate SYMBOL SHIFT
+	kbd.HandleKeyWithModifiers(fyne.KeyA, true, false, true, false, false)
+
+	status := kbd.GetKeyStatus()
+	found := false
+	for i := 0; i <= len(status)-12; i++ {
+		if status[i:i+12] == "SYMBOL_SHIFT" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected status to contain 'SYMBOL_SHIFT' when ctrl is held, got %q", status)
+	}
+}
+
+// ---------- SimulateNMI ----------
+
+func TestSimulateNMI_WithCallback(t *testing.T) {
+	kbd := New()
+
+	called := false
+	kbd.SetNMICallback(func() {
+		called = true
+	})
+
+	kbd.SimulateNMI()
+	if !called {
+		t.Error("SimulateNMI should call the NMI callback")
+	}
+}
+
+func TestSimulateNMI_WithoutCallback(t *testing.T) {
+	kbd := New()
+	// Should not panic when no callback is set
+	kbd.SimulateNMI()
+}
+
+func TestSetNMICallback_Replaces(t *testing.T) {
+	kbd := New()
+
+	firstCalled := false
+	secondCalled := false
+
+	kbd.SetNMICallback(func() {
+		firstCalled = true
+	})
+	kbd.SetNMICallback(func() {
+		secondCalled = true
+	})
+
+	kbd.SimulateNMI()
+	if firstCalled {
+		t.Error("first callback should NOT be called after replacement")
+	}
+	if !secondCalled {
+		t.Error("second callback should be called")
+	}
+}
+
+// ---------- Concurrent access ----------
+
+func TestConcurrentKeyPressRelease(t *testing.T) {
+	kbd := New()
+
+	var wg sync.WaitGroup
+	keys := []fyne.KeyName{
+		fyne.KeyA, fyne.KeyS, fyne.KeyD, fyne.KeyF,
+		fyne.KeyQ, fyne.KeyW, fyne.KeyE, fyne.KeyR,
+		fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4,
+		fyne.KeyZ, fyne.KeyX, fyne.KeyC, fyne.KeyV,
+	}
+
+	// Launch goroutines that press and release keys concurrently
+	for _, key := range keys {
+		wg.Add(1)
+		go func(k fyne.KeyName) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				kbd.HandleKeyWithModifiers(k, true, false, false, false, false)
+				kbd.HandleKeyWithModifiers(k, false, false, false, false, false)
+			}
+		}(key)
+	}
+
+	// Also read the scan concurrently
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			kbd.Scan(0xFE00)
+			kbd.Scan(0xFD00)
+			kbd.Scan(0x0000)
+		}
+	}()
+
+	// Also read status concurrently
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_ = kbd.IsBreakPressed()
+			_ = kbd.GetKeyStatus()
+		}
+	}()
+
+	wg.Wait()
+
+	// After all goroutines complete (all keys released), matrix should be clean
+	for i, row := range kbd.matrix {
+		if row != 0xFF {
+			t.Errorf("after concurrent test, row %d should be 0xFF, got 0x%02X", i, row)
+		}
+	}
+}
+
+func TestConcurrentNMICallback(t *testing.T) {
+	kbd := New()
+
+	var mu sync.Mutex
+	count := 0
+	kbd.SetNMICallback(func() {
+		mu.Lock()
+		count++
+		mu.Unlock()
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			kbd.SimulateNMI()
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if count != 10 {
+		t.Errorf("expected NMI callback called 10 times, got %d", count)
+	}
+}
+
+func TestConcurrentF11BreakKey(t *testing.T) {
+	kbd := New()
+
+	var wg sync.WaitGroup
+
+	// Multiple goroutines pressing and releasing F11
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				kbd.HandleKeyWithModifiers(fyne.KeyF11, true, false, false, false, false)
+				_ = kbd.IsBreakPressed()
+				kbd.HandleKeyWithModifiers(fyne.KeyF11, false, false, false, false, false)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// After all goroutines finish, break should not be pressed
+	if kbd.IsBreakPressed() {
+		t.Error("break should not be pressed after all goroutines release")
 	}
 }
