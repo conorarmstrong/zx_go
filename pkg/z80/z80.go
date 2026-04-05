@@ -830,9 +830,8 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 	case 0xDB: // IN A,(n)
 		port := uint16(c.readOperand()) | (uint16(c.A) << 8)
 		c.mem.ContendPort(port)
-		if val, ok := c.ula.ReadPort(port); ok {
-			c.A = val
-		}
+		val, _ := c.ula.ReadPort(port)
+		c.A = val
 		c.tstates += 11
 
 	// Exchange
@@ -1301,58 +1300,50 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 	// I/O operations
 	case 0x40: // IN B,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.B = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.B = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.B] | c.parityTable[c.B]
 		c.tstates += 12
 	case 0x48: // IN C,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.C = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.C = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.C] | c.parityTable[c.C]
 		c.tstates += 12
 	case 0x50: // IN D,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.D = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.D = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.D] | c.parityTable[c.D]
 		c.tstates += 12
 	case 0x58: // IN E,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.E = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.E = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.E] | c.parityTable[c.E]
 		c.tstates += 12
 	case 0x60: // IN H,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.H = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.H = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.H] | c.parityTable[c.H]
 		c.tstates += 12
 	case 0x68: // IN L,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.L = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.L = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.L] | c.parityTable[c.L]
 		c.tstates += 12
 	case 0x78: // IN A,(C)
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.A = val
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.A = val
 		c.F = (c.F & FLAG_C) | c.sz53Table[c.A] | c.parityTable[c.A]
 		c.tstates += 12
 	case 0x70: // IN F,(C) - special case, only affects flags
 		c.mem.ContendPort(c.bc())
-		if val, ok := c.ula.ReadPort(c.bc()); ok {
-			c.F = (c.F & FLAG_C) | c.sz53Table[val] | c.parityTable[val]
-		}
+		val, _ := c.ula.ReadPort(c.bc())
+		c.F = (c.F & FLAG_C) | c.sz53Table[val] | c.parityTable[val]
 		c.tstates += 12
 
 	// Output instructions

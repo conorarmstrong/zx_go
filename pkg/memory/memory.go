@@ -337,6 +337,18 @@ func (m *Memory) GetPage(pageIndex int) []byte {
 	return m.ram[pageIndex]
 }
 
+// GetPageMap returns the current read/write page map for debugging.
+// Returns [4]int for read map and [4]int for write map.
+// Values >= 16 indicate ROM pages (16=ROM0, 17=ROM1, etc.), others are RAM page indices.
+func (m *Memory) GetPageMap() ([4]int, [4]int) {
+	return m.memoryPageReadMap, m.memoryPageWriteMap
+}
+
+// GetPortState returns the current port 7FFD and 1FFD values for debugging.
+func (m *Memory) GetPortState() (byte, byte, bool) {
+	return m.port7FFD, m.port1FFD, m.specialPaging
+}
+
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
 	if !m.PagingEnabled {
