@@ -231,13 +231,13 @@ func TestTapePlayerLoadTAP(t *testing.T) {
 
 	// Block 1: header (flag byte 0x00 = header)
 	block1 := []byte{0x00, 0x03, 0x41, 0x42, 0x43} // flag + type + "ABC"
-	binary.Write(&buf, binary.LittleEndian, uint16(len(block1)))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(len(block1)))
 	buf.Write(block1)
 
 	// Block 2: data (flag byte 0xFF = data)
 	block2 := make([]byte, 10)
 	block2[0] = 0xFF
-	binary.Write(&buf, binary.LittleEndian, uint16(len(block2)))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(len(block2)))
 	buf.Write(block2)
 
 	dir := t.TempDir()

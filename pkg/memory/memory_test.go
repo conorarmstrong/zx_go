@@ -387,9 +387,8 @@ func TestContendedMemory(t *testing.T) {
 	tstates = 14335
 	before := tstates
 	mem.ContendMemory(0x4000) // Contended address
-	if tstates == before {
-		// Contention should add some delay
-		// (The exact delay depends on position within the scanline)
+	if tstates <= before {
+		t.Error("Contended memory access during active display should add delay")
 	}
 
 	// Access non-contended address — should not add delay
@@ -422,7 +421,9 @@ func TestPlus3SpecialPaging(t *testing.T) {
 		"plus3-3.rom": make([]byte, PageSize),
 	}
 	for name, data := range romFiles {
-		os.WriteFile(filepath.Join(testDir, name), data, 0644)
+		if err := os.WriteFile(filepath.Join(testDir, name), data, 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	mem, err := New(testDir, roms.ModelPlus3)

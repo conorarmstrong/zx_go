@@ -12,7 +12,6 @@ type TapePlayer struct {
 	mu       sync.Mutex
 	blocks   []tapeBlock
 	blockIdx int
-	bitIdx   int
 	playing  bool
 
 	// Timing state (in T-states)
