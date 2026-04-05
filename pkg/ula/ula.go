@@ -191,7 +191,7 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 		if u.mem.GetCurrentModel() != roms.Model48K {
 			u.mem.PageMemory(val)
 		}
-	} else if addr&0xC002 == 0x1000 { // Port 0x1FFD (+3 special paging): A15=0, A14=0, A12=1, A1=0
+	} else if addr&0xF002 == 0x1000 { // Port 0x1FFD (+3 special paging): A15=0, A14=0, A13=0, A12=1, A1=0
 		if u.mem.GetCurrentModel() == roms.ModelPlus3 || u.mem.GetCurrentModel() == roms.ModelPlus2A {
 			u.mem.PageMemoryPlus3(val)
 		}

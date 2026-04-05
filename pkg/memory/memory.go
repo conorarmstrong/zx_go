@@ -300,11 +300,20 @@ func (m *Memory) PageMemory(val byte) {
 		m.ScreenPage = 5
 	}
 
-	// Bit 4: ROM select (0 for 128-0.rom, 1 for 128-1.rom)
-	if (val & 0x10) != 0 {
-		m.memoryPageReadMap[0] = 17 // ROM 1
+	// Bit 4: ROM select
+	// For +3/+2A, the ROM index is formed from two bits:
+	//   bit 4 of 0x7FFD (low bit) + bit 2 of 0x1FFD (high bit)
+	// For 128K/+2, only bit 4 of 0x7FFD is used (ROM 0 or ROM 1)
+	if m.currentModel == roms.ModelPlus3 || m.currentModel == roms.ModelPlus2A {
+		romIndex := int((val >> 4) & 1)
+		romIndex |= int((m.port1FFD >> 1) & 2) // bit 2 of 1FFD becomes bit 1 of index
+		m.memoryPageReadMap[0] = 16 + romIndex
 	} else {
-		m.memoryPageReadMap[0] = 16 // ROM 0
+		if (val & 0x10) != 0 {
+			m.memoryPageReadMap[0] = 17 // ROM 1
+		} else {
+			m.memoryPageReadMap[0] = 16 // ROM 0
+		}
 	}
 
 	// Bit 5: Paging disable
@@ -341,13 +350,15 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 	} else {
 		// Normal paging mode — restore standard mapping
 		m.specialPaging = false
-		// ROM slot restored based on current 7FFD state
-		m.memoryPageReadMap[0] = 16 // Will be corrected by next PageMemory call
 		m.memoryPageWriteMap[0] = -1
 		m.memoryPageReadMap[1] = 5
 		m.memoryPageWriteMap[1] = 5
 		m.memoryPageReadMap[2] = 2
 		m.memoryPageWriteMap[2] = 2
-		// Slot 3 keeps whatever PageMemory set
+		// Update ROM selection using both port values
+		romIndex := int((m.port1FFD >> 1) & 2) // bit 2 of 1FFD → bit 1 of index
+		// bit 4 of 7FFD will be applied by the next PageMemory call, but
+		// set a reasonable default from the current mapping
+		m.memoryPageReadMap[0] = 16 + romIndex
 	}
 }
