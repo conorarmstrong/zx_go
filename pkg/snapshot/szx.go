@@ -171,7 +171,7 @@ func (s *Snapshot) loadSZX(file io.Reader) error {
 // loadSZXZ80Regs loads Z80 CPU registers from SZX block
 func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 	if len(data) < 37 {
-		return fmt.Errorf("Z80 registers block too small: %d bytes", len(data))
+		return fmt.Errorf("z80 registers block too small: %d bytes", len(data))
 	}
 	
 	var regs szxZ80Regs
@@ -214,7 +214,7 @@ func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 // loadSZXSpecRegs loads Spectrum-specific registers from SZX block
 func (s *Snapshot) loadSZXSpecRegs(data []byte) error {
 	if len(data) < 8 {
-		return fmt.Errorf("Spectrum registers block too small: %d bytes", len(data))
+		return fmt.Errorf("spectrum registers block too small: %d bytes", len(data))
 	}
 	
 	var regs szxSpecRegs
@@ -231,7 +231,7 @@ func (s *Snapshot) loadSZXSpecRegs(data []byte) error {
 // loadSZXRamPage loads a RAM page from SZX block
 func (s *Snapshot) loadSZXRamPage(data []byte) error {
 	if len(data) < 3 {
-		return fmt.Errorf("RAM page block too small: %d bytes", len(data))
+		return fmt.Errorf("ram page block too small: %d bytes", len(data))
 	}
 	
 	var ramPage szxRamPage

@@ -251,16 +251,18 @@ func (d *Disciple) executeCommand(cmd byte) {
 		d.track = d.data
 		d.status = 0x80 // Not busy
 		
-	case CmdStep, CmdStepIn, CmdStepOut:
-		// Step operations
-		if cmdType == CmdStepIn {
-			if d.track < 79 {
-				d.track++
-			}
-		} else if cmdType == CmdStepOut {
-			if d.track > 0 {
-				d.track--
-			}
+	case CmdStep:
+		d.status = 0x80 // Not busy
+
+	case CmdStepIn:
+		if d.track < 79 {
+			d.track++
+		}
+		d.status = 0x80 // Not busy
+
+	case CmdStepOut:
+		if d.track > 0 {
+			d.track--
 		}
 		d.status = 0x80 // Not busy
 		

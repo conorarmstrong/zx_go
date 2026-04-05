@@ -109,7 +109,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 		// Fall back to embedded ROMs
 		data, err = embeddedROMs.ReadFile("data/" + filename)
 		if err != nil {
-			return fmt.Errorf("ROM file %s not found", filename)
+			return fmt.Errorf("rom file %s not found", filename)
 		}
 	}
 	
@@ -123,7 +123,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 	}
 	
 	if len(data) != expectedSize {
-		return fmt.Errorf("ROM %s has invalid size: %d bytes (expected %d)", filename, len(data), expectedSize)
+		return fmt.Errorf("rom %s has invalid size: %d bytes (expected %d)", filename, len(data), expectedSize)
 	}
 	
 	rm.roms[romType] = data

@@ -319,7 +319,7 @@ func GetVariantName(variant MultifaceType) string {
 // SaveSnapshot saves a memory snapshot (placeholder implementation)
 func (mf *Multiface) SaveSnapshot(filename string) error {
 	if !mf.enabled || !mf.romPaged {
-		return fmt.Errorf("Multiface not active")
+		return fmt.Errorf("multiface not active")
 	}
 	
 	// In a real implementation, this would save the entire Spectrum memory
@@ -331,7 +331,7 @@ func (mf *Multiface) SaveSnapshot(filename string) error {
 // LoadSnapshot loads a memory snapshot (placeholder implementation)
 func (mf *Multiface) LoadSnapshot(filename string) error {
 	if !mf.enabled {
-		return fmt.Errorf("Multiface not enabled")
+		return fmt.Errorf("multiface not enabled")
 	}
 	
 	// Check if file exists

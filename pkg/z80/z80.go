@@ -2187,7 +2187,7 @@ func (c *CPU) setRegister8(reg int, val byte) {
 
 // 16-bit subtract with carry
 func (c *CPU) sbc16(hl, value uint16) {
-	var result uint32 = uint32(hl) - uint32(value)
+	result := uint32(hl) - uint32(value)
 	if (c.F & FLAG_C) != 0 {
 		result--
 	}
@@ -2214,7 +2214,7 @@ func (c *CPU) sbc16(hl, value uint16) {
 }
 
 func (c *CPU) adc16(hl, value uint16) {
-	var result uint32 = uint32(hl) + uint32(value)
+	result := uint32(hl) + uint32(value)
 	if (c.F & FLAG_C) != 0 {
 		result++
 	}

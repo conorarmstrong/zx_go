@@ -229,7 +229,7 @@ func (pm *PeripheralManager) GetMultiface() *multiface.Multiface {
 // LoadDiscipleDisk loads a disk image into the Disciple interface
 func (pm *PeripheralManager) LoadDiscipleDisk(drive int, filename string) error {
 	if !pm.discipleEnabled || pm.disciple == nil {
-		return fmt.Errorf("Disciple not enabled")
+		return fmt.Errorf("disciple not enabled")
 	}
 	
 	return pm.disciple.LoadDisk(drive, filename)
@@ -238,7 +238,7 @@ func (pm *PeripheralManager) LoadDiscipleDisk(drive int, filename string) error 
 // SaveMultifaceSnapshot saves a snapshot using the Multiface
 func (pm *PeripheralManager) SaveMultifaceSnapshot(filename string) error {
 	if !pm.multifaceEnabled || pm.multiface == nil {
-		return fmt.Errorf("Multiface not enabled")
+		return fmt.Errorf("multiface not enabled")
 	}
 	
 	return pm.multiface.SaveSnapshot(filename)
@@ -247,7 +247,7 @@ func (pm *PeripheralManager) SaveMultifaceSnapshot(filename string) error {
 // LoadMultifaceSnapshot loads a snapshot using the Multiface
 func (pm *PeripheralManager) LoadMultifaceSnapshot(filename string) error {
 	if !pm.multifaceEnabled || pm.multiface == nil {
-		return fmt.Errorf("Multiface not enabled")
+		return fmt.Errorf("multiface not enabled")
 	}
 	
 	return pm.multiface.LoadSnapshot(filename)
