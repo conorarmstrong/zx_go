@@ -35,11 +35,44 @@ type Memory struct {
 	PagingEnabled bool
 	// ScreenPage is the RAM page currently used for the display (5 or 7).
 	ScreenPage int
+	// Plus3 special paging mode
+	specialPaging bool
+	port1FFD      byte
 
 	// ROM manager for handling multiple ROM types
 	romManager *roms.ROMManager
 	// Current Spectrum model
 	currentModel roms.SpectrumModel
+
+	// Contention: T-state counter reference set by CPU each frame
+	ContentionEnabled bool
+	TStates           *uint64 // Pointer to CPU's T-state counter
+}
+
+// Contention delay pattern (repeats every 8 T-states in contended region)
+var contentionPattern = [8]uint64{6, 5, 4, 3, 2, 1, 0, 0}
+
+// ContendMemory adds contention delay if the address is in contended memory.
+// Contended region is 0x4000-0x7FFF (bank 5) on 48K/128K.
+func (m *Memory) ContendMemory(addr uint16) {
+	if !m.ContentionEnabled || m.TStates == nil {
+		return
+	}
+	// Only contend addresses in the 0x4000-0x7FFF range (screen RAM)
+	if addr >= 0x4000 && addr < 0x8000 {
+		// Contention applies during the active display (T-states 14335-57343 for 48K)
+		tstate := *m.TStates
+		if tstate >= 14335 && tstate < 57344 {
+			line := (tstate - 14335) / 228
+			if line < 192 {
+				pos := (tstate - 14335) % 228
+				if pos < 128 { // Only during the pixel-drawing portion
+					delay := contentionPattern[pos%8]
+					*m.TStates += delay
+				}
+			}
+		}
+	}
 }
 
 // New creates a new Memory instance for a given machine model.
@@ -277,5 +310,44 @@ func (m *Memory) PageMemory(val byte) {
 	// Bit 5: Paging disable
 	if (val & 0x20) != 0 {
 		m.PagingEnabled = false
+	}
+}
+
+// PageMemoryPlus3 handles the +3/+2A special paging via port 0x1FFD.
+func (m *Memory) PageMemoryPlus3(val byte) {
+	if !m.PagingEnabled {
+		return
+	}
+	m.port1FFD = val
+
+	if val&0x01 != 0 {
+		// Special paging mode: 4 predefined RAM configurations
+		m.specialPaging = true
+		mode := (val >> 1) & 0x03
+		switch mode {
+		case 0: // 0,1,2,3
+			m.memoryPageReadMap = [4]int{0, 1, 2, 3}
+			m.memoryPageWriteMap = [4]int{0, 1, 2, 3}
+		case 1: // 4,5,6,7
+			m.memoryPageReadMap = [4]int{4, 5, 6, 7}
+			m.memoryPageWriteMap = [4]int{4, 5, 6, 7}
+		case 2: // 4,5,6,3
+			m.memoryPageReadMap = [4]int{4, 5, 6, 3}
+			m.memoryPageWriteMap = [4]int{4, 5, 6, 3}
+		case 3: // 4,7,6,3
+			m.memoryPageReadMap = [4]int{4, 7, 6, 3}
+			m.memoryPageWriteMap = [4]int{4, 7, 6, 3}
+		}
+	} else {
+		// Normal paging mode — restore standard mapping
+		m.specialPaging = false
+		// ROM slot restored based on current 7FFD state
+		m.memoryPageReadMap[0] = 16 // Will be corrected by next PageMemory call
+		m.memoryPageWriteMap[0] = -1
+		m.memoryPageReadMap[1] = 5
+		m.memoryPageWriteMap[1] = 5
+		m.memoryPageReadMap[2] = 2
+		m.memoryPageWriteMap[2] = 2
+		// Slot 3 keeps whatever PageMemory set
 	}
 }

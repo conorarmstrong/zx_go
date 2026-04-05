@@ -20,7 +20,7 @@ go.work
 go.work.sum
 
 # Compiled binary
-zx_go
+/zx_go
 
 # OS files
 .DS_Store

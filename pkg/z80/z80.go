@@ -45,6 +45,9 @@ type CPU struct {
 	// T-state counter for timing
 	tstates uint64
 
+	// IM2 interrupt vector low byte (0xFF on ZX Spectrum)
+	IM2Vector byte
+
 	// For debugging
 	logEnabled bool
 
@@ -71,6 +74,9 @@ func New(mem *memory.Memory, ula ULA) *CPU {
 	}
 	c.initTables()
 	c.Reset()
+	// Enable contention by sharing T-state counter with memory
+	mem.TStates = &c.tstates
+	mem.ContentionEnabled = true
 	return c
 }
 
@@ -85,6 +91,7 @@ func (c *CPU) Reset() {
 	c.IM = 0
 	c.Halted = false
 	c.tstates = 0
+	c.IM2Vector = 0xFF // ZX Spectrum ULA puts 0xFF on data bus during INTA
 }
 
 // Run starts the emulation loop.
@@ -1228,17 +1235,18 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 
 	// Arithmetic operations
 	case 0x44: // NEG - Negate accumulator (two's complement)
+		orig := c.A
 		c.F = 0
-		if c.A == 0x80 {
+		if orig == 0x80 {
 			c.F |= FLAG_PV // Overflow if A was 0x80
 		}
-		if c.A != 0x00 {
+		if orig != 0x00 {
 			c.F |= FLAG_C // Carry if A was not zero
 		}
-		c.A = -c.A // Two's complement negation
+		c.A = -orig // Two's complement negation
 		c.F |= c.sz53Table[c.A]
-		if (c.A & 0x0F) != 0 {
-			c.F |= FLAG_H // Half-carry if there's a borrow from bit 4
+		if (orig & 0x0F) != 0 {
+			c.F |= FLAG_H // Half-carry if lower nibble of original was non-zero
 		}
 		c.F |= FLAG_N // Subtraction flag is always set for NEG
 		c.tstates += 8
@@ -2467,8 +2475,9 @@ func (c *CPU) interrupt() {
 		c.PC = 0x38
 		c.tstates += 13
 	case 2:
-		// IM2: Indirect jump using I register
-		addr := uint16(c.I)<<8 | 0xFF // In practice, 0xFF is commonly used
+		// IM2: Indirect jump using I register and data bus value.
+		// On the ZX Spectrum, the ULA places 0xFF on the bus during INTA.
+		addr := uint16(c.I)<<8 | uint16(c.IM2Vector)
 		low := c.mem.Read(addr)
 		high := c.mem.Read(addr + 1)
 		c.push(c.PC)

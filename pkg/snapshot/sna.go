@@ -23,43 +23,36 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 		return fmt.Errorf("failed to read SNA header: %w", err)
 	}
 
-	// Parse CPU state from header
+	// Parse CPU state from header per official SNA specification.
+	// Register pairs are little-endian (low byte first).
 	s.CPU.I = header[0]
-	s.CPU.H_ = header[1]
-	s.CPU.L_ = header[2]
-	s.CPU.D_ = header[3]
-	s.CPU.E_ = header[4]
-	s.CPU.B_ = header[5]
-	s.CPU.C_ = header[6]
+	s.CPU.L_ = header[1]
+	s.CPU.H_ = header[2]
+	s.CPU.E_ = header[3]
+	s.CPU.D_ = header[4]
+	s.CPU.C_ = header[5]
+	s.CPU.B_ = header[6]
 	s.CPU.F_ = header[7]
 	s.CPU.A_ = header[8]
-	s.CPU.H = header[9]
-	s.CPU.L = header[10]
-	s.CPU.D = header[11]
-	s.CPU.E = header[12]
-	s.CPU.B = header[13]
-	s.CPU.C = header[14]
-	s.CPU.F = header[15]
-	s.CPU.A = header[16]
-	s.CPU.IY = binary.LittleEndian.Uint16(header[17:19])
-	s.CPU.IX = binary.LittleEndian.Uint16(header[19:21])
-	
-	// IFF2 is stored, IFF1 is derived
-	if header[21]&0x04 != 0 {
-		s.CPU.IFF2 = true
-		s.CPU.IFF1 = true // SNA assumes IFF1 = IFF2
-	}
-	
-	s.CPU.R = header[22]
-	s.CPU.F = header[23] // Flags again?
-	s.CPU.A = header[24] // A again?
-	s.CPU.SP = binary.LittleEndian.Uint16(header[25:27])
-	
-	// Interrupt mode (derived from header[21])
-	s.CPU.IM = header[21] & 0x03
-	
-	// Border color (bits 1-3 of header[26])
-	s.CPU.BorderColor = (header[26] >> 1) & 0x07
+	s.CPU.L = header[9]
+	s.CPU.H = header[10]
+	s.CPU.E = header[11]
+	s.CPU.D = header[12]
+	s.CPU.C = header[13]
+	s.CPU.B = header[14]
+	s.CPU.IY = binary.LittleEndian.Uint16(header[15:17])
+	s.CPU.IX = binary.LittleEndian.Uint16(header[17:19])
+
+	// Byte 19: bit 2 = IFF2, bits 0-1 = part of IM (stored at byte 25)
+	s.CPU.IFF2 = (header[19] & 0x04) != 0
+	s.CPU.IFF1 = s.CPU.IFF2 // SNA assumes IFF1 = IFF2
+
+	s.CPU.R = header[20]
+	s.CPU.F = header[21]
+	s.CPU.A = header[22]
+	s.CPU.SP = binary.LittleEndian.Uint16(header[23:25])
+	s.CPU.IM = header[25] & 0x03
+	s.CPU.BorderColor = header[26] & 0x07
 
 	// Read 48K of RAM data (banks 5, 2, 0 - the standard 48K layout)
 	// Bank 5 (0x4000-0x7FFF)
@@ -107,14 +100,30 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 			}
 		}
 	} else {
-		// This is a 48K SNA file
+		// 48K SNA: PC is stored on the stack — pop it from RAM
 		s.Memory.Is128K = false
-		// PC is stored on the stack, we need to pop it
-		// For now, we'll set it to 0 and let the emulator handle it
-		s.CPU.PC = 0
+		sp := s.CPU.SP
+		lo := s.readRAM(sp)
+		hi := s.readRAM(sp + 1)
+		s.CPU.PC = uint16(hi)<<8 | uint16(lo)
+		s.CPU.SP += 2
 	}
 
 	return nil
+}
+
+// readRAM reads a byte from the snapshot's 48K RAM address space (0x4000-0xFFFF)
+func (s *Snapshot) readRAM(addr uint16) byte {
+	switch {
+	case addr >= 0xC000:
+		return s.Memory.RAM[0][addr-0xC000]
+	case addr >= 0x8000:
+		return s.Memory.RAM[2][addr-0x8000]
+	case addr >= 0x4000:
+		return s.Memory.RAM[5][addr-0x4000]
+	default:
+		return 0 // ROM area
+	}
 }
 
 // saveSNA saves a snapshot in .SNA format
@@ -123,35 +132,34 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 	header := make([]byte, 27)
 	
 	header[0] = s.CPU.I
-	header[1] = s.CPU.H_
-	header[2] = s.CPU.L_
-	header[3] = s.CPU.D_
-	header[4] = s.CPU.E_
-	header[5] = s.CPU.B_
-	header[6] = s.CPU.C_
+	header[1] = s.CPU.L_
+	header[2] = s.CPU.H_
+	header[3] = s.CPU.E_
+	header[4] = s.CPU.D_
+	header[5] = s.CPU.C_
+	header[6] = s.CPU.B_
 	header[7] = s.CPU.F_
 	header[8] = s.CPU.A_
-	header[9] = s.CPU.H
-	header[10] = s.CPU.L
-	header[11] = s.CPU.D
-	header[12] = s.CPU.E
-	header[13] = s.CPU.B
-	header[14] = s.CPU.C
-	header[15] = s.CPU.F
-	header[16] = s.CPU.A
-	binary.LittleEndian.PutUint16(header[17:19], s.CPU.IY)
-	binary.LittleEndian.PutUint16(header[19:21], s.CPU.IX)
-	
-	// Interrupt state and mode
+	header[9] = s.CPU.L
+	header[10] = s.CPU.H
+	header[11] = s.CPU.E
+	header[12] = s.CPU.D
+	header[13] = s.CPU.C
+	header[14] = s.CPU.B
+	binary.LittleEndian.PutUint16(header[15:17], s.CPU.IY)
+	binary.LittleEndian.PutUint16(header[17:19], s.CPU.IX)
+
+	// Byte 19: bit 2 = IFF2
 	if s.CPU.IFF2 {
-		header[21] |= 0x04
+		header[19] |= 0x04
 	}
-	header[21] |= s.CPU.IM & 0x03
-	
-	header[22] = s.CPU.R
-	header[23] = s.CPU.F
-	header[24] = s.CPU.A
-	binary.LittleEndian.PutUint16(header[25:27], s.CPU.SP)
+
+	header[20] = s.CPU.R
+	header[21] = s.CPU.F
+	header[22] = s.CPU.A
+	binary.LittleEndian.PutUint16(header[23:25], s.CPU.SP)
+	header[25] = s.CPU.IM & 0x03
+	header[26] = s.CPU.BorderColor & 0x07
 
 	// Write header
 	if _, err := file.Write(header); err != nil {

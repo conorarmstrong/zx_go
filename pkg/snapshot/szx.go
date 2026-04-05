@@ -263,30 +263,11 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 		memData = pageData
 	}
 	
-	// Map page number to RAM bank
-	// SZX uses different page numbering than our internal representation
-	var targetBank int
-	switch bankNum {
-	case 5:
-		targetBank = 0 // Bank 5 -> Internal bank 0
-	case 2:
-		targetBank = 2 // Bank 2 -> Internal bank 2
-	case 0:
-		targetBank = 5 // Bank 0 -> Internal bank 5
-	case 1:
-		targetBank = 1 // Bank 1 -> Internal bank 1
-	case 3:
-		targetBank = 3 // Bank 3 -> Internal bank 3
-	case 4:
-		targetBank = 4 // Bank 4 -> Internal bank 4
-	case 6:
-		targetBank = 6 // Bank 6 -> Internal bank 6
-	case 7:
-		targetBank = 7 // Bank 7 -> Internal bank 7
-	default:
-		// Unknown bank number
+	// SZX page numbers map directly to RAM bank numbers (0-7)
+	if bankNum < 0 || bankNum > 7 {
 		return fmt.Errorf("unknown RAM page number: %d", bankNum)
 	}
+	targetBank := bankNum
 	
 	// Copy data to RAM bank
 	if len(memData) >= 16384 {
@@ -454,28 +435,8 @@ func (s *Snapshot) saveSZXRamPage(file io.Writer, bankNum int) error {
 		return err
 	}
 	
-	// Map internal bank number to SZX page number
-	var pageNum byte
-	switch bankNum {
-	case 0:
-		pageNum = 5 // Internal bank 0 -> SZX page 5
-	case 1:
-		pageNum = 1 // Internal bank 1 -> SZX page 1
-	case 2:
-		pageNum = 2 // Internal bank 2 -> SZX page 2
-	case 3:
-		pageNum = 3 // Internal bank 3 -> SZX page 3
-	case 4:
-		pageNum = 4 // Internal bank 4 -> SZX page 4
-	case 5:
-		pageNum = 0 // Internal bank 5 -> SZX page 0
-	case 6:
-		pageNum = 6 // Internal bank 6 -> SZX page 6
-	case 7:
-		pageNum = 7 // Internal bank 7 -> SZX page 7
-	default:
-		return fmt.Errorf("invalid bank number: %d", bankNum)
-	}
+	// SZX page numbers map directly to internal bank numbers
+	pageNum := byte(bankNum)
 	
 	// Create RAM page header
 	ramPage := szxRamPage{

@@ -113,8 +113,12 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	ula := ula.New(mem, kbd)
 	cpu := z80.New(mem, ula)
 
-	// Create peripheral manager
+	// Initialize audio
+	ula.EnableAudio()
+
+	// Create peripheral manager and wire it to ULA
 	pm := peripherals.NewPeripheralManager(mem, "roms")
+	ula.SetPeripherals(pm)
 
 	// Set up NMI callback for keyboard (Multiface red button simulation)
 	kbd.SetNMICallback(func() {
@@ -546,6 +550,36 @@ func main() {
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
 				fd.Show()
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Load Tape (TAP)...", func() {
+				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if reader == nil {
+						return
+					}
+					tp := ula.NewTapePlayer()
+					if err := tp.LoadTAP(reader.URI().Path()); err != nil {
+						dialog.ShowError(fmt.Errorf("Failed to load TAP: %w", err), w)
+						reader.Close()
+						return
+					}
+					emu.ula.SetTapePlayer(tp)
+					tp.Play()
+					dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
+					reader.Close()
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
+				fd.Show()
+			}),
+			fyne.NewMenuItem("Stop Tape", func() {
+				if emu.ula != nil {
+					emu.ula.SetTapePlayer(nil)
+					emu.ula.TapeIn = false
+				}
 			}),
 		),
 		fyne.NewMenu("Machine",

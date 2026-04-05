@@ -8,24 +8,40 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
+)
+
+// Display constants
+const (
+	ScreenWidth   = 256 // Spectrum screen width in pixels
+	ScreenHeight  = 192 // Spectrum screen height in pixels
+	BorderLeft    = 32  // Left border width in pixels
+	BorderTop     = 24  // Top border height in pixels
+	TotalWidth    = ScreenWidth + BorderLeft*2  // 320
+	TotalHeight   = ScreenHeight + BorderTop*2  // 240
+	FlashFrames   = 16  // Number of frames between flash toggles
 )
 
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
 type ULA struct {
-	mem      *memory.Memory
-	kbd      *keyboard.Keyboard
-	audio    *audio.AudioSystem
-	img      *image.RGBA
-	palette  [16]color.RGBA
-	flash    bool
-	flashCount int
+	mem         *memory.Memory
+	kbd         *keyboard.Keyboard
+	audio       *audio.AudioSystem
+	peripherals *peripherals.PeripheralManager
+	img         *image.RGBA
+	palette     [16]color.RGBA
+	flash       bool
+	flashCount  int
 
 	// Port 0xFE state
 	BorderColour byte
 	Mic          bool
 	TapeIn       bool
 	Speaker      bool
+
+	// Tape loading state
+	tape       *TapePlayer
 }
 
 // New creates a new ULA instance.
@@ -33,26 +49,12 @@ func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 	u := &ULA{
 		mem: mem,
 		kbd: kbd,
-		img: image.NewRGBA(image.Rect(0, 0, 320, 240)), // 256x192 screen + 32/24 border
+		img: image.NewRGBA(image.Rect(0, 0, TotalWidth, TotalHeight)),
 	}
 	u.initPalette()
-	
-	// Temporarily disable audio system to test if it's causing performance issues
-	log.Println("Audio system temporarily disabled for debugging")
-	u.audio = nil
-	
-	// Original audio initialization code (commented out):
-	// if audioSys, err := audio.New(); err == nil {
-	//     u.audio = audioSys
-	//     if err := u.audio.Start(); err != nil {
-	//         log.Printf("Warning: Failed to start audio system: %v", err)
-	//     } else {
-	//         log.Println("Audio system initialized and started successfully")
-	//     }
-	// } else {
-	//     log.Printf("Warning: Failed to initialize audio system: %v", err)
-	// }
-	// If audio initialization fails, we'll continue without sound
+
+	// Audio initialization is deferred to EnableAudio() to avoid crashes
+	// in headless/test environments where audio hardware is unavailable.
 	
 	return u
 }
@@ -83,8 +85,13 @@ func (u *ULA) initPalette() {
 
 // Render generates the current frame.
 func (u *ULA) Render() *image.RGBA {
+	// Update tape player (one frame = 69888 T-states)
+	if u.tape != nil && u.tape.IsPlaying() {
+		u.TapeIn = u.tape.Update(69888)
+	}
+
 	u.flashCount++
-	if u.flashCount >= 16 { // Flash roughly every 16 frames
+	if u.flashCount >= FlashFrames {
 		u.flash = !u.flash
 		u.flashCount = 0
 	}
@@ -92,9 +99,9 @@ func (u *ULA) Render() *image.RGBA {
 	borderColor := u.palette[u.BorderColour]
 
 	// Draw borders
-	for y := 0; y < 240; y++ {
-		for x := 0; x < 320; x++ {
-			if x < 32 || x >= 288 || y < 24 || y >= 216 {
+	for y := 0; y < TotalHeight; y++ {
+		for x := 0; x < TotalWidth; x++ {
+			if x < BorderLeft || x >= BorderLeft+ScreenWidth || y < BorderTop || y >= BorderTop+ScreenHeight {
 				u.img.Set(x, y, borderColor)
 			}
 		}
@@ -104,8 +111,8 @@ func (u *ULA) Render() *image.RGBA {
 	screenMem := u.mem.GetPage(u.mem.ScreenPage)
 	attrMem := screenMem[0x1800:]
 
-	for y := 0; y < 192; y++ {
-		for x := 0; x < 32; x++ {
+	for y := 0; y < ScreenHeight; y++ {
+		for x := 0; x < ScreenWidth/8; x++ {
 			// Calculate address of pixel data and attribute data
 			// This layout is non-linear
 			addr := ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | x
@@ -129,8 +136,8 @@ func (u *ULA) Render() *image.RGBA {
 			}
 
 			for bit := 0; bit < 8; bit++ {
-				px := 32 + (x*8 + bit)
-				py := 24 + y
+				px := BorderLeft + (x*8 + bit)
+				py := BorderTop + y
 				if (pixels & (0x80 >> bit)) != 0 {
 					u.img.Set(px, py, ink)
 				} else {
@@ -152,7 +159,16 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 		val &= u.kbd.Scan(addr)
 		return val, true
 	}
-	return 0, false
+
+	// Delegate to peripherals
+	if u.peripherals != nil {
+		if value, handled := u.peripherals.HandlePortRead(addr); handled {
+			return value, true
+		}
+	}
+
+	// Floating bus: return 0xFF for unhandled ports
+	return 0xFF, false
 }
 
 // WritePort handles CPU writes to ULA-controlled ports.
@@ -170,11 +186,20 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 				u.audio.SetSpeakerState(newSpeakerState)
 			}
 		}
-	} else if addr == 0x7FFD { // Port 0x7FFD (128K memory paging)
+	} else if addr&0x8002 == 0 { // Port 0x7FFD (128K memory paging): A15=0, A1=0
 		// Only handle this on 128K+ models
 		if u.mem.GetCurrentModel() != roms.Model48K {
 			u.mem.PageMemory(val)
 		}
+	} else if addr&0xC002 == 0x1000 { // Port 0x1FFD (+3 special paging): A15=0, A14=0, A12=1, A1=0
+		if u.mem.GetCurrentModel() == roms.ModelPlus3 || u.mem.GetCurrentModel() == roms.ModelPlus2A {
+			u.mem.PageMemoryPlus3(val)
+		}
+	}
+
+	// Delegate to peripherals
+	if u.peripherals != nil {
+		u.peripherals.HandlePortWrite(addr, val)
 	}
 }
 
@@ -183,6 +208,30 @@ func (u *ULA) Close() {
 	if u.audio != nil {
 		u.audio.Close()
 	}
+}
+
+// EnableAudio initializes and starts the audio system.
+// Call this from the application (not tests) after creating the ULA.
+func (u *ULA) EnableAudio() {
+	audioSys, err := audio.New()
+	if err != nil {
+		log.Printf("Warning: Failed to initialize audio system: %v", err)
+		return
+	}
+	u.audio = audioSys
+	if err := u.audio.Start(); err != nil {
+		log.Printf("Warning: Failed to start audio system: %v", err)
+	}
+}
+
+// SetPeripherals sets the peripheral manager for I/O port delegation
+func (u *ULA) SetPeripherals(pm *peripherals.PeripheralManager) {
+	u.peripherals = pm
+}
+
+// SetTapePlayer sets the tape player for tape loading
+func (u *ULA) SetTapePlayer(tp *TapePlayer) {
+	u.tape = tp
 }
 
 // Reset resets the ULA to initial state

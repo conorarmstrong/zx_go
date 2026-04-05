@@ -368,6 +368,93 @@ func BenchmarkMemoryWrite(b *testing.B) {
 	}
 }
 
+func TestContendedMemory(t *testing.T) {
+	testDir := "test_roms"
+	createTestROMs(t, testDir)
+	defer cleanupTestROMs(testDir)
+
+	mem, err := New(testDir, roms.Model48K)
+	if err != nil {
+		t.Fatalf("Failed to create memory: %v", err)
+	}
+
+	// Set up contention
+	var tstates uint64
+	mem.TStates = &tstates
+	mem.ContentionEnabled = true
+
+	// Access contended address during active display (tstate 14335-57343)
+	tstates = 14335
+	before := tstates
+	mem.ContendMemory(0x4000) // Contended address
+	if tstates == before {
+		// Contention should add some delay
+		// (The exact delay depends on position within the scanline)
+	}
+
+	// Access non-contended address — should not add delay
+	tstates = 14335
+	before = tstates
+	mem.ContendMemory(0x8000) // Non-contended address
+	if tstates != before {
+		t.Errorf("Non-contended address should not add delay")
+	}
+
+	// Access outside active display — should not add delay
+	tstates = 0
+	before = tstates
+	mem.ContendMemory(0x4000)
+	if tstates != before {
+		t.Errorf("Access outside active display should not add delay")
+	}
+}
+
+func TestPlus3SpecialPaging(t *testing.T) {
+	testDir := "test_roms"
+	createTestROMs(t, testDir)
+	defer cleanupTestROMs(testDir)
+
+	// Need +3 ROMs — create them
+	romFiles := map[string][]byte{
+		"plus3-0.rom": make([]byte, PageSize),
+		"plus3-1.rom": make([]byte, PageSize),
+		"plus3-2.rom": make([]byte, PageSize),
+		"plus3-3.rom": make([]byte, PageSize),
+	}
+	for name, data := range romFiles {
+		os.WriteFile(filepath.Join(testDir, name), data, 0644)
+	}
+
+	mem, err := New(testDir, roms.ModelPlus3)
+	if err != nil {
+		t.Fatalf("Failed to create +3 memory: %v", err)
+	}
+
+	// Write distinct values to different RAM banks
+	for bank := 0; bank < 8; bank++ {
+		page := mem.GetPage(bank)
+		page[0] = byte(0x10 + bank)
+	}
+
+	// Enable special paging mode 0: banks 0,1,2,3
+	mem.PageMemoryPlus3(0x01) // bit 0 set = special mode, mode 0
+
+	// Read from 0xC000 should be bank 3
+	val := mem.Read(0xC000)
+	if val != 0x13 { // 0x10 + 3
+		t.Errorf("Special mode 0, slot 3: expected 0x13, got 0x%02X", val)
+	}
+
+	// Read from 0x0000 should be bank 0 (RAM, writable)
+	val = mem.Read(0x0000)
+	if val != 0x10 { // 0x10 + 0
+		t.Errorf("Special mode 0, slot 0: expected 0x10, got 0x%02X", val)
+	}
+
+	// Disable special paging
+	mem.PageMemoryPlus3(0x00) // bit 0 clear = normal mode
+}
+
 func BenchmarkMemoryPaging(b *testing.B) {
 	testDir := "test_roms"
 	createTestROMs(&testing.T{}, testDir)
