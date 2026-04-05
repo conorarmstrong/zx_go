@@ -290,11 +290,6 @@ func (m *Memory) PageMemory(val byte) {
 	}
 	m.port7FFD = val
 
-	// Bits 0-2: RAM page to map into 0xC000-0xFFFF
-	ramPage := int(val & 0x07)
-	m.memoryPageReadMap[3] = ramPage
-	m.memoryPageWriteMap[3] = ramPage
-
 	// Bit 3: Screen page (0 for page 5, 1 for page 7)
 	if (val & 0x08) != 0 {
 		m.ScreenPage = 7
@@ -302,8 +297,15 @@ func (m *Memory) PageMemory(val byte) {
 		m.ScreenPage = 5
 	}
 
-	// Bit 4: ROM select
+	// Only modify memory mapping when NOT in special paging mode.
+	// In special paging mode, the memory layout is entirely controlled by port 1FFD.
 	if !m.specialPaging {
+		// Bits 0-2: RAM page to map into 0xC000-0xFFFF
+		ramPage := int(val & 0x07)
+		m.memoryPageReadMap[3] = ramPage
+		m.memoryPageWriteMap[3] = ramPage
+
+		// Bit 4: ROM select
 		m.selectROM()
 	}
 
@@ -355,13 +357,18 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 			m.memoryPageWriteMap = [4]int{4, 7, 6, 3}
 		}
 	} else {
-		// Normal paging mode — restore standard mapping
+		// Normal paging mode — restore standard mapping from both port values.
+		// This must restore ALL slots, including slot 3 from port7FFD bits 0-2.
 		m.specialPaging = false
 		m.memoryPageWriteMap[0] = -1
 		m.memoryPageReadMap[1] = 5
 		m.memoryPageWriteMap[1] = 5
 		m.memoryPageReadMap[2] = 2
 		m.memoryPageWriteMap[2] = 2
+		// Restore slot 3 from port7FFD bits 0-2
+		ramPage := int(m.port7FFD & 0x07)
+		m.memoryPageReadMap[3] = ramPage
+		m.memoryPageWriteMap[3] = ramPage
 	}
 
 	// Update ROM selection when 0x1FFD changes (bit 2 is high bit of ROM index)

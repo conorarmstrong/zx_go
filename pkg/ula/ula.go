@@ -186,14 +186,19 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 				u.audio.SetSpeakerState(newSpeakerState)
 			}
 		}
+	} else if u.mem.GetCurrentModel() == roms.ModelPlus3 || u.mem.GetCurrentModel() == roms.ModelPlus2A {
+		// +3/+2A use stricter port decoding to avoid conflicts between 0x7FFD and 0x1FFD:
+		//   0x7FFD: mask=0xC002 value=0x4000 (A15=0, A14=1, A1=0)
+		//   0x1FFD: mask=0xF002 value=0x1000 (A15=0, A14=0, A13=0, A12=1, A1=0)
+		if addr&0xC002 == 0x4000 {
+			u.mem.PageMemory(val)
+		} else if addr&0xF002 == 0x1000 {
+			u.mem.PageMemoryPlus3(val)
+		}
 	} else if addr&0x8002 == 0 { // Port 0x7FFD (128K memory paging): A15=0, A1=0
 		// Only handle this on 128K+ models
 		if u.mem.GetCurrentModel() != roms.Model48K {
 			u.mem.PageMemory(val)
-		}
-	} else if addr&0xF002 == 0x1000 { // Port 0x1FFD (+3 special paging): A15=0, A14=0, A13=0, A12=1, A1=0
-		if u.mem.GetCurrentModel() == roms.ModelPlus3 || u.mem.GetCurrentModel() == roms.ModelPlus2A {
-			u.mem.PageMemoryPlus3(val)
 		}
 	}
 
