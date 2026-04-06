@@ -47,6 +47,10 @@ type Multiface struct {
 	
 	// ROM filename for loading
 	romFile string
+
+	// Session state: active from NMI until OUT re-arms the hardware
+	sessionActive   bool
+	savedPagingState *memory.PagingState
 }
 
 // Port ranges for Multiface I/O decoding (from FUSE emulator source).
@@ -263,27 +267,48 @@ func (mf *Multiface) HandlePortWrite(port uint16, value byte) bool {
 	}
 
 	// OUT re-arms the hardware (IC8b_Q = 1 in FUSE).
-	mf.redButton = false
+	// This ends the MF session and restores the host paging state.
+	if mf.sessionActive {
+		mf.endSession()
+	} else {
+		mf.redButton = false
+	}
 
 	return true
 }
 
 // pageInROM pages in the Multiface ROM overlay.
-// While romPaged=true, PeripheralRead intercepts 0x0000-0x3FFF.
-// Paging port writes (0x7FFD/0x1FFD) still take effect normally —
-// the MF code uses them to access the Spectrum ROM for printing.
 func (mf *Multiface) pageInROM() {
 	if mf.invisible || !mf.enabled {
 		return
+	}
+	// On first page-in of a session, save the host paging state and
+	// freeze RAM/screen paging. ROM selection stays unfrozen so the
+	// MF code can access the Spectrum ROM's print routines.
+	if !mf.sessionActive {
+		mf.sessionActive = true
+		mf.savedPagingState = mf.memory.SavePagingState()
+		mf.memory.PagingFrozen = true
 	}
 	mf.romPaged = true
 }
 
 // pageOutROM removes the Multiface ROM overlay.
-// The normal ROM/RAM at 0x0000-0x3FFF becomes visible again,
-// based on the current paging port state (which the MF code manages).
+// Called during both the print cycle (temporary) and final exit.
 func (mf *Multiface) pageOutROM() {
 	mf.romPaged = false
+}
+
+// endSession restores the host paging state and ends the MF session.
+func (mf *Multiface) endSession() {
+	mf.romPaged = false
+	mf.sessionActive = false
+	mf.redButton = false
+	mf.memory.PagingFrozen = false
+	if mf.savedPagingState != nil {
+		mf.memory.RestorePagingState(mf.savedPagingState)
+		mf.savedPagingState = nil
+	}
 }
 
 // IsEnabled returns whether the Multiface is enabled
@@ -325,8 +350,12 @@ func (mf *Multiface) GetRAM() []byte {
 func (mf *Multiface) SetEnabled(enabled bool) {
 	mf.enabled = enabled
 	if !enabled {
-		mf.pageOutROM()
-		mf.redButton = false
+		if mf.sessionActive {
+			mf.endSession()
+		} else {
+			mf.pageOutROM()
+			mf.redButton = false
+		}
 	}
 }
 

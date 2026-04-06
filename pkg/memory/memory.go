@@ -420,9 +420,20 @@ func (m *Memory) RestorePagingState(state *PagingState) {
 
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
-	if !m.PagingEnabled || m.PagingFrozen {
+	if !m.PagingEnabled {
 		return
 	}
+
+	if m.PagingFrozen {
+		// When frozen (Multiface active), only allow ROM selection changes.
+		// RAM page, screen page, and paging disable are blocked.
+		m.port7FFD = val
+		if !m.specialPaging {
+			m.selectROM()
+		}
+		return
+	}
+
 	m.port7FFD = val
 
 	// Bit 3: Screen page (0 for page 5, 1 for page 7)
@@ -433,7 +444,6 @@ func (m *Memory) PageMemory(val byte) {
 	}
 
 	// Only modify memory mapping when NOT in special paging mode.
-	// In special paging mode, the memory layout is entirely controlled by port 1FFD.
 	if !m.specialPaging {
 		// Bits 0-2: RAM page to map into 0xC000-0xFFFF
 		ramPage := int(val & 0x07)
@@ -468,7 +478,15 @@ func (m *Memory) selectROM() {
 
 // PageMemoryPlus3 handles the +3/+2A special paging via port 0x1FFD.
 func (m *Memory) PageMemoryPlus3(val byte) {
-	if !m.PagingEnabled || m.PagingFrozen {
+	if !m.PagingEnabled {
+		return
+	}
+	if m.PagingFrozen {
+		// When frozen, only update port1FFD for ROM selection purposes.
+		m.port1FFD = val
+		if !m.specialPaging {
+			m.selectROM()
+		}
 		return
 	}
 	m.port1FFD = val
