@@ -139,8 +139,7 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 			return
 		}
 		c.executeInstruction()
-		// Check NMI after instruction — ensures IFF1 reflects the current
-		// state (e.g. after EI has run), so RETN can restore it correctly
+		// NMI check after each instruction (NMI is non-maskable)
 		if c.PendingNMI.CompareAndSwap(true, false) {
 			if c.NMICallback != nil {
 				c.NMICallback()

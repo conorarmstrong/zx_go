@@ -300,8 +300,9 @@ func (mf *Multiface) pageOutROM() {
 }
 
 // endSession restores the host paging state and ends the MF session.
+// NOTE: does NOT change romPaged — the MF code's IN instruction will
+// page out the ROM separately after it finishes its exit sequence.
 func (mf *Multiface) endSession() {
-	mf.romPaged = false
 	mf.sessionActive = false
 	mf.redButton = false
 	mf.memory.PagingFrozen = false
@@ -350,10 +351,10 @@ func (mf *Multiface) GetRAM() []byte {
 func (mf *Multiface) SetEnabled(enabled bool) {
 	mf.enabled = enabled
 	if !enabled {
+		mf.romPaged = false
 		if mf.sessionActive {
 			mf.endSession()
 		} else {
-			mf.pageOutROM()
 			mf.redButton = false
 		}
 	}
