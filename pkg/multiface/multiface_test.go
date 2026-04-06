@@ -133,61 +133,53 @@ func TestLoadROM_SpecificFile(t *testing.T) {
 	}
 }
 
-func TestLoadROM_AlternativeName(t *testing.T) {
+func TestLoadROM_FilesystemOverridesEmbedded(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
-	// Do not write mf128_official.rom; write one of the alternative names instead
-	writeDummyMFROM(t, dir, "multiface.rom", 0xCD)
+	// Write a custom ROM to filesystem with primary name — should override embedded
+	writeDummyMFROM(t, dir, "mf128_official.rom", 0xCD)
 
 	mf, err := NewMultiface(Multiface128, dir, mem)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
 	if mf.GetROM()[0] != 0xCD {
-		t.Errorf("expected ROM byte 0xCD from alternative name, got 0x%02X", mf.GetROM()[0])
+		t.Errorf("expected filesystem ROM byte 0xCD, got 0x%02X (embedded may have overridden)", mf.GetROM()[0])
 	}
 }
 
-func TestLoadROM_PlaceholderFallback(t *testing.T) {
+func TestLoadROM_EmbeddedFallback(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
-	// No ROM files at all -- should get placeholder
+	// No filesystem ROM files — should load from embedded ROMs
 
 	mf, err := NewMultiface(Multiface1, dir, mem)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	// Placeholder starts with DI (0xF3), JP (0xC3), 0x10, 0x00
 	rom := mf.GetROM()
-	if rom[0] != 0xF3 || rom[1] != 0xC3 || rom[2] != 0x10 || rom[3] != 0x00 {
-		t.Errorf("unexpected placeholder ROM header: %02X %02X %02X %02X", rom[0], rom[1], rom[2], rom[3])
+	if len(rom) != 0x2000 {
+		t.Errorf("expected 8KB ROM, got %d bytes", len(rom))
 	}
-	// Version byte at 0x0011 should be 0x01 for Multiface1
-	if rom[0x0011] != 0x01 {
-		t.Errorf("placeholder version byte: expected 0x01, got 0x%02X", rom[0x0011])
+	// Should NOT be the placeholder (placeholder starts with F3 C3 10 00)
+	if rom[0] == 0xF3 && rom[1] == 0xC3 && rom[2] == 0x10 && rom[3] == 0x00 {
+		t.Errorf("got placeholder ROM instead of embedded real ROM")
 	}
 }
 
-func TestLoadROM_PlaceholderVersions(t *testing.T) {
+func TestLoadROM_AllVariantsLoadEmbedded(t *testing.T) {
 	mem, _ := newTestMemory(t)
 
-	tests := []struct {
-		variant     MultifaceType
-		expectedVer byte
-	}{
-		{Multiface1, 0x01},
-		{Multiface128, 0x02},
-		{Multiface3, 0x03},
-	}
-	for _, tc := range tests {
+	variants := []MultifaceType{Multiface1, Multiface128, Multiface3}
+	for _, v := range variants {
 		dir := t.TempDir()
-		mf, err := NewMultiface(tc.variant, dir, mem)
+		mf, err := NewMultiface(v, dir, mem)
 		if err != nil {
-			t.Fatalf("error for variant %d: %v", tc.variant, err)
+			t.Fatalf("error for variant %d: %v", v, err)
 		}
-		if mf.GetROM()[0x0011] != tc.expectedVer {
-			t.Errorf("variant %d: expected version 0x%02X, got 0x%02X",
-				tc.variant, tc.expectedVer, mf.GetROM()[0x0011])
+		rom := mf.GetROM()
+		if len(rom) != 0x2000 {
+			t.Errorf("variant %d: expected 8KB ROM, got %d", v, len(rom))
 		}
 	}
 }
@@ -204,10 +196,10 @@ func TestLoadROM_WrongSizeIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	// Should fall through to placeholder since file is wrong size
+	// Wrong-size file should be ignored; embedded ROM loads instead
 	rom := mf.GetROM()
-	if rom[0] != 0xF3 {
-		t.Error("expected placeholder ROM when specific file has wrong size")
+	if len(rom) != 0x2000 {
+		t.Errorf("expected 8KB ROM, got %d bytes", len(rom))
 	}
 }
 

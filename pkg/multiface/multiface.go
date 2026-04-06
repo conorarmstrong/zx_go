@@ -93,28 +93,40 @@ func NewMultiface(variant MultifaceType, romPath string, memory *memory.Memory) 
 
 // loadROM loads the Multiface ROM
 func (mf *Multiface) loadROM(romPath string) error {
-	// Try the specific ROM file first
+	// Try filesystem first
 	path := filepath.Join(romPath, mf.romFile)
-	
 	if data, err := os.ReadFile(path); err == nil {
-		if len(data) == 0x2000 { // 8KB ROM
+		if len(data) == 0x2000 {
 			mf.rom = data
 			return nil
 		}
 	}
-	
-	// Try alternative names
-	altNames := []string{"mf128.rom", "mf3.rom", "multiface.rom"}
+
+	// Try embedded ROMs
+	if data, err := roms.ReadEmbeddedROM(mf.romFile); err == nil {
+		if len(data) == 0x2000 {
+			mf.rom = data
+			return nil
+		}
+	}
+
+	// Try alternative filesystem names
+	altNames := []string{"multiface1.rom", "multiface128.rom", "multiface3.rom"}
 	for _, name := range altNames {
-		path := filepath.Join(romPath, name)
-		if data, err := os.ReadFile(path); err == nil {
+		if data, err := os.ReadFile(filepath.Join(romPath, name)); err == nil {
+			if len(data) == 0x2000 {
+				mf.rom = data
+				return nil
+			}
+		}
+		if data, err := roms.ReadEmbeddedROM(name); err == nil {
 			if len(data) == 0x2000 {
 				mf.rom = data
 				return nil
 			}
 		}
 	}
-	
+
 	// Create a minimal placeholder ROM if no real ROM found
 	mf.rom = make([]byte, 0x2000)
 	// Add basic Multiface signature - jump to main code

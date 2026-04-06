@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // Disciple represents the DISCiPLE disk interface by Miles Gordon Technology
@@ -84,25 +85,21 @@ func NewDisciple(romPath string, memory *memory.Memory) (*Disciple, error) {
 
 // loadROM loads the GDOS ROM
 func (d *Disciple) loadROM(romPath string) error {
-	// Try different possible ROM filenames
+	// Try filesystem then embedded for each possible ROM filename
 	romFiles := []string{"gdos.rom", "disciple.rom", "GDOS_3d.rom"}
-	
 	for _, filename := range romFiles {
-		path := filepath.Join(romPath, filename)
-		if _, err := os.Stat(path); err == nil {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			
-			// GDOS ROM should be 8KB
-			if len(data) == 0x2000 {
-				d.rom = data
-				return nil
-			}
+		// Filesystem first
+		if data, err := os.ReadFile(filepath.Join(romPath, filename)); err == nil && len(data) == 0x2000 {
+			d.rom = data
+			return nil
+		}
+		// Embedded fallback
+		if data, err := roms.ReadEmbeddedROM(filename); err == nil && len(data) == 0x2000 {
+			d.rom = data
+			return nil
 		}
 	}
-	
+
 	// Create a minimal placeholder ROM if no real ROM found
 	d.rom = make([]byte, 0x2000)
 	// Add basic GDOS signature
