@@ -2,6 +2,7 @@ package z80
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/conorarmstrong/zx_go/pkg/memory"
@@ -51,6 +52,10 @@ type CPU struct {
 	// Breakpoint callback: called before each instruction during ExecuteFrame.
 	// If it returns true, execution stops immediately (breakpoint hit).
 	BreakpointCheck func(pc uint16) bool
+
+	// PendingNMI is set from any goroutine to signal an NMI. The CPU
+	// processes it at the next safe point in ExecuteFrame.
+	PendingNMI atomic.Bool
 
 	// For debugging
 	logEnabled bool
@@ -112,6 +117,10 @@ func (c *CPU) Run() {
 func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	tstatesEnd := c.tstates + uint64(tstatesPerFrame)
 	for c.tstates < tstatesEnd {
+		// Check for pending NMI (set from keyboard goroutine)
+		if c.PendingNMI.CompareAndSwap(true, false) {
+			c.NMI()
+		}
 		if c.Halted {
 			c.tstates++
 			continue
