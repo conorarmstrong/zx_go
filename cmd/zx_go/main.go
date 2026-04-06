@@ -450,11 +450,13 @@ func (a *aspectRatioLayout) Layout(objects []fyne.CanvasObject, containerSize fy
 
 func main() {
 	a := app.NewWithID("com.conorarmstrong.zxgo")
+	a.SetIcon(spectrumIcon())
 
 	// Start with 48K model by default
 	currentModel := roms.Model48K
 
 	w := a.NewWindow(fmt.Sprintf("ZX Spectrum Emulator - %s", roms.GetModelName(currentModel)))
+	w.SetIcon(spectrumIcon())
 	w.Resize(fyne.NewSize(windowWidth, windowHeight))
 
 	emu, err := newEmulator(currentModel)
