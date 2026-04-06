@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -411,6 +412,42 @@ func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
 	return snap, nil
 }
 
+// aspectRatioLayout centres its single child at a fixed aspect ratio
+// within the available space, adding black bars as needed.
+type aspectRatioLayout struct {
+	ratio float64 // width / height, e.g. 4.0/3.0
+}
+
+func (a *aspectRatioLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(320, 240)
+}
+
+func (a *aspectRatioLayout) Layout(objects []fyne.CanvasObject, containerSize fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	cw := float64(containerSize.Width)
+	ch := float64(containerSize.Height)
+
+	// Fit the aspect ratio inside the container
+	var w, h float64
+	if cw/ch > a.ratio {
+		// Container is wider than 4:3 — pillarbox (black bars on sides)
+		h = ch
+		w = h * a.ratio
+	} else {
+		// Container is taller than 4:3 — letterbox (black bars top/bottom)
+		w = cw
+		h = w / a.ratio
+	}
+
+	x := (cw - w) / 2
+	y := (ch - h) / 2
+
+	objects[0].Move(fyne.NewPos(float32(x), float32(y)))
+	objects[0].Resize(fyne.NewSize(float32(w), float32(h)))
+}
+
 func main() {
 	a := app.NewWithID("com.conorarmstrong.zxgo")
 
@@ -743,8 +780,10 @@ func main() {
 	)
 	w.SetMainMenu(mainMenu)
 
-	// Layer the keyboard widget behind the screen so it can receive focus
-	content := container.NewStack(keyboardWidget, screen)
+	// 4:3 aspect ratio container with black letterbox/pillarbox bars
+	blackBG := canvas.NewRectangle(color.Black)
+	aspectScreen := container.New(&aspectRatioLayout{ratio: 4.0 / 3.0}, screen)
+	content := container.NewStack(blackBG, aspectScreen, keyboardWidget)
 	w.SetContent(content)
 
 	// Make sure the keyboard widget gets focus
