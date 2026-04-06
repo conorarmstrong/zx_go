@@ -53,12 +53,18 @@ A full-featured Z80 debugger accessible from **Emulator > Debugger**:
 
 Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/conorarmstrong/zx_go/releases) page.
 
-| Platform | Binary |
-|----------|--------|
-| macOS (Apple Silicon) | `zx_go-macos-arm64` |
-| macOS (Intel) | `zx_go-macos-amd64` |
-| Windows | `zx_go-windows-amd64.exe` |
-| Linux | `zx_go-linux-amd64` |
+| Platform | Download |
+|----------|----------|
+| macOS (Apple Silicon) | `zx_go-macos-arm64.tar.gz` |
+| macOS (Intel) | `zx_go-macos-amd64.tar.gz` |
+| Windows | `zx_go-windows-amd64.exe.zip` |
+| Linux | `zx_go-linux-amd64.tar.gz` |
+
+On macOS/Linux, extract and run:
+```bash
+tar xzf zx_go-macos-arm64.tar.gz
+./zx_go-macos-arm64
+```
 
 ## Building from source
 

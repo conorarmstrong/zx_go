@@ -57,11 +57,19 @@ jobs:
           CC: ${{ matrix.cc || '' }}
         run: go build -o ${{ matrix.artifact }} ./cmd/zx_go
 
-      - name: Set executable permission
-        if: matrix.goos != 'windows'
-        run: chmod +x ${{ matrix.artifact }}
+      - name: Package binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip ${{ matrix.artifact }}.zip ${{ matrix.artifact }}
+          else
+            chmod +x ${{ matrix.artifact }}
+            tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+          fi
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact }}
+          files: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
