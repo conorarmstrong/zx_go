@@ -1932,12 +1932,15 @@ func TestNMI(t *testing.T) {
 
 	cpu.NMI()
 
-	// IFF2 should have IFF1's old value; IFF1 should be disabled
+	// IFF1 should be disabled; IFF2 must be left unchanged (not copied
+	// from IFF1) so that the Multiface 3 exit path — which uses EI
+	// rather than RETN — does not permanently disable interrupts on
+	// the +3.  See FUSE's z80_nmi() for the same approach.
 	if cpu.IFF1 {
 		t.Errorf("NMI: IFF1 should be false")
 	}
-	if !cpu.IFF2 {
-		t.Errorf("NMI: IFF2 should be true (copied from IFF1)")
+	if cpu.IFF2 {
+		t.Errorf("NMI: IFF2 should be unchanged (false)")
 	}
 	if cpu.Halted {
 		t.Errorf("NMI: should exit halted state")
@@ -1950,6 +1953,28 @@ func TestNMI(t *testing.T) {
 	retAddr := uint16(retHi)<<8 | uint16(retLo)
 	if retAddr != 0x8000 {
 		t.Errorf("NMI: return addr expected 0x8000, got 0x%04X", retAddr)
+	}
+}
+
+func TestNMI_PreservesIFF2(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// When NMI fires while IFF1=false (e.g. inside a DI section),
+	// IFF2 must NOT be overwritten.  This is critical for the +3
+	// where IFF2=true may be needed by a later RETN.
+	cpu.IFF1 = false
+	cpu.IFF2 = true
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+
+	cpu.NMI()
+
+	if cpu.IFF1 {
+		t.Errorf("NMI: IFF1 should be false")
+	}
+	if !cpu.IFF2 {
+		t.Errorf("NMI: IFF2 should still be true (must not be overwritten)")
 	}
 }
 

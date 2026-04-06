@@ -121,21 +121,32 @@ func (c *CPU) Run() {
 func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	tstatesEnd := c.tstates + uint64(tstatesPerFrame)
 	for c.tstates < tstatesEnd {
-		// Check for pending NMI (set from keyboard goroutine)
-		if c.PendingNMI.CompareAndSwap(true, false) {
-			if c.NMICallback != nil {
-				c.NMICallback() // Page in peripheral ROM before NMI executes
-			}
-			c.NMI()
-		}
 		if c.Halted {
+			// NMI during HALT: the CPU is waiting with IFF1=true (after EI).
+			// This is the ideal time for NMI — IFF2 captures IFF1=true so
+			// RETN can restore interrupts correctly.
+			if c.PendingNMI.CompareAndSwap(true, false) {
+				if c.NMICallback != nil {
+					c.NMICallback()
+				}
+				c.NMI()
+				continue
+			}
 			c.tstates++
 			continue
 		}
 		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
-			return // Breakpoint hit — stop execution mid-frame
+			return
 		}
 		c.executeInstruction()
+		// Check NMI after instruction — ensures IFF1 reflects the current
+		// state (e.g. after EI has run), so RETN can restore it correctly
+		if c.PendingNMI.CompareAndSwap(true, false) {
+			if c.NMICallback != nil {
+				c.NMICallback()
+			}
+			c.NMI()
+		}
 	}
 	
 	// Process interrupt at end of frame (50Hz for ZX Spectrum)
@@ -1571,10 +1582,13 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		addr := uint16(int32(c.IX) + int32(d))
 		c.executeDDCBInstruction(opcode, addr)
 		c.tstates += 8 // Base timing, individual instructions add more
-		
+
 	default:
-		fmt.Printf("DD instruction not implemented: 0x%02X\n", opcode)
-		c.tstates += 8
+		// On real Z80 hardware, a DD prefix followed by an opcode that
+		// doesn't use IX simply executes the base opcode (the prefix is
+		// ignored, acting only as a NOP-like delay already counted by the
+		// fetch above).
+		c.executeBaseInstruction(opcode)
 	}
 }
 
@@ -1852,9 +1866,13 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		opcode := c.fetch()  // Then the CB opcode
 		c.executeFDCBInstruction(opcode, d)
 		c.tstates += 8 // Base timing, individual instructions add more
+
 	default:
-		fmt.Printf("FD instruction not implemented: 0x%02X\n", opcode)
-		c.tstates += 8
+		// On real Z80 hardware, an FD prefix followed by an opcode that
+		// doesn't use IY simply executes the base opcode (the prefix is
+		// ignored, acting only as a NOP-like delay already counted by the
+		// fetch above).
+		c.executeBaseInstruction(opcode)
 	}
 }
 
@@ -2624,15 +2642,25 @@ func (c *CPU) interrupt() {
 
 // NMI (Non-Maskable Interrupt) handling - for Multiface red button
 func (c *CPU) NMI() {
-	// NMI cannot be disabled and always executes
-	
-	// Copy IFF1 to IFF2 and disable IFF1
-	c.IFF2 = c.IFF1
+	// NMI cannot be disabled and always executes.
+	//
+	// Standard Z80 documentation says IFF2 = IFF1 before clearing IFF1,
+	// but we deliberately leave IFF2 unchanged (matching FUSE's approach).
+	// Rationale: the Multiface 3 ROM re-enables interrupts with EI and
+	// never uses RETN, so it does not rely on IFF2 to restore IFF1.
+	// If we copied IFF1 into IFF2 here, an NMI that fires while IFF1 is
+	// false (e.g. inside a DI section) would set IFF2=false, and any
+	// subsequent RETN in the interrupted program would restore IFF1=false
+	// — permanently disabling maskable interrupts and crashing the +3
+	// (which needs IM2 interrupts for keyboard scanning).
 	c.IFF1 = false
-	
+
 	// Exit halt state if in it
 	c.Halted = false
-	
+
+	// Bump the R register like a real Z80 M1 cycle
+	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
+
 	// NMI always jumps to 0x0066
 	c.push(c.PC)
 	c.PC = 0x0066
