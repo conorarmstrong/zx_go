@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"log"
 	"sync"
@@ -46,7 +47,7 @@ type emulator struct {
 	kbd         *keyboard.Keyboard
 	peripherals *peripherals.PeripheralManager
 
-	paused bool
+	paused atomic.Bool
 	ticker *time.Ticker
 
 	// Track physical key states to prevent OS repeat issues
@@ -135,17 +136,18 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 		}
 	})
 
-	return &emulator{
+	e := &emulator{
 		cpu:          cpu,
 		mem:          mem,
 		ula:          ula,
 		kbd:          kbd,
 		peripherals:  pm,
-		paused:       true,
 		physicalKeys: make(map[fyne.KeyName]bool),
-		keyQueue:     make(chan keyState, 10), // Small buffer
+		keyQueue:     make(chan keyState, 10),
 		stopChan:     make(chan struct{}),
-	}, nil
+	}
+	e.paused.Store(true)
+	return e, nil
 }
 
 func (e *emulator) startKeyProcessor() {
@@ -223,7 +225,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		for {
 			select {
 			case <-ticker.C:
-				if !e.paused {
+				if !e.paused.Load() {
 					// Execute CPU frame
 					e.cpu.ExecuteFrame(tstatesPerFrame)
 
@@ -235,9 +237,13 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					if now.Sub(lastRender) >= 20*time.Millisecond {
 						newImage := e.ula.Render()
 
+						// Copy pixel data to avoid race with UI thread
+						imgCopy := image.NewRGBA(newImage.Bounds())
+						copy(imgCopy.Pix, newImage.Pix)
+
 						// Update UI on main thread
 						fyne.Do(func() {
-							newImageObj := canvas.NewImageFromImage(newImage)
+							newImageObj := canvas.NewImageFromImage(imgCopy)
 							newImageObj.ScaleMode = canvas.ImageScalePixels
 							screen.Resource = newImageObj.Resource
 							screen.Refresh()
@@ -271,8 +277,8 @@ func (e *emulator) reboot() {
 }
 
 func (e *emulator) togglePause() {
-	e.paused = !e.paused
-	if e.paused {
+	e.paused.Store(!e.paused.Load())
+	if e.paused.Load() {
 		log.Println("Emulator paused")
 	} else {
 		log.Println("Emulator resumed")
@@ -281,7 +287,7 @@ func (e *emulator) togglePause() {
 
 func (e *emulator) cleanup() {
 	log.Println("Cleaning up emulator resources...")
-	e.paused = true
+	e.paused.Store(true)
 	close(e.stopChan)
 	if e.ticker != nil {
 		e.ticker.Stop()
@@ -306,8 +312,8 @@ func getFormatName(format snapshot.SnapshotFormat) string {
 // applySnapshotToEmulator applies a loaded snapshot to the running emulator
 func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
 	// Pause emulation during snapshot loading
-	wasPaused := emu.paused
-	if !emu.paused {
+	wasPaused := emu.paused.Load()
+	if !emu.paused.Load() {
 		emu.togglePause()
 	}
 
@@ -482,8 +488,8 @@ func main() {
 		log.Printf("Switching to %s...", roms.GetModelName(newModel))
 
 		// Pause emulation during switch
-		wasPaused := emu.paused
-		if !emu.paused {
+		wasPaused := emu.paused.Load()
+		if !emu.paused.Load() {
 			emu.togglePause()
 		}
 
@@ -698,8 +704,10 @@ func main() {
 						dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
 					}
 				}
-				updateLabels()
-				w.MainMenu().Refresh()
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
 			}
 
 			toggleMF := func(variant multiface.MultifaceType) {
@@ -710,8 +718,10 @@ func main() {
 						dialog.ShowError(fmt.Errorf("failed to enable %s: %w", multiface.GetVariantName(variant), err), w)
 					}
 				}
-				updateLabels()
-				w.MainMenu().Refresh()
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
 			}
 
 			mf1Item.Action = func() { toggleMF(multiface.Multiface1) }
@@ -731,16 +741,16 @@ func main() {
 			fyne.NewMenuItem("Debugger", func() {
 				dbg := debugger.New(emu.cpu, emu.mem, a)
 				dbg.SetCallbacks(
-					func() { emu.paused = true },
+					func() { emu.paused.Store(true) },
 					func() { emu.cpu.StepInstruction() },
-					func() { emu.paused = false },
-					func() bool { return emu.paused },
+					func() { emu.paused.Store(false) },
+					func() bool { return emu.paused.Load() },
 				)
 				// Wire breakpoints: when the debugger has a breakpoint set,
 				// the CPU checks it before each instruction and auto-pauses.
 				emu.cpu.BreakpointCheck = func(pc uint16) bool {
 					if dbg.CheckBreakpoint() {
-						emu.paused = true
+						emu.paused.Store(true)
 						return true
 					}
 					return false
