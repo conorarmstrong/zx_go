@@ -34,12 +34,17 @@ type Multiface struct {
 	romPaged    bool
 	redButton   bool
 	invisible   bool // Stealth mode
-	
+
 	// Video page store (for Multiface 128/3)
 	videoPageStore byte
-	
+
 	// Memory reference for paging
 	memory *memory.Memory
+
+	// Saved paging state — captured when the MF ROM pages in and restored
+	// when it pages out, so that port writes the MF ROM code makes to
+	// 0x7FFD/0x1FFD don't corrupt the host machine's paging configuration.
+	savedPagingState *memory.PagingState
 	
 	// ROM filename for loading
 	romFile string
@@ -267,15 +272,31 @@ func (mf *Multiface) pageInROM() {
 	if mf.invisible || !mf.enabled {
 		return
 	}
-	
-	// In a real implementation, this would modify the memory map
-	// to page in the Multiface ROM at 0x0000-0x1FFF
+
+	// Save the host machine's paging state before we take over.
+	// The MF ROM will write to ports 0x7FFD/0x1FFD to save/restore
+	// the +3's paging, but those writes go through the ULA and
+	// actually modify the paging registers. By saving and restoring
+	// the state around MF operation, we prevent corruption.
+	if !mf.romPaged {
+		mf.savedPagingState = mf.memory.SavePagingState()
+	}
+
 	mf.romPaged = true
 }
 
 // pageOutROM pages out the Multiface ROM
 func (mf *Multiface) pageOutROM() {
+	wasPaged := mf.romPaged
 	mf.romPaged = false
+
+	// Restore the host machine's paging state that was saved when the
+	// MF ROM paged in. This undoes any paging register writes the MF
+	// ROM made while it was active.
+	if wasPaged && mf.savedPagingState != nil {
+		mf.memory.RestorePagingState(mf.savedPagingState)
+		mf.savedPagingState = nil
+	}
 }
 
 // IsEnabled returns whether the Multiface is enabled

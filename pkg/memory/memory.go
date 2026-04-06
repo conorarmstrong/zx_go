@@ -370,6 +370,49 @@ func (m *Memory) GetPortState() (byte, byte, bool) {
 	return m.port7FFD, m.port1FFD, m.specialPaging
 }
 
+// PagingState holds a snapshot of the memory paging configuration so it can
+// be saved before a peripheral (e.g. Multiface 3) takes control and restored
+// afterwards, preventing paging corruption.
+type PagingState struct {
+	port7FFD          byte
+	port1FFD          byte
+	specialPaging     bool
+	memoryPageReadMap [4]int
+	memoryPageWriteMap [4]int
+	screenPage        int
+	pagingEnabled     bool
+	valid             bool
+}
+
+// SavePagingState captures the current paging configuration into a PagingState.
+func (m *Memory) SavePagingState() *PagingState {
+	return &PagingState{
+		port7FFD:          m.port7FFD,
+		port1FFD:          m.port1FFD,
+		specialPaging:     m.specialPaging,
+		memoryPageReadMap: m.memoryPageReadMap,
+		memoryPageWriteMap: m.memoryPageWriteMap,
+		screenPage:        m.ScreenPage,
+		pagingEnabled:     m.PagingEnabled,
+		valid:             true,
+	}
+}
+
+// RestorePagingState restores a previously saved paging configuration.
+// If state is nil or was never saved, this is a no-op.
+func (m *Memory) RestorePagingState(state *PagingState) {
+	if state == nil || !state.valid {
+		return
+	}
+	m.port7FFD = state.port7FFD
+	m.port1FFD = state.port1FFD
+	m.specialPaging = state.specialPaging
+	m.memoryPageReadMap = state.memoryPageReadMap
+	m.memoryPageWriteMap = state.memoryPageWriteMap
+	m.ScreenPage = state.screenPage
+	m.PagingEnabled = state.pagingEnabled
+}
+
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
 	if !m.PagingEnabled {

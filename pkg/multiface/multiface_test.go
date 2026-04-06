@@ -830,6 +830,126 @@ func TestLoadSnapshot_FileExists(t *testing.T) {
 	}
 }
 
+// ---------- Paging state save/restore ----------
+
+// newPlus3TestMemory creates a +3 memory for testing paging state save/restore.
+func newPlus3TestMemory(t *testing.T) *memory.Memory {
+	t.Helper()
+	dir := t.TempDir()
+	mem, err := memory.New(dir, roms.ModelPlus3)
+	if err != nil {
+		t.Fatalf("failed to create +3 test memory: %v", err)
+	}
+	return mem
+}
+
+func TestMF3_PageInSavesPagingState(t *testing.T) {
+	mem := newPlus3TestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface3, dir, mem)
+
+	// Set up a known paging state.
+	mem.PageMemory(0x04)      // RAM page 4 in slot 3
+	mem.PageMemoryPlus3(0x04) // ROM 2 selected, normal mode
+
+	port7ffdBefore, port1ffdBefore, _ := mem.GetPortState()
+	readMapBefore, writeMapBefore := mem.GetPageMap()
+
+	// Trigger NMI — pages in the MF3 ROM and saves paging state.
+	if !mf.HandleNMI() {
+		t.Fatal("HandleNMI should succeed")
+	}
+
+	// Simulate what the MF3 ROM does: writes to paging ports.
+	mem.PageMemory(0x17)      // Different page/screen/ROM
+	mem.PageMemoryPlus3(0x03) // Special paging mode 1
+
+	// Verify paging state actually changed.
+	port7ffdDuring, _, _ := mem.GetPortState()
+	if port7ffdDuring == port7ffdBefore {
+		t.Fatal("paging state should have changed during MF3 operation")
+	}
+
+	// Page out MF3 ROM — should restore the saved paging state.
+	// MF3: IN with A7=1 pages out.
+	_, handled := mf.HandlePortRead(0x00BF)
+	if !handled {
+		t.Fatal("HandlePortRead should handle MF3 port")
+	}
+	if mf.IsROMPaged() {
+		t.Fatal("MF3 ROM should be paged out")
+	}
+
+	// Verify paging state was restored.
+	port7ffdAfter, port1ffdAfter, _ := mem.GetPortState()
+	readMapAfter, writeMapAfter := mem.GetPageMap()
+
+	if port7ffdAfter != port7ffdBefore {
+		t.Errorf("port7FFD not restored: want 0x%02X, got 0x%02X", port7ffdBefore, port7ffdAfter)
+	}
+	if port1ffdAfter != port1ffdBefore {
+		t.Errorf("port1FFD not restored: want 0x%02X, got 0x%02X", port1ffdBefore, port1ffdAfter)
+	}
+	if readMapAfter != readMapBefore {
+		t.Errorf("readMap not restored: want %v, got %v", readMapBefore, readMapAfter)
+	}
+	if writeMapAfter != writeMapBefore {
+		t.Errorf("writeMap not restored: want %v, got %v", writeMapBefore, writeMapAfter)
+	}
+}
+
+func TestMF3_PageOutWithoutPageInIsNoOp(t *testing.T) {
+	mem := newPlus3TestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface3, dir, mem)
+
+	// Set a known state.
+	mem.PageMemory(0x04)
+	port7ffdBefore, _, _ := mem.GetPortState()
+
+	// Page out without ever paging in — should not crash or modify state.
+	mf.pageOutROM()
+
+	port7ffdAfter, _, _ := mem.GetPortState()
+	if port7ffdAfter != port7ffdBefore {
+		t.Errorf("pageOutROM without prior pageIn should not alter paging state")
+	}
+}
+
+func TestMF3_DoublePageInDoesNotOverwriteSavedState(t *testing.T) {
+	mem := newPlus3TestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface3, dir, mem)
+
+	// Set initial state.
+	mem.PageMemory(0x04)
+	port7ffdOrig, _, _ := mem.GetPortState()
+
+	// First page-in saves the state.
+	mf.HandleNMI()
+
+	// Corrupt the paging state (as MF3 ROM would).
+	mem.PageMemory(0x17)
+
+	// Second page-in (e.g. opcode read at 0x0066) should NOT overwrite
+	// the originally saved state.
+	mf.HandleOpcodeRead(0x0066)
+
+	// Verify it is still paged in.
+	if !mf.IsROMPaged() {
+		t.Fatal("MF3 ROM should still be paged in")
+	}
+
+	// Page out — should restore the ORIGINAL state, not the corrupted state.
+	mf.HandlePortRead(0x00BF) // MF3: A7=1 pages out
+
+	port7ffdAfter, _, _ := mem.GetPortState()
+	if port7ffdAfter != port7ffdOrig {
+		t.Errorf("double page-in overwrote saved state: want 0x%02X, got 0x%02X",
+			port7ffdOrig, port7ffdAfter)
+	}
+}
+
 // ---------- Integration: full NMI cycle ----------
 
 func TestNMICycle_Full(t *testing.T) {
