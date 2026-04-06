@@ -36,7 +36,7 @@ var (
 )
 
 const (
-	hexRows  = 64
+	hexRows  = 4096 // Full 64KB: 65536 / 16 bytes per row
 	dasmRows = 80
 	fontSize = 13
 )
@@ -290,7 +290,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			t := o.(*canvas.Text)
-			addr := d.hexAddr + uint16(id)*16
+			addr := uint16(id) * 16
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("%04X  ", addr))
 			ascii := ""
@@ -344,7 +344,8 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.hexAddrEntry.OnSubmitted = func(s string) {
 		if addr, err := strconv.ParseUint(s, d.hexAddrBase, 16); err == nil {
 			d.hexAddr = uint16(addr) & 0xFFF0
-			d.hexList.Refresh()
+			row := int(d.hexAddr) / 16
+			d.hexList.ScrollTo(widget.ListItemID(row))
 		}
 	}
 
@@ -399,6 +400,7 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	pcBtn := widget.NewButton("Go to PC", func() {
 		d.hexAddr = d.cpu.PC & 0xFFF0
 		d.hexAddrEntry.SetText(d.formatAddr(d.hexAddr))
+		d.hexList.ScrollTo(widget.ListItemID(int(d.hexAddr) / 16))
 		d.Refresh()
 	})
 	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
