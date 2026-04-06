@@ -127,15 +127,19 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	ula.SetPeripherals(pm)
 	mem.PeripheralRead = pm.HandleMemoryRead
 
-	// Set up NMI callback for keyboard (Multiface red button simulation).
-	// This runs from the key processor goroutine, so we signal the CPU
-	// via an atomic flag instead of calling NMI() directly.
+	// NMI: keyboard goroutine sets a flag, CPU processes it on the emulator
+	// goroutine. The NMICallback pages in the Multiface ROM at the exact
+	// moment the NMI fires (not before, which would corrupt execution).
 	kbd.SetNMICallback(func() {
 		if pm.IsMultifaceEnabled() {
-			pm.HandleNMI()
 			cpu.PendingNMI.Store(true)
 		}
 	})
+	cpu.NMICallback = func() {
+		if pm.IsMultifaceEnabled() {
+			pm.HandleNMI() // Pages in Multiface ROM
+		}
+	}
 
 	e := &emulator{
 		cpu:          cpu,

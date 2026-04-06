@@ -57,6 +57,10 @@ type CPU struct {
 	// processes it at the next safe point in ExecuteFrame.
 	PendingNMI atomic.Bool
 
+	// NMICallback is called just before the NMI is executed, allowing
+	// peripherals to page in their ROM at the exact right moment.
+	NMICallback func()
+
 	// For debugging
 	logEnabled bool
 
@@ -119,6 +123,9 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	for c.tstates < tstatesEnd {
 		// Check for pending NMI (set from keyboard goroutine)
 		if c.PendingNMI.CompareAndSwap(true, false) {
+			if c.NMICallback != nil {
+				c.NMICallback() // Page in peripheral ROM before NMI executes
+			}
 			c.NMI()
 		}
 		if c.Halted {
