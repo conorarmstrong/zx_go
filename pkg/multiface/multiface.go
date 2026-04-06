@@ -44,7 +44,6 @@ type Multiface struct {
 	// Saved paging state — captured when the MF ROM pages in and restored
 	// when it pages out, so that port writes the MF ROM code makes to
 	// 0x7FFD/0x1FFD don't corrupt the host machine's paging configuration.
-	savedPagingState *memory.PagingState
 	
 	// ROM filename for loading
 	romFile string
@@ -248,7 +247,8 @@ func (mf *Multiface) HandlePortRead(port uint16) (byte, bool) {
 }
 
 // HandlePortWrite handles writes to Multiface I/O ports.
-// OUT to the Multiface port controls the software lockout (J2).
+// OUT to the Multiface port re-arms the hardware (IC8b_Q = 1).
+// For MF128/MF3, A7 also controls the software lockout (J2).
 func (mf *Multiface) HandlePortWrite(port uint16, value byte) bool {
 	if !mf.enabled {
 		return false
@@ -257,46 +257,33 @@ func (mf *Multiface) HandlePortWrite(port uint16, value byte) bool {
 		return false
 	}
 
-	// For MF128/MF3: A7 controls software lockout (J2)
+	// For MF128/MF3: A7 controls software lockout (J2/invisible)
 	if mf.variant != Multiface1 {
-		if mf.romPaged {
-			mf.invisible = (port & 0x0080) == 0
-		}
+		mf.invisible = (port & 0x0080) == 0
 	}
+
+	// OUT re-arms the hardware (IC8b_Q = 1 in FUSE).
+	mf.redButton = false
 
 	return true
 }
 
-// pageInROM pages in the Multiface ROM
+// pageInROM pages in the Multiface ROM overlay.
+// While romPaged=true, PeripheralRead intercepts 0x0000-0x3FFF.
+// Paging port writes (0x7FFD/0x1FFD) still take effect normally —
+// the MF code uses them to access the Spectrum ROM for printing.
 func (mf *Multiface) pageInROM() {
 	if mf.invisible || !mf.enabled {
 		return
 	}
-
-	// Save the host machine's paging state before we take over.
-	// The MF ROM will write to ports 0x7FFD/0x1FFD to save/restore
-	// the +3's paging, but those writes go through the ULA and
-	// actually modify the paging registers. By saving and restoring
-	// the state around MF operation, we prevent corruption.
-	if !mf.romPaged {
-		mf.savedPagingState = mf.memory.SavePagingState()
-	}
-
 	mf.romPaged = true
 }
 
-// pageOutROM pages out the Multiface ROM
+// pageOutROM removes the Multiface ROM overlay.
+// The normal ROM/RAM at 0x0000-0x3FFF becomes visible again,
+// based on the current paging port state (which the MF code manages).
 func (mf *Multiface) pageOutROM() {
-	wasPaged := mf.romPaged
 	mf.romPaged = false
-
-	// Restore the host machine's paging state that was saved when the
-	// MF ROM paged in. This undoes any paging register writes the MF
-	// ROM made while it was active.
-	if wasPaged && mf.savedPagingState != nil {
-		mf.memory.RestorePagingState(mf.savedPagingState)
-		mf.savedPagingState = nil
-	}
 }
 
 // IsEnabled returns whether the Multiface is enabled

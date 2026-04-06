@@ -56,6 +56,11 @@ type Memory struct {
 	// PeripheralWrite is called for writes in the peripheral area.
 	// If it returns true, the peripheral handled the write.
 	PeripheralWrite func(addr uint16, val byte) bool
+
+	// PagingFrozen: when true, PageMemory and PageMemoryPlus3 are no-ops.
+	// Used by peripherals (Multiface) to prevent paging changes while
+	// their ROM is overlaying the memory map.
+	PagingFrozen bool
 }
 
 // Contention delay pattern (repeats every 8 T-states in contended region)
@@ -415,7 +420,7 @@ func (m *Memory) RestorePagingState(state *PagingState) {
 
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
-	if !m.PagingEnabled {
+	if !m.PagingEnabled || m.PagingFrozen {
 		return
 	}
 	m.port7FFD = val
@@ -463,7 +468,7 @@ func (m *Memory) selectROM() {
 
 // PageMemoryPlus3 handles the +3/+2A special paging via port 0x1FFD.
 func (m *Memory) PageMemoryPlus3(val byte) {
-	if !m.PagingEnabled {
+	if !m.PagingEnabled || m.PagingFrozen {
 		return
 	}
 	m.port1FFD = val
