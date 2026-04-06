@@ -55,6 +55,9 @@ type emulator struct {
 	// Frame counter
 	frameCounter int32
 
+	// Window reference for fullscreen toggle
+	window fyne.Window
+
 	// Separate goroutine for processing keys
 	keyQueue chan keyState
 	stopChan chan struct{}
@@ -160,6 +163,12 @@ func (e *emulator) startKeyProcessor() {
 }
 
 func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
+	// Escape exits fullscreen
+	if ev.Name == fyne.KeyEscape && e.window != nil && e.window.FullScreen() {
+		e.window.SetFullScreen(false)
+		return
+	}
+
 	e.keyMutex.Lock()
 
 	// Check if this is a repeat event from the OS
@@ -410,12 +419,12 @@ func main() {
 
 	w := a.NewWindow(fmt.Sprintf("ZX Spectrum Emulator - %s", roms.GetModelName(currentModel)))
 	w.Resize(fyne.NewSize(windowWidth, windowHeight))
-	w.SetFixedSize(true)
 
 	emu, err := newEmulator(currentModel)
 	if err != nil {
 		log.Fatalf("Failed to create emulator: %v", err)
 	}
+	emu.window = w
 
 	// Use static image approach
 	initialImage := emu.ula.Render()
@@ -589,6 +598,32 @@ func main() {
 			fyne.NewMenuItem("+2", func() { switchModel(roms.ModelPlus2) }),
 			fyne.NewMenuItem("+2A", func() { switchModel(roms.ModelPlus2A) }),
 			fyne.NewMenuItem("+3", func() { switchModel(roms.ModelPlus3) }),
+		),
+		fyne.NewMenu("View",
+			fyne.NewMenuItem("100% (320x240)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(320, 240))
+			}),
+			fyne.NewMenuItem("125% (400x300)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(400, 300))
+			}),
+			fyne.NewMenuItem("150% (480x360)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(480, 360))
+			}),
+			fyne.NewMenuItem("200% (640x480)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(640, 480))
+			}),
+			fyne.NewMenuItem("300% (960x720)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(960, 720))
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Full Screen", func() {
+				w.SetFullScreen(true)
+			}),
 		),
 		fyne.NewMenu("Peripherals",
 			fyne.NewMenuItem("Enable Disciple", func() {
