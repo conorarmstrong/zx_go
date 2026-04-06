@@ -2,6 +2,7 @@ package roms
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -143,7 +144,7 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 				return err
 			}
 			// Optional ROM, just log and continue
-			fmt.Printf("Warning: Optional ROM %s not found: %v\n", mapping.Filename, err)
+			log.Printf("Warning: Optional ROM %s not found: %v\n", mapping.Filename, err)
 		}
 	}
 	
@@ -163,7 +164,7 @@ func (rm *ROMManager) LoadPeripheralROMs() error {
 	
 	for romType, filename := range peripheralROMs {
 		if err := rm.LoadROM(romType, filename); err != nil {
-			fmt.Printf("Warning: Peripheral ROM %s not found: %v\n", filename, err)
+			log.Printf("Warning: Peripheral ROM %s not found: %v\n", filename, err)
 		}
 	}
 	

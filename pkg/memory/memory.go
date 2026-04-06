@@ -363,6 +363,14 @@ func (m *Memory) GetPage(pageIndex int) []byte {
 	return m.ram[pageIndex]
 }
 
+// GetROMPage returns a direct pointer to a ROM page (0-3).
+func (m *Memory) GetROMPage(pageIndex int) []byte {
+	if pageIndex < 0 || pageIndex >= 4 {
+		return nil
+	}
+	return m.rom[pageIndex]
+}
+
 // GetPageMap returns the current read/write page map for debugging.
 // Returns [4]int for read map and [4]int for write map.
 // Values >= 16 indicate ROM pages (16=ROM0, 17=ROM1, etc.), others are RAM page indices.

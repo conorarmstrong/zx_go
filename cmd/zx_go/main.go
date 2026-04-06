@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -528,8 +529,7 @@ func main() {
 
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
-			fyne.NewMenuItem("Select ROM...", func() {
-				log.Println("Select ROM...")
+			fyne.NewMenuItem("Load ROM...", func() {
 				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 					if err != nil {
 						dialog.ShowError(err, w)
@@ -538,9 +538,44 @@ func main() {
 					if reader == nil {
 						return
 					}
-					log.Println("ROM selected:", reader.URI().Path())
-					// TODO: Load ROM
+					romPath := reader.URI().Path()
 					_ = reader.Close()
+
+					// Read the ROM file
+					data, readErr := os.ReadFile(romPath)
+					if readErr != nil {
+						dialog.ShowError(fmt.Errorf("failed to read ROM: %w", readErr), w)
+						return
+					}
+
+					// Validate size: 16KB for system ROMs, 8KB for peripheral ROMs
+					if len(data) != 16384 && len(data) != 8192 {
+						dialog.ShowError(fmt.Errorf("invalid ROM size: %d bytes (expected 16384 or 8192)", len(data)), w)
+						return
+					}
+
+					// Pause, load the ROM into slot 0, reboot
+					wasPaused := emu.paused.Load()
+					if !emu.paused.Load() {
+						emu.togglePause()
+					}
+
+					if len(data) == 16384 {
+						// Replace the current model's primary ROM
+						page := emu.mem.GetROMPage(0)
+						if page != nil {
+							copy(page, data)
+						}
+					}
+
+					emu.reboot()
+
+					if !wasPaused {
+						emu.togglePause()
+					}
+
+					log.Printf("Loaded ROM: %s (%d bytes)", romPath, len(data))
+					dialog.ShowInformation("ROM Loaded", fmt.Sprintf("Loaded %s\n(%d bytes)\n\nEmulator rebooted.", reader.URI().Name(), len(data)), w)
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
 				fd.Show()

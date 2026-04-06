@@ -2,6 +2,7 @@ package multiface
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -153,7 +154,7 @@ func (mf *Multiface) loadROM(romPath string) error {
 	}
 	mf.rom[0x0012] = 0xC9 // RET
 	
-	fmt.Printf("Warning: Using placeholder %s ROM - functionality will be limited\n", mf.romFile)
+	log.Printf("Warning: Using placeholder %s ROM - functionality will be limited\n", mf.romFile)
 	
 	return nil
 }

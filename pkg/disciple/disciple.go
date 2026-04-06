@@ -2,6 +2,7 @@ package disciple
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -104,7 +105,7 @@ func (d *Disciple) loadROM(romPath string) error {
 	d.rom = make([]byte, 0x2000)
 	// Add basic GDOS signature
 	copy(d.rom[0:], []byte{0xF3, 0xC3, 0x00, 0x20}) // DI, JP 0x2000
-	fmt.Println("Warning: Using placeholder GDOS ROM - disk functionality will be limited")
+	log.Println("Warning: Using placeholder GDOS ROM - disk functionality will be limited")
 	
 	return nil
 }

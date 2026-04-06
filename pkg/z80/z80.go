@@ -1,7 +1,7 @@
 package z80
 
 import (
-	"fmt"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -107,14 +107,14 @@ func (c *CPU) Reset() {
 	c.IM2Vector = 0xFF // ZX Spectrum ULA puts 0xFF on data bus during INTA
 }
 
-// Run starts the emulation loop.
+// Run starts a standalone emulation loop at 50Hz.
+// Note: the main application uses its own run loop instead of this method.
 func (c *CPU) Run() {
 	ticker := time.NewTicker(20 * time.Millisecond) // 50Hz
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// TODO: Calculate t-states per frame based on model
-					c.ExecuteFrame(69888)
+		c.ExecuteFrame(69888) // 48K: 69888, 128K+: 70908
 	}
 }
 
@@ -931,7 +931,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 
 	default:
 		if !c.logEnabled {
-			fmt.Printf("Unknown opcode: 0x%02X at PC: 0x%04X\n", opcode, c.PC-1)
+			log.Printf("Unknown opcode: 0x%02X at PC: 0x%04X\n", opcode, c.PC-1)
 			c.logEnabled = true
 		}
 		c.tstates += 4
@@ -1434,7 +1434,7 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		c.tstates += 14
 
 	default:
-		fmt.Printf("ED instruction not implemented: 0x%02X\n", opcode)
+		log.Printf("ED instruction not implemented: 0x%02X\n", opcode)
 		c.tstates += 8
 	}
 }
