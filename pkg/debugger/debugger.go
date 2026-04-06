@@ -53,8 +53,9 @@ type Debugger struct {
 	onRun    func()
 	isPaused func() bool
 
-	hexAddr     uint16
-	breakpoints map[uint16]bool
+	hexAddr      uint16
+	hexAddrBase  int // 16, 10, or 8
+	breakpoints  map[uint16]bool
 
 	// Register display
 	regLines [20]*canvas.Text
@@ -80,6 +81,7 @@ func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
 		cpu:         cpu,
 		mem:         mem,
 		hexAddr:     0x0000,
+		hexAddrBase: 16,
 		breakpoints: make(map[uint16]bool),
 		stopChan:    make(chan struct{}),
 	}
@@ -144,6 +146,17 @@ func (d *Debugger) stopRefresh() {
 }
 
 // --- helpers ---
+
+func (d *Debugger) formatAddr(addr uint16) string {
+	switch d.hexAddrBase {
+	case 10:
+		return fmt.Sprintf("%d", addr)
+	case 8:
+		return fmt.Sprintf("%o", addr)
+	default:
+		return fmt.Sprintf("%04X", addr)
+	}
+}
 
 func mkText(c color.Color) *canvas.Text {
 	t := canvas.NewText("", c)
@@ -312,17 +325,35 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.hexAddrEntry = widget.NewEntry()
 	d.hexAddrEntry.SetText("0000")
 	d.hexAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
+
+	baseSelect := widget.NewSelect([]string{"Hex", "Dec", "Oct"}, func(val string) {
+		switch val {
+		case "Dec":
+			d.hexAddrBase = 10
+			d.hexAddrEntry.SetText(fmt.Sprintf("%d", d.hexAddr))
+		case "Oct":
+			d.hexAddrBase = 8
+			d.hexAddrEntry.SetText(fmt.Sprintf("%o", d.hexAddr))
+		default:
+			d.hexAddrBase = 16
+			d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
+		}
+	})
+	baseSelect.SetSelected("Hex")
+
 	d.hexAddrEntry.OnSubmitted = func(s string) {
-		if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
+		if addr, err := strconv.ParseUint(s, d.hexAddrBase, 16); err == nil {
 			d.hexAddr = uint16(addr) & 0xFFF0
 			d.hexList.Refresh()
 		}
 	}
+
 	hexAddrSized := container.New(layout.NewGridWrapLayout(fyne.NewSize(100, 36)), d.hexAddrEntry)
+	baseSized := container.New(layout.NewGridWrapLayout(fyne.NewSize(70, 36)), baseSelect)
 
 	hexPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(headerText("  MEMORY", colAddr), widget.NewLabel("  Addr:"), hexAddrSized),
+			container.NewHBox(headerText("  MEMORY", colAddr), widget.NewLabel("  Addr:"), hexAddrSized, baseSized),
 			widget.NewSeparator(),
 		), nil, nil, nil, d.hexList,
 	))
@@ -367,7 +398,7 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	})
 	pcBtn := widget.NewButton("Go to PC", func() {
 		d.hexAddr = d.cpu.PC & 0xFFF0
-		d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
+		d.hexAddrEntry.SetText(d.formatAddr(d.hexAddr))
 		d.Refresh()
 	})
 	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
