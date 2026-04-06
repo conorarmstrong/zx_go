@@ -188,11 +188,14 @@ func (mf *Multiface) HandleOpcodeRead(addr uint16) bool {
 }
 
 // isMultifacePort checks if the port matches this Multiface variant's decode.
+// MF128 also responds to MF1's port pattern for backwards compatibility.
 func (mf *Multiface) isMultifacePort(port uint16) bool {
 	switch mf.variant {
 	case Multiface1:
 		return (port & PortMask1) == PortValue1
-	default: // MF128, MF3
+	case Multiface128:
+		return (port&PortMask128) == PortValue128 || (port&PortMask1) == PortValue1
+	default: // MF3
 		return (port & PortMask128) == PortValue128
 	}
 }
