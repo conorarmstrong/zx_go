@@ -37,8 +37,8 @@ var (
 )
 
 const (
-	hexRows  = 24
-	dasmRows = 30
+	hexRows  = 32
+	dasmRows = 50
 	fontSize = 13
 )
 
@@ -199,36 +199,37 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		nil, nil, nil, regScroll,
 	))
 
-	// Hex panel
-	hexBox := container.NewVBox()
-	for i := range d.hexLines {
-		hexBox.Add(d.hexLines[i])
-	}
-	hexPanel := panelBG(container.NewBorder(
-		container.NewVBox(
-			container.NewHBox(headerText("  MEMORY", colAddr), d.buildHexBar()),
-			widget.NewSeparator(),
-		), nil, nil, nil, container.NewVScroll(hexBox),
-	))
-
-	// Disassembly panel
+	// Disassembly panel (centre — main focus)
 	dasmBox := container.NewVBox()
 	for i := range d.dasmLines {
 		dasmBox.Add(d.dasmLines[i])
 	}
+	dasmScroll := container.NewVScroll(dasmBox)
 	dasmPanel := panelBG(container.NewBorder(
 		container.NewVBox(
 			container.NewHBox(headerText("  DISASSEMBLY", colMnem), d.buildDasmBar()),
 			widget.NewSeparator(),
-		), nil, nil, nil, container.NewVScroll(dasmBox),
+		), nil, nil, nil, dasmScroll,
 	))
 
-	// Layout
-	split := container.NewHSplit(
-		container.NewHSplit(regPanel, hexPanel),
-		dasmPanel,
-	)
-	split.SetOffset(0.50)
+	// Hex panel (right)
+	hexBox := container.NewVBox()
+	for i := range d.hexLines {
+		hexBox.Add(d.hexLines[i])
+	}
+	hexScroll := container.NewVScroll(hexBox)
+	hexPanel := panelBG(container.NewBorder(
+		container.NewVBox(
+			container.NewHBox(headerText("  MEMORY", colAddr), d.buildHexBar()),
+			widget.NewSeparator(),
+		), nil, nil, nil, hexScroll,
+	))
+
+	// Layout: registers | disassembly | hex
+	innerSplit := container.NewHSplit(regPanel, dasmPanel)
+	innerSplit.SetOffset(0.25)
+	split := container.NewHSplit(innerSplit, hexPanel)
+	split.SetOffset(0.60)
 
 	return container.NewBorder(
 		container.NewVBox(d.buildControls(), widget.NewSeparator()),
