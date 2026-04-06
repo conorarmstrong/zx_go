@@ -48,6 +48,10 @@ type Memory struct {
 	// Contention: T-state counter reference set by CPU each frame
 	ContentionEnabled bool
 	TStates           *uint64 // Pointer to CPU's T-state counter
+
+	// PeripheralRead is called for reads in the ROM area (0x0000-0x3FFF).
+	// If it returns (value, true), the peripheral ROM overrides the normal ROM.
+	PeripheralRead func(addr uint16) (byte, bool)
 }
 
 // Contention delay pattern (repeats every 8 T-states in contended region)
@@ -314,7 +318,13 @@ func (m *Memory) Read(addr uint16) byte {
 	pageIndex := m.memoryPageReadMap[addr>>14]
 	offset := addr & (PageSize - 1)
 
-	if pageIndex >= 16 { // ROM
+	if pageIndex >= 16 { // ROM area
+		// Check if a peripheral ROM overrides this address
+		if m.PeripheralRead != nil {
+			if val, ok := m.PeripheralRead(addr); ok {
+				return val
+			}
+		}
 		return m.rom[pageIndex-16][offset]
 	}
 	// RAM

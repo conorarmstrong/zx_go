@@ -121,9 +121,10 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	// Initialize audio
 	ula.EnableAudio()
 
-	// Create peripheral manager and wire it to ULA
+	// Create peripheral manager and wire it to ULA and memory
 	pm := peripherals.NewPeripheralManager(mem, "roms")
 	ula.SetPeripherals(pm)
+	mem.PeripheralRead = pm.HandleMemoryRead
 
 	// Set up NMI callback for keyboard (Multiface red button simulation)
 	kbd.SetNMICallback(func() {
@@ -664,45 +665,66 @@ func main() {
 				w.SetFullScreen(true)
 			}),
 		),
-		fyne.NewMenu("Peripherals",
-			fyne.NewMenuItem("Enable Disciple", func() {
-				if err := emu.peripherals.EnableDisciple("roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
+		func() *fyne.Menu {
+			discipleItem := fyne.NewMenuItem("Enable Disciple", nil)
+			mf1Item := fyne.NewMenuItem("Enable Multiface 1", nil)
+			mf128Item := fyne.NewMenuItem("Enable Multiface 128", nil)
+			mf3Item := fyne.NewMenuItem("Enable Multiface 3", nil)
+
+			updateLabels := func() {
+				if emu.peripherals.IsDiscipleEnabled() {
+					discipleItem.Label = "Disable Disciple"
 				} else {
-					dialog.ShowInformation("Success", "Disciple disk interface enabled", w)
+					discipleItem.Label = "Enable Disciple"
 				}
-			}),
-			fyne.NewMenuItem("Disable Disciple", func() {
-				emu.peripherals.DisableDisciple()
-				dialog.ShowInformation("Success", "Disciple disk interface disabled", w)
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Enable Multiface 1", func() {
-				if err := emu.peripherals.EnableMultiface(multiface.Multiface1, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("failed to enable Multiface 1: %w", err), w)
+				if emu.peripherals.IsMultifaceEnabled() {
+					mf1Item.Label = "Disable Multiface"
+					mf128Item.Disabled = true
+					mf3Item.Disabled = true
 				} else {
-					dialog.ShowInformation("Success", "Multiface 1 enabled", w)
+					mf1Item.Label = "Enable Multiface 1"
+					mf128Item.Label = "Enable Multiface 128"
+					mf3Item.Label = "Enable Multiface 3"
+					mf128Item.Disabled = false
+					mf3Item.Disabled = false
 				}
-			}),
-			fyne.NewMenuItem("Enable Multiface 128", func() {
-				if err := emu.peripherals.EnableMultiface(multiface.Multiface128, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("failed to enable Multiface 128: %w", err), w)
+			}
+
+			discipleItem.Action = func() {
+				if emu.peripherals.IsDiscipleEnabled() {
+					emu.peripherals.DisableDisciple()
 				} else {
-					dialog.ShowInformation("Success", "Multiface 128 enabled", w)
+					if err := emu.peripherals.EnableDisciple("roms"); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
+					}
 				}
-			}),
-			fyne.NewMenuItem("Enable Multiface 3", func() {
-				if err := emu.peripherals.EnableMultiface(multiface.Multiface3, "roms"); err != nil {
-					dialog.ShowError(fmt.Errorf("failed to enable Multiface 3: %w", err), w)
+				updateLabels()
+				w.MainMenu().Refresh()
+			}
+
+			toggleMF := func(variant multiface.MultifaceType) {
+				if emu.peripherals.IsMultifaceEnabled() {
+					emu.peripherals.DisableMultiface()
 				} else {
-					dialog.ShowInformation("Success", "Multiface 3 enabled", w)
+					if err := emu.peripherals.EnableMultiface(variant, "roms"); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to enable %s: %w", multiface.GetVariantName(variant), err), w)
+					}
 				}
-			}),
-			fyne.NewMenuItem("Disable Multiface", func() {
-				emu.peripherals.DisableMultiface()
-				dialog.ShowInformation("Success", "Multiface disabled", w)
-			}),
-		),
+				updateLabels()
+				w.MainMenu().Refresh()
+			}
+
+			mf1Item.Action = func() { toggleMF(multiface.Multiface1) }
+			mf128Item.Action = func() { toggleMF(multiface.Multiface128) }
+			mf3Item.Action = func() { toggleMF(multiface.Multiface3) }
+
+			updateLabels()
+			return fyne.NewMenu("Peripherals",
+				discipleItem,
+				fyne.NewMenuItemSeparator(),
+				mf1Item, mf128Item, mf3Item,
+			)
+		}(),
 		fyne.NewMenu("Emulator",
 			fyne.NewMenuItem("Reboot", emu.reboot),
 			fyne.NewMenuItem("Pause/Resume", emu.togglePause),
