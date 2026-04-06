@@ -635,11 +635,20 @@ func main() {
 			fyne.NewMenuItem("Debugger", func() {
 				dbg := debugger.New(emu.cpu, emu.mem, a)
 				dbg.SetCallbacks(
-					func() { emu.paused = true },              // Pause
-					func() { emu.cpu.StepInstruction() },       // Step one instruction (no interrupt)
-					func() { emu.paused = false },              // Run
-					func() bool { return emu.paused },          // isPaused
+					func() { emu.paused = true },
+					func() { emu.cpu.StepInstruction() },
+					func() { emu.paused = false },
+					func() bool { return emu.paused },
 				)
+				// Wire breakpoints: when the debugger has a breakpoint set,
+				// the CPU checks it before each instruction and auto-pauses.
+				emu.cpu.BreakpointCheck = func(pc uint16) bool {
+					if dbg.CheckBreakpoint() {
+						emu.paused = true
+						return true
+					}
+					return false
+				}
 				dbg.Show()
 			}),
 			fyne.NewMenuItemSeparator(),

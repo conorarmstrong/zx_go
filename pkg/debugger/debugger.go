@@ -19,28 +19,29 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// Colour palette for the debugger
+// Colours
 var (
-	colPC       = color.NRGBA{R: 255, G: 220, B: 60, A: 255}  // Yellow — current PC
-	colBP       = color.NRGBA{R: 255, G: 80, B: 80, A: 255}   // Red — breakpoint
-	colBPHit    = color.NRGBA{R: 255, G: 140, B: 40, A: 255}  // Orange — breakpoint + PC
-	colAddr     = color.NRGBA{R: 100, G: 180, B: 255, A: 255} // Blue — addresses
-	colHex      = color.NRGBA{R: 200, G: 200, B: 200, A: 255} // Light grey — hex bytes
-	colASCII    = color.NRGBA{R: 140, G: 220, B: 140, A: 255} // Green — ASCII
-	colMnem     = color.NRGBA{R: 180, G: 140, B: 255, A: 255} // Purple — mnemonics
-	colOperand  = color.NRGBA{R: 255, G: 200, B: 140, A: 255} // Peach — operands
-	colRegName  = color.NRGBA{R: 100, G: 180, B: 255, A: 255} // Blue — register names
-	colRegVal   = color.NRGBA{R: 255, G: 255, B: 255, A: 255} // White — register values
-	colFlagSet  = color.NRGBA{R: 100, G: 255, B: 100, A: 255} // Green — flag set
-	colFlagClr  = color.NRGBA{R: 120, G: 120, B: 120, A: 255} // Dim grey — flag clear
-	colStatus   = color.NRGBA{R: 200, G: 200, B: 200, A: 255} // Light grey — status
-	colRunning  = color.NRGBA{R: 100, G: 255, B: 100, A: 255} // Green — running
-	colPaused   = color.NRGBA{R: 255, G: 220, B: 60, A: 255}  // Yellow — paused
-	colHalted   = color.NRGBA{R: 255, G: 80, B: 80, A: 255}   // Red — halted
-	colPanelBG  = color.NRGBA{R: 30, G: 30, B: 40, A: 255}    // Dark — panel background
+	colPC      = color.NRGBA{R: 255, G: 220, B: 60, A: 255}
+	colBP      = color.NRGBA{R: 255, G: 80, B: 80, A: 255}
+	colBPHit   = color.NRGBA{R: 255, G: 140, B: 40, A: 255}
+	colAddr    = color.NRGBA{R: 100, G: 180, B: 255, A: 255}
+	colHex     = color.NRGBA{R: 190, G: 190, B: 190, A: 255}
+	colMnem    = color.NRGBA{R: 180, G: 140, B: 255, A: 255}
+	colRegName = color.NRGBA{R: 100, G: 180, B: 255, A: 255}
+	colRegVal  = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	colFlagOn  = color.NRGBA{R: 100, G: 255, B: 100, A: 255}
+	colRunning = color.NRGBA{R: 100, G: 255, B: 100, A: 255}
+	colPaused  = color.NRGBA{R: 255, G: 220, B: 60, A: 255}
+	colHalted  = color.NRGBA{R: 255, G: 80, B: 80, A: 255}
+	colPanel   = color.NRGBA{R: 30, G: 30, B: 40, A: 255}
 )
 
-// Debugger provides a debugging window for the ZX Spectrum emulator.
+const (
+	hexRows  = 24
+	dasmRows = 30
+	fontSize = 13
+)
+
 type Debugger struct {
 	cpu *z80.CPU
 	mem *memory.Memory
@@ -56,11 +57,14 @@ type Debugger struct {
 	hexAddr     uint16
 	breakpoints map[uint16]bool
 
-	// Canvas objects for coloured rendering
-	regContainer  *fyne.Container
-	hexContainer  *fyne.Container
-	dasmContainer *fyne.Container
-	statusBar     *fyne.Container
+	// Pre-allocated line objects (updated in-place, no allocation on refresh)
+	regLines  [20]*canvas.Text // register display lines
+	flagLine  *canvas.Text
+	iffLine   *canvas.Text
+	haltLine  *canvas.Text
+	hexLines  [hexRows]*canvas.Text
+	dasmLines [dasmRows]*canvas.Text
+	statusTxt *canvas.Text
 
 	hexAddrEntry  *widget.Entry
 	dasmAddrEntry *widget.Entry
@@ -69,7 +73,6 @@ type Debugger struct {
 	stopChan      chan struct{}
 }
 
-// New creates a new debugger.
 func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
 	d := &Debugger{
 		cpu:         cpu,
@@ -78,14 +81,10 @@ func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
 		breakpoints: make(map[uint16]bool),
 		stopChan:    make(chan struct{}),
 	}
-
 	d.window = app.NewWindow("ZX Spectrum Debugger")
 	d.window.Resize(fyne.NewSize(1300, 780))
-
-	content := d.buildUI()
-	d.window.SetContent(content)
+	d.window.SetContent(d.buildUI())
 	d.window.SetOnClosed(func() { d.stopRefresh() })
-
 	return d
 }
 
@@ -142,91 +141,99 @@ func (d *Debugger) stopRefresh() {
 	}
 }
 
-// --- Coloured text helpers ---
+// --- helpers ---
 
-func colorText(s string, c color.Color, mono bool, size float32) *canvas.Text {
-	t := canvas.NewText(s, c)
-	t.TextStyle = fyne.TextStyle{Monospace: mono}
-	if size > 0 {
-		t.TextSize = size
-	}
+func mkText(c color.Color) *canvas.Text {
+	t := canvas.NewText("", c)
+	t.TextStyle = fyne.TextStyle{Monospace: true}
+	t.TextSize = fontSize
 	return t
 }
 
-func monoC(s string, c color.Color) *canvas.Text {
-	return colorText(s, c, true, 13)
-}
-
-func panelBG() *canvas.Rectangle {
-	r := canvas.NewRectangle(colPanelBG)
-	r.CornerRadius = 6
-	return r
-}
-
-func panelWithBG(content fyne.CanvasObject) fyne.CanvasObject {
-	bg := panelBG()
+func panelBG(content fyne.CanvasObject) fyne.CanvasObject {
+	bg := canvas.NewRectangle(colPanel)
+	bg.CornerRadius = 6
 	return container.NewStack(bg, container.NewPadded(content))
 }
 
-// --- UI Building ---
+func headerText(s string, c color.Color) *canvas.Text {
+	t := canvas.NewText(s, c)
+	t.TextStyle = fyne.TextStyle{Monospace: true, Bold: true}
+	t.TextSize = 14
+	return t
+}
+
+// --- UI ---
 
 func (d *Debugger) buildUI() fyne.CanvasObject {
-	controls := d.buildControls()
+	// Pre-allocate all text objects
+	for i := range d.regLines {
+		d.regLines[i] = mkText(colRegVal)
+	}
+	d.flagLine = mkText(colFlagOn)
+	d.iffLine = mkText(colRegVal)
+	d.haltLine = mkText(colHalted)
+	for i := range d.hexLines {
+		d.hexLines[i] = mkText(colHex)
+	}
+	for i := range d.dasmLines {
+		d.dasmLines[i] = mkText(colMnem)
+	}
+	d.statusTxt = mkText(colPaused)
 
-	d.regContainer = container.NewVBox()
-	d.hexContainer = container.NewVBox()
-	d.dasmContainer = container.NewVBox()
-	d.statusBar = container.NewHBox()
+	// Register panel
+	regBox := container.NewVBox()
+	for i := range d.regLines {
+		regBox.Add(d.regLines[i])
+	}
+	regBox.Add(widget.NewSeparator())
+	regBox.Add(d.flagLine)
+	regBox.Add(d.iffLine)
+	regBox.Add(d.haltLine)
 
-	regScroll := container.NewVScroll(d.regContainer)
-	regScroll.SetMinSize(fyne.NewSize(260, 0))
+	regScroll := container.NewVScroll(regBox)
+	regScroll.SetMinSize(fyne.NewSize(230, 0))
 
-	hexScroll := container.NewVScroll(d.hexContainer)
-	dasmScroll := container.NewVScroll(d.dasmContainer)
-
-	regPanel := panelWithBG(container.NewBorder(
-		container.NewVBox(
-			colorText("  REGISTERS", colRegName, true, 14),
-			widget.NewSeparator(),
-		), nil, nil, nil,
-		regScroll,
+	regPanel := panelBG(container.NewBorder(
+		container.NewVBox(headerText("  REGISTERS", colRegName), widget.NewSeparator()),
+		nil, nil, nil, regScroll,
 	))
 
-	hexPanel := panelWithBG(container.NewBorder(
+	// Hex panel
+	hexBox := container.NewVBox()
+	for i := range d.hexLines {
+		hexBox.Add(d.hexLines[i])
+	}
+	hexPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(
-				colorText("  MEMORY", colAddr, true, 14),
-				layout.NewSpacer(),
-				d.buildHexAddrBar(),
-			),
+			container.NewHBox(headerText("  MEMORY", colAddr), layout.NewSpacer(), d.buildHexBar()),
 			widget.NewSeparator(),
-		), nil, nil, nil,
-		hexScroll,
+		), nil, nil, nil, container.NewVScroll(hexBox),
 	))
 
-	dasmPanel := panelWithBG(container.NewBorder(
+	// Disassembly panel
+	dasmBox := container.NewVBox()
+	for i := range d.dasmLines {
+		dasmBox.Add(d.dasmLines[i])
+	}
+	dasmPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(
-				colorText("  DISASSEMBLY", colMnem, true, 14),
-				layout.NewSpacer(),
-				d.buildDasmAddrBar(),
-			),
+			container.NewHBox(headerText("  DISASSEMBLY", colMnem), layout.NewSpacer(), d.buildDasmBar()),
 			widget.NewSeparator(),
-		), nil, nil, nil,
-		dasmScroll,
+		), nil, nil, nil, container.NewVScroll(dasmBox),
 	))
 
-	mainSplit := container.NewHSplit(
+	// Layout
+	split := container.NewHSplit(
 		container.NewHSplit(regPanel, hexPanel),
 		dasmPanel,
 	)
-	mainSplit.SetOffset(0.50)
+	split.SetOffset(0.50)
 
 	return container.NewBorder(
-		container.NewVBox(controls, widget.NewSeparator()),
-		container.NewVBox(widget.NewSeparator(), panelWithBG(d.statusBar)),
-		nil, nil,
-		mainSplit,
+		container.NewVBox(d.buildControls(), widget.NewSeparator()),
+		container.NewVBox(widget.NewSeparator(), panelBG(d.statusTxt)),
+		nil, nil, split,
 	)
 }
 
@@ -248,47 +255,46 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 			d.onRun()
 		}
 	})
-	stepFrameBtn := widget.NewButton("Step Frame", func() {
+	frameBtn := widget.NewButton("Step Frame", func() {
 		if d.onPause != nil {
 			d.onPause()
 		}
 		d.cpu.ExecuteFrame(69888)
 		d.Refresh()
 	})
-	goToPCBtn := widget.NewButton("Go to PC", func() {
+	pcBtn := widget.NewButton("Go to PC", func() {
 		d.hexAddr = d.cpu.PC & 0xFFF0
 		d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
 		d.Refresh()
 	})
+	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
+	writeBtn := widget.NewButton("Write Mem...", func() { d.showWriteDialog() })
 
-	// Breakpoint controls
 	bpEntry := widget.NewEntry()
 	bpEntry.SetPlaceHolder("ADDR")
 	bpEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	bpBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
+	bpAdd := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
 		if addr, err := strconv.ParseUint(bpEntry.Text, 16, 16); err == nil {
 			d.breakpoints[uint16(addr)] = true
 			bpEntry.SetText("")
 			d.Refresh()
 		}
 	})
-	clearBPBtn := widget.NewButton("Clear All", func() {
+	bpClr := widget.NewButton("Clear BPs", func() {
 		d.breakpoints = make(map[uint16]bool)
 		d.Refresh()
 	})
-	editRegBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
-	writeMemBtn := widget.NewButton("Write Mem...", func() { d.showWriteMemDialog() })
 
 	return container.NewHBox(
-		pauseBtn, stepBtn, stepFrameBtn, runBtn,
+		pauseBtn, stepBtn, frameBtn, runBtn,
 		widget.NewSeparator(),
-		goToPCBtn, editRegBtn, writeMemBtn,
+		pcBtn, editBtn, writeBtn,
 		widget.NewSeparator(),
-		colorText("BP:", colBP, false, 0), bpEntry, bpBtn, clearBPBtn,
+		headerText("BP:", colBP), bpEntry, bpAdd, bpClr,
 	)
 }
 
-func (d *Debugger) buildHexAddrBar() fyne.CanvasObject {
+func (d *Debugger) buildHexBar() fyne.CanvasObject {
 	d.hexAddrEntry = widget.NewEntry()
 	d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
 	d.hexAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
@@ -301,167 +307,141 @@ func (d *Debugger) buildHexAddrBar() fyne.CanvasObject {
 	return container.NewHBox(widget.NewLabel("Addr:"), d.hexAddrEntry)
 }
 
-func (d *Debugger) buildDasmAddrBar() fyne.CanvasObject {
+func (d *Debugger) buildDasmBar() fyne.CanvasObject {
 	d.dasmAddrEntry = widget.NewEntry()
 	d.dasmAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
 	d.dasmAddrEntry.SetPlaceHolder("follows PC")
 	return container.NewHBox(widget.NewLabel("PC:"), d.dasmAddrEntry)
 }
 
-// --- Register panel ---
+// --- Refresh (in-place updates, zero allocation) ---
 
 func (d *Debugger) refreshRegisters() {
-	d.regContainer.RemoveAll()
-
-	addReg16 := func(name string, val uint16) {
-		d.regContainer.Add(container.NewHBox(
-			monoC(fmt.Sprintf("%-3s ", name), colRegName),
-			monoC(fmt.Sprintf("%04X", val), colRegVal),
-		))
+	set := func(i int, s string) {
+		d.regLines[i].Text = s
+		d.regLines[i].Refresh()
 	}
-	addReg8Pair := func(n1 string, v1 byte, n2 string, v2 byte) {
-		d.regContainer.Add(container.NewHBox(
-			monoC(fmt.Sprintf("%-2s ", n1), colRegName),
-			monoC(fmt.Sprintf("%02X", v1), colRegVal),
-			monoC("  ", colRegVal),
-			monoC(fmt.Sprintf("%-2s ", n2), colRegName),
-			monoC(fmt.Sprintf("%02X", v2), colRegVal),
-		))
+	setC := func(i int, s string, c color.Color) {
+		d.regLines[i].Text = s
+		d.regLines[i].Color = c
+		d.regLines[i].Refresh()
 	}
 
-	addReg16("PC", d.cpu.PC)
-	addReg16("SP", d.cpu.SP)
-	addReg16("IX", d.cpu.IX)
-	addReg16("IY", d.cpu.IY)
-	d.regContainer.Add(widget.NewSeparator())
-	addReg8Pair("A", d.cpu.A, "F", d.cpu.F)
-	addReg8Pair("B", d.cpu.B, "C", d.cpu.C)
-	addReg8Pair("D", d.cpu.D, "E", d.cpu.E)
-	addReg8Pair("H", d.cpu.H, "L", d.cpu.L)
-	d.regContainer.Add(widget.NewSeparator())
-	addReg8Pair("A'", d.cpu.A_, "F'", d.cpu.F_)
-	addReg8Pair("B'", d.cpu.B_, "C'", d.cpu.C_)
-	addReg8Pair("D'", d.cpu.D_, "E'", d.cpu.E_)
-	addReg8Pair("H'", d.cpu.H_, "L'", d.cpu.L_)
-	d.regContainer.Add(widget.NewSeparator())
-	addReg8Pair("I", d.cpu.I, "R", d.cpu.R)
-	d.regContainer.Add(widget.NewSeparator())
+	setC(0, fmt.Sprintf(" PC   %04X", d.cpu.PC), colPC)
+	set(1, fmt.Sprintf(" SP   %04X", d.cpu.SP))
+	set(2, fmt.Sprintf(" IX   %04X", d.cpu.IX))
+	set(3, fmt.Sprintf(" IY   %04X", d.cpu.IY))
+	set(4, "")
+	set(5, fmt.Sprintf(" A %02X   F %02X", d.cpu.A, d.cpu.F))
+	set(6, fmt.Sprintf(" B %02X   C %02X", d.cpu.B, d.cpu.C))
+	set(7, fmt.Sprintf(" D %02X   E %02X", d.cpu.D, d.cpu.E))
+	set(8, fmt.Sprintf(" H %02X   L %02X", d.cpu.H, d.cpu.L))
+	set(9, "")
+	set(10, fmt.Sprintf(" A'%02X   F'%02X", d.cpu.A_, d.cpu.F_))
+	set(11, fmt.Sprintf(" B'%02X   C'%02X", d.cpu.B_, d.cpu.C_))
+	set(12, fmt.Sprintf(" D'%02X   E'%02X", d.cpu.D_, d.cpu.E_))
+	set(13, fmt.Sprintf(" H'%02X   L'%02X", d.cpu.H_, d.cpu.L_))
+	set(14, "")
+	set(15, fmt.Sprintf(" I  %02X   R  %02X", d.cpu.I, d.cpu.R))
+	// 16-19 unused but available for stack preview
+	sp := d.cpu.SP
+	set(16, "")
+	set(17, " Stack:")
+	set(18, fmt.Sprintf("  %04X: %02X%02X  %02X%02X", sp, d.mem.Read(sp+1), d.mem.Read(sp), d.mem.Read(sp+3), d.mem.Read(sp+2)))
+	set(19, fmt.Sprintf("  %04X: %02X%02X  %02X%02X", sp+4, d.mem.Read(sp+5), d.mem.Read(sp+4), d.mem.Read(sp+7), d.mem.Read(sp+6)))
 
-	// Flags with colour coding
+	// Flags
 	f := d.cpu.F
-	flagRow := container.NewHBox()
-	addFlag := func(name string, bit byte) {
-		set := f&bit != 0
-		col := colFlagClr
-		val := "0"
-		if set {
-			col = colFlagSet
-			val = "1"
+	flagStr := " "
+	flags := []struct {
+		name string
+		bit  byte
+	}{{"S", 0x80}, {"Z", 0x40}, {"H", 0x10}, {"PV", 0x04}, {"N", 0x02}, {"C", 0x01}}
+	for _, fl := range flags {
+		if f&fl.bit != 0 {
+			flagStr += fl.name + ":1 "
+		} else {
+			flagStr += fl.name + ":0 "
 		}
-		flagRow.Add(monoC(name+":", colRegName))
-		flagRow.Add(monoC(val+" ", col))
 	}
-	addFlag("S", 0x80)
-	addFlag("Z", 0x40)
-	addFlag("H", 0x10)
-	addFlag("PV", 0x04)
-	addFlag("N", 0x02)
-	addFlag("C", 0x01)
-	d.regContainer.Add(flagRow)
-	d.regContainer.Add(widget.NewSeparator())
+	d.flagLine.Text = flagStr
+	d.flagLine.Color = colRegVal
+	d.flagLine.Refresh()
 
-	// IFF/IM
-	iffCol := colFlagClr
-	if d.cpu.IFF1 {
-		iffCol = colFlagSet
-	}
-	d.regContainer.Add(container.NewHBox(
-		monoC("IFF ", colRegName),
-		monoC(fmt.Sprintf("%v/%v", d.cpu.IFF1, d.cpu.IFF2), iffCol),
-		monoC("  IM ", colRegName),
-		monoC(fmt.Sprintf("%d", d.cpu.IM), colRegVal),
-	))
+	iff := fmt.Sprintf(" IFF %v/%v  IM %d", d.cpu.IFF1, d.cpu.IFF2, d.cpu.IM)
+	d.iffLine.Text = iff
+	d.iffLine.Refresh()
 
 	if d.cpu.Halted {
-		d.regContainer.Add(monoC("  ** HALTED **", colHalted))
+		d.haltLine.Text = " ** HALTED **"
+		d.haltLine.Color = colHalted
+	} else {
+		d.haltLine.Text = ""
 	}
+	d.haltLine.Refresh()
 }
 
-// --- Hex dump ---
-
 func (d *Debugger) refreshHexDump() {
-	d.hexContainer.RemoveAll()
-
 	addr := d.hexAddr
-	for row := 0; row < 24; row++ {
-		line := container.NewHBox()
-		line.Add(monoC(fmt.Sprintf("%04X  ", addr), colAddr))
-
-		asciiStr := ""
+	for row := 0; row < hexRows; row++ {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("%04X  ", addr))
+		ascii := ""
+		hasPC := false
 		for col := 0; col < 16; col++ {
 			b := d.mem.Read(addr)
-
-			hexCol := colHex
-			// Highlight current PC address
 			if addr == d.cpu.PC {
-				hexCol = colPC
-			} else if d.breakpoints[addr] {
-				hexCol = colBP
+				hasPC = true
 			}
-
-			sep := ""
-			if col == 8 {
-				sep = " "
+			sb.WriteString(fmt.Sprintf("%02X ", b))
+			if col == 7 {
+				sb.WriteByte(' ')
 			}
-			line.Add(monoC(sep+fmt.Sprintf("%02X ", b), hexCol))
-
 			if b >= 0x20 && b < 0x7F {
-				asciiStr += string(rune(b))
+				ascii += string(rune(b))
 			} else {
-				asciiStr += "."
+				ascii += "."
 			}
 			addr++
 		}
-		line.Add(monoC(" |"+asciiStr+"|", colASCII))
-		d.hexContainer.Add(line)
+		sb.WriteString(" |" + ascii + "|")
+
+		t := d.hexLines[row]
+		t.Text = sb.String()
+		if hasPC {
+			t.Color = colPC
+		} else {
+			t.Color = colHex
+		}
+		t.Refresh()
 	}
 }
 
-// --- Disassembly ---
-
 func (d *Debugger) refreshDisassembly() {
-	d.dasmContainer.RemoveAll()
-
 	pc := d.cpu.PC
 	d.dasmAddrEntry.SetText(fmt.Sprintf("%04X", pc))
+	lines := Disassemble(d.mem.Read, pc, dasmRows)
 
-	lines := Disassemble(d.mem.Read, pc, 30)
-
-	for _, line := range lines {
-		row := container.NewHBox()
-
+	for i := 0; i < dasmRows; i++ {
+		t := d.dasmLines[i]
+		if i >= len(lines) {
+			t.Text = ""
+			t.Refresh()
+			continue
+		}
+		line := lines[i]
 		isPC := line.Addr == pc
 		isBP := d.breakpoints[line.Addr]
 
-		// Prefix marker
+		prefix := "  "
 		if isPC && isBP {
-			row.Add(monoC("*>", colBPHit))
+			prefix = "*>"
 		} else if isPC {
-			row.Add(monoC("> ", colPC))
+			prefix = "> "
 		} else if isBP {
-			row.Add(monoC("* ", colBP))
-		} else {
-			row.Add(monoC("  ", colHex))
+			prefix = "* "
 		}
 
-		// Address
-		addrCol := colAddr
-		if isPC {
-			addrCol = colPC
-		}
-		row.Add(monoC(fmt.Sprintf("%04X ", line.Addr), addrCol))
-
-		// Hex bytes
 		hexStr := ""
 		for _, b := range line.Bytes {
 			hexStr += fmt.Sprintf("%02X ", b)
@@ -469,53 +449,56 @@ func (d *Debugger) refreshDisassembly() {
 		for len(hexStr) < 12 {
 			hexStr += "   "
 		}
-		row.Add(monoC(hexStr, colHex))
 
-		// Mnemonic
-		mnemCol := colMnem
-		if strings.HasPrefix(line.Mnem, "DB") {
-			mnemCol = colFlagClr
-		}
-		row.Add(monoC(fmt.Sprintf("%-5s", line.Mnem), mnemCol))
-
-		// Operand
+		op := line.Mnem
 		if line.Operand != "" {
-			row.Add(monoC(line.Operand, colOperand))
+			op += " " + line.Operand
 		}
 
-		d.dasmContainer.Add(row)
+		t.Text = fmt.Sprintf("%s%04X  %s%-5s", prefix, line.Addr, hexStr, op)
+
+		if isPC && isBP {
+			t.Color = colBPHit
+		} else if isPC {
+			t.Color = colPC
+		} else if isBP {
+			t.Color = colBP
+		} else {
+			t.Color = colMnem
+		}
+		t.Refresh()
 	}
 }
 
-// --- Status bar ---
-
 func (d *Debugger) refreshStatus() {
-	d.statusBar.RemoveAll()
-
 	paused := d.isPaused != nil && d.isPaused()
+	state := "RUNNING"
+	col := colRunning
 	if paused {
-		d.statusBar.Add(monoC(" PAUSED ", colPaused))
-	} else {
-		d.statusBar.Add(monoC(" RUNNING ", colRunning))
+		state = "PAUSED"
+		col = colPaused
 	}
-
-	d.statusBar.Add(monoC(fmt.Sprintf(
-		"  PC:%04X  SP:%04X  AF:%02X%02X  BC:%02X%02X  DE:%02X%02X  HL:%02X%02X  IM:%d  IFF:%v",
-		d.cpu.PC, d.cpu.SP,
-		d.cpu.A, d.cpu.F, d.cpu.B, d.cpu.C, d.cpu.D, d.cpu.E, d.cpu.H, d.cpu.L,
-		d.cpu.IM, d.cpu.IFF1), colStatus))
-
 	if d.cpu.Halted {
-		d.statusBar.Add(monoC("  HALTED", colHalted))
+		state += " [HALTED]"
+		col = colHalted
 	}
 
+	bps := ""
 	if len(d.breakpoints) > 0 {
 		addrs := []string{}
-		for addr := range d.breakpoints {
-			addrs = append(addrs, fmt.Sprintf("%04X", addr))
+		for a := range d.breakpoints {
+			addrs = append(addrs, fmt.Sprintf("%04X", a))
 		}
-		d.statusBar.Add(monoC(fmt.Sprintf("  BPs: %s", strings.Join(addrs, ",")), colBP))
+		bps = "  BPs:" + strings.Join(addrs, ",")
 	}
+
+	d.statusTxt.Text = fmt.Sprintf(
+		" %s  PC:%04X SP:%04X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X IM:%d IFF:%v%s",
+		state, d.cpu.PC, d.cpu.SP,
+		d.cpu.A, d.cpu.F, d.cpu.B, d.cpu.C, d.cpu.D, d.cpu.E, d.cpu.H, d.cpu.L,
+		d.cpu.IM, d.cpu.IFF1, bps)
+	d.statusTxt.Color = col
+	d.statusTxt.Refresh()
 }
 
 // --- Dialogs ---
@@ -523,104 +506,69 @@ func (d *Debugger) refreshStatus() {
 func (d *Debugger) showEditDialog() {
 	entries := make(map[string]*widget.Entry)
 	regs := []struct{ name, val string }{
-		{"PC", fmt.Sprintf("%04X", d.cpu.PC)},
-		{"SP", fmt.Sprintf("%04X", d.cpu.SP)},
-		{"IX", fmt.Sprintf("%04X", d.cpu.IX)},
-		{"IY", fmt.Sprintf("%04X", d.cpu.IY)},
-		{"A", fmt.Sprintf("%02X", d.cpu.A)},
-		{"F", fmt.Sprintf("%02X", d.cpu.F)},
-		{"B", fmt.Sprintf("%02X", d.cpu.B)},
-		{"C", fmt.Sprintf("%02X", d.cpu.C)},
-		{"D", fmt.Sprintf("%02X", d.cpu.D)},
-		{"E", fmt.Sprintf("%02X", d.cpu.E)},
-		{"H", fmt.Sprintf("%02X", d.cpu.H)},
-		{"L", fmt.Sprintf("%02X", d.cpu.L)},
-		{"I", fmt.Sprintf("%02X", d.cpu.I)},
-		{"R", fmt.Sprintf("%02X", d.cpu.R)},
+		{"PC", fmt.Sprintf("%04X", d.cpu.PC)}, {"SP", fmt.Sprintf("%04X", d.cpu.SP)},
+		{"IX", fmt.Sprintf("%04X", d.cpu.IX)}, {"IY", fmt.Sprintf("%04X", d.cpu.IY)},
+		{"A", fmt.Sprintf("%02X", d.cpu.A)}, {"F", fmt.Sprintf("%02X", d.cpu.F)},
+		{"B", fmt.Sprintf("%02X", d.cpu.B)}, {"C", fmt.Sprintf("%02X", d.cpu.C)},
+		{"D", fmt.Sprintf("%02X", d.cpu.D)}, {"E", fmt.Sprintf("%02X", d.cpu.E)},
+		{"H", fmt.Sprintf("%02X", d.cpu.H)}, {"L", fmt.Sprintf("%02X", d.cpu.L)},
+		{"I", fmt.Sprintf("%02X", d.cpu.I)}, {"R", fmt.Sprintf("%02X", d.cpu.R)},
 	}
-
-	formItems := []*widget.FormItem{}
+	items := []*widget.FormItem{}
 	for _, r := range regs {
 		e := widget.NewEntry()
 		e.SetText(r.val)
 		e.TextStyle = fyne.TextStyle{Monospace: true}
 		entries[r.name] = e
-		formItems = append(formItems, widget.NewFormItem(r.name, e))
+		items = append(items, widget.NewFormItem(r.name, e))
 	}
-
-	form := widget.NewForm(formItems...)
+	form := widget.NewForm(items...)
 	content := container.NewVBox(form)
 	dlg := widget.NewModalPopUp(content, d.window.Canvas())
 
-	p16 := func(name string) uint16 {
-		if v, err := strconv.ParseUint(entries[name].Text, 16, 16); err == nil {
-			return uint16(v)
-		}
-		return 0
-	}
-	p8 := func(name string) byte {
-		if v, err := strconv.ParseUint(entries[name].Text, 16, 8); err == nil {
-			return byte(v)
-		}
-		return 0
-	}
+	p16 := func(n string) uint16 { v, _ := strconv.ParseUint(entries[n].Text, 16, 16); return uint16(v) }
+	p8 := func(n string) byte { v, _ := strconv.ParseUint(entries[n].Text, 16, 8); return byte(v) }
 
-	applyBtn := widget.NewButton("Apply", func() {
-		d.cpu.PC = p16("PC")
-		d.cpu.SP = p16("SP")
-		d.cpu.IX = p16("IX")
-		d.cpu.IY = p16("IY")
-		d.cpu.A = p8("A")
-		d.cpu.F = p8("F")
-		d.cpu.B = p8("B")
-		d.cpu.C = p8("C")
-		d.cpu.D = p8("D")
-		d.cpu.E = p8("E")
-		d.cpu.H = p8("H")
-		d.cpu.L = p8("L")
-		d.cpu.I = p8("I")
-		d.cpu.R = p8("R")
-		dlg.Hide()
-		d.Refresh()
-	})
-	cancelBtn := widget.NewButton("Cancel", func() { dlg.Hide() })
-	content.Add(container.NewHBox(layout.NewSpacer(), cancelBtn, applyBtn))
+	content.Add(container.NewHBox(layout.NewSpacer(),
+		widget.NewButton("Cancel", func() { dlg.Hide() }),
+		widget.NewButton("Apply", func() {
+			d.cpu.PC = p16("PC"); d.cpu.SP = p16("SP"); d.cpu.IX = p16("IX"); d.cpu.IY = p16("IY")
+			d.cpu.A = p8("A"); d.cpu.F = p8("F"); d.cpu.B = p8("B"); d.cpu.C = p8("C")
+			d.cpu.D = p8("D"); d.cpu.E = p8("E"); d.cpu.H = p8("H"); d.cpu.L = p8("L")
+			d.cpu.I = p8("I"); d.cpu.R = p8("R")
+			dlg.Hide(); d.Refresh()
+		}),
+	))
 	dlg.Resize(fyne.NewSize(300, 500))
 	dlg.Show()
 }
 
-func (d *Debugger) showWriteMemDialog() {
-	addrEntry := widget.NewEntry()
-	addrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
-	addrEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	valEntry := widget.NewEntry()
-	valEntry.SetPlaceHolder("00 01 FF ...")
-	valEntry.TextStyle = fyne.TextStyle{Monospace: true}
+func (d *Debugger) showWriteDialog() {
+	addrE := widget.NewEntry()
+	addrE.SetText(fmt.Sprintf("%04X", d.hexAddr))
+	addrE.TextStyle = fyne.TextStyle{Monospace: true}
+	valE := widget.NewEntry()
+	valE.SetPlaceHolder("00 01 FF ...")
+	valE.TextStyle = fyne.TextStyle{Monospace: true}
 
-	form := widget.NewForm(
-		widget.NewFormItem("Address", addrEntry),
-		widget.NewFormItem("Hex bytes", valEntry),
-	)
+	form := widget.NewForm(widget.NewFormItem("Address", addrE), widget.NewFormItem("Hex bytes", valE))
 	content := container.NewVBox(form)
 	dlg := widget.NewModalPopUp(content, d.window.Canvas())
-
-	applyBtn := widget.NewButton("Write", func() {
-		addr, err := strconv.ParseUint(addrEntry.Text, 16, 16)
-		if err != nil {
-			dlg.Hide()
-			return
-		}
-		for _, p := range strings.Fields(valEntry.Text) {
-			if v, err := strconv.ParseUint(p, 16, 8); err == nil {
-				d.mem.Write(uint16(addr), byte(v))
-				addr++
+	content.Add(container.NewHBox(layout.NewSpacer(),
+		widget.NewButton("Cancel", func() { dlg.Hide() }),
+		widget.NewButton("Write", func() {
+			addr, err := strconv.ParseUint(addrE.Text, 16, 16)
+			if err == nil {
+				for _, p := range strings.Fields(valE.Text) {
+					if v, err := strconv.ParseUint(p, 16, 8); err == nil {
+						d.mem.Write(uint16(addr), byte(v))
+						addr++
+					}
+				}
 			}
-		}
-		dlg.Hide()
-		d.Refresh()
-	})
-	cancelBtn := widget.NewButton("Cancel", func() { dlg.Hide() })
-	content.Add(container.NewHBox(layout.NewSpacer(), cancelBtn, applyBtn))
+			dlg.Hide(); d.Refresh()
+		}),
+	))
 	dlg.Resize(fyne.NewSize(400, 200))
 	dlg.Show()
 }

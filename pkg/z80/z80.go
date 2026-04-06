@@ -48,6 +48,10 @@ type CPU struct {
 	// IM2 interrupt vector low byte (0xFF on ZX Spectrum)
 	IM2Vector byte
 
+	// Breakpoint callback: called before each instruction during ExecuteFrame.
+	// If it returns true, execution stops immediately (breakpoint hit).
+	BreakpointCheck func(pc uint16) bool
+
 	// For debugging
 	logEnabled bool
 
@@ -111,6 +115,9 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 		if c.Halted {
 			c.tstates++
 			continue
+		}
+		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
+			return // Breakpoint hit — stop execution mid-frame
 		}
 		c.executeInstruction()
 	}
