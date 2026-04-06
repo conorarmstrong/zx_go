@@ -206,7 +206,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	}
 	hexPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(headerText("  MEMORY", colAddr), layout.NewSpacer(), d.buildHexBar()),
+			container.NewHBox(headerText("  MEMORY", colAddr), d.buildHexBar()),
 			widget.NewSeparator(),
 		), nil, nil, nil, container.NewVScroll(hexBox),
 	))
@@ -218,7 +218,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	}
 	dasmPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(headerText("  DISASSEMBLY", colMnem), layout.NewSpacer(), d.buildDasmBar()),
+			container.NewHBox(headerText("  DISASSEMBLY", colMnem), d.buildDasmBar()),
 			widget.NewSeparator(),
 		), nil, nil, nil, container.NewVScroll(dasmBox),
 	))
@@ -294,24 +294,32 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	)
 }
 
+func wideEntry(text string) (*widget.Entry, fyne.CanvasObject) {
+	e := widget.NewEntry()
+	e.TextStyle = fyne.TextStyle{Monospace: true}
+	e.SetText(text)
+	// Wrap in a fixed-width container so it doesn't collapse
+	sized := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), e)
+	return e, sized
+}
+
 func (d *Debugger) buildHexBar() fyne.CanvasObject {
-	d.hexAddrEntry = widget.NewEntry()
-	d.hexAddrEntry.SetText(fmt.Sprintf("%04X", d.hexAddr))
-	d.hexAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	var sized fyne.CanvasObject
+	d.hexAddrEntry, sized = wideEntry(fmt.Sprintf("%04X", d.hexAddr))
 	d.hexAddrEntry.OnSubmitted = func(s string) {
 		if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
 			d.hexAddr = uint16(addr) & 0xFFF0
 			d.Refresh()
 		}
 	}
-	return container.NewHBox(widget.NewLabel("Addr:"), d.hexAddrEntry)
+	return container.NewHBox(widget.NewLabel("Addr:"), sized)
 }
 
 func (d *Debugger) buildDasmBar() fyne.CanvasObject {
-	d.dasmAddrEntry = widget.NewEntry()
-	d.dasmAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	d.dasmAddrEntry.SetPlaceHolder("follows PC")
-	return container.NewHBox(widget.NewLabel("PC:"), d.dasmAddrEntry)
+	var sized fyne.CanvasObject
+	d.dasmAddrEntry, sized = wideEntry("")
+	d.dasmAddrEntry.SetPlaceHolder("PC")
+	return container.NewHBox(widget.NewLabel("PC:"), sized)
 }
 
 // --- Refresh (in-place updates, zero allocation) ---
