@@ -292,7 +292,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 			t := o.(*canvas.Text)
 			addr := uint16(id) * 16
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("%04X  ", addr))
+			fmt.Fprintf(&sb, "%04X  ", addr)
 			ascii := ""
 			hasPC := false
 			for col := 0; col < 16; col++ {
@@ -301,7 +301,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 				if a == d.cpu.PC {
 					hasPC = true
 				}
-				sb.WriteString(fmt.Sprintf("%02X ", b))
+				fmt.Fprintf(&sb, "%02X ", b)
 				if col == 7 {
 					sb.WriteByte(' ')
 				}
