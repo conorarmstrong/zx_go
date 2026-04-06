@@ -245,8 +245,8 @@ func TestHandlePortRead_MultifaceEnabled(t *testing.T) {
 
 	_ = pm.EnableMultiface(multiface.Multiface1, dir)
 
-	// Multiface port pattern: xxxx xxxx x011 x1xx = 0x3C
-	_, handled := pm.HandlePortRead(0x3C)
+	// MF1 port mask: (port & 0x0072) == 0x0012. Port 0x009F matches with A7=1.
+	_, handled := pm.HandlePortRead(0x009F)
 	if !handled {
 		t.Error("Multiface port should be handled when enabled")
 	}
@@ -259,7 +259,8 @@ func TestHandlePortWrite_MultifaceEnabled(t *testing.T) {
 
 	_ = pm.EnableMultiface(multiface.Multiface1, dir)
 
-	handled := pm.HandlePortWrite(0x3C, 0x00)
+	// MF1 port mask: (port & 0x0072) == 0x0012. Port 0x009F matches.
+	handled := pm.HandlePortWrite(0x009F, 0x00)
 	if !handled {
 		t.Error("Multiface port write should be handled when enabled")
 	}

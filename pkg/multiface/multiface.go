@@ -45,15 +45,16 @@ type Multiface struct {
 	romFile string
 }
 
-// Port ranges for Multiface I/O decoding
+// Port ranges for Multiface I/O decoding (from FUSE emulator source).
+// MF1:   port & 0x0072 == 0x0012  (xxxx xxxx x001 xx1x)
+// MF128: port & 0x0072 == 0x0032  (xxxx xxxx x011 xx1x)
+// MF3:   port & 0x0072 == 0x0032  (xxxx xxxx x011 xx1x)
+// Page-in/out is controlled by A7 of the port address on IN instructions.
 const (
-	// Port decoding: xxxx xxxx x011 x1xx (A2, A4-A5, IORQ, RD/WR)
-	PortBase     = 0x3C  // Base port address pattern
-	PortMask     = 0x3C  // Mask for port address matching
-	
-	// Video page port: 0xxx xxxx xxxx xx0x (A1, A15, WR)
-	VideoPortBase = 0x0000
-	VideoPortMask = 0x8002
+	PortMask1   = 0x0072 // MF1 port mask
+	PortValue1  = 0x0012 // MF1 port value
+	PortMask128 = 0x0072 // MF128/MF3 port mask
+	PortValue128 = 0x0032 // MF128/MF3 port value
 )
 
 // NMI vector addresses that trigger Multiface activation
@@ -186,74 +187,76 @@ func (mf *Multiface) HandleOpcodeRead(addr uint16) bool {
 	return false
 }
 
-// HandlePortRead handles reads from Multiface I/O ports
-func (mf *Multiface) HandlePortRead(port uint16) (byte, bool) {
-	if !mf.enabled || mf.invisible {
-		return 0, false
+// isMultifacePort checks if the port matches this Multiface variant's decode.
+func (mf *Multiface) isMultifacePort(port uint16) bool {
+	switch mf.variant {
+	case Multiface1:
+		return (port & PortMask1) == PortValue1
+	default: // MF128, MF3
+		return (port & PortMask128) == PortValue128
 	}
-	
-	// Check if this is a Multiface port (xxxx xxxx x011 x1xx)
-	if (port & PortMask) == PortBase {
-		// Return some status information
-		status := byte(0)
-		if mf.romPaged {
-			status |= 0x01
-		}
-		if mf.redButton {
-			status |= 0x02
-		}
-		return status, true
-	}
-	
-	return 0, false
 }
 
-// HandlePortWrite handles writes to Multiface I/O ports
+// HandlePortRead handles reads from Multiface I/O ports.
+// On real hardware, IN to the Multiface port controls page-in/page-out
+// based on A7: A7=1 pages in (MF1/128) or out (MF3), A7=0 does the opposite.
+func (mf *Multiface) HandlePortRead(port uint16) (byte, bool) {
+	if !mf.enabled {
+		return 0, false
+	}
+	if !mf.isMultifacePort(port) {
+		return 0, false
+	}
+
+	a7 := (port & 0x0080) != 0
+
+	switch mf.variant {
+	case Multiface1:
+		if a7 {
+			if !mf.invisible {
+				mf.pageInROM()
+			}
+		} else {
+			mf.pageOutROM()
+		}
+	case Multiface128:
+		if a7 {
+			if !mf.invisible {
+				mf.pageInROM()
+			}
+		} else {
+			mf.pageOutROM()
+		}
+	case Multiface3:
+		// MF3 is inverted: A7=1 pages out, A7=0 pages in
+		if a7 {
+			mf.pageOutROM()
+		} else if !mf.invisible {
+			mf.pageInROM()
+		}
+	}
+
+	return 0xFF, true
+}
+
+// HandlePortWrite handles writes to Multiface I/O ports.
+// OUT to the Multiface port controls the software lockout (J2).
 func (mf *Multiface) HandlePortWrite(port uint16, value byte) bool {
 	if !mf.enabled {
 		return false
 	}
-	
-	// Check if this is a Multiface port (xxxx xxxx x011 x1xx)
-	if (port & PortMask) == PortBase {
-		mf.handleControlWrite(value)
-		return true
+	if !mf.isMultifacePort(port) {
+		return false
 	}
-	
-	// Check for video page store (for Multiface 128/3)
-	if mf.variant == Multiface128 || mf.variant == Multiface3 {
-		// Video page port: 0xxx xxxx xxxx xx0x (A1, A15, WR)
-		if (port & VideoPortMask) == VideoPortBase {
-			mf.videoPageStore = (value >> 3) & 0x01 // Store bit 3
-			return true
+
+	// For MF128/MF3: A7 controls software lockout (J2)
+	if mf.variant != Multiface1 {
+		if mf.romPaged {
+			mf.invisible = (port & 0x0080) == 0
 		}
 	}
-	
-	return false
-}
 
-// handleControlWrite handles control register writes
-func (mf *Multiface) handleControlWrite(value byte) {
-	// Bit 0: ROM page out
-	if value&0x01 != 0 {
-		mf.pageOutROM()
-	}
-	
-	// Bit 1: Clear red button
-	if value&0x02 != 0 {
-		mf.redButton = false
-	}
-	
-	// Bit 2: Invisible mode (stealth)
-	if value&0x04 != 0 {
-		mf.invisible = true
-		mf.pageOutROM()
-	}
-	
-	// Bit 3: Visible mode  
-	if value&0x08 != 0 {
-		mf.invisible = false
-	}
+	return true
 }
 
 // pageInROM pages in the Multiface ROM

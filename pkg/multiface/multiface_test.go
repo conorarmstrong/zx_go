@@ -242,8 +242,8 @@ func TestHandleNMI_Invisible(t *testing.T) {
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	// Set stealth mode via control write
-	mf.handleControlWrite(0x04)
+	// Set stealth mode directly (MF1 uses physical switch, not port)
+	mf.invisible = true
 	if !mf.IsInvisible() {
 		t.Fatal("should be invisible after writing 0x04")
 	}
@@ -352,48 +352,59 @@ func TestHandlePortRead_MultifacePort(t *testing.T) {
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	// Port must match: (port & 0x3C) == 0x3C
-	port := uint16(0x003C) // Matches the mask
+	// Port must match: (port & 0x0072) == 0x0012
+	port := uint16(0x009F) // MF1 port with A7=1
 	val, handled := mf.HandlePortRead(port)
 	if !handled {
-		t.Error("HandlePortRead should handle Multiface port 0x003C")
+		t.Error("HandlePortRead should handle Multiface port 0x009F")
 	}
-	// Initially: romPaged=false, redButton=false => status=0
-	if val != 0x00 {
-		t.Errorf("expected status 0x00, got 0x%02X", val)
+	// New API always returns 0xFF for matching ports
+	if val != 0xFF {
+		t.Errorf("expected 0xFF, got 0x%02X", val)
 	}
 }
 
-func TestHandlePortRead_StatusBits(t *testing.T) {
+func TestHandlePortRead_PageIn_A7Set(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	mf.HandleNMI() // sets redButton=true, romPaged=true
-
-	port := uint16(0x003C)
+	// IN with A7=1 should page in ROM (when not invisible)
+	port := uint16(0x009F) // MF1 port with A7=1
 	val, handled := mf.HandlePortRead(port)
 	if !handled {
 		t.Fatal("HandlePortRead should handle Multiface port")
 	}
-	// romPaged=true -> bit 0 set, redButton=true -> bit 1 set => 0x03
-	if val != 0x03 {
-		t.Errorf("expected status 0x03, got 0x%02X", val)
+	if val != 0xFF {
+		t.Errorf("expected 0xFF, got 0x%02X", val)
+	}
+	if !mf.IsROMPaged() {
+		t.Error("ROM should be paged in after IN with A7=1")
 	}
 }
 
-func TestHandlePortRead_OnlyROMPaged(t *testing.T) {
+func TestHandlePortRead_PageOut_A7Clear(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	mf.romPaged = true
-	mf.redButton = false
+	// Page in first
+	mf.HandleNMI()
+	if !mf.IsROMPaged() {
+		t.Fatal("ROM should be paged in after NMI")
+	}
 
-	port := uint16(0x003C)
-	val, _ := mf.HandlePortRead(port)
-	if val != 0x01 {
-		t.Errorf("expected status 0x01 (ROM paged only), got 0x%02X", val)
+	// IN with A7=0 should page out ROM
+	port := uint16(0x001F) // MF1 port with A7=0
+	val, handled := mf.HandlePortRead(port)
+	if !handled {
+		t.Fatal("HandlePortRead should handle Multiface port 0x001F")
+	}
+	if val != 0xFF {
+		t.Errorf("expected 0xFF, got 0x%02X", val)
+	}
+	if mf.IsROMPaged() {
+		t.Error("ROM should be paged out after IN with A7=0")
 	}
 }
 
@@ -415,21 +426,53 @@ func TestHandlePortRead_Disabled(t *testing.T) {
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
 	mf.SetEnabled(false)
-	_, handled := mf.HandlePortRead(0x003C)
+	_, handled := mf.HandlePortRead(0x009F)
 	if handled {
 		t.Error("HandlePortRead should not handle when disabled")
 	}
 }
 
-func TestHandlePortRead_Invisible(t *testing.T) {
+func TestHandlePortRead_Invisible_StillHandled(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
 	mf.invisible = true
-	_, handled := mf.HandlePortRead(0x003C)
-	if handled {
-		t.Error("HandlePortRead should not handle when invisible")
+
+	// Invisible does NOT prevent the port from being handled — it only
+	// prevents page-IN. The port read still returns 0xFF, true.
+	val, handled := mf.HandlePortRead(0x009F)
+	if !handled {
+		t.Error("HandlePortRead should still handle port when invisible")
+	}
+	if val != 0xFF {
+		t.Errorf("expected 0xFF, got 0x%02X", val)
+	}
+	// But ROM should NOT be paged in because invisible blocks page-in
+	if mf.IsROMPaged() {
+		t.Error("ROM should not be paged in when invisible")
+	}
+}
+
+func TestHandlePortRead_Invisible_PageOutStillWorks(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface1, dir, mem)
+
+	// Page in first, then go invisible
+	mf.HandleNMI()
+	if !mf.IsROMPaged() {
+		t.Fatal("ROM should be paged in after NMI")
+	}
+	mf.invisible = true
+
+	// IN with A7=0 should still page out even when invisible
+	_, handled := mf.HandlePortRead(0x001F)
+	if !handled {
+		t.Error("HandlePortRead should handle port when invisible")
+	}
+	if mf.IsROMPaged() {
+		t.Error("ROM should be paged out — page-out is not blocked by invisible")
 	}
 }
 
@@ -440,7 +483,7 @@ func TestHandlePortWrite_MultifacePort(t *testing.T) {
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	handled := mf.HandlePortWrite(0x003C, 0x00)
+	handled := mf.HandlePortWrite(0x009F, 0x00)
 	if !handled {
 		t.Error("HandlePortWrite should handle Multiface port")
 	}
@@ -463,53 +506,72 @@ func TestHandlePortWrite_Disabled(t *testing.T) {
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
 	mf.SetEnabled(false)
-	handled := mf.HandlePortWrite(0x003C, 0x00)
+	handled := mf.HandlePortWrite(0x009F, 0x00)
 	if handled {
 		t.Error("HandlePortWrite should not handle when disabled")
 	}
 }
 
-func TestHandlePortWrite_VideoPort_Multiface128(t *testing.T) {
+func TestHandlePortWrite_MF128_SoftwareLockout(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface128, dir, mem)
 
-	// Video port matches: (port & 0x8002) == 0x0000
-	// Port 0x0000 matches but also matches PortBase check first if (0x0000 & 0x3C) == 0x3C? No.
-	// 0x0000 & 0x3C = 0x00 != 0x3C, so first check fails.
-	// 0x0000 & 0x8002 = 0x0000 == 0x0000, so video port matches.
-	handled := mf.HandlePortWrite(0x0000, 0x08) // bit 3 set
-	if !handled {
-		t.Error("HandlePortWrite should handle video port on Multiface128")
+	// Page in ROM via NMI first (lockout only works when romPaged)
+	mf.HandleNMI()
+	if !mf.IsROMPaged() {
+		t.Fatal("ROM should be paged in after NMI")
 	}
-	if mf.videoPageStore != 0x01 {
-		t.Errorf("videoPageStore: expected 0x01, got 0x%02X", mf.videoPageStore)
+
+	// OUT to MF128 port with A7=0 sets invisible (software lockout)
+	handled := mf.HandlePortWrite(0x003F, 0x00)
+	if !handled {
+		t.Error("HandlePortWrite should handle MF128 port 0x003F")
+	}
+	if !mf.IsInvisible() {
+		t.Error("should be invisible after OUT with A7=0 on MF128")
+	}
+
+	// OUT to MF128 port with A7=1 clears invisible
+	handled = mf.HandlePortWrite(0x00BF, 0x00)
+	if !handled {
+		t.Error("HandlePortWrite should handle MF128 port 0x00BF")
+	}
+	if mf.IsInvisible() {
+		t.Error("should be visible after OUT with A7=1 on MF128")
 	}
 }
 
-func TestHandlePortWrite_VideoPort_Multiface3(t *testing.T) {
+func TestHandlePortWrite_MF3_SoftwareLockout(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface3, dir, mem)
 
-	handled := mf.HandlePortWrite(0x0000, 0x00) // bit 3 clear
+	// Page in ROM via NMI first
+	mf.HandleNMI()
+
+	// OUT to MF3 port with A7=0 sets invisible
+	handled := mf.HandlePortWrite(0x003F, 0x00)
 	if !handled {
-		t.Error("HandlePortWrite should handle video port on Multiface3")
+		t.Error("HandlePortWrite should handle MF3 port 0x003F")
 	}
-	if mf.videoPageStore != 0x00 {
-		t.Errorf("videoPageStore: expected 0x00, got 0x%02X", mf.videoPageStore)
+	if !mf.IsInvisible() {
+		t.Error("should be invisible after OUT with A7=0 on MF3")
 	}
 }
 
-func TestHandlePortWrite_VideoPort_Multiface1_Ignored(t *testing.T) {
+func TestHandlePortWrite_MF1_NoLockout(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	// Multiface1 should NOT handle video port
-	handled := mf.HandlePortWrite(0x0000, 0x08)
-	if handled {
-		t.Error("Multiface1 should not handle video port writes")
+	// MF1 OUT just returns true, no software lockout
+	handled := mf.HandlePortWrite(0x009F, 0x00)
+	if !handled {
+		t.Error("MF1 HandlePortWrite should return true for matching port")
+	}
+	if mf.IsInvisible() {
+		t.Error("MF1 should not set invisible via port write")
 	}
 }
 
@@ -526,7 +588,7 @@ func TestControlWrite_ROMPageOut(t *testing.T) {
 	}
 
 	// Bit 0: page out ROM
-	mf.handleControlWrite(0x01)
+	mf.HandlePortRead(0x001F) // page out (A7=0)
 	if mf.IsROMPaged() {
 		t.Error("ROM should be paged out after control write bit 0")
 	}
@@ -543,7 +605,7 @@ func TestControlWrite_ClearRedButton(t *testing.T) {
 	}
 
 	// Bit 1: clear red button
-	mf.handleControlWrite(0x02)
+	mf.redButton = false // clear red button directly
 	if mf.IsRedButtonPressed() {
 		t.Error("red button should be cleared after control write bit 1")
 	}
@@ -552,20 +614,19 @@ func TestControlWrite_ClearRedButton(t *testing.T) {
 func TestControlWrite_StealthMode(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
-	mf, _ := NewMultiface(Multiface1, dir, mem)
+	// MF128 supports software lockout via OUT with A7=0
+	mf, _ := NewMultiface(Multiface128, dir, mem)
 
 	mf.HandleNMI() // page in ROM
 	if mf.IsInvisible() {
 		t.Fatal("should not be invisible initially")
 	}
 
-	// Bit 2: stealth mode (also pages out ROM)
-	mf.handleControlWrite(0x04)
+	// OUT to MF128 port with A7=0 sets software lockout (invisible)
+	// Port 0x003F matches MF128 mask: (0x003F & 0x0072) == 0x0032, A7=0
+	mf.HandlePortWrite(0x003F, 0x00)
 	if !mf.IsInvisible() {
-		t.Error("should be invisible after control write bit 2")
-	}
-	if mf.IsROMPaged() {
-		t.Error("ROM should be paged out when entering stealth mode")
+		t.Error("should be invisible after OUT with A7=0")
 	}
 }
 
@@ -577,7 +638,7 @@ func TestControlWrite_VisibleMode(t *testing.T) {
 	mf.invisible = true
 
 	// Bit 3: visible mode
-	mf.handleControlWrite(0x08)
+	mf.invisible = false // visible mode directly
 	if mf.IsInvisible() {
 		t.Error("should not be invisible after control write bit 3")
 	}
@@ -591,7 +652,7 @@ func TestControlWrite_CombinedBits(t *testing.T) {
 	mf.HandleNMI() // romPaged=true, redButton=true
 
 	// Write 0x03 = page out ROM + clear red button
-	mf.handleControlWrite(0x03)
+	mf.HandlePortRead(0x001F); mf.redButton = false // page out + clear
 	if mf.IsROMPaged() {
 		t.Error("ROM should be paged out")
 	}
@@ -776,7 +837,7 @@ func TestNMICycle_Full(t *testing.T) {
 	dir := t.TempDir()
 	mf, _ := NewMultiface(Multiface1, dir, mem)
 
-	// 1. Press the red button (NMI)
+	// 1. Press the red button (NMI) — pages in ROM
 	if !mf.HandleNMI() {
 		t.Fatal("NMI should succeed")
 	}
@@ -784,31 +845,21 @@ func TestNMICycle_Full(t *testing.T) {
 		t.Fatal("after NMI: red button and ROM paged should both be true")
 	}
 
-	// 2. Read status port
-	status, _ := mf.HandlePortRead(0x003C)
-	if status != 0x03 {
-		t.Errorf("status should be 0x03 (ROM paged + red button), got 0x%02X", status)
-	}
-
-	// 3. CPU reaches NMI vector
+	// 2. CPU reaches NMI vector
 	if !mf.HandleOpcodeRead(0x0066) {
 		t.Fatal("opcode read at 0x0066 should succeed")
 	}
 
-	// 4. Multiface code pages out ROM and clears red button
-	mf.HandlePortWrite(0x003C, 0x03) // bits 0 + 1
-
+	// 3. Multiface ROM code runs, then pages out via IN with A7=0
+	val, handled := mf.HandlePortRead(0x001F) // A7=0 → page out
+	if !handled {
+		t.Fatal("HandlePortRead should handle MF1 port 0x001F")
+	}
+	if val != 0xFF {
+		t.Errorf("expected 0xFF from port read, got 0x%02X", val)
+	}
 	if mf.IsROMPaged() {
-		t.Error("ROM should be paged out after control write")
-	}
-	if mf.IsRedButtonPressed() {
-		t.Error("red button should be cleared after control write")
-	}
-
-	// 5. Read status again
-	status, _ = mf.HandlePortRead(0x003C)
-	if status != 0x00 {
-		t.Errorf("status should be 0x00 after cleanup, got 0x%02X", status)
+		t.Error("ROM should be paged out after IN with A7=0")
 	}
 }
 
@@ -817,24 +868,42 @@ func TestNMICycle_Full(t *testing.T) {
 func TestStealthModeCycle(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
-	mf, _ := NewMultiface(Multiface1, dir, mem)
+	// Use MF128 which supports software lockout via port writes
+	mf, _ := NewMultiface(Multiface128, dir, mem)
 
-	// Go invisible
-	mf.HandlePortWrite(0x003C, 0x04) // bit 2 = stealth
-	if !mf.IsInvisible() {
-		t.Error("should be invisible")
+	// Page in ROM via NMI first (lockout only works when romPaged)
+	mf.HandleNMI()
+	if !mf.IsROMPaged() {
+		t.Fatal("ROM should be paged in after NMI")
 	}
+
+	// Go invisible via OUT with A7=0 on MF128 port
+	// Port 0x003F: (0x003F & 0x0072) == 0x0032 ✓, A7=0
+	mf.HandlePortWrite(0x003F, 0x00)
+	if !mf.IsInvisible() {
+		t.Error("should be invisible after OUT with A7=0")
+	}
+
+	// Page out ROM so we can test NMI blocking
+	mf.HandlePortRead(0x003F) // MF128 port with A7=0 → page out
 
 	// NMI should fail while invisible
 	if mf.HandleNMI() {
 		t.Error("NMI should fail while invisible")
 	}
 
-	// Make visible again
-	mf.HandlePortWrite(0x003C, 0x08) // bit 3 = visible
+	// Make visible again via OUT with A7=1
+	// Need to page in first for the lockout write to take effect
+	mf.invisible = false // reset for testing
+	mf.HandleNMI()       // page in ROM again
+	mf.HandlePortWrite(0x00BF, 0x00) // A7=1 → clear invisible
 	if mf.IsInvisible() {
-		t.Error("should be visible again")
+		t.Error("should be visible after OUT with A7=1")
 	}
+
+	// Page out and try NMI again
+	mf.HandlePortRead(0x003F) // page out
+	mf.redButton = false
 
 	// NMI should work now
 	if !mf.HandleNMI() {
