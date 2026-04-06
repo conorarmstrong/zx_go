@@ -19,7 +19,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// Colours
 var (
 	colPC      = color.NRGBA{R: 255, G: 220, B: 60, A: 255}
 	colBP      = color.NRGBA{R: 255, G: 80, B: 80, A: 255}
@@ -37,8 +36,8 @@ var (
 )
 
 const (
-	hexRows  = 32
-	dasmRows = 50
+	hexRows  = 64
+	dasmRows = 80
 	fontSize = 13
 )
 
@@ -57,17 +56,20 @@ type Debugger struct {
 	hexAddr     uint16
 	breakpoints map[uint16]bool
 
-	// Pre-allocated line objects (updated in-place, no allocation on refresh)
-	regLines  [20]*canvas.Text // register display lines
-	flagLine  *canvas.Text
-	iffLine   *canvas.Text
-	haltLine  *canvas.Text
-	hexLines  [hexRows]*canvas.Text
-	dasmLines [dasmRows]*canvas.Text
-	statusTxt *canvas.Text
+	// Register display
+	regLines [20]*canvas.Text
+	flagLine *canvas.Text
+	iffLine  *canvas.Text
+	haltLine *canvas.Text
 
-	hexAddrEntry  *widget.Entry
-	dasmAddrEntry *widget.Entry
+	// Lists for scrollable, tappable content
+	dasmList      *widget.List
+	dasmCache     []DisassembledLine
+	dasmLastPC    uint16
+	hexList       *widget.List
+
+	statusTxt    *canvas.Text
+	hexAddrEntry *widget.Entry
 
 	refreshTicker *time.Ticker
 	stopChan      chan struct{}
@@ -77,12 +79,12 @@ func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
 	d := &Debugger{
 		cpu:         cpu,
 		mem:         mem,
-		hexAddr:     0x4000,
+		hexAddr:     0x0000,
 		breakpoints: make(map[uint16]bool),
 		stopChan:    make(chan struct{}),
 	}
 	d.window = app.NewWindow("ZX Spectrum Debugger")
-	d.window.Resize(fyne.NewSize(1300, 780))
+	d.window.Resize(fyne.NewSize(1400, 800))
 	d.window.SetContent(d.buildUI())
 	d.window.SetOnClosed(func() { d.stopRefresh() })
 	return d
@@ -108,8 +110,8 @@ func (d *Debugger) Refresh() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.refreshRegisters()
-	d.refreshHexDump()
 	d.refreshDisassembly()
+	d.refreshHex()
 	d.refreshStatus()
 }
 
@@ -166,19 +168,12 @@ func headerText(s string, c color.Color) *canvas.Text {
 // --- UI ---
 
 func (d *Debugger) buildUI() fyne.CanvasObject {
-	// Pre-allocate all text objects
 	for i := range d.regLines {
 		d.regLines[i] = mkText(colRegVal)
 	}
 	d.flagLine = mkText(colFlagOn)
 	d.iffLine = mkText(colRegVal)
 	d.haltLine = mkText(colHalted)
-	for i := range d.hexLines {
-		d.hexLines[i] = mkText(colHex)
-	}
-	for i := range d.dasmLines {
-		d.dasmLines[i] = mkText(colMnem)
-	}
 	d.statusTxt = mkText(colPaused)
 
 	// Register panel
@@ -190,46 +185,153 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	regBox.Add(d.flagLine)
 	regBox.Add(d.iffLine)
 	regBox.Add(d.haltLine)
-
 	regScroll := container.NewVScroll(regBox)
 	regScroll.SetMinSize(fyne.NewSize(230, 0))
-
 	regPanel := panelBG(container.NewBorder(
 		container.NewVBox(headerText("  REGISTERS", colRegName), widget.NewSeparator()),
 		nil, nil, nil, regScroll,
 	))
 
-	// Disassembly panel (centre — main focus)
-	dasmBox := container.NewVBox()
-	for i := range d.dasmLines {
-		dasmBox.Add(d.dasmLines[i])
+	// Disassembly panel (centre — widget.List for scrolling + tapping)
+	d.dasmCache = Disassemble(d.mem.Read, d.cpu.PC, dasmRows)
+	d.dasmList = widget.NewList(
+		func() int { return dasmRows },
+		func() fyne.CanvasObject {
+			t := canvas.NewText(strings.Repeat(" ", 60), colMnem)
+			t.TextStyle = fyne.TextStyle{Monospace: true}
+			t.TextSize = fontSize
+			return t
+		},
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			t := o.(*canvas.Text)
+			if id >= len(d.dasmCache) {
+				t.Text = ""
+				t.Refresh()
+				return
+			}
+			line := d.dasmCache[id]
+			isPC := line.Addr == d.cpu.PC
+			isBP := d.breakpoints[line.Addr]
+
+			prefix := "  "
+			if isPC && isBP {
+				prefix = "*>"
+			} else if isPC {
+				prefix = "> "
+			} else if isBP {
+				prefix = "* "
+			}
+
+			hexStr := ""
+			for _, b := range line.Bytes {
+				hexStr += fmt.Sprintf("%02X ", b)
+			}
+			for len(hexStr) < 12 {
+				hexStr += "   "
+			}
+			op := line.Mnem
+			if line.Operand != "" {
+				op += " " + line.Operand
+			}
+			t.Text = fmt.Sprintf("%s%04X  %s%s", prefix, line.Addr, hexStr, op)
+
+			if isPC && isBP {
+				t.Color = colBPHit
+			} else if isPC {
+				t.Color = colPC
+			} else if isBP {
+				t.Color = colBP
+			} else {
+				t.Color = colMnem
+			}
+			t.Refresh()
+		},
+	)
+	d.dasmList.OnSelected = func(id widget.ListItemID) {
+		// Toggle breakpoint on tap
+		if id < len(d.dasmCache) {
+			addr := d.dasmCache[id].Addr
+			if d.breakpoints[addr] {
+				delete(d.breakpoints, addr)
+			} else {
+				d.breakpoints[addr] = true
+			}
+			d.dasmList.UnselectAll()
+			d.dasmList.Refresh()
+		}
 	}
-	dasmScroll := container.NewVScroll(dasmBox)
+
 	dasmPanel := panelBG(container.NewBorder(
-		container.NewVBox(
-			container.NewHBox(headerText("  DISASSEMBLY", colMnem), d.buildDasmBar()),
-			widget.NewSeparator(),
-		), nil, nil, nil, dasmScroll,
+		container.NewVBox(headerText("  DISASSEMBLY  (tap to toggle breakpoint)", colMnem), widget.NewSeparator()),
+		nil, nil, nil, d.dasmList,
 	))
 
-	// Hex panel (right)
-	hexBox := container.NewVBox()
-	for i := range d.hexLines {
-		hexBox.Add(d.hexLines[i])
+	// Hex panel (right — widget.List for scrolling)
+	d.hexList = widget.NewList(
+		func() int { return hexRows },
+		func() fyne.CanvasObject {
+			t := canvas.NewText(strings.Repeat(" ", 70), colHex)
+			t.TextStyle = fyne.TextStyle{Monospace: true}
+			t.TextSize = fontSize
+			return t
+		},
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			t := o.(*canvas.Text)
+			addr := d.hexAddr + uint16(id)*16
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("%04X  ", addr))
+			ascii := ""
+			hasPC := false
+			for col := 0; col < 16; col++ {
+				a := addr + uint16(col)
+				b := d.mem.Read(a)
+				if a == d.cpu.PC {
+					hasPC = true
+				}
+				sb.WriteString(fmt.Sprintf("%02X ", b))
+				if col == 7 {
+					sb.WriteByte(' ')
+				}
+				if b >= 0x20 && b < 0x7F {
+					ascii += string(rune(b))
+				} else {
+					ascii += "."
+				}
+			}
+			sb.WriteString(" |" + ascii + "|")
+			t.Text = sb.String()
+			if hasPC {
+				t.Color = colPC
+			} else {
+				t.Color = colHex
+			}
+			t.Refresh()
+		},
+	)
+
+	d.hexAddrEntry = widget.NewEntry()
+	d.hexAddrEntry.SetText("0000")
+	d.hexAddrEntry.TextStyle = fyne.TextStyle{Monospace: true}
+	d.hexAddrEntry.OnSubmitted = func(s string) {
+		if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
+			d.hexAddr = uint16(addr) & 0xFFF0
+			d.hexList.Refresh()
+		}
 	}
-	hexScroll := container.NewVScroll(hexBox)
+	hexAddrSized := container.New(layout.NewGridWrapLayout(fyne.NewSize(100, 36)), d.hexAddrEntry)
+
 	hexPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(headerText("  MEMORY", colAddr), d.buildHexBar()),
+			container.NewHBox(headerText("  MEMORY", colAddr), widget.NewLabel("  Addr:"), hexAddrSized),
 			widget.NewSeparator(),
-		), nil, nil, nil, hexScroll,
+		), nil, nil, nil, d.hexList,
 	))
 
 	// Layout: registers | disassembly | hex
 	innerSplit := container.NewHSplit(regPanel, dasmPanel)
-	innerSplit.SetOffset(0.25)
+	innerSplit.SetOffset(0.22)
 	split := container.NewHSplit(innerSplit, hexPanel)
-	split.SetOffset(0.60)
+	split.SetOffset(0.58)
 
 	return container.NewBorder(
 		container.NewVBox(d.buildControls(), widget.NewSeparator()),
@@ -270,18 +372,7 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	})
 	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
 	writeBtn := widget.NewButton("Write Mem...", func() { d.showWriteDialog() })
-
-	bpEntry := widget.NewEntry()
-	bpEntry.SetPlaceHolder("ADDR")
-	bpEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	bpAdd := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
-		if addr, err := strconv.ParseUint(bpEntry.Text, 16, 16); err == nil {
-			d.breakpoints[uint16(addr)] = true
-			bpEntry.SetText("")
-			d.Refresh()
-		}
-	})
-	bpClr := widget.NewButton("Clear BPs", func() {
+	clearBPBtn := widget.NewButton("Clear BPs", func() {
 		d.breakpoints = make(map[uint16]bool)
 		d.Refresh()
 	})
@@ -291,39 +382,11 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 		widget.NewSeparator(),
 		pcBtn, editBtn, writeBtn,
 		widget.NewSeparator(),
-		headerText("BP:", colBP), bpEntry, bpAdd, bpClr,
+		clearBPBtn,
 	)
 }
 
-func wideEntry(text string) (*widget.Entry, fyne.CanvasObject) {
-	e := widget.NewEntry()
-	e.TextStyle = fyne.TextStyle{Monospace: true}
-	e.SetText(text)
-	// Wrap in a fixed-width container so it doesn't collapse
-	sized := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), e)
-	return e, sized
-}
-
-func (d *Debugger) buildHexBar() fyne.CanvasObject {
-	var sized fyne.CanvasObject
-	d.hexAddrEntry, sized = wideEntry(fmt.Sprintf("%04X", d.hexAddr))
-	d.hexAddrEntry.OnSubmitted = func(s string) {
-		if addr, err := strconv.ParseUint(s, 16, 16); err == nil {
-			d.hexAddr = uint16(addr) & 0xFFF0
-			d.Refresh()
-		}
-	}
-	return container.NewHBox(widget.NewLabel("Addr:"), sized)
-}
-
-func (d *Debugger) buildDasmBar() fyne.CanvasObject {
-	var sized fyne.CanvasObject
-	d.dasmAddrEntry, sized = wideEntry("")
-	d.dasmAddrEntry.SetPlaceHolder("PC")
-	return container.NewHBox(widget.NewLabel("PC:"), sized)
-}
-
-// --- Refresh (in-place updates, zero allocation) ---
+// --- Refresh ---
 
 func (d *Debugger) refreshRegisters() {
 	set := func(i int, s string) {
@@ -352,33 +415,26 @@ func (d *Debugger) refreshRegisters() {
 	set(13, fmt.Sprintf(" H'%02X   L'%02X", d.cpu.H_, d.cpu.L_))
 	set(14, "")
 	set(15, fmt.Sprintf(" I  %02X   R  %02X", d.cpu.I, d.cpu.R))
-	// 16-19 unused but available for stack preview
-	sp := d.cpu.SP
 	set(16, "")
 	set(17, " Stack:")
+	sp := d.cpu.SP
 	set(18, fmt.Sprintf("  %04X: %02X%02X  %02X%02X", sp, d.mem.Read(sp+1), d.mem.Read(sp), d.mem.Read(sp+3), d.mem.Read(sp+2)))
 	set(19, fmt.Sprintf("  %04X: %02X%02X  %02X%02X", sp+4, d.mem.Read(sp+5), d.mem.Read(sp+4), d.mem.Read(sp+7), d.mem.Read(sp+6)))
 
-	// Flags
 	f := d.cpu.F
 	flagStr := " "
-	flags := []struct {
-		name string
-		bit  byte
-	}{{"S", 0x80}, {"Z", 0x40}, {"H", 0x10}, {"PV", 0x04}, {"N", 0x02}, {"C", 0x01}}
-	for _, fl := range flags {
-		if f&fl.bit != 0 {
-			flagStr += fl.name + ":1 "
+	for _, fl := range []struct{ n string; b byte }{{"S", 0x80}, {"Z", 0x40}, {"H", 0x10}, {"PV", 0x04}, {"N", 0x02}, {"C", 0x01}} {
+		if f&fl.b != 0 {
+			flagStr += fl.n + ":1 "
 		} else {
-			flagStr += fl.name + ":0 "
+			flagStr += fl.n + ":0 "
 		}
 	}
 	d.flagLine.Text = flagStr
 	d.flagLine.Color = colRegVal
 	d.flagLine.Refresh()
 
-	iff := fmt.Sprintf(" IFF %v/%v  IM %d", d.cpu.IFF1, d.cpu.IFF2, d.cpu.IM)
-	d.iffLine.Text = iff
+	d.iffLine.Text = fmt.Sprintf(" IFF %v/%v  IM %d", d.cpu.IFF1, d.cpu.IFF2, d.cpu.IM)
 	d.iffLine.Refresh()
 
 	if d.cpu.Halted {
@@ -390,93 +446,20 @@ func (d *Debugger) refreshRegisters() {
 	d.haltLine.Refresh()
 }
 
-func (d *Debugger) refreshHexDump() {
-	addr := d.hexAddr
-	for row := 0; row < hexRows; row++ {
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("%04X  ", addr))
-		ascii := ""
-		hasPC := false
-		for col := 0; col < 16; col++ {
-			b := d.mem.Read(addr)
-			if addr == d.cpu.PC {
-				hasPC = true
-			}
-			sb.WriteString(fmt.Sprintf("%02X ", b))
-			if col == 7 {
-				sb.WriteByte(' ')
-			}
-			if b >= 0x20 && b < 0x7F {
-				ascii += string(rune(b))
-			} else {
-				ascii += "."
-			}
-			addr++
-		}
-		sb.WriteString(" |" + ascii + "|")
-
-		t := d.hexLines[row]
-		t.Text = sb.String()
-		if hasPC {
-			t.Color = colPC
-		} else {
-			t.Color = colHex
-		}
-		t.Refresh()
-	}
-}
-
 func (d *Debugger) refreshDisassembly() {
 	pc := d.cpu.PC
-	d.dasmAddrEntry.SetText(fmt.Sprintf("%04X", pc))
-	lines := Disassemble(d.mem.Read, pc, dasmRows)
-
-	for i := 0; i < dasmRows; i++ {
-		t := d.dasmLines[i]
-		if i >= len(lines) {
-			t.Text = ""
-			t.Refresh()
-			continue
-		}
-		line := lines[i]
-		isPC := line.Addr == pc
-		isBP := d.breakpoints[line.Addr]
-
-		prefix := "  "
-		if isPC && isBP {
-			prefix = "*>"
-		} else if isPC {
-			prefix = "> "
-		} else if isBP {
-			prefix = "* "
-		}
-
-		hexStr := ""
-		for _, b := range line.Bytes {
-			hexStr += fmt.Sprintf("%02X ", b)
-		}
-		for len(hexStr) < 12 {
-			hexStr += "   "
-		}
-
-		op := line.Mnem
-		if line.Operand != "" {
-			op += " " + line.Operand
-		}
-
-		t.Text = fmt.Sprintf("%s%04X  %s%-5s", prefix, line.Addr, hexStr, op)
-
-		if isPC && isBP {
-			t.Color = colBPHit
-		} else if isPC {
-			t.Color = colPC
-		} else if isBP {
-			t.Color = colBP
-		} else {
-			t.Color = colMnem
-		}
-		t.Refresh()
+	// Only re-disassemble if PC changed
+	if pc != d.dasmLastPC || len(d.dasmCache) == 0 {
+		d.dasmCache = Disassemble(d.mem.Read, pc, dasmRows)
+		d.dasmLastPC = pc
 	}
+	d.dasmList.Refresh()
+	// Scroll to show PC at top
+	d.dasmList.ScrollToTop()
+}
+
+func (d *Debugger) refreshHex() {
+	d.hexList.Refresh()
 }
 
 func (d *Debugger) refreshStatus() {
