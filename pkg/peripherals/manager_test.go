@@ -412,10 +412,16 @@ func TestHandleMemoryRead_MultifaceROMPaged(t *testing.T) {
 		t.Errorf("memory read value = 0x%02X, want 0x%02X", val, expectedROM[0])
 	}
 
-	// Address >= 0x2000 should not be intercepted via this path
+	// Address 0x2000-0x3FFF should be intercepted as Multiface RAM
 	_, handled = pm.HandleMemoryRead(0x2000)
+	if !handled {
+		t.Error("memory read at 0x2000 should be intercepted by Multiface RAM")
+	}
+
+	// Address >= 0x4000 should not be intercepted
+	_, handled = pm.HandleMemoryRead(0x4000)
 	if handled {
-		t.Error("memory read at 0x2000 should not be intercepted by Multiface ROM")
+		t.Error("memory read at 0x4000 should not be intercepted")
 	}
 }
 

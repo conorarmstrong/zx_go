@@ -126,6 +126,7 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	pm := peripherals.NewPeripheralManager(mem, "roms")
 	ula.SetPeripherals(pm)
 	mem.PeripheralRead = pm.HandleMemoryRead
+	mem.PeripheralWrite = pm.HandleMemoryWrite
 
 	// NMI: keyboard goroutine sets a flag, CPU processes it on the emulator
 	// goroutine. The NMICallback pages in the Multiface ROM at the exact

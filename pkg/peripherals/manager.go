@@ -143,11 +143,15 @@ func (pm *PeripheralManager) HandleOpcodeRead(addr uint16) bool {
 
 // HandleMemoryRead handles memory reads that might be intercepted by peripherals
 func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
-	// Check if Multiface ROM is paged in
+	// Check if Multiface ROM/RAM is paged in
 	if pm.multifaceEnabled && pm.multiface != nil && pm.multiface.IsROMPaged() {
-		if addr < 0x2000 { // Multiface ROM area
+		if addr < 0x2000 { // Multiface ROM area (0x0000-0x1FFF)
 			rom := pm.multiface.GetROM()
 			return rom[addr], true
+		}
+		if addr >= 0x2000 && addr < 0x4000 { // Multiface RAM area (0x2000-0x3FFF)
+			ram := pm.multiface.GetRAM()
+			return ram[addr-0x2000], true
 		}
 	}
 	

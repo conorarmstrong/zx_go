@@ -52,6 +52,10 @@ type Memory struct {
 	// PeripheralRead is called for reads in the ROM area (0x0000-0x3FFF).
 	// If it returns (value, true), the peripheral ROM overrides the normal ROM.
 	PeripheralRead func(addr uint16) (byte, bool)
+
+	// PeripheralWrite is called for writes in the peripheral area.
+	// If it returns true, the peripheral handled the write.
+	PeripheralWrite func(addr uint16, val byte) bool
 }
 
 // Contention delay pattern (repeats every 8 T-states in contended region)
@@ -333,6 +337,13 @@ func (m *Memory) Read(addr uint16) byte {
 
 // Write sets the byte at the given address.
 func (m *Memory) Write(addr uint16, val byte) {
+	// Check if a peripheral intercepts this write
+	if m.PeripheralWrite != nil {
+		if m.PeripheralWrite(addr, val) {
+			return
+		}
+	}
+
 	pageIndex := m.memoryPageWriteMap[addr>>14]
 	if pageIndex == -1 {
 		// Attempt to write to ROM, ignore.
