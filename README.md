@@ -106,9 +106,7 @@ ROM files are embedded in the binary, so no external ROM directory is needed. Th
 
 You can override embedded ROMs by placing files in a `roms/` directory alongside the binary. The emulator checks the filesystem first and falls back to embedded ROMs.
 
-## Architecture
-
-The emulator was developed with reference to the [FUSE](http://fuse-emulator.sourceforge.net/) emulator source code for accuracy, particularly:
+## Technical Details
 
 - +3/+2A port decode isolation (0x7FFD vs 0x1FFD require stricter address matching)
 - +3 special paging modes with correct slot 3 restore on exit
