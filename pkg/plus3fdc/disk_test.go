@@ -246,6 +246,87 @@ func TestSaveDSKAfterSectorWrite(t *testing.T) {
 	}
 }
 
+func TestSaveDSKPreservesIDAMOnlySector(t *testing.T) {
+	// Build a track with an IDAM that has no following DAM (a header
+	// without a data field, used by some copy-protection schemes).
+	// Save → reload → READ DATA should report ST1.MA / ST1.ND, not
+	// silently return the bytes that physically follow the IDAM.
+	d := &Disk{Sides: 1, Cylinders: 1, Tracks: [][]*Track{{nil}}}
+	tr := newTrack(bytesPerTrackDD, 0xE5, 0, 0, 2)
+	b := newTrackBuilder(tr, gapMFM)
+	b.preindexAdd()
+	b.postindexAdd()
+	// Sector 1 has IDAM only — no dataAdd call.
+	if !b.idAdd(0, 0, 1, 2, false) {
+		t.Fatal("idAdd failed")
+	}
+	// Sector 2 is a normal sector for comparison.
+	b.idAdd(0, 0, 2, 2, false)
+	want := make([]byte, 512)
+	for i := range want {
+		want[i] = 0xA5
+	}
+	b.dataAdd(want, false, false)
+	b.gap4Add()
+	d.Tracks[0][0] = tr
+
+	// Save and reload.
+	saved, err := d.SerializeDSK()
+	if err != nil {
+		t.Fatalf("SerializeDSK: %v", err)
+	}
+	d2, err := ParseDSK(saved)
+	if err != nil {
+		t.Fatalf("ParseDSK: %v", err)
+	}
+
+	// Sector 1 should fail with ST1.MA / ST1.ND.
+	f := NewUPD765()
+	f.AttachDisk(0, d2)
+	f.WriteData(0x46)
+	f.WriteData(0x00)
+	f.WriteData(0x00)
+	f.WriteData(0x00)
+	f.WriteData(0x01)
+	f.WriteData(0x02)
+	f.WriteData(0x01)
+	f.WriteData(0x4E)
+	f.WriteData(0xFF)
+	res := drainResult(t, f, 7)
+	if res[0]&st0IC0 == 0 {
+		t.Errorf("IDAM-only sector after reload: ST0=%02X, expected abnormal", res[0])
+	}
+	if res[1]&(st1MA|st1ND) == 0 {
+		t.Errorf("IDAM-only sector after reload: ST1=%02X, expected MA or ND", res[1])
+	}
+
+	// Sector 2 should still read cleanly.
+	f.headPos[0] = 0
+	f.WriteData(0x46)
+	f.WriteData(0x00)
+	f.WriteData(0x00)
+	f.WriteData(0x00)
+	f.WriteData(0x02)
+	f.WriteData(0x02)
+	f.WriteData(0x02)
+	f.WriteData(0x4E)
+	f.WriteData(0xFF)
+	got := make([]byte, 0, 512)
+	for i := 0; i < 512; i++ {
+		got = append(got, f.ReadData())
+	}
+	res = drainResult(t, f, 7)
+	if res[0]&st0IC0 != 0 {
+		t.Errorf("normal sector after reload: ST0=%02X, expected normal", res[0])
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("normal sector byte %d: got %02X, want %02X", i, got[i], want[i])
+			break
+		}
+	}
+}
+
 func TestSaveDSKPreservesDeletedDAM(t *testing.T) {
 	// A sector with a deleted DAM should round-trip through save/load
 	// with ST2.CM still set on the next read.

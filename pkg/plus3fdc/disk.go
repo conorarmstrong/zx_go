@@ -257,6 +257,15 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 		if !b.idAdd(c, h, r, n, idCRCError) {
 			return nil, fmt.Errorf("track too small to write sector %d ID", j)
 		}
+		// EDSK encodes "no data field" with a stored length of 0 —
+		// see extractTrackSectors in save.go for the symmetric save
+		// path. Skip dataAdd entirely so a subsequent READ DATA on
+		// this sector reports ST1.MA / ST1.ND instead of streaming
+		// the bytes that physically follow the IDAM (which would be
+		// the next sector's sync field or GAP IV).
+		if dataBytes == 0 {
+			continue
+		}
 		// EDSK can record more data bytes than the sector ID claims
 		// (e.g. for weak sectors that store multiple copies). Emit the
 		// ID-length-worth and mark it weak — matches FUSE's

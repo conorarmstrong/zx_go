@@ -457,12 +457,27 @@ func (t *Track) idAtCRC(start int) (c, h, r, n byte, idEnd int, crcOK bool, ok b
 // dataAt walks from start looking for a data address mark (FB or F8 with
 // the A1 sync prefix or clock bit). Returns (dataStart, deleted, ok) —
 // dataStart is the position of the first data byte after the mark.
+//
+// If a new IDAM (FE with clock) appears before any DAM, the search
+// fails: the legitimate DAM for a sector always sits between its IDAM
+// and the next sector's IDAM, so encountering an IDAM means the current
+// sector has no data field (an IDAM-only sector — used by some
+// copy-protection schemes and produced by EDSK images that record
+// length=0). Without this guard, dataAt would walk into the *next*
+// sector and silently return that sector's DAM and data instead of
+// failing with ST1.MA / ST1.ND.
 func (t *Track) dataAt(start int) (dataStart int, deleted bool, ok bool) {
 	a1Run := 0
 	for i := start; i < t.bpt; i++ {
 		if t.data[i] == a1Mark && bitTest(t.clocks, i) {
 			a1Run++
 			continue
+		}
+		// A new IDAM means we've walked into the next sector's ID
+		// field — give up before we can mistake the next sector's
+		// DAM for this sector's.
+		if t.data[i] == idMark && (bitTest(t.clocks, i) || a1Run > 0) {
+			return 0, false, false
 		}
 		isMark := (t.data[i] == dataMark || t.data[i] == delDataMrk) &&
 			(bitTest(t.clocks, i) || a1Run > 0)
