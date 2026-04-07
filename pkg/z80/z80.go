@@ -53,6 +53,13 @@ type CPU struct {
 	// If it returns true, execution stops immediately (breakpoint hit).
 	BreakpointCheck func(pc uint16) bool
 
+	// TrapCheck is called before each instruction during ExecuteFrame.
+	// If it returns true, the trap has handled the instruction (typically by
+	// modifying CPU state and PC) and the normal fetch/execute cycle is
+	// skipped. Used to short-circuit known ROM routines such as the 48K
+	// LD-BYTES tape loader at 0x0556.
+	TrapCheck func(pc uint16) bool
+
 	// PendingNMI is set from any goroutine to signal an NMI. The CPU
 	// processes it at the next safe point in ExecuteFrame.
 	PendingNMI atomic.Bool
@@ -137,6 +144,11 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 		}
 		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
 			return
+		}
+		if c.TrapCheck != nil && c.TrapCheck(c.PC) {
+			// Trap handled the "instruction" (typically a ROM routine);
+			// skip the real fetch/execute and continue the loop.
+			continue
 		}
 		c.executeInstruction()
 		// NMI check after each instruction (NMI is non-maskable)

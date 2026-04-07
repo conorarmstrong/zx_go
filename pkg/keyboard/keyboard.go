@@ -1,10 +1,14 @@
 package keyboard
 
 import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"sync"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
-	"log"
-	"sync"
 )
 
 // Keyboard handles keyboard input by mapping modern keys to the Spectrum's 8x5 matrix.
@@ -293,4 +297,74 @@ func (k *Keyboard) SimulateNMI() {
 		log.Println("NMI triggered programmatically")
 		k.nmiCallback()
 	}
+}
+
+// MappingEntry is the JSON-friendly representation of a single matrix
+// position. row is 0..7 and mask is one of {0x01, 0x02, 0x04, 0x08, 0x10}.
+type MappingEntry struct {
+	Row  byte `json:"row"`
+	Mask byte `json:"mask"`
+}
+
+// SetMapping replaces the mapping for a single physical key. Multiple
+// MappingEntry values represent compound keystrokes (e.g. CAPS SHIFT + 5
+// for cursor left). Pass an empty slice to clear a mapping entirely.
+func (k *Keyboard) SetMapping(key fyne.KeyName, entries []MappingEntry) {
+	k.matrixMu.Lock()
+	defer k.matrixMu.Unlock()
+	if k.keyMap == nil {
+		k.keyMap = map[fyne.KeyName][]keyMapping{}
+	}
+	mappings := make([]keyMapping, len(entries))
+	for i, e := range entries {
+		mappings[i] = keyMapping{row: e.Row, mask: e.Mask}
+	}
+	k.keyMap[key] = mappings
+}
+
+// GetMapping returns the current mapping for a physical key, or an empty
+// slice if the key is not mapped.
+func (k *Keyboard) GetMapping(key fyne.KeyName) []MappingEntry {
+	k.matrixMu.RLock()
+	defer k.matrixMu.RUnlock()
+	src := k.keyMap[key]
+	out := make([]MappingEntry, len(src))
+	for i, m := range src {
+		out[i] = MappingEntry{Row: m.row, Mask: m.mask}
+	}
+	return out
+}
+
+// LoadOverrides applies a JSON map of physical key name -> []MappingEntry
+// from the given file path. Missing files are not an error (overrides are
+// optional). Each entry replaces the matching default mapping.
+func (k *Keyboard) LoadOverrides(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read keymap %s: %w", path, err)
+	}
+	var raw map[string][]MappingEntry
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse keymap %s: %w", path, err)
+	}
+	for name, entries := range raw {
+		k.SetMapping(fyne.KeyName(name), entries)
+	}
+	return nil
+}
+
+// SaveOverrides writes the given override map (physical key name ->
+// MappingEntry list) to path as JSON. The caller chooses which entries to
+// persist; this is intentionally separate from LoadOverrides so the UI can
+// expose just the user's customisations rather than dumping the full
+// default table.
+func SaveOverrides(path string, overrides map[string][]MappingEntry) error {
+	data, err := json.MarshalIndent(overrides, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal keymap: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
 }

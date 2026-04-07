@@ -131,7 +131,7 @@ func TestTapePlayerPulseGeneration(t *testing.T) {
 
 	// Header block (flag < 128): should have 8063 pilot pulses
 	headerData := []byte{0x00, 0x01}
-	pulses := tp.generatePulses(headerData)
+	pulses := tp.generatePulses(tapeBlock{data: headerData})
 	if pulses == nil {
 		t.Fatal("generatePulses returned nil")
 	}
@@ -142,7 +142,7 @@ func TestTapePlayerPulseGeneration(t *testing.T) {
 
 	// Data block (flag >= 128): should have 3223 pilot pulses
 	dataBlock := []byte{0xFF, 0x01}
-	dataPulses := tp.generatePulses(dataBlock)
+	dataPulses := tp.generatePulses(tapeBlock{data: dataBlock})
 	if dataPulses == nil {
 		t.Fatal("generatePulses returned nil for data block")
 	}

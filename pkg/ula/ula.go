@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
+	"github.com/conorarmstrong/zx_go/pkg/ay"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
@@ -31,6 +32,7 @@ type ULA struct {
 	mem         *memory.Memory
 	kbd         *keyboard.Keyboard
 	audio       *audio.AudioSystem
+	ay          *ay.AY
 	peripherals *peripherals.PeripheralManager
 	img         *image.RGBA
 	palette     [16]color.RGBA
@@ -42,6 +44,12 @@ type ULA struct {
 	Mic          bool
 	TapeIn       bool
 	Speaker      bool
+
+	// Kempston joystick state (port 0x1F).
+	// Bit 0: Right, Bit 1: Left, Bit 2: Down, Bit 3: Up, Bit 4: Fire.
+	// A bit is 1 when the corresponding direction/fire is active.
+	KempstonEnabled bool
+	KempstonState   byte
 
 	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
 	// Allows accurate rendering of border effects that change colour during the frame.
@@ -67,8 +75,19 @@ func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 
 	// Audio initialization is deferred to EnableAudio() to avoid crashes
 	// in headless/test environments where audio hardware is unavailable.
-	
+
+	// AY-3-8912 sound chip is fitted on every model except the original 48K.
+	if mem.GetCurrentModel() != roms.Model48K {
+		u.ay = ay.New()
+	}
+
 	return u
+}
+
+// AY returns the AY-3-8912 sound chip instance, or nil for models that do
+// not have one (e.g. the 48K).
+func (u *ULA) AY() *ay.AY {
+	return u.ay
 }
 
 func (u *ULA) initPalette() {
@@ -199,6 +218,18 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 		return val, true
 	}
 
+	// AY-3-8912 register read: port 0xFFFD on 128K+ models.
+	// Decoded as A15=1, A14=1, A1=0 (addr & 0xC002 == 0xC000).
+	if u.ay != nil && (addr&0xC002) == 0xC000 {
+		return u.ay.ReadSelected(), true
+	}
+
+	// Kempston joystick: port 0x1F. Decoded as A7..A5 = 0 and A4..A0 = 0x1F.
+	// We use the conventional decode (addr & 0x00E0 == 0 and addr & 0x001F == 0x001F).
+	if u.KempstonEnabled && (addr&0x00E0) == 0x0000 && (addr&0x001F) == 0x001F {
+		return u.KempstonState & 0x1F, true
+	}
+
 	// Delegate to peripherals
 	if u.peripherals != nil {
 		if value, handled := u.peripherals.HandlePortRead(addr); handled {
@@ -208,6 +239,24 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 
 	// Floating bus: return 0xFF for unhandled ports
 	return 0xFF, false
+}
+
+// Kempston joystick bit constants for KempstonState.
+const (
+	KempstonRight = 0x01
+	KempstonLeft  = 0x02
+	KempstonDown  = 0x04
+	KempstonUp    = 0x08
+	KempstonFire  = 0x10
+)
+
+// SetKempstonButton sets or clears a Kempston joystick button bit.
+func (u *ULA) SetKempstonButton(mask byte, pressed bool) {
+	if pressed {
+		u.KempstonState |= mask
+	} else {
+		u.KempstonState &^= mask
+	}
 }
 
 // WritePort handles CPU writes to ULA-controlled ports.
@@ -234,6 +283,14 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 				u.audio.SetSpeakerState(newSpeakerState)
 			}
 		}
+	} else if u.ay != nil && (addr&0xC002) == 0xC000 {
+		// AY-3-8912 register select: port 0xFFFD on 128K+ models.
+		// Decoded as A15=1, A14=1, A1=0.
+		u.ay.SelectRegister(val)
+	} else if u.ay != nil && (addr&0xC002) == 0x8000 {
+		// AY-3-8912 data write: port 0xBFFD on 128K+ models.
+		// Decoded as A15=1, A14=0, A1=0.
+		u.ay.WriteSelected(val)
 	} else if u.mem.GetCurrentModel() == roms.ModelPlus3 || u.mem.GetCurrentModel() == roms.ModelPlus2A {
 		// +3/+2A use stricter port decoding to avoid conflicts between 0x7FFD and 0x1FFD:
 		//   0x7FFD: mask=0xC002 value=0x4000 (A15=0, A14=1, A1=0)
@@ -263,6 +320,32 @@ func (u *ULA) Close() {
 	}
 }
 
+// StartRecording begins capturing the audio output to a WAV file. Returns
+// nil if no audio system is available (in which case recording is silently
+// skipped).
+func (u *ULA) StartRecording(path string) error {
+	if u.audio == nil {
+		return nil
+	}
+	return u.audio.StartRecording(path)
+}
+
+// StopRecording finalises the active WAV recording, if any.
+func (u *ULA) StopRecording() error {
+	if u.audio == nil {
+		return nil
+	}
+	return u.audio.StopRecording()
+}
+
+// IsRecording reports whether a WAV recording is currently in progress.
+func (u *ULA) IsRecording() bool {
+	if u.audio == nil {
+		return false
+	}
+	return u.audio.IsRecording()
+}
+
 // EnableAudio initializes and starts the audio system.
 // Call this from the application (not tests) after creating the ULA.
 func (u *ULA) EnableAudio() {
@@ -272,6 +355,9 @@ func (u *ULA) EnableAudio() {
 		return
 	}
 	u.audio = audioSys
+	if u.ay != nil {
+		u.audio.SetAY(u.ay)
+	}
 	if err := u.audio.Start(); err != nil {
 		log.Printf("Warning: Failed to start audio system: %v", err)
 	}
@@ -287,6 +373,11 @@ func (u *ULA) SetTapePlayer(tp *TapePlayer) {
 	u.tape = tp
 }
 
+// GetTapePlayer returns the currently loaded tape player (or nil).
+func (u *ULA) GetTapePlayer() *TapePlayer {
+	return u.tape
+}
+
 // Reset resets the ULA to initial state
 func (u *ULA) Reset() {
 	u.BorderColour = 0
@@ -295,8 +386,30 @@ func (u *ULA) Reset() {
 	u.Speaker = false
 	u.flash = false
 	u.flashCount = 0
-	
+	u.KempstonState = 0
+
 	if u.audio != nil {
 		u.audio.Reset()
+	}
+
+	// Sync the AY presence with the current memory model. SwitchModel may
+	// have changed the machine since the ULA was created, so we (re)create
+	// the AY here for any 128K+ model and detach it on a plain 48K.
+	if u.mem.GetCurrentModel() != roms.Model48K {
+		if u.ay == nil {
+			u.ay = ay.New()
+			if u.audio != nil {
+				u.audio.SetAY(u.ay)
+			}
+		} else {
+			u.ay.Reset()
+		}
+	} else {
+		if u.ay != nil {
+			u.ay = nil
+			if u.audio != nil {
+				u.audio.SetAY(nil)
+			}
+		}
 	}
 }

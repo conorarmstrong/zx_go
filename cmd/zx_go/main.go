@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"log"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +46,18 @@ type keyState struct {
 	pressed bool
 }
 
+// JoystickType identifies which joystick interface (if any) is currently
+// active. Only one joystick interface can be active at a time.
+type JoystickType int
+
+const (
+	JoystickNone     JoystickType = iota
+	JoystickKempston              // Hardware port 0x1F (handled by ULA)
+	JoystickSinclair1              // Sinclair Interface 2 left joystick (keys 1..5)
+	JoystickSinclair2              // Sinclair Interface 2 right joystick (keys 6..0)
+	JoystickCursor                 // Protek/Cursor joystick (keys 5/6/7/8/0)
+)
+
 type emulator struct {
 	cpu         *z80.CPU
 	mem         *memory.Memory
@@ -64,6 +81,93 @@ type emulator struct {
 	// Separate goroutine for processing keys
 	keyQueue chan keyState
 	stopChan chan struct{}
+
+	// CRT scanline filter toggle. When true, the rendered image is upscaled
+	// 2x and every other row is darkened to mimic a CRT.
+	crtFilter atomic.Bool
+
+	// CRT post-process destination. When the filter is enabled the render
+	// goroutine writes the upscaled image here and points screen.Image at
+	// it. Sized lazily on first use; reused across frames.
+	crtScratch *image.RGBA
+
+	// Currently active joystick interface. Mutated only from the UI thread.
+	joystickType JoystickType
+}
+
+// joystickKeySymbols returns the Spectrum keys (as fyne.KeyName values that
+// the emulator's keyboard package recognises) corresponding to up/down/left/
+// right/fire for the active joystick. Returns nil if the joystick type
+// uses something other than the keyboard matrix (e.g. Kempston).
+func joystickKeySymbols(t JoystickType) [5]fyne.KeyName {
+	switch t {
+	case JoystickSinclair1:
+		// Left joystick: 1=left 2=right 3=down 4=up 5=fire
+		return [5]fyne.KeyName{fyne.Key4, fyne.Key3, fyne.Key1, fyne.Key2, fyne.Key5}
+	case JoystickSinclair2:
+		// Right joystick: 6=left 7=right 8=down 9=up 0=fire
+		return [5]fyne.KeyName{fyne.Key9, fyne.Key8, fyne.Key6, fyne.Key7, fyne.Key0}
+	case JoystickCursor:
+		// Cursor joystick: 5=left 6=down 7=up 8=right 0=fire
+		// Index order: up, down, left, right, fire
+		return [5]fyne.KeyName{fyne.Key7, fyne.Key6, fyne.Key5, fyne.Key8, fyne.Key0}
+	}
+	return [5]fyne.KeyName{}
+}
+
+// joystickKeyForArrow maps a physical arrow / fire key to one of the five
+// joystick directions. Returns -1 if the key is not a joystick input.
+// Index order matches joystickKeySymbols: 0=up, 1=down, 2=left, 3=right, 4=fire.
+func joystickKeyForArrow(name fyne.KeyName) int {
+	switch name {
+	case fyne.KeyUp:
+		return 0
+	case fyne.KeyDown:
+		return 1
+	case fyne.KeyLeft:
+		return 2
+	case fyne.KeyRight:
+		return 3
+	case desktop.KeyAltRight, desktop.KeyControlRight:
+		return 4
+	}
+	return -1
+}
+
+// applyCRTFilterInto writes a 2x upscaled CRT version of src into dst:
+// each input pixel becomes a 2x2 block where the bottom row is halved in
+// brightness. dst must have the right dimensions; callers reuse it across
+// frames to avoid per-frame allocations.
+func applyCRTFilterInto(dst, src *image.RGBA) {
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	for y := 0; y < h; y++ {
+		srcRow := src.Pix[y*src.Stride : y*src.Stride+w*4]
+		topRow := dst.Pix[(y*2)*dst.Stride : (y*2)*dst.Stride+w*8]
+		botRow := dst.Pix[(y*2+1)*dst.Stride : (y*2+1)*dst.Stride+w*8]
+		for x := 0; x < w; x++ {
+			r := srcRow[x*4]
+			g := srcRow[x*4+1]
+			b := srcRow[x*4+2]
+			a := srcRow[x*4+3]
+			topRow[x*8+0] = r
+			topRow[x*8+1] = g
+			topRow[x*8+2] = b
+			topRow[x*8+3] = a
+			topRow[x*8+4] = r
+			topRow[x*8+5] = g
+			topRow[x*8+6] = b
+			topRow[x*8+7] = a
+			r2, g2, b2 := r/2, g/2, b/2
+			botRow[x*8+0] = r2
+			botRow[x*8+1] = g2
+			botRow[x*8+2] = b2
+			botRow[x*8+3] = a
+			botRow[x*8+4] = r2
+			botRow[x*8+5] = g2
+			botRow[x*8+6] = b2
+			botRow[x*8+7] = a
+		}
+	}
 }
 
 // keyboardWidget implements desktop.Keyable to receive KeyDown/KeyUp events
@@ -111,8 +215,24 @@ func (kw *keyboardWidget) CreateRenderer() fyne.WidgetRenderer {
 
 var _ desktop.Keyable = (*keyboardWidget)(nil)
 
+// userKeymapPath returns the absolute path to the user's keymap override
+// file (~/.config/zxgo/keymap.json). It does not create the file or
+// directory; the caller decides whether missing files matter.
+func userKeymapPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "zxgo", "keymap.json")
+}
+
 func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	kbd := keyboard.New()
+	if path := userKeymapPath(); path != "" {
+		if err := kbd.LoadOverrides(path); err != nil {
+			log.Printf("Warning: failed to load custom keymap: %v", err)
+		}
+	}
 	mem, err := memory.New("roms", model)
 	if err != nil {
 		return nil, err
@@ -190,11 +310,55 @@ func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
 	e.physicalKeys[ev.Name] = true
 	e.keyMutex.Unlock()
 
+	// Joystick interception. The arrow keys / right modifiers are routed to
+	// whichever joystick interface is currently active and are NOT
+	// forwarded to the keyboard matrix in the usual way.
+	if e.joystickType != JoystickNone {
+		idx := joystickKeyForArrow(ev.Name)
+		if idx >= 0 {
+			e.dispatchJoystick(idx, true)
+			return
+		}
+	}
+
 	// Queue the key event (non-blocking)
 	select {
 	case e.keyQueue <- keyState{key: ev.Name, pressed: true}:
 	default:
 		// If queue is full, drop the event (shouldn't happen with normal typing)
+	}
+}
+
+// dispatchJoystick translates a joystick direction (0=up..4=fire) into the
+// appropriate hardware action for the active joystick interface. For
+// Kempston this sets/clears a port bit; for Sinclair/Cursor it injects a
+// Spectrum key press into the keyboard matrix.
+func (e *emulator) dispatchJoystick(direction int, pressed bool) {
+	switch e.joystickType {
+	case JoystickKempston:
+		var mask byte
+		switch direction {
+		case 0:
+			mask = ula.KempstonUp
+		case 1:
+			mask = ula.KempstonDown
+		case 2:
+			mask = ula.KempstonLeft
+		case 3:
+			mask = ula.KempstonRight
+		case 4:
+			mask = ula.KempstonFire
+		}
+		if mask != 0 {
+			e.ula.SetKempstonButton(mask, pressed)
+		}
+	case JoystickSinclair1, JoystickSinclair2, JoystickCursor:
+		keys := joystickKeySymbols(e.joystickType)
+		key := keys[direction]
+		if key == "" {
+			return
+		}
+		e.kbd.HandleKeyWithModifiers(key, pressed, false, false, false, false)
 	}
 }
 
@@ -208,6 +372,15 @@ func (e *emulator) handleKeyUp(ev *fyne.KeyEvent) {
 	}
 	delete(e.physicalKeys, ev.Name)
 	e.keyMutex.Unlock()
+
+	// Joystick interception (release).
+	if e.joystickType != JoystickNone {
+		idx := joystickKeyForArrow(ev.Name)
+		if idx >= 0 {
+			e.dispatchJoystick(idx, false)
+			return
+		}
+	}
 
 	// Queue the key event (non-blocking)
 	select {
@@ -244,15 +417,27 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					if now.Sub(lastRender) >= 20*time.Millisecond {
 						newImage := e.ula.Render()
 
-						// Copy pixel data to avoid race with UI thread
-						imgCopy := image.NewRGBA(newImage.Bounds())
-						copy(imgCopy.Pix, newImage.Pix)
+						// In plain mode, screen.Image already points at the
+						// ULA's frame buffer (set at startup) and Render
+						// mutated it in place — we just need to refresh.
+						// In CRT mode we post-process into a 2x scratch
+						// buffer and point screen.Image at that instead.
+						var displayImg *image.RGBA = newImage
+						if e.crtFilter.Load() {
+							b := newImage.Bounds()
+							want := image.Rect(0, 0, b.Dx()*2, b.Dy()*2)
+							if e.crtScratch == nil || e.crtScratch.Bounds() != want {
+								e.crtScratch = image.NewRGBA(want)
+							}
+							applyCRTFilterInto(e.crtScratch, newImage)
+							displayImg = e.crtScratch
+						}
 
 						// Update UI on main thread
 						fyne.Do(func() {
-							newImageObj := canvas.NewImageFromImage(imgCopy)
-							newImageObj.ScaleMode = canvas.ImageScalePixels
-							screen.Resource = newImageObj.Resource
+							if screen.Image != displayImg {
+								screen.Image = displayImg
+							}
 							screen.Refresh()
 						})
 
@@ -426,6 +611,142 @@ func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
 	return snap, nil
 }
 
+// installTapeTrap installs a fast-load trap on the CPU that intercepts the
+// 48K ROM LD-BYTES routine at 0x0556 and synthesises the load directly from
+// the next tape block, avoiding the slow real-time pulse decoding.
+//
+// On entry to LD-BYTES the contract is:
+//   A'         expected flag byte (header=0x00, data=0xFF)
+//   F' carry   set means LOAD, clear means VERIFY
+//   IX         destination address
+//   DE         number of bytes to load (excluding flag/checksum)
+//
+// The routine returns with carry set on success, carry clear on failure.
+// We replicate this contract by reading bytes directly from the current
+// tape block (which is stored as: flag byte, data bytes..., checksum byte).
+func installTapeTrap(emu *emulator) {
+	emu.cpu.TrapCheck = func(pc uint16) bool {
+		if pc != 0x0556 {
+			return false
+		}
+		// Only on 48K (the entry point differs on later models, and the ROM
+		// is paged differently). Other models still get correct behaviour
+		// via the slow tape player.
+		if emu.mem.GetCurrentModel() != roms.Model48K {
+			return false
+		}
+		tp := emu.ula.GetTapePlayer()
+		if tp == nil || !tp.HasMoreBlocks() {
+			return false
+		}
+
+		block := tp.NextBlock()
+		if block == nil {
+			return false
+		}
+
+		// Use A' as the expected flag (the routine swaps AF/AF' on entry).
+		expectedFlag := emu.cpu.A_
+		// Carry of F' = 1 means LOAD, 0 means VERIFY.
+		isLoad := (emu.cpu.F_ & z80.FLAG_C) != 0
+
+		dst := emu.cpu.IX
+		count := uint16(emu.cpu.D)<<8 | uint16(emu.cpu.E)
+
+		success := true
+		if len(block) < 1 {
+			success = false
+		} else if block[0] != expectedFlag {
+			// Flag mismatch — emulate failure.
+			success = false
+		} else {
+			// Block contains: flag, data..., checksum.
+			data := block[1:]
+			if len(data) > 0 {
+				// Last byte of the block is the checksum.
+				data = data[:len(data)-1]
+			}
+			n := int(count)
+			if n > len(data) {
+				n = len(data)
+				success = false
+			}
+			if isLoad {
+				for i := 0; i < n; i++ {
+					emu.mem.Write(dst+uint16(i), data[i])
+				}
+			}
+			// Advance IX and zero DE as the real routine would on success.
+			emu.cpu.IX = dst + uint16(n)
+			emu.cpu.D = 0
+			emu.cpu.E = 0
+		}
+
+		// Update the carry flag in F (current accumulator's flags).
+		if success {
+			emu.cpu.F |= z80.FLAG_C
+		} else {
+			emu.cpu.F &^= z80.FLAG_C
+		}
+
+		// Return from LD-BYTES: pop the return address from the stack.
+		// LD-BYTES is normally entered via CALL, so the stack holds the
+		// caller's return address. We mimic the routine's RET by popping
+		// directly into PC.
+		low := emu.mem.Read(emu.cpu.SP)
+		high := emu.mem.Read(emu.cpu.SP + 1)
+		emu.cpu.SP += 2
+		emu.cpu.PC = uint16(high)<<8 | uint16(low)
+
+		log.Printf("Tape trap: loaded %d bytes at 0x%04X (success=%v)", count, dst, success)
+		return true
+	}
+}
+
+// parsePokes parses a multi-line poke string. Each non-empty, non-comment line
+// must contain an address and a value, separated by whitespace, comma, or
+// colon. Values are interpreted as hexadecimal. Returns a slice of (addr,val)
+// pairs and an error describing the first malformed line.
+func parsePokes(text string) ([]struct {
+	Addr uint16
+	Val  byte
+}, error) {
+	var result []struct {
+		Addr uint16
+		Val  byte
+	}
+	lines := strings.Split(text, "\n")
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		// Replace separators with spaces.
+		line = strings.ReplaceAll(line, ",", " ")
+		line = strings.ReplaceAll(line, ":", " ")
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("line %d: expected ADDR VALUE, got %q", i+1, raw)
+		}
+		// Strip optional 0x prefix.
+		af := strings.TrimPrefix(strings.TrimPrefix(fields[0], "0x"), "0X")
+		vf := strings.TrimPrefix(strings.TrimPrefix(fields[1], "0x"), "0X")
+		addr, err := strconv.ParseUint(af, 16, 16)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid address %q: %w", i+1, fields[0], err)
+		}
+		val, err := strconv.ParseUint(vf, 16, 8)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid value %q: %w", i+1, fields[1], err)
+		}
+		result = append(result, struct {
+			Addr uint16
+			Val  byte
+		}{Addr: uint16(addr), Val: byte(val)})
+	}
+	return result, nil
+}
+
 // aspectRatioLayout centres its single child at a fixed aspect ratio
 // within the available space, adding black bars as needed.
 type aspectRatioLayout struct {
@@ -478,6 +799,9 @@ func main() {
 		log.Fatalf("Failed to create emulator: %v", err)
 	}
 	emu.window = w
+
+	// Install fast tape loading trap (no-op until a tape is loaded).
+	installTapeTrap(emu)
 
 	// Use static image approach
 	initialImage := emu.ula.Render()
@@ -672,11 +996,180 @@ func main() {
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
 				fd.Show()
 			}),
+			fyne.NewMenuItem("Load Tape (TZX)...", func() {
+				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if reader == nil {
+						return
+					}
+					tp := ula.NewTapePlayer()
+					if err := tp.LoadTZX(reader.URI().Path()); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to load TZX: %w", err), w)
+						_ = reader.Close()
+						return
+					}
+					emu.ula.SetTapePlayer(tp)
+					tp.Play()
+					dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
+					_ = reader.Close()
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
+				fd.Show()
+			}),
+			fyne.NewMenuItem("Save Tape (TAP)...", func() {
+				tp := emu.ula.GetTapePlayer()
+				if tp == nil || tp.BlockCount() == 0 {
+					dialog.ShowInformation("Save Tape", "No tape loaded.", w)
+					return
+				}
+				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if writer == nil {
+						return
+					}
+					path := writer.URI().Path()
+					_ = writer.Close()
+					if err := tp.SaveTAP(path); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to save TAP: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
+				fd.Show()
+			}),
 			fyne.NewMenuItem("Stop Tape", func() {
 				if emu.ula != nil {
 					emu.ula.SetTapePlayer(nil)
 					emu.ula.TapeIn = false
 				}
+			}),
+			fyne.NewMenuItem("Tape Browser...", func() {
+				tp := emu.ula.GetTapePlayer()
+				if tp == nil {
+					dialog.ShowInformation("Tape Browser", "No tape loaded.", w)
+					return
+				}
+				blocks := tp.Blocks()
+				if len(blocks) == 0 {
+					dialog.ShowInformation("Tape Browser", "Tape contains no blocks.", w)
+					return
+				}
+				current := tp.CurrentBlock()
+				items := make([]string, len(blocks))
+				for i, b := range blocks {
+					marker := "  "
+					if i == current {
+						marker = "▶ "
+					}
+					if b.Title != "" {
+						items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  %q", marker, b.Index, b.Type, b.Length, b.Title)
+					} else {
+						items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  flag=0x%02X", marker, b.Index, b.Type, b.Length, b.FlagByte)
+					}
+				}
+				list := widget.NewList(
+					func() int { return len(items) },
+					func() fyne.CanvasObject { return widget.NewLabel("") },
+					func(id widget.ListItemID, obj fyne.CanvasObject) {
+						obj.(*widget.Label).SetText(items[id])
+					},
+				)
+				selected := current
+				list.OnSelected = func(id widget.ListItemID) { selected = id }
+				list.Select(current)
+
+				content := container.NewBorder(
+					widget.NewLabel(fmt.Sprintf("%d blocks  •  current: %d", len(blocks), current)),
+					nil, nil, nil,
+					list,
+				)
+				d := dialog.NewCustomConfirm(
+					"Tape Browser",
+					"Jump to selected",
+					"Close",
+					content,
+					func(ok bool) {
+						if !ok {
+							return
+						}
+						tp.SeekToBlock(selected)
+						tp.Play()
+					},
+					w,
+				)
+				d.Resize(fyne.NewSize(520, 400))
+				d.Show()
+			}),
+			fyne.NewMenuItemSeparator(),
+			func() *fyne.MenuItem {
+				item := fyne.NewMenuItem("Start Recording (WAV)...", nil)
+				item.Action = func() {
+					if emu.ula.IsRecording() {
+						if err := emu.ula.StopRecording(); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to stop recording: %w", err), w)
+							return
+						}
+						item.Label = "Start Recording (WAV)..."
+						fyne.Do(func() { w.MainMenu().Refresh() })
+						dialog.ShowInformation("Recording", "Recording stopped.", w)
+						return
+					}
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						path := writer.URI().Path()
+						// We only need the path; close the writer and open
+						// our own file inside the audio package.
+						_ = writer.Close()
+						if err := emu.ula.StartRecording(path); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to start recording: %w", err), w)
+							return
+						}
+						item.Label = "Stop Recording"
+						fyne.Do(func() { w.MainMenu().Refresh() })
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".wav"}))
+					fd.Show()
+				}
+				return item
+			}(),
+			fyne.NewMenuItem("Save Screenshot...", func() {
+				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if writer == nil {
+						return
+					}
+					defer func() { _ = writer.Close() }()
+
+					// Render the current frame and copy the pixel data so the
+					// PNG encode can't race with the emulator goroutine.
+					src := emu.ula.Render()
+					imgCopy := image.NewRGBA(src.Bounds())
+					copy(imgCopy.Pix, src.Pix)
+
+					if err := png.Encode(writer, imgCopy); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to write PNG: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("Screenshot Saved", "Saved screenshot to:\n"+writer.URI().Name(), w)
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
+				fd.Show()
 			}),
 		),
 		fyne.NewMenu("Machine",
@@ -711,12 +1204,31 @@ func main() {
 			fyne.NewMenuItem("Full Screen", func() {
 				w.SetFullScreen(true)
 			}),
+			func() *fyne.MenuItem {
+				item := fyne.NewMenuItem("Enable CRT Filter", nil)
+				item.Action = func() {
+					on := !emu.crtFilter.Load()
+					emu.crtFilter.Store(on)
+					if on {
+						item.Label = "Disable CRT Filter"
+					} else {
+						item.Label = "Enable CRT Filter"
+					}
+					fyne.Do(func() { w.MainMenu().Refresh() })
+				}
+				return item
+			}(),
 		),
 		func() *fyne.Menu {
 			discipleItem := fyne.NewMenuItem("Enable Disciple", nil)
 			mf1Item := fyne.NewMenuItem("Enable Multiface 1", nil)
 			mf128Item := fyne.NewMenuItem("Enable Multiface 128", nil)
 			mf3Item := fyne.NewMenuItem("Enable Multiface 3", nil)
+			joyNoneItem := fyne.NewMenuItem("Joystick: None", nil)
+			joyKempstonItem := fyne.NewMenuItem("Joystick: Kempston", nil)
+			joySinclair1Item := fyne.NewMenuItem("Joystick: Sinclair (left, 1-5)", nil)
+			joySinclair2Item := fyne.NewMenuItem("Joystick: Sinclair (right, 6-0)", nil)
+			joyCursorItem := fyne.NewMenuItem("Joystick: Cursor / Protek", nil)
 
 			updateLabels := func() {
 				if emu.peripherals.IsDiscipleEnabled() {
@@ -735,6 +1247,18 @@ func main() {
 					mf128Item.Disabled = false
 					mf3Item.Disabled = false
 				}
+				// Show a check next to the active joystick by re-labelling.
+				marker := func(t JoystickType, base string) string {
+					if emu.joystickType == t {
+						return "✓ " + base
+					}
+					return "  " + base
+				}
+				joyNoneItem.Label = marker(JoystickNone, "Joystick: None")
+				joyKempstonItem.Label = marker(JoystickKempston, "Joystick: Kempston")
+				joySinclair1Item.Label = marker(JoystickSinclair1, "Joystick: Sinclair (left, 1-5)")
+				joySinclair2Item.Label = marker(JoystickSinclair2, "Joystick: Sinclair (right, 6-0)")
+				joyCursorItem.Label = marker(JoystickCursor, "Joystick: Cursor / Protek")
 			}
 
 			discipleItem.Action = func() {
@@ -769,16 +1293,80 @@ func main() {
 			mf128Item.Action = func() { toggleMF(multiface.Multiface128) }
 			mf3Item.Action = func() { toggleMF(multiface.Multiface3) }
 
+			selectJoystick := func(t JoystickType) {
+				// Release whatever's currently held on the active interface
+				// so a held direction doesn't stick in the keyboard matrix
+				// (Sinclair/Cursor) or as a Kempston port bit when switching.
+				for dir := 0; dir < 5; dir++ {
+					emu.dispatchJoystick(dir, false)
+				}
+				if emu.joystickType == JoystickKempston {
+					emu.ula.KempstonEnabled = false
+				}
+				emu.joystickType = t
+				if t == JoystickKempston {
+					emu.ula.KempstonEnabled = true
+				}
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
+			joyNoneItem.Action = func() { selectJoystick(JoystickNone) }
+			joyKempstonItem.Action = func() { selectJoystick(JoystickKempston) }
+			joySinclair1Item.Action = func() { selectJoystick(JoystickSinclair1) }
+			joySinclair2Item.Action = func() { selectJoystick(JoystickSinclair2) }
+			joyCursorItem.Action = func() { selectJoystick(JoystickCursor) }
+
 			updateLabels()
 			return fyne.NewMenu("Peripherals",
 				discipleItem,
 				fyne.NewMenuItemSeparator(),
 				mf1Item, mf128Item, mf3Item,
+				fyne.NewMenuItemSeparator(),
+				joyNoneItem,
+				joyKempstonItem,
+				joySinclair1Item,
+				joySinclair2Item,
+				joyCursorItem,
 			)
 		}(),
 		fyne.NewMenu("Emulator",
 			fyne.NewMenuItem("Reboot", emu.reboot),
 			fyne.NewMenuItem("Pause/Resume", emu.togglePause),
+			fyne.NewMenuItem("Enter Poke...", func() {
+				entry := widget.NewMultiLineEntry()
+				entry.SetPlaceHolder("ADDR VALUE\n5C3A FF\n0x4000,0x55\n; comments allowed")
+				entry.SetMinRowsVisible(8)
+				form := dialog.NewCustomConfirm(
+					"Enter Pokes",
+					"Apply",
+					"Cancel",
+					container.NewBorder(
+						widget.NewLabel("One poke per line. Address and value are hexadecimal."),
+						nil, nil, nil,
+						entry,
+					),
+					func(ok bool) {
+						if !ok {
+							return
+						}
+						pokes, perr := parsePokes(entry.Text)
+						if perr != nil {
+							dialog.ShowError(perr, w)
+							return
+						}
+						for _, p := range pokes {
+							emu.mem.Write(p.Addr, p.Val)
+						}
+						dialog.ShowInformation("Pokes Applied", fmt.Sprintf("Applied %d poke(s).", len(pokes)), w)
+					},
+					w,
+				)
+				form.Resize(fyne.NewSize(420, 320))
+				form.Show()
+			}),
 			fyne.NewMenuItem("Debugger", func() {
 				dbg := debugger.New(emu.cpu, emu.mem, a)
 				dbg.SetCallbacks(
@@ -847,6 +1435,61 @@ func main() {
 				info += "\nKeyboard Status: " + emu.kbd.GetKeyStatus()
 
 				dialog.ShowInformation("Peripheral Status", info, w)
+			}),
+			fyne.NewMenuItem("Custom Keymap...", func() {
+				// Read whatever override file is on disk so the dialog
+				// reflects the user's most recent edits, even if they
+				// changed it externally.
+				path := userKeymapPath()
+				if path == "" {
+					dialog.ShowError(fmt.Errorf("could not determine home directory"), w)
+					return
+				}
+				existing, _ := os.ReadFile(path)
+				if len(existing) == 0 {
+					existing = []byte("{\n  \"F1\": [{\"row\": 0, \"mask\": 1}, {\"row\": 7, \"mask\": 1}]\n}\n")
+				}
+				entry := widget.NewMultiLineEntry()
+				entry.SetText(string(existing))
+				entry.SetMinRowsVisible(12)
+				help := widget.NewLabel(
+					"JSON map of fyne key name -> matrix entries.\n" +
+						"Each entry is {\"row\": 0..7, \"mask\": 1|2|4|8|16}.\n" +
+						"Saved to " + path + " and applied immediately.",
+				)
+				form := dialog.NewCustomConfirm(
+					"Custom Keymap",
+					"Save & Apply",
+					"Cancel",
+					container.NewBorder(help, nil, nil, nil, entry),
+					func(ok bool) {
+						if !ok {
+							return
+						}
+						// Validate JSON before writing.
+						var raw map[string][]keyboard.MappingEntry
+						if err := json.Unmarshal([]byte(entry.Text), &raw); err != nil {
+							dialog.ShowError(fmt.Errorf("invalid keymap JSON: %w", err), w)
+							return
+						}
+						// Ensure the directory exists, then write the file.
+						if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+							dialog.ShowError(fmt.Errorf("create config dir: %w", err), w)
+							return
+						}
+						if err := keyboard.SaveOverrides(path, raw); err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						for name, entries := range raw {
+							emu.kbd.SetMapping(fyne.KeyName(name), entries)
+						}
+						dialog.ShowInformation("Custom Keymap", fmt.Sprintf("Applied %d override(s).", len(raw)), w)
+					},
+					w,
+				)
+				form.Resize(fyne.NewSize(520, 420))
+				form.Show()
 			}),
 			fyne.NewMenuItem("Trigger NMI (F12)", func() {
 				emu.kbd.SimulateNMI()

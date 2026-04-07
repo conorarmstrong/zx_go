@@ -448,6 +448,49 @@ func TestULAAddressCalculation(t *testing.T) {
 	}
 }
 
+func TestULAKempstonJoystick(t *testing.T) {
+	testDir := "test_roms_ula"
+	createTestROMs(t, testDir)
+	defer cleanupTestROMs(testDir)
+
+	mem, _ := memory.New(testDir, roms.Model48K)
+	kbd := keyboard.New()
+	ula := New(mem, kbd)
+
+	// Disabled: port 0x1F should fall through to floating bus.
+	val, handled := ula.ReadPort(0x001F)
+	if handled {
+		t.Errorf("Kempston disabled: port 0x1F should not be handled, got val=0x%02X", val)
+	}
+
+	// Enable and set Right + Fire bits.
+	ula.KempstonEnabled = true
+	ula.SetKempstonButton(KempstonRight, true)
+	ula.SetKempstonButton(KempstonFire, true)
+
+	val, handled = ula.ReadPort(0x001F)
+	if !handled {
+		t.Fatal("Kempston enabled: port 0x1F should be handled")
+	}
+	if val != (KempstonRight | KempstonFire) {
+		t.Errorf("expected joystick state 0x%02X, got 0x%02X", KempstonRight|KempstonFire, val)
+	}
+
+	// Releasing fire only.
+	ula.SetKempstonButton(KempstonFire, false)
+	val, _ = ula.ReadPort(0x001F)
+	if val != KempstonRight {
+		t.Errorf("expected joystick state 0x%02X, got 0x%02X", KempstonRight, val)
+	}
+
+	// Bits 5-7 must always read as zero.
+	ula.KempstonState = 0xFF
+	val, _ = ula.ReadPort(0x001F)
+	if val&0xE0 != 0 {
+		t.Errorf("upper 3 bits should be zero, got 0x%02X", val)
+	}
+}
+
 // Benchmark tests
 func BenchmarkULARender(b *testing.B) {
 	testDir := "test_roms_ula"
