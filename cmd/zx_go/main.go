@@ -215,6 +215,71 @@ func (kw *keyboardWidget) CreateRenderer() fyne.WidgetRenderer {
 
 var _ desktop.Keyable = (*keyboardWidget)(nil)
 
+// savePlus3Disk opens a file save picker and writes the current disk in
+// the given drive to a DSK file.
+func savePlus3Disk(emu *emulator, w fyne.Window, drive int) {
+	fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if writer == nil {
+			return
+		}
+		path := writer.URI().Path()
+		_ = writer.Close()
+		if err := emu.peripherals.SavePlus3Disk(drive, path); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to save DSK: %w", err), w)
+			return
+		}
+		driveName := "A"
+		if drive == 1 {
+			driveName = "B"
+		}
+		dialog.ShowInformation("Disk Saved",
+			"Wrote drive "+driveName+" to "+filepath.Base(path)+".", w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".dsk"}))
+	fd.Show()
+}
+
+// loadPlus3Disk opens a file picker for a DSK image and mounts it in the
+// given +3 FDC drive (0 = A, 1 = B). Refuses (with explanation) on
+// non-+3/+2A models.
+func loadPlus3Disk(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel, drive int) {
+	if currentModel != roms.ModelPlus3 && currentModel != roms.ModelPlus2A {
+		dialog.ShowInformation("Load Disk",
+			"DSK images can only be loaded on the +3 or +2A.\n"+
+				"Switch the machine model from the Machine menu first.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		_ = reader.Close()
+		if err := emu.peripherals.LoadPlus3Disk(drive, path); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to load DSK: %w", err), w)
+			return
+		}
+		driveName := "A"
+		if drive == 1 {
+			driveName = "B"
+		}
+		dialog.ShowInformation("Disk Loaded",
+			"Inserted "+filepath.Base(path)+" into drive "+driveName+".", w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{
+		".dsk", ".udi", ".mgt", ".img", ".trd", ".sad", ".d40", ".d80",
+	}))
+	fd.Show()
+}
+
 // userKeymapPath returns the absolute path to the user's keymap override
 // file (~/.config/zxgo/keymap.json). It does not create the file or
 // directory; the caller decides whether missing files matter.
@@ -1019,6 +1084,69 @@ func main() {
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
 				fd.Show()
 			}),
+			fyne.NewMenuItem("Load Disk A...", func() {
+				loadPlus3Disk(emu, w, currentModel, 0)
+			}),
+			fyne.NewMenuItem("Load Disk B...", func() {
+				loadPlus3Disk(emu, w, currentModel, 1)
+			}),
+			fyne.NewMenuItem("Save Disk A (DSK)...", func() {
+				savePlus3Disk(emu, w, 0)
+			}),
+			fyne.NewMenuItem("Save Disk B (DSK)...", func() {
+				savePlus3Disk(emu, w, 1)
+			}),
+			fyne.NewMenuItem("Eject Disk A", func() {
+				emu.peripherals.EjectPlus3Disk(0)
+			}),
+			fyne.NewMenuItem("Eject Disk B", func() {
+				emu.peripherals.EjectPlus3Disk(1)
+			}),
+			func() *fyne.MenuItem {
+				wpA := false
+				item := fyne.NewMenuItem("Write Protect Disk A", nil)
+				item.Action = func() {
+					wpA = !wpA
+					emu.peripherals.SetPlus3WriteProtect(0, wpA)
+					if wpA {
+						item.Label = "Unprotect Disk A"
+					} else {
+						item.Label = "Write Protect Disk A"
+					}
+					fyne.Do(func() { w.MainMenu().Refresh() })
+				}
+				return item
+			}(),
+			func() *fyne.MenuItem {
+				wpB := false
+				item := fyne.NewMenuItem("Write Protect Disk B", nil)
+				item.Action = func() {
+					wpB = !wpB
+					emu.peripherals.SetPlus3WriteProtect(1, wpB)
+					if wpB {
+						item.Label = "Unprotect Disk B"
+					} else {
+						item.Label = "Write Protect Disk B"
+					}
+					fyne.Do(func() { w.MainMenu().Refresh() })
+				}
+				return item
+			}(),
+			func() *fyne.MenuItem {
+				speedlockOn := false
+				item := fyne.NewMenuItem("Enable Speedlock Workaround", nil)
+				item.Action = func() {
+					speedlockOn = !speedlockOn
+					emu.peripherals.SetPlus3Speedlock(speedlockOn)
+					if speedlockOn {
+						item.Label = "Disable Speedlock Workaround"
+					} else {
+						item.Label = "Enable Speedlock Workaround"
+					}
+					fyne.Do(func() { w.MainMenu().Refresh() })
+				}
+				return item
+			}(),
 			fyne.NewMenuItem("Save Tape (TAP)...", func() {
 				tp := emu.ula.GetTapePlayer()
 				if tp == nil || tp.BlockCount() == 0 {

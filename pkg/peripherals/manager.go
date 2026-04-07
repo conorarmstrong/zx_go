@@ -7,6 +7,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/disciple"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
+	"github.com/conorarmstrong/zx_go/pkg/plus3fdc"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -15,11 +16,12 @@ type PeripheralManager struct {
 	memory    *memory.Memory
 	disciple  *disciple.Disciple
 	multiface *multiface.Multiface
-	
+	plus3fdc  *plus3fdc.Plus3FDC
+
 	// Configuration
-	discipleEnabled   bool
-	multifaceEnabled  bool
-	multifaceVariant  multiface.MultifaceType
+	discipleEnabled  bool
+	multifaceEnabled bool
+	multifaceVariant multiface.MultifaceType
 }
 
 // NewPeripheralManager creates a new peripheral manager
@@ -29,9 +31,48 @@ func NewPeripheralManager(mem *memory.Memory, romPath string) *PeripheralManager
 		discipleEnabled:  false,
 		multifaceEnabled: false,
 		multifaceVariant: multiface.Multiface128, // Default variant
+		// The +3 FDC is built once and always present — it only
+		// responds to ports 0x2FFD/0x3FFD which are inert on
+		// non-+3/+2A models, so leaving it always-on is harmless on
+		// 48K/128K and avoids per-model wiring churn.
+		plus3fdc: plus3fdc.New(),
 	}
-	
+
 	return pm
+}
+
+// LoadPlus3Disk parses a DSK image and attaches it to the given drive of
+// the +3 FDC (0 = A, 1 = B).
+func (pm *PeripheralManager) LoadPlus3Disk(drive int, path string) error {
+	return pm.plus3fdc.LoadDisk(drive, path)
+}
+
+// EjectPlus3Disk removes the disk from the given drive.
+func (pm *PeripheralManager) EjectPlus3Disk(drive int) {
+	pm.plus3fdc.EjectDisk(drive)
+}
+
+// SavePlus3Disk writes the disk in the given drive back to a DSK file.
+func (pm *PeripheralManager) SavePlus3Disk(drive int, path string) error {
+	return pm.plus3fdc.SaveDisk(drive, path)
+}
+
+// Plus3DriveHasDisk reports whether the given drive of the +3 FDC has a
+// disk loaded.
+func (pm *PeripheralManager) Plus3DriveHasDisk(drive int) bool {
+	return pm.plus3fdc.HasDisk(drive)
+}
+
+// SetPlus3WriteProtect toggles the per-drive write-protect flag.
+func (pm *PeripheralManager) SetPlus3WriteProtect(drive int, wp bool) {
+	pm.plus3fdc.SetWriteProtect(drive, wp)
+}
+
+// SetPlus3Speedlock toggles the Speedlock copy-protection workaround on
+// the +3 FDC. Enable this for games that use Speedlock; leave it off
+// for normal software so legitimate BDOS retries aren't affected.
+func (pm *PeripheralManager) SetPlus3Speedlock(enabled bool) {
+	pm.plus3fdc.SetSpeedlockEnabled(enabled)
 }
 
 // EnableDisciple enables the Disciple disk interface
@@ -91,35 +132,60 @@ func (pm *PeripheralManager) HandlePortRead(port uint16) (byte, bool) {
 			return value, true
 		}
 	}
-	
+
 	// Check Multiface
 	if pm.multifaceEnabled && pm.multiface != nil {
 		if value, handled := pm.multiface.HandlePortRead(port); handled {
 			return value, true
 		}
 	}
-	
+
+	// +3 FDC is gated on the model so 48K-only games can't accidentally
+	// hit the disk controller via floating-bus reads at 0x2FFD/0x3FFD.
+	if pm.plus3fdc != nil && pm.modelHasFDC() {
+		if value, handled := pm.plus3fdc.HandlePortRead(port); handled {
+			return value, true
+		}
+	}
+
 	return 0, false
+}
+
+// modelHasFDC reports whether the current Spectrum model has a +3 FDC
+// fitted (i.e. the +3 or the +2A).
+func (pm *PeripheralManager) modelHasFDC() bool {
+	switch pm.memory.GetCurrentModel() {
+	case roms.ModelPlus3, roms.ModelPlus2A:
+		return true
+	}
+	return false
 }
 
 // HandlePortWrite handles I/O port writes to peripherals
 func (pm *PeripheralManager) HandlePortWrite(port uint16, value byte) bool {
 	handled := false
-	
+
 	// Check Disciple first
 	if pm.discipleEnabled && pm.disciple != nil {
 		if pm.disciple.HandlePortWrite(port, value) {
 			handled = true
 		}
 	}
-	
+
 	// Check Multiface (can coexist)
 	if pm.multifaceEnabled && pm.multiface != nil {
 		if pm.multiface.HandlePortWrite(port, value) {
 			handled = true
 		}
 	}
-	
+
+	// +3 FDC writes (gated on the model — see HandlePortRead).
+	if pm.plus3fdc != nil && pm.modelHasFDC() {
+		if pm.plus3fdc.HandlePortWrite(port, value) {
+			handled = true
+		}
+	}
+
 	return handled
 }
 
