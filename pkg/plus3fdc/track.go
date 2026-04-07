@@ -3,12 +3,11 @@ package plus3fdc
 // Track-level disk representation. This mirrors FUSE's UDI internal model
 // (see fuse-1.6.0/peripherals/disk/disk.h:107 and disk.c:74) where each
 // track is stored as a stream of bytes representing what the FDC head
-// reads as the disk spins past it, plus three parallel bitmaps:
+// reads as the disk spins past it, plus two parallel bitmaps:
 //
 //   clocks: 1 = the byte at this position has a missing-clock pattern
 //           (used to mark address marks: A1 with clock = sync, FE with
 //           clock = ID address mark, FB/F8 with clock = data mark)
-//   fm:     1 = the byte is FM-encoded (vs MFM)
 //   weak:   1 = the byte is "weak" — reads return random data, used
 //           by copy-protected disks
 //
@@ -28,21 +27,17 @@ import (
 	"math/rand/v2"
 )
 
-// Default bytes-per-track for double-density (DD) MFM disks. This matches
-// FUSE's bpt for a standard DD format.
-const (
-	bytesPerTrackDD = 6250
-	bytesPerTrackSD = 3125
-	bytesPerTrackHD = 12500
-)
+// Default bytes-per-track for double-density (DD) MFM disks. This
+// matches FUSE's bpt for a standard DD format — the only density we
+// currently emit.
+const bytesPerTrackDD = 6250
 
 // Address mark and gap byte values.
 const (
 	gapByteMFM = 0x4E
-	gapByteFM  = 0xFF
+	gapByteFM  = 0xFF // IBM3740 FM gap byte — referenced by the FM gapSpec row for future use
 	syncByte   = 0x00
 	a1Mark     = 0xA1 // MFM sync mark (with missing clock)
-	c2Mark     = 0xC2 // MFM index mark (with missing clock)
 	idMark     = 0xFE // ID address mark
 	dataMark   = 0xFB // Data address mark
 	delDataMrk = 0xF8 // Deleted data address mark
@@ -90,26 +85,24 @@ var gapSpecs = [...]gapSpec{
 //
 //	data:   bpt bytes — what the FDC head reads
 //	clocks: bpt/8 bytes — clock-mark bitmap (1 = missing clock pattern)
-//	fm:     bpt/8 bytes — FM-encoding bitmap (1 = FM byte)
 //	weak:   bpt/8 bytes — weak-data bitmap (1 = weak byte, read random)
 //
-// The track's logical metadata (cylinder, head, sector size) lives in the
-// fields below; bpt and the byte stream are the actual hardware view.
+// The track's logical metadata (cylinder, head, sector size) lives in
+// the fields below; bpt and the byte stream are the actual hardware view.
 type Track struct {
 	C      byte // Physical cylinder index (matches the disk geometry)
 	H      byte // Physical head index
 	N      byte // "Default" sector size code for the track (informational)
 	Filler byte // Filler byte that was used to format the track
 
-	bpt    int    // Bytes per track (length of data, clocks, fm, weak)
+	bpt    int    // Bytes per track (length of data, clocks, weak)
 	data   []byte // Track byte stream
 	clocks []byte // Clock-mark bitmap (1 bit per byte of data)
-	fm     []byte // FM-encoded bitmap
 	weak   []byte // Weak-data bitmap
 }
 
 // newTrack allocates a Track with the given byte capacity and zeroes the
-// data area to the specified filler byte. clocks/fm/weak start cleared.
+// data area to the specified filler byte. clocks and weak start cleared.
 func newTrack(bpt int, filler byte, c, h, n byte) *Track {
 	bitmapLen := bitmapBytes(bpt)
 	t := &Track{
@@ -120,7 +113,6 @@ func newTrack(bpt int, filler byte, c, h, n byte) *Track {
 		bpt:    bpt,
 		data:   make([]byte, bpt),
 		clocks: make([]byte, bitmapLen),
-		fm:     make([]byte, bitmapLen),
 		weak:   make([]byte, bitmapLen),
 	}
 	for i := range t.data {

@@ -9,28 +9,24 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"os"
 )
 
-// Sector is a logical view of a single sector recovered from a Track by
-// walking its byte stream. The Data slice is fresh — it is NOT a slice
-// into the underlying track storage, so callers can keep references
-// across disk swaps.
+// Sector is a logical view of a single sector recovered by walking a
+// track's byte stream. The Data slice is fresh — it's NOT a slice
+// into the underlying track storage — so callers can keep references
+// across disk swaps. Used by test helpers only; the FDC walks tracks
+// directly via Track.idAt / Track.dataAt.
 type Sector struct {
-	C    byte // Cylinder (track)
-	H    byte // Head (side)
-	R    byte // Record (sector ID)
-	N    byte // Size code: actual size = 128 << N for "ID" length
-	ST1  byte // Status register 1 from when the disk was imaged
-	ST2  byte // Status register 2 from when the disk was imaged
+	C    byte
+	H    byte
+	R    byte
+	N    byte
 	Data []byte
 }
 
-// FindSector locates a sector by R within the track by walking the
-// underlying byte stream looking for IDAMs. Returns nil if the sector
-// is not present. Used by the sector-level FDC; the track-stream-aware
-// FDC introduced in phase 2 will go directly through Track.idAt /
-// Track.dataAt.
+// FindSector locates a sector by R on the track by walking the byte
+// stream for matching IDAMs. Returns nil if not present. Used by tests
+// for verification; the production FDC walks track.idAt directly.
 func (t *Track) FindSector(r byte) *Sector {
 	if t == nil {
 		return nil
@@ -57,37 +53,6 @@ func (t *Track) FindSector(r byte) *Sector {
 			return &Sector{C: c, H: h, R: r, N: n, Data: data}
 		}
 		pos = idEnd
-	}
-}
-
-// Sectors walks the entire track and returns a Sector view for each one
-// in physical order. Used by the tape browser-equivalent disk inspector
-// and by tests; not on the FDC's hot path.
-func (t *Track) Sectors() []Sector {
-	if t == nil {
-		return nil
-	}
-	var out []Sector
-	pos := 0
-	for {
-		c, h, r, n, idEnd, ok := t.idAt(pos)
-		if !ok {
-			return out
-		}
-		ds, _, dok := t.dataAt(idEnd)
-		if !dok {
-			return out
-		}
-		length := sectorLength(n)
-		if ds+length > t.bpt {
-			length = t.bpt - ds
-		}
-		data := make([]byte, length)
-		for i := 0; i < length; i++ {
-			data[i] = t.readByte(ds + i)
-		}
-		out = append(out, Sector{C: c, H: h, R: r, N: n, Data: data})
-		pos = ds + length
 	}
 }
 
@@ -123,38 +88,10 @@ var (
 	trackInfoSignature = []byte("Track-Info\r\n")
 )
 
-// LoadDSK reads a DSK image from disk.
-func LoadDSK(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read DSK: %w", err)
-	}
-	return ParseDSK(data)
-}
-
-// LoadDisk auto-detects the file format by signature and parses it
-// into a canonical Disk. Supported formats (roughly in order of
-// priority for real Spectrum software):
-//
-//	DSK / EDSK  — Amstrad / Spectrum +3 (the +3 FDC native format)
-//	UDI         — FUSE's native raw-track format (preserves weak sectors)
-//
-// Formats without a recognisable magic signature (MGT, IMG, TRD, etc.)
-// are not auto-detected and must be loaded via a format-specific
-// helper. Phase 8 will extend this dispatcher as more parsers come
-// online.
-func LoadDisk(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read disk image: %w", err)
-	}
-	return ParseDiskImage(data)
-}
-
 // ParseDiskImage parses an in-memory disk image of any supported format,
 // dispatching by signature. Headerless formats (MGT / IMG / TRD /
-// D40 / D80) have no magic bytes — the caller must use a
-// format-specific helper or LoadDisk's extension fallback for those.
+// D40 / D80) have no magic bytes — the caller resolves those via
+// loadDiskByPath's file-extension fallback.
 func ParseDiskImage(data []byte) (*Disk, error) {
 	switch {
 	case bytes.HasPrefix(data, dskSignatureStd),

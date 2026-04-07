@@ -87,18 +87,6 @@ func (p *Plus3FDC) SetSpeedlockEnabled(enabled bool) {
 	p.fdc.SetSpeedlockEnabled(enabled)
 }
 
-// Tick advances the FDC's simulated T-state counter. Called by the
-// emulator once per CPU frame so future cycle-accurate behaviour (motor
-// spin-up, index pulses) has a time source.
-func (p *Plus3FDC) Tick(tstates int) {
-	p.fdc.Tick(tstates)
-}
-
-// HasDisk reports whether the given drive currently has a disk loaded.
-func (p *Plus3FDC) HasDisk(drive int) bool {
-	return p.fdc.HasDisk(drive)
-}
-
 // HandlePortRead returns (value, true) if the FDC handled the port; the
 // PeripheralManager uses this to know whether to fall through to other
 // peripherals. The +3 decodes:

@@ -315,6 +315,116 @@ func TestUPD765FormatTrack(t *testing.T) {
 	}
 }
 
+func TestPlus3FDCPortDecode(t *testing.T) {
+	// The +3 hardware decodes the FDC at 0x2FFD (status, read-only)
+	// and 0x3FFD (data, read/write) using the mask 0xF002 / value
+	// 0x2000 or 0x3000. Verify the decoder accepts the canonical
+	// addresses, accepts aliased ports that hit the same mask, and
+	// rejects ports that don't match.
+	p := New()
+	p.fdc.AttachDisk(0, loadTestDisk(t))
+
+	// Status port aliases: any port where (p & 0xF002) == 0x2000.
+	statusPorts := []uint16{0x2FFD, 0x2FFC, 0x2000, 0x2001, 0x2FF0}
+	for _, port := range statusPorts {
+		if _, handled := p.HandlePortRead(port); !handled {
+			t.Errorf("status port %04X: not handled", port)
+		}
+	}
+
+	// Data port aliases: any port where (p & 0xF002) == 0x3000.
+	dataPorts := []uint16{0x3FFD, 0x3FFC, 0x3000, 0x3001, 0x3FF0}
+	for _, port := range dataPorts {
+		if _, handled := p.HandlePortRead(port); !handled {
+			t.Errorf("data port %04X: not handled", port)
+		}
+	}
+
+	// Ports that should NOT match: bit 1 set (status), or wrong
+	// bits 15-12.
+	rejectPorts := []uint16{0x2FFF, 0x3FFF, 0x2002, 0x3002, 0x0FFD, 0x1FFD, 0x4FFD, 0x6FFD, 0xAFFD}
+	for _, port := range rejectPorts {
+		if _, handled := p.HandlePortRead(port); handled {
+			t.Errorf("port %04X: handled but should not be", port)
+		}
+	}
+
+	// Writes to the status port are accepted (handled=true) so the
+	// floating bus doesn't kick in, even though the FDC ignores them.
+	if !p.HandlePortWrite(0x2FFD, 0xFF) {
+		t.Errorf("status-port write: not handled")
+	}
+	// Writes to the data port should also be handled.
+	if !p.HandlePortWrite(0x3FFD, 0x03) {
+		t.Errorf("data-port write: not handled")
+	}
+}
+
+func TestUPD765FormatThenReadDataRoundTrip(t *testing.T) {
+	// FORMAT TRACK with 5 sectors and a recognisable filler, then
+	// READ DATA each sector and verify the bytes come back as the
+	// filler. The existing FORMAT TRACK test only walks IDAMs via
+	// READ ID; this test catches off-by-one errors in DAM placement,
+	// CRC priming for freshly-formatted sectors, and the WRITE ID
+	// staging swap.
+	f := NewUPD765()
+	f.AttachDisk(0, loadTestDisk(t))
+
+	// SEEK to cyl 12 first.
+	f.WriteData(0x0F)
+	f.WriteData(0x00)
+	f.WriteData(12)
+	f.WriteData(0x08)
+	drainResult(t, f, 2)
+
+	// FORMAT TRACK with 4 sectors of 512 bytes, filler 0xC3.
+	const filler = byte(0xC3)
+	f.WriteData(0x4D) // WRITE ID (MFM)
+	f.WriteData(0x00)
+	f.WriteData(0x02) // N=2 (512)
+	f.WriteData(0x04) // SC=4
+	f.WriteData(0x54) // GPL
+	f.WriteData(filler)
+	for j := 0; j < 4; j++ {
+		f.WriteData(12)         // C
+		f.WriteData(0)          // H
+		f.WriteData(byte(j + 1)) // R
+		f.WriteData(2)          // N
+	}
+	res := drainResult(t, f, 7)
+	if res[0]&st0IC0 != 0 {
+		t.Fatalf("FORMAT abnormal: ST0=%02X", res[0])
+	}
+
+	// READ DATA each sector and verify the data field is all filler.
+	for r := byte(1); r <= 4; r++ {
+		f.headPos[0] = 0 // rewind so the read can find the new sectors
+		f.WriteData(0x46)
+		f.WriteData(0x00)
+		f.WriteData(12)
+		f.WriteData(0)
+		f.WriteData(r)
+		f.WriteData(2)
+		f.WriteData(r)
+		f.WriteData(0x4E)
+		f.WriteData(0xFF)
+		got := make([]byte, 0, 512)
+		for i := 0; i < 512; i++ {
+			got = append(got, f.ReadData())
+		}
+		res := drainResult(t, f, 7)
+		if res[0]&st0IC0 != 0 {
+			t.Errorf("READ DATA r=%d abnormal: ST0=%02X", r, res[0])
+		}
+		for i, b := range got {
+			if b != filler {
+				t.Errorf("r=%d byte %d: got %02X, want %02X", r, i, b, filler)
+				break
+			}
+		}
+	}
+}
+
 func TestUPD765FormatTrackOverflow(t *testing.T) {
 	// FORMAT TRACK with too many sectors should fail gracefully (ST1.ND
 	// + abnormal termination) instead of silently producing a corrupt
@@ -671,24 +781,40 @@ func TestUPD765ReadDiag(t *testing.T) {
 }
 
 func TestUPD765SpeedlockRetryCounter(t *testing.T) {
-	// With Speedlock enabled:
-	//  - First READ DATA leaves the counter at 0 (no retry yet).
-	//  - Second READ DATA on the same sector activates the heuristic
-	//    (counter > 0). The escalation path may bump it further when
-	//    the first 64 bytes of the sector contain non-0xE5 data.
-	//  - A different-sector read resets the counter to 0.
+	// Speedlock detection is narrow on purpose (see trackSpeedlockRetry
+	// comment): only the exact pattern C=0 H=0 R=2 EOT=2 matches. Any
+	// other READ DATA resets the counter so legitimate BDOS retries
+	// don't get mangled.
 	f := NewUPD765()
 	f.AttachDisk(0, loadTestDisk(t))
 	f.SetSpeedlockEnabled(true)
 
-	read := func(r byte) {
+	// Read sector 2 (the Speedlock pattern).
+	readSpeedlock := func() {
+		f.WriteData(0x46)
+		f.WriteData(0x00)
+		f.WriteData(0x00) // C
+		f.WriteData(0x00) // H
+		f.WriteData(0x02) // R = 2
+		f.WriteData(0x02)
+		f.WriteData(0x02) // EOT = 2 (single-sector)
+		f.WriteData(0x4E)
+		f.WriteData(0xFF)
+		for i := 0; i < 512; i++ {
+			f.ReadData()
+		}
+		drainResult(t, f, 7)
+		f.headPos[0] = 0
+	}
+	// Read sector 1 (NOT the Speedlock pattern — resets the counter).
+	readOther := func() {
 		f.WriteData(0x46)
 		f.WriteData(0x00)
 		f.WriteData(0x00)
 		f.WriteData(0x00)
-		f.WriteData(r)
+		f.WriteData(0x01) // R = 1
 		f.WriteData(0x02)
-		f.WriteData(r)
+		f.WriteData(0x01)
 		f.WriteData(0x4E)
 		f.WriteData(0xFF)
 		for i := 0; i < 512; i++ {
@@ -698,17 +824,17 @@ func TestUPD765SpeedlockRetryCounter(t *testing.T) {
 		f.headPos[0] = 0
 	}
 
-	read(1)
+	readSpeedlock()
 	if f.speedlockCounter != 0 {
-		t.Errorf("after first read: counter=%d, want 0", f.speedlockCounter)
+		t.Errorf("after first Speedlock read: counter=%d, want 0", f.speedlockCounter)
 	}
-	read(1)
+	readSpeedlock()
 	if f.speedlockCounter == 0 {
-		t.Errorf("after second same-sector read: counter=0, want >0")
+		t.Errorf("after second Speedlock read: counter=0, want >0")
 	}
-	read(2) // different sector → reset
+	readOther() // not the Speedlock pattern → reset
 	if f.speedlockCounter != 0 {
-		t.Errorf("after different-sector read: counter=%d, want 0", f.speedlockCounter)
+		t.Errorf("after off-pattern read: counter=%d, want 0", f.speedlockCounter)
 	}
 }
 
@@ -748,14 +874,16 @@ func TestUPD765SpeedlockManglesOnRetry(t *testing.T) {
 	f.AttachDisk(0, loadTestDisk(t))
 	f.SetSpeedlockEnabled(true)
 
+	// Speedlock only triggers on C=0 H=0 R=2 EOT=2 (see
+	// trackSpeedlockRetry comment). Use the exact pattern.
 	read := func() []byte {
 		f.WriteData(0x46)
 		f.WriteData(0x00)
 		f.WriteData(0x00)
 		f.WriteData(0x00)
-		f.WriteData(0x01)
 		f.WriteData(0x02)
-		f.WriteData(0x01)
+		f.WriteData(0x02)
+		f.WriteData(0x02)
 		f.WriteData(0x4E)
 		f.WriteData(0xFF)
 		got := make([]byte, 0, 512)
@@ -785,7 +913,7 @@ func TestUPD765SpeedlockRetryReportsCRCError(t *testing.T) {
 	// Speedlock's protection relies on the retry read producing
 	// different data AND the CRC check failing (mirroring a real
 	// weak sector). Verify both happen together: the second read of
-	// the same sector must terminate with ST2.DD set.
+	// the Speedlock pattern sector must terminate with ST2.DD set.
 	f := NewUPD765()
 	f.AttachDisk(0, loadTestDisk(t))
 	f.SetSpeedlockEnabled(true)
@@ -795,9 +923,9 @@ func TestUPD765SpeedlockRetryReportsCRCError(t *testing.T) {
 		f.WriteData(0x00)
 		f.WriteData(0x00)
 		f.WriteData(0x00)
-		f.WriteData(0x01)
+		f.WriteData(0x02) // R = 2 (Speedlock pattern)
 		f.WriteData(0x02)
-		f.WriteData(0x01)
+		f.WriteData(0x02) // EOT = 2
 		f.WriteData(0x4E)
 		f.WriteData(0xFF)
 		for i := 0; i < 512; i++ {
@@ -904,29 +1032,8 @@ func TestUPD765SpeedlockResetClearsCounter(t *testing.T) {
 	if f.speedlockCounter != 0 {
 		t.Errorf("after Reset: counter=%d, want 0", f.speedlockCounter)
 	}
-	if f.lastSectorID != sectorIDNone {
-		t.Errorf("after Reset: lastSectorID=%08X, want %08X",
-			f.lastSectorID, sectorIDNone)
-	}
-}
-
-func TestUPD765TickAdvancesClock(t *testing.T) {
-	// Tick is a placeholder for future cycle-accurate work; verify
-	// the counter moves monotonically.
-	f := NewUPD765()
-	start := f.now
-	f.Tick(1000)
-	if f.now != start+1000 {
-		t.Errorf("after Tick(1000): now=%d, want %d", f.now, start+1000)
-	}
-	f.Tick(0)
-	f.Tick(-5)
-	if f.now != start+1000 {
-		t.Errorf("Tick(0) or Tick(-5) shouldn't move clock: now=%d", f.now)
-	}
-	f.Tick(2500)
-	if f.now != start+3500 {
-		t.Errorf("after Tick(2500): now=%d, want %d", f.now, start+3500)
+	if f.lastSectorID != 0 {
+		t.Errorf("after Reset: lastSectorID=%08X, want 0", f.lastSectorID)
 	}
 }
 

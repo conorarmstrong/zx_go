@@ -16,7 +16,6 @@ package plus3fdc
 import (
 	"bytes"
 	"fmt"
-	"os"
 )
 
 // buildRawSectorTrack wraps a flat block of sector bytes in a track
@@ -65,35 +64,17 @@ func sectorSizeCode(size int) (byte, bool) {
 // MGT / IMG (DISCiPLE / +D)
 // ----------------------------------------------------------------------
 
-// LoadMGT reads a DISCiPLE / +D MGT image. The geometry is guessed
+// ParseMGT parses an in-memory MGT image. The geometry is guessed
 // from the file size, matching FUSE's open_img_mgt_opd heuristic.
 // MGT stores tracks in "side-alternating" order — cyl 0 head 0,
 // cyl 0 head 1, cyl 1 head 0, ...
-func LoadMGT(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read MGT: %w", err)
-	}
-	return ParseMGT(data)
-}
-
-// ParseMGT parses an in-memory MGT image.
 func ParseMGT(data []byte) (*Disk, error) {
 	return parseRawSideAlternating(data, true)
 }
 
-// LoadIMG reads a DISCiPLE / +D IMG image. Same geometry as MGT but
+// ParseIMG parses an in-memory IMG image. Same geometry as MGT but
 // sectors are stored in "out-out" order — all of side 0's tracks, then
 // all of side 1's.
-func LoadIMG(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read IMG: %w", err)
-	}
-	return ParseIMG(data)
-}
-
-// ParseIMG parses an in-memory IMG image.
 func ParseIMG(data []byte) (*Disk, error) {
 	return parseRawSideAlternating(data, false)
 }
@@ -168,19 +149,10 @@ func guessMGTGeometry(size int) (sides, cyls, sectors, seclen int, err error) {
 
 var sadSignature = []byte("Aley's disk backup")
 
-// LoadSAD reads a SAD image. SAD is a DISCiPLE / +D variant with an
-// 18-byte "Aley's disk backup" magic followed by a 4-byte geometry
-// header: sides, cylinders, sectors/track, (sector size / 64). Sectors
-// are stored in out-out order.
-func LoadSAD(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read SAD: %w", err)
-	}
-	return ParseSAD(data)
-}
-
-// ParseSAD parses an in-memory SAD image.
+// ParseSAD parses an in-memory SAD image. SAD is a DISCiPLE / +D
+// variant with an 18-byte "Aley's disk backup" magic followed by a
+// 4-byte geometry header: sides, cylinders, sectors/track, (sector
+// size / 64). Sectors are stored in out-out order.
 func ParseSAD(data []byte) (*Disk, error) {
 	if len(data) < 22 {
 		return nil, fmt.Errorf("SAD too short: %d bytes", len(data))
@@ -237,18 +209,9 @@ func ParseSAD(data []byte) (*Disk, error) {
 // D40 / D80 (Didaktik 40 / 80)
 // ----------------------------------------------------------------------
 
-// LoadD40D80 reads a Didaktik 40 / 80 image. The geometry lives in the
-// first track's boot sector at fixed offsets (bytes 0xB1..0xB3), and
-// all sectors are 512 bytes. Stored in out-out order.
-func LoadD40D80(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read D40/D80: %w", err)
-	}
-	return ParseD40D80(data)
-}
-
-// ParseD40D80 parses an in-memory Didaktik image.
+// ParseD40D80 parses an in-memory Didaktik 40 / 80 image. The geometry
+// lives in the first track's boot sector at fixed offsets (bytes
+// 0xB1..0xB3), and all sectors are 512 bytes. Stored in out-out order.
 func ParseD40D80(data []byte) (*Disk, error) {
 	if len(data) < 0xB4 {
 		return nil, fmt.Errorf("D40/D80 too short: %d bytes", len(data))
@@ -296,19 +259,11 @@ func ParseD40D80(data []byte) (*Disk, error) {
 	return d, nil
 }
 
-// LoadTRD reads a TR-DOS TRD image. TR-DOS disks are always formatted
-// as 2 sides × 80 cylinders × 16 sectors × 256 bytes (655360 bytes
-// total), though partial images with fewer tracks are accepted.
-// Sectors are stored in side-alternating order starting at sector ID 1.
-func LoadTRD(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read TRD: %w", err)
-	}
-	return ParseTRD(data)
-}
-
-// ParseTRD parses an in-memory TRD image.
+// ParseTRD parses an in-memory TR-DOS TRD image. TR-DOS disks are
+// always formatted as 2 sides × 80 cylinders × 16 sectors × 256
+// bytes (655360 bytes total), though partial images with fewer tracks
+// are accepted. Sectors are stored in side-alternating order starting
+// at sector ID 1.
 func ParseTRD(data []byte) (*Disk, error) {
 	const (
 		sectorsPerTrack = 16

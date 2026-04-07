@@ -147,6 +147,10 @@ type sectorOut struct {
 // come out as whatever pattern was present when the disk was loaded.
 // CRCs are recomputed so that imaging-time errors (bad ID CRC, bad
 // data CRC) round-trip through save/reload.
+//
+// IDAM-only sectors (a header with no following DAM) are preserved as
+// a zero-length data field with ST1.DE set, so game protections that
+// rely on header-without-data round-trip through save/reload.
 func extractTrackSectors(t *Track) ([]sectorOut, error) {
 	var out []sectorOut
 	pos := 0
@@ -157,6 +161,20 @@ func extractTrackSectors(t *Track) ([]sectorOut, error) {
 		}
 		dataStart, deleted, dok := t.dataAt(idEnd)
 		if !dok {
+			// Header exists but no data field follows. Record the
+			// IDAM anyway with an empty data field and the ST1.DE
+			// (missing-data) bit set so reloading preserves the
+			// anomaly.
+			var st1 byte = 0x01 // ST1.MA (missing address mark)
+			if !idCRCOK {
+				st1 |= 0x20
+			}
+			out = append(out, sectorOut{
+				c: c, h: h, r: r, n: n,
+				st1:  st1,
+				st2:  0,
+				data: nil,
+			})
 			pos = idEnd
 			continue
 		}

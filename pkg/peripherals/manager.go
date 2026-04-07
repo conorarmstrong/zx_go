@@ -57,12 +57,6 @@ func (pm *PeripheralManager) SavePlus3Disk(drive int, path string) error {
 	return pm.plus3fdc.SaveDisk(drive, path)
 }
 
-// Plus3DriveHasDisk reports whether the given drive of the +3 FDC has a
-// disk loaded.
-func (pm *PeripheralManager) Plus3DriveHasDisk(drive int) bool {
-	return pm.plus3fdc.HasDisk(drive)
-}
-
 // SetPlus3WriteProtect toggles the per-drive write-protect flag.
 func (pm *PeripheralManager) SetPlus3WriteProtect(drive int, wp bool) {
 	pm.plus3fdc.SetWriteProtect(drive, wp)

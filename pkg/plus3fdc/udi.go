@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"os"
 )
 
 // UDI ("UDI!") is FUSE's native raw-track disk image format. Unlike DSK
@@ -45,15 +44,6 @@ const (
 )
 
 var udiSignature = []byte("UDI!")
-
-// LoadUDI reads a UDI file from disk.
-func LoadUDI(path string) (*Disk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read UDI: %w", err)
-	}
-	return ParseUDI(data)
-}
 
 // ParseUDI parses a UDI image from a byte slice.
 func ParseUDI(data []byte) (*Disk, error) {
@@ -124,13 +114,14 @@ func ParseUDI(data []byte) (*Disk, error) {
 			bpt:    bpt,
 			data:   make([]byte, bpt),
 			clocks: make([]byte, clen),
-			fm:     make([]byte, clen),
 			weak:   make([]byte, clen),
 		}
 		copy(t.data, data[offset+3:offset+3+bpt])
 		copy(t.clocks, data[offset+3+bpt:offset+3+bpt+clen])
 		if base == udiTypeMFMWeak {
-			copy(t.fm, data[offset+3+bpt+clen:offset+3+bpt+2*clen])
+			// UDI type 0x02 payload: clocks, then FM marks (which
+			// we skip — FM decoding isn't modelled), then weak
+			// marks.
 			copy(t.weak, data[offset+3+bpt+2*clen:offset+3+bpt+3*clen])
 		}
 

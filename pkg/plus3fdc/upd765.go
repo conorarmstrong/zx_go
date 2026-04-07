@@ -42,7 +42,6 @@ const (
 	st0US1 byte = 0x02
 	st0HD  byte = 0x04
 	st0NR  byte = 0x08
-	st0EC  byte = 0x10
 	st0SE  byte = 0x20
 	st0IC0 byte = 0x40 // IC = bits 7..6 (00=normal, 01=abnormal, 10=invalid)
 	st0IC1 byte = 0x80
@@ -51,21 +50,28 @@ const (
 // Status register 1 bits.
 const (
 	st1MA byte = 0x01 // Missing address mark
+	st1NW byte = 0x02 // Not writable (write protect)
 	st1ND byte = 0x04 // No data
-	st1OR byte = 0x10 // Overrun
+	st1DE byte = 0x20 // Data error in ID/data field (CRC)
 	st1EN byte = 0x80 // End of cylinder
+)
+
+// Status register 2 bits.
+const (
+	st2SN byte = 0x04 // Scan Not satisfied
+	st2SH byte = 0x08 // Scan Equal Hit
+	st2WC byte = 0x10 // Wrong Cylinder
+	st2DD byte = 0x20 // Data error in Data field (CRC)
+	st2CM byte = 0x40 // Control Mark (deleted DAM encountered)
 )
 
 // Status register 3 bits.
 const (
-	st3US0    byte = 0x01
-	st3US1    byte = 0x02
-	st3HD     byte = 0x04
-	st3TS     byte = 0x08 // Two-sided
-	st3T0     byte = 0x10 // Track 0
-	st3RY     byte = 0x20 // Ready
-	st3WP     byte = 0x40 // Write protect
-	st3FT     byte = 0x80 // Fault
+	st3HD byte = 0x04
+	st3TS byte = 0x08 // Two-sided
+	st3T0 byte = 0x10 // Track 0
+	st3RY byte = 0x20 // Ready
+	st3WP byte = 0x40 // Write protect
 )
 
 // fdcPhase is the current FDC state.
@@ -114,41 +120,39 @@ func (id commandID) consumesFromCPU() bool {
 }
 
 // commandSpec describes how a command is decoded and how many parameter
-// bytes follow the opcode. paramBytes is the number of bytes that follow
-// the first byte; resultBytes is the size of the result phase. A command
-// matches when (opcode & mask) == value.
+// bytes follow the opcode. paramBytes is the number of bytes that
+// follow the first byte. A command matches when (opcode & mask) == value.
 type commandSpec struct {
-	id          commandID
-	mask        byte
-	value       byte
-	paramBytes  int
-	resultBytes int
+	id         commandID
+	mask       byte
+	value      byte
+	paramBytes int
 }
 
 // commandTable is scanned linearly on opcode receipt — first match wins.
 // Mask/value/length numbers come from FUSE upd_fdc.c:77-93.
 var commandTable = []commandSpec{
-	{cmdReadData, 0x1F, 0x06, 8, 7},
-	{cmdReadDelData, 0x1F, 0x0C, 8, 7},
-	{cmdReadDiag, 0x9F, 0x02, 8, 7},
-	{cmdWriteData, 0x3F, 0x05, 8, 7},
-	{cmdWriteDelData, 0x3F, 0x09, 8, 7},
-	{cmdWriteID, 0xBF, 0x0D, 5, 7},
-	{cmdScanEq, 0x1F, 0x11, 8, 7},
-	{cmdScanLE, 0x1F, 0x19, 8, 7},
-	{cmdScanGE, 0x1F, 0x1D, 8, 7},
-	{cmdReadID, 0xBF, 0x0A, 1, 7},
-	{cmdRecalibrate, 0xFF, 0x07, 1, 0},
-	{cmdSeek, 0xFF, 0x0F, 2, 0},
-	{cmdSenseInt, 0xFF, 0x08, 0, 2},
-	{cmdSpecify, 0xFF, 0x03, 2, 0},
-	{cmdSenseDrive, 0xFF, 0x04, 1, 1},
-	{cmdVersion, 0x1F, 0x10, 0, 1},
+	{cmdReadData, 0x1F, 0x06, 8},
+	{cmdReadDelData, 0x1F, 0x0C, 8},
+	{cmdReadDiag, 0x9F, 0x02, 8},
+	{cmdWriteData, 0x3F, 0x05, 8},
+	{cmdWriteDelData, 0x3F, 0x09, 8},
+	{cmdWriteID, 0xBF, 0x0D, 5},
+	{cmdScanEq, 0x1F, 0x11, 8},
+	{cmdScanLE, 0x1F, 0x19, 8},
+	{cmdScanGE, 0x1F, 0x1D, 8},
+	{cmdReadID, 0xBF, 0x0A, 1},
+	{cmdRecalibrate, 0xFF, 0x07, 1},
+	{cmdSeek, 0xFF, 0x0F, 2},
+	{cmdSenseInt, 0xFF, 0x08, 0},
+	{cmdSpecify, 0xFF, 0x03, 2},
+	{cmdSenseDrive, 0xFF, 0x04, 1},
+	{cmdVersion, 0x1F, 0x10, 0},
 }
 
 // invalidCommandSpec is returned by lookupCommand for unrecognised
 // opcodes — package-level so the lookup is allocation-free.
-var invalidCommandSpec = commandSpec{id: cmdInvalid, resultBytes: 1}
+var invalidCommandSpec = commandSpec{id: cmdInvalid}
 
 // UPD765 is the FDC instance state.
 type UPD765 struct {
@@ -207,24 +211,25 @@ type UPD765 struct {
 	// gates the whole mechanism — disabled by default, the user
 	// opts in via SetSpeedlockEnabled (from the UI).
 	lastSectorID      uint32
-	speedlockCounter  int
-	speedlockEnabled  bool
-
-	// Accumulated simulated FDC time, advanced by Tick. Unused by the
-	// current command subset but exposed for future cycle-accurate
-	// behaviour (motor spin-up timing, index pulses, RQM pacing).
-	now uint64
+	speedlockCounter int
+	speedlockEnabled bool
 
 	// WRITE ID / FORMAT TRACK state. The CPU sends 4 bytes (CHRN) per
 	// sector during execution; we accumulate them and rebuild the
-	// track once all sectors have been described.
-	formatTrack  *Track
-	formatN      byte
-	formatNumSec byte
-	formatGPL    byte
-	formatFiller byte
-	formatCHRN   []byte // 4*formatNumSec bytes of CHRN data
-	formatFail   bool   // track builder overflowed during format
+	// track once all sectors have been described. The new track is
+	// built into a staging buffer (formatStaging) and only swapped
+	// into formatDisk.Tracks[formatHead][formatCyl] if the build
+	// succeeds — a failed or aborted FORMAT never damages the
+	// previously-present track.
+	formatStaging *Track
+	formatDisk    *Disk
+	formatCyl     int
+	formatHead    int
+	formatN       byte
+	formatNumSec  byte
+	formatFiller  byte
+	formatCHRN    []byte // 4*formatNumSec bytes of CHRN data
+	formatFail    bool   // track builder overflowed during format
 
 	// Per-drive head position on the current track. Reset to 0 by
 	// SEEK/RECALIBRATE; advanced past each sector that's read so the
@@ -248,7 +253,7 @@ type UPD765 struct {
 
 // NewUPD765 creates an idle FDC with no disk loaded.
 func NewUPD765() *UPD765 {
-	return &UPD765{lastSectorID: sectorIDNone}
+	return &UPD765{}
 }
 
 // physicalDrive returns the physical drive index (0 = A, 1 = B) for a
@@ -295,32 +300,8 @@ func (f *UPD765) SetSpeedlockEnabled(enabled bool) {
 	f.speedlockEnabled = enabled
 	if !enabled {
 		f.speedlockCounter = 0
-		f.lastSectorID = sectorIDNone
+		f.lastSectorID = 0
 	}
-}
-
-// Tick advances the FDC's simulated time by the given number of CPU
-// T-states. Currently this is just bookkeeping — no commands care about
-// the elapsed time yet — but it gives the emulator a hook for future
-// cycle-accurate work (motor spin timing, RQM pacing) without another
-// API break.
-func (f *UPD765) Tick(tstates int) {
-	if tstates <= 0 {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.now += uint64(tstates)
-}
-
-// HasDisk reports whether the given drive currently has a disk loaded.
-func (f *UPD765) HasDisk(drive int) bool {
-	if drive < 0 || drive >= len(f.disks) {
-		return false
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.disks[drive] != nil
 }
 
 // disk returns the Disk currently mounted in the given drive, or nil.
@@ -348,10 +329,34 @@ func (f *UPD765) resetLocked() {
 	f.cmdLen = 0
 	f.resultLen = 0
 	f.resultIdx = 0
+
+	// Read/scan/write execution scratch — all cleared so a fresh
+	// command starts from a known state rather than inheriting flags
+	// from whatever was in flight when the reset hit.
 	f.ioTrack = nil
 	f.ioPos = 0
 	f.ioEnd = 0
+	f.ioCRC = 0
+	f.ioDataOffset = 0
+	f.readCM = false
 	f.readDataCRC = false
+	f.readWrongCyl = false
+	f.readWantDeleted = false
+	f.readSK = false
+	f.scanMatch = false
+
+	// FORMAT TRACK scratch — dropping the staging reference lets the
+	// garbage collector reclaim the partially-built track.
+	f.formatStaging = nil
+	f.formatDisk = nil
+	f.formatCHRN = nil
+	f.formatFail = false
+	f.formatN = 0
+	f.formatNumSec = 0
+	f.formatFiller = 0
+	f.formatCyl = 0
+	f.formatHead = 0
+
 	for i := range f.pcn {
 		f.pcn[i] = 0
 		f.headPos[i] = 0
@@ -361,14 +366,9 @@ func (f *UPD765) resetLocked() {
 	}
 	// Speedlock state clears on reset / disk change. The enable flag
 	// itself is a user preference and is NOT cleared here.
-	f.lastSectorID = sectorIDNone
+	f.lastSectorID = 0
 	f.speedlockCounter = 0
 }
-
-// sectorIDNone is a packed CHRN value that cannot come from a real
-// sector (it would require C=H=R=N=0xFF). Used as the "no previous
-// sector" sentinel for Speedlock retry tracking.
-const sectorIDNone uint32 = 0xFFFFFFFF
 
 // ReadStatus returns the Main Status Register byte. The CPU reads this
 // from port 0x2FFD on the +3.
@@ -736,41 +736,108 @@ func (f *UPD765) execReadData() {
 	f.phase = phaseExecution
 }
 
-// trackSpeedlockRetry updates the Speedlock repetition counter based
-// on the sector identity of the current READ DATA command. The packed
-// ID encodes (C, H, R, N) into a single uint32 so the comparison with
-// the previous command is a single integer compare. Reset to zero on
-// any "different sector" read so the counter only reflects tight
-// retry loops. Mirrors FUSE upd_fdc.c:1311.
+// trackSpeedlockRetry updates the Speedlock repetition counter, but
+// ONLY for the very specific READ DATA pattern Speedlock actually uses
+// for its copy-protection check: a single-sector read of sector 2 on
+// track 0, head 0 (or any even head). This mirrors FUSE's gate at
+// upd_fdc.c:1312-1323 exactly — broadening the detection would cause
+// legitimate BDOS retries of arbitrary sectors to get progressively
+// corrupted and turn recoverable errors into hard failures.
 func (f *UPD765) trackSpeedlockRetry() {
 	if !f.speedlockEnabled {
 		return
 	}
-	id := packSectorID(
-		f.cmdBuf[rdParamC],
-		f.cmdBuf[rdParamH],
-		f.cmdBuf[rdParamR],
-		f.cmdBuf[rdParamN],
-	)
-	if id == f.lastSectorID {
-		f.speedlockCounter++
+	c := f.cmdBuf[rdParamC]
+	h := f.cmdBuf[rdParamH]
+	r := f.cmdBuf[rdParamR]
+	eot := f.cmdBuf[rdParamEOT]
+	u := uint32(h&1) | uint32(c)<<1 | uint32(r)<<8
+	if r == eot && u == 0x200 {
+		if u == f.lastSectorID {
+			f.speedlockCounter++
+		} else {
+			f.speedlockCounter = 0
+			f.lastSectorID = u
+		}
 	} else {
+		f.lastSectorID = 0
 		f.speedlockCounter = 0
-		f.lastSectorID = id
 	}
 }
 
-// packSectorID combines the four CHRN bytes into a single uint32 so
-// comparisons and storage are trivial.
-func packSectorID(c, h, r, n byte) uint32 {
-	return uint32(c) | uint32(h)<<8 | uint32(r)<<16 | uint32(n)<<24
+// sectorLocation is the result of walking the track for a matching
+// IDAM. err describes why the search failed; on success the fields
+// describe where the sector data lives and what its DAM / ID state
+// was, but don't include any command-specific interpretation.
+type sectorLocation struct {
+	dataStart int  // first byte of the sector data field
+	length    int  // number of data bytes (before the trailing CRC)
+	deleted   bool // sector has a deleted DAM (F8)
+	wrongCyl  bool // IDAM C didn't match wantC
+	nextPos   int  // position immediately after the ID CRC (for retries)
+}
+
+// findSector searches the given track for an IDAM with the requested
+// record ID, starting from startPos and walking at most one full
+// revolution. It handles wrap-around, skips sectors with bad ID CRCs,
+// and (when sk=true) skips sectors whose DAM type doesn't match
+// wantDeleted — that's the µPD765 SK bit applied during the walk so
+// retries can't false-match the same wrong-DAM sector again.
+//
+// This is the single source of truth for the "walk the track looking
+// for sector R" logic that READ DATA, WRITE DATA, and SCAN all need.
+// Returns (_, st1, false) when the sector can't be found; st1 is the
+// ST1 bits the caller should set in the error result phase.
+func (f *UPD765) findSector(track *Track, wantC, wantR byte, startPos int, wantDeleted, sk bool) (loc sectorLocation, st1 byte, ok bool) {
+	pos := startPos
+	wrapped := false
+	for {
+		c, _, r, n, idEnd, idCRCOK, walkOK := track.idAtCRC(pos)
+		if !walkOK {
+			if wrapped {
+				return sectorLocation{}, st1ND, false
+			}
+			pos = 0
+			wrapped = true
+			continue
+		}
+		idamPos := idEnd - 7
+		if wrapped && idamPos >= startPos {
+			return sectorLocation{}, st1ND, false
+		}
+		if !idCRCOK || r != wantR {
+			pos = idEnd
+			continue
+		}
+		dataStart, deleted, dok := track.dataAt(idEnd)
+		if !dok {
+			return sectorLocation{}, st1MA, false
+		}
+		length := sectorLength(n)
+		if dataStart+length > track.bpt {
+			return sectorLocation{}, st1ND, false
+		}
+		// SK=1 + wrong DAM type → keep walking. The wrap detection
+		// above guarantees we make at most one revolution before
+		// giving up.
+		if sk && deleted != wantDeleted {
+			pos = idEnd
+			continue
+		}
+		return sectorLocation{
+			dataStart: dataStart,
+			length:    length,
+			deleted:   deleted,
+			wrongCyl:  c != wantC,
+			nextPos:   idEnd,
+		}, 0, true
+	}
 }
 
 // startSectorRead searches the current track for a sector matching
 // cmdBuf[rdParamR] and primes the execution phase to stream its data.
-// Returns false if the sector wasn't found (in which case it has already
-// entered the result phase with the appropriate error bits) or if a
-// matching sector was skipped via SK=1 and there are no alternatives.
+// Returns false if the sector wasn't found (the result phase has
+// already been populated with the error bits).
 func (f *UPD765) startSectorRead() bool {
 	wantC := f.cmdBuf[rdParamC]
 	wantR := f.cmdBuf[rdParamR]
@@ -779,63 +846,20 @@ func (f *UPD765) startSectorRead() bool {
 		f.readDataError(st1MA | st1ND)
 		return false
 	}
-	startPos := f.headPos[f.us&3]
-	pos := startPos
-	wrapped := false
-	for {
-		c, _, r, n, idEnd, idCRCOK, ok := track.idAtCRC(pos)
-		if !ok {
-			if wrapped {
-				f.readDataError(st1ND)
-				return false
-			}
-			pos = 0
-			wrapped = true
-			continue
-		}
-		idamPos := idEnd - 7
-		if wrapped && idamPos >= startPos {
-			f.readDataError(st1ND)
-			return false
-		}
-		if !idCRCOK {
-			pos = idEnd
-			continue
-		}
-		if r != wantR {
-			pos = idEnd
-			continue
-		}
-		wrongCyl := c != wantC
-		dataStart, deleted, dok := track.dataAt(idEnd)
-		if !dok {
-			f.readDataError(st1MA)
-			return false
-		}
-		// DAM type check vs the commanded type.
-		damMismatch := deleted != f.readWantDeleted
-		if damMismatch && f.readSK {
-			// SK=1: skip this sector, keep walking for another
-			// matching R (which in practice means giving up on
-			// this revolution).
-			pos = idEnd
-			continue
-		}
-		length := sectorLength(n)
-		if dataStart+length > track.bpt {
-			f.readDataError(st1ND)
-			return false
-		}
-		f.ioTrack = track
-		f.ioPos = dataStart
-		f.ioEnd = dataStart + length
-		f.ioCRC = initialDataCRC(deleted)
-		f.ioDataOffset = 0
-		f.readCM = damMismatch
-		f.readDataCRC = false
-		f.readWrongCyl = wrongCyl
-		return true
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], f.readWantDeleted, f.readSK)
+	if !ok {
+		f.readDataError(st1)
+		return false
 	}
+	f.ioTrack = track
+	f.ioPos = loc.dataStart
+	f.ioEnd = loc.dataStart + loc.length
+	f.ioCRC = initialDataCRC(loc.deleted)
+	f.ioDataOffset = 0
+	f.readCM = loc.deleted != f.readWantDeleted
+	f.readDataCRC = false
+	f.readWrongCyl = loc.wrongCyl
+	return true
 }
 
 // initialDataCRC returns the CRC accumulator state after the implied
@@ -909,14 +933,15 @@ func (f *UPD765) execRead() byte {
 	// mirrors FUSE's fdd_read_data; crc_add() pattern at upd_fdc.c:921.
 	f.ioCRC = crcUpdate(f.ioCRC, b)
 
-	// Speedlock hack (mirrors FUSE upd_fdc.c:923-932): on repeated
+	// Speedlock hack (mirrors FUSE upd_fdc.c:920-932): on repeated
 	// reads of the same sector, progressively corrupt the returned
 	// bytes so the program believes it's hitting a weak copy-protected
-	// sector. The first read is clean; the second+ escalate the
-	// counter if the first 64 bytes contain non-filler data, and XOR
-	// mangle the byte at every 29th offset.
-	offset := f.ioDataOffset
+	// sector. FUSE increments its counter BEFORE the byte read, so
+	// the first byte has data_offset == 1 (not 0). We match that
+	// exactly so the mangling pattern lines up with real Speedlock
+	// protection checks.
 	f.ioDataOffset++
+	offset := f.ioDataOffset
 	if f.speedlockEnabled && f.speedlockCounter > 0 {
 		if offset < 64 && b != 0xE5 {
 			f.speedlockCounter = 2
@@ -1012,15 +1037,15 @@ func (f *UPD765) finishReadResult() {
 	st2 := byte(0)
 	if f.readDataCRC {
 		st0 = f.makeST0(icAbnormal)
-		st1 |= 0x20
-		st2 |= 0x20
+		st1 |= st1DE
+		st2 |= st2DD
 	}
 	if f.readCM {
-		st2 |= 0x40
+		st2 |= st2CM
 	}
 	if f.readWrongCyl {
 		st0 = f.makeST0(icAbnormal)
-		st2 |= 0x10
+		st2 |= st2WC
 	}
 	// Multi-sector transfers that reach EOT set ST1.EN.
 	if f.cmdBuf[rdParamR] >= f.cmdBuf[rdParamEOT] {
@@ -1042,13 +1067,13 @@ func (f *UPD765) execWriteData(deleted bool) {
 	hduds := f.cmdBuf[rdParamHDS]
 	f.us = hduds & 0x03
 	f.hd = (hduds >> 2) & 0x01
+	wantC := f.cmdBuf[rdParamC]
 	wantR := f.cmdBuf[rdParamR]
 
 	if f.wp[physicalDrive(f.us)] {
-		// ST1.NW = 0x02 (not writable / write protect).
 		st0 := f.makeST0(icAbnormal)
 		f.beginResult([]byte{
-			st0, 0x02, 0,
+			st0, st1NW, 0,
 			f.cmdBuf[rdParamC], f.cmdBuf[rdParamH], f.cmdBuf[rdParamR], f.cmdBuf[rdParamN],
 		})
 		return
@@ -1059,65 +1084,34 @@ func (f *UPD765) execWriteData(deleted bool) {
 		f.readDataError(st1MA | st1ND)
 		return
 	}
-	startPos := f.headPos[f.us&3]
-	pos := startPos
-	wrapped := false
-	for {
-		_, _, r, n, idEnd, idCRCOK, ok := track.idAtCRC(pos)
-		if !ok {
-			if wrapped {
-				f.readDataError(st1ND)
-				return
-			}
-			pos = 0
-			wrapped = true
-			continue
-		}
-		idamPos := idEnd - 7
-		if wrapped && idamPos >= startPos {
-			f.readDataError(st1ND)
-			return
-		}
-		if !idCRCOK {
-			pos = idEnd
-			continue
-		}
-		if r != wantR {
-			pos = idEnd
-			continue
-		}
-		// Found the sector. Locate the existing DAM so we can overwrite
-		// it (to switch between FB and F8 if the command is WRITE
-		// DELETED DATA on a normal sector, or vice versa).
-		dataStart, _, dok := track.dataAt(idEnd)
-		if !dok {
-			f.readDataError(st1MA)
-			return
-		}
-		length := sectorLength(n)
-		if dataStart+length+2 > track.bpt {
-			f.readDataError(st1ND)
-			return
-		}
-		// Overwrite the DAM byte (1 byte before dataStart).
-		damPos := dataStart - 1
-		if deleted {
-			track.data[damPos] = delDataMrk
-		} else {
-			track.data[damPos] = dataMark
-		}
-		// Clear the weak bitmap for the data region — a fresh write
-		// replaces the stored bytes with known-good data.
-		for i := dataStart; i < dataStart+length; i++ {
-			bitClear(track.weak, i)
-		}
-		f.ioTrack = track
-		f.ioPos = dataStart
-		f.ioEnd = dataStart + length
-		f.ioCRC = initialDataCRC(deleted)
-		f.phase = phaseExecution
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], false, false)
+	if !ok {
+		f.readDataError(st1)
 		return
 	}
+	if loc.dataStart+loc.length+2 > track.bpt {
+		f.readDataError(st1ND)
+		return
+	}
+	// Overwrite the DAM byte (1 byte before dataStart) so WRITE DATA
+	// on a previously-deleted sector flips it back to FB, and vice
+	// versa for WRITE DELETED DATA.
+	damPos := loc.dataStart - 1
+	if deleted {
+		track.data[damPos] = delDataMrk
+	} else {
+		track.data[damPos] = dataMark
+	}
+	// Clear the weak bitmap for the data region — a fresh write
+	// replaces the stored bytes with known-good data.
+	for i := loc.dataStart; i < loc.dataStart+loc.length; i++ {
+		bitClear(track.weak, i)
+	}
+	f.ioTrack = track
+	f.ioPos = loc.dataStart
+	f.ioEnd = loc.dataStart + loc.length
+	f.ioCRC = initialDataCRC(deleted)
+	f.phase = phaseExecution
 }
 
 // execWrite accepts one sector data byte from the CPU during a WRITE
@@ -1162,12 +1156,13 @@ func (f *UPD765) execWriteID() {
 	f.hd = (hduds >> 2) & 0x01
 	f.formatN = f.cmdBuf[2]
 	f.formatNumSec = f.cmdBuf[3]
-	f.formatGPL = f.cmdBuf[4]
+	// cmdBuf[4] = GPL (gap length) is accepted from the CPU but
+	// ignored — we use the MFM gap layout from gapSpecs.
 	f.formatFiller = f.cmdBuf[5]
 
 	if f.wp[physicalDrive(f.us)] {
 		st0 := f.makeST0(icAbnormal)
-		f.beginResult([]byte{st0, 0x02, 0, 0, 0, 0, 0})
+		f.beginResult([]byte{st0, st1NW, 0, 0, 0, 0, 0})
 		return
 	}
 	// Reject sector-size codes > 8 (would mean sectors ≥ 32KB, which
@@ -1184,24 +1179,31 @@ func (f *UPD765) execWriteID() {
 		return
 	}
 
-	// Allocate a fresh Track to hold the formatted output. Format a
-	// new track in place; FORMAT TRACK rewrites whatever was there.
+	// Record the FORMAT target (disk + head + cyl) so the final swap
+	// in execWriteIDByte can commit — or skip — without tearing the
+	// existing track.
 	cyl := int(f.pcn[f.us&3])
 	if int(f.hd) >= d.Sides || cyl >= d.Cylinders {
 		st0 := f.makeST0(icAbnormal)
 		f.beginResult([]byte{st0, st1ND, 0, 0, 0, 0, 0})
 		return
 	}
-	f.formatTrack = newTrack(bytesPerTrackDD, f.formatFiller, byte(cyl), f.hd, f.formatN)
-	d.Tracks[f.hd][cyl] = f.formatTrack
+	f.formatDisk = d
+	f.formatCyl = cyl
+	f.formatHead = int(f.hd)
+	f.formatStaging = newTrack(bytesPerTrackDD, f.formatFiller, byte(cyl), f.hd, f.formatN)
 
 	if f.formatNumSec == 0 {
-		// Zero-sector format produces an empty track; nothing more to
-		// receive from the CPU.
-		b := newTrackBuilder(f.formatTrack, gapMFM)
+		// Zero-sector format produces an empty track. Build in the
+		// staging buffer and commit unconditionally — no CPU input
+		// needed.
+		b := newTrackBuilder(f.formatStaging, gapMFM)
 		b.preindexAdd()
 		b.postindexAdd()
 		b.gap4Add()
+		d.Tracks[f.hd][cyl] = f.formatStaging
+		f.formatStaging = nil
+		f.formatDisk = nil
 		st0 := f.makeST0(icNormal)
 		f.beginResult([]byte{st0, 0, 0, 0, 0, 0, f.formatN})
 		return
@@ -1214,20 +1216,21 @@ func (f *UPD765) execWriteID() {
 
 // execWriteIDByte accepts one CHRN byte from the CPU during FORMAT TRACK
 // execution. Once all sectors have been described the track byte stream
-// is rebuilt from the collected CHRN list. If the supplied layout
-// overflows the track, the result phase reports ST1.ND (no data).
+// is built into the staging buffer and only swapped into the disk if
+// the build succeeds — a too-small layout leaves the previous track
+// untouched and reports ST1.ND.
 func (f *UPD765) execWriteIDByte(b byte) {
 	f.formatCHRN = append(f.formatCHRN, b)
 	if len(f.formatCHRN) < 4*int(f.formatNumSec) {
 		return
 	}
-	// All CHRN bytes received — build the track.
-	track := f.formatTrack
-	tb := newTrackBuilder(track, gapMFM)
+	// All CHRN bytes received — build the track in the staging buffer.
+	staging := f.formatStaging
+	tb := newTrackBuilder(staging, gapMFM)
 	if !tb.preindexAdd() || !tb.postindexAdd() {
 		f.formatFail = true
 	}
-	data := make([]byte, 128<<f.formatN)
+	data := make([]byte, sectorLength(f.formatN))
 	for i := range data {
 		data[i] = f.formatFiller
 	}
@@ -1249,6 +1252,12 @@ func (f *UPD765) execWriteIDByte(b byte) {
 	}
 	tb.gap4Add()
 
+	// Commit only on success. A failed format leaves the disk's
+	// Tracks[head][cyl] pointing at whatever was there before.
+	if !f.formatFail && f.formatDisk != nil {
+		f.formatDisk.Tracks[f.formatHead][f.formatCyl] = staging
+	}
+
 	st1 := byte(0)
 	ic := icNormal
 	if f.formatFail {
@@ -1257,7 +1266,8 @@ func (f *UPD765) execWriteIDByte(b byte) {
 	}
 	st0 := f.makeST0(ic)
 	f.beginResult([]byte{st0, st1, 0, lastC, lastH, lastR, lastN})
-	f.formatTrack = nil
+	f.formatStaging = nil
+	f.formatDisk = nil
 	f.formatCHRN = nil
 	f.formatFail = false
 }
@@ -1280,51 +1290,20 @@ func (f *UPD765) execScanData() {
 		f.readDataError(st1MA | st1ND)
 		return
 	}
-	startPos := f.headPos[f.us&3]
-	pos := startPos
-	wrapped := false
-	for {
-		c, _, r, n, idEnd, idCRCOK, ok := track.idAtCRC(pos)
-		if !ok {
-			if wrapped {
-				f.readDataError(st1ND)
-				return
-			}
-			pos = 0
-			wrapped = true
-			continue
-		}
-		idamPos := idEnd - 7
-		if wrapped && idamPos >= startPos {
-			f.readDataError(st1ND)
-			return
-		}
-		if !idCRCOK || r != wantR {
-			pos = idEnd
-			continue
-		}
-		wrongCyl := c != wantC
-		dataStart, deleted, dok := track.dataAt(idEnd)
-		if !dok {
-			f.readDataError(st1MA)
-			return
-		}
-		length := sectorLength(n)
-		if dataStart+length > track.bpt {
-			f.readDataError(st1ND)
-			return
-		}
-		f.ioTrack = track
-		f.ioPos = dataStart
-		f.ioEnd = dataStart + length
-		f.ioCRC = initialDataCRC(deleted)
-		f.readCM = deleted // scan treats any deleted DAM as a control-mark event
-		f.readDataCRC = false
-		f.readWrongCyl = wrongCyl
-		f.scanMatch = true
-		f.phase = phaseExecution
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], false, false)
+	if !ok {
+		f.readDataError(st1)
 		return
 	}
+	f.ioTrack = track
+	f.ioPos = loc.dataStart
+	f.ioEnd = loc.dataStart + loc.length
+	f.ioCRC = initialDataCRC(loc.deleted)
+	f.readCM = loc.deleted // scan treats a deleted DAM as a control-mark event
+	f.readDataCRC = false
+	f.readWrongCyl = loc.wrongCyl
+	f.scanMatch = true
+	f.phase = phaseExecution
 }
 
 // execScanByte compares the next CPU byte against the next disk byte
@@ -1379,21 +1358,20 @@ func (f *UPD765) execScanByte(b byte) {
 		st2 := byte(0)
 		if f.readDataCRC {
 			st0 = f.makeST0(icAbnormal)
-			st1 |= 0x20
-			st2 |= 0x20
+			st1 |= st1DE
+			st2 |= st2DD
 		}
 		if f.readCM {
-			st2 |= 0x40
+			st2 |= st2CM
 		}
 		if f.readWrongCyl {
 			st0 = f.makeST0(icAbnormal)
-			st2 |= 0x10
+			st2 |= st2WC
 		}
-		// ST2 bit 3 = Scan Equal Hit; bit 2 = Scan Not satisfied.
 		if f.scanMatch {
-			st2 |= 0x08
+			st2 |= st2SH
 		} else {
-			st2 |= 0x04
+			st2 |= st2SN
 		}
 		f.beginResult([]byte{
 			st0, st1, st2,
