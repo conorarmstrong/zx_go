@@ -588,8 +588,15 @@ func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int1
 }
 
 // Beeper amplitude levels — symmetric around zero so a constant
-// 50% duty cycle averages to silence.
+// 50% duty cycle averages to silence. The amplitude is high (~60%
+// of int16 range) because on a real Spectrum the beeper is
+// significantly louder than the AY chip — it's a 1-bit DAC driven
+// directly by the speaker bit, with no attenuation. The remaining
+// headroom (32767 − 20000 = 12767) is enough to mix in one AY
+// channel at maximum volume without clipping; the worst case (all
+// 3 AY channels at maximum + beeper at peak) is rare and clips
+// gracefully via the int32 saturation in MixInto.
 const (
-	beeperHigh int16 = 6000
-	beeperLow  int16 = -6000
+	beeperHigh int16 = 20000
+	beeperLow  int16 = -20000
 )
