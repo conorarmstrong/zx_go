@@ -102,7 +102,7 @@ func (tp *TapePlayer) SaveTAP(path string) error {
 	if err != nil {
 		return fmt.Errorf("create TAP: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	for _, data := range blocks {
 		if len(data) > 0xFFFF {

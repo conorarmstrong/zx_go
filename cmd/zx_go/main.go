@@ -545,7 +545,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						// mutated it in place — we just need to refresh.
 						// In CRT mode we post-process into a 2x scratch
 						// buffer and point screen.Image at that instead.
-						var displayImg *image.RGBA = newImage
+						displayImg := newImage
 						if e.crtFilter.Load() {
 							b := newImage.Bounds()
 							want := image.Rect(0, 0, b.Dx()*2, b.Dy()*2)
