@@ -532,24 +532,54 @@ func (u *ULA) flushAudioFrame() {
 // and the speaker state at the end of the frame so the caller can
 // seed the next frame's initial state.
 //
-// Each event records the T-state offset within the frame at which
-// the speaker bit changed. For each output sample we look up which
-// state was active at that sample's midpoint by walking the events
-// forward — events are sorted by tstate, so this is a single linear
-// pass over both arrays.
+// Each output sample is the *average* speaker level over the T-state
+// range that sample represents — i.e. a box-filter integration. This
+// matters because the speaker can toggle far faster than the audio
+// sample rate (BEEP runs at a few kHz, the audio rate is ~44kHz with
+// ~79 T-states per sample), so a sample window can contain several
+// transitions. Point-sampling at the midpoint loses the duty cycle
+// inside the window and snaps every transition to a sample boundary,
+// which produces audible time-jitter — the "fuzzy" sound the
+// midpoint version had on a clean square wave. Integration converts
+// the jitter into amplitude variation, which is much less perceptible
+// and naturally low-pass-filters the output.
 func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int16, finalState bool) {
 	const tstatesPerFrame = 69888
 	samples = make([]int16, audio.SamplesPerFrame)
 	state := initialState
 	eventIdx := 0
+
+	delta := int32(beeperHigh) - int32(beeperLow)
+	low := int32(beeperLow)
+
 	for i := 0; i < audio.SamplesPerFrame; i++ {
-		sampleTstate := (2*i + 1) * tstatesPerFrame / (2 * audio.SamplesPerFrame)
-		for eventIdx < len(events) && events[eventIdx].tstateOffset <= sampleTstate {
+		sampleStart := i * tstatesPerFrame / audio.SamplesPerFrame
+		sampleEnd := (i + 1) * tstatesPerFrame / audio.SamplesPerFrame
+		sampleLen := sampleEnd - sampleStart
+
+		// Walk events that fall inside [sampleStart, sampleEnd),
+		// summing the T-states the speaker was high.
+		highTstates := 0
+		cur := sampleStart
+		for eventIdx < len(events) && events[eventIdx].tstateOffset < sampleEnd {
+			next := events[eventIdx].tstateOffset
+			if next < cur {
+				next = cur
+			}
+			if state {
+				highTstates += next - cur
+			}
+			cur = next
 			state = events[eventIdx].state
 			eventIdx++
 		}
+		// Tail of the sample window (after the last event in it).
 		if state {
-			samples[i] = beeperHigh
+			highTstates += sampleEnd - cur
+		}
+
+		if sampleLen > 0 {
+			samples[i] = int16(low + delta*int32(highTstates)/int32(sampleLen))
 		} else {
 			samples[i] = beeperLow
 		}

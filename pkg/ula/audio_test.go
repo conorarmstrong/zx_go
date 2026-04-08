@@ -111,6 +111,65 @@ func TestFlushAudioFrameMultipleToggles(t *testing.T) {
 	check(t, 3*q+q/2, beeperHigh, "quarter 4 (high)")
 }
 
+// TestFlushAudioFrameIntegratesSubSampleToggles is the regression
+// test for the "fuzzy beep" fix. It drives several speaker toggles
+// inside a single audio sample window and verifies the output sample
+// reflects the *average* speaker level over the window, not just the
+// state at one instant. Without integration the sample would jump
+// between full high and full low depending on which toggle landed
+// closest to the midpoint, producing pulse-width jitter.
+func TestFlushAudioFrameIntegratesSubSampleToggles(t *testing.T) {
+	const tpf = 69888
+	tstatesPerSample := tpf / audio.SamplesPerFrame // ~79
+
+	// Build events that toggle the speaker at 1/4 and 3/4 of the
+	// way through sample 0's window. The speaker is therefore:
+	//   - low for 25% of the window (state 0 → 25)
+	//   - high for 50% of the window (25 → 75)
+	//   - low for 25% of the window (75 → end)
+	// Total high time = 50% → output should be exactly midway
+	// between beeperLow and beeperHigh, i.e. 0.
+	events := []audioEvent{
+		{tstateOffset: tstatesPerSample / 4, state: true},
+		{tstateOffset: 3 * tstatesPerSample / 4, state: false},
+	}
+
+	samples, _ := generateBeeperFrame(events, false)
+
+	// Sample 0 should be near the midpoint between beeperLow and
+	// beeperHigh. Without the integration fix, sample 0 would be
+	// either beeperLow or beeperHigh (full ±6000). The integer
+	// truncation of the event offsets means the duty cycle isn't
+	// exactly 50% — typical result is ±100 — but anything inside
+	// ±500 confirms the integration is averaging across the whole
+	// window, not snapping to a single value.
+	got := samples[0]
+	if got < -500 || got > 500 {
+		t.Errorf("sample 0 = %d, want near 0 (~50%% duty cycle averaged); a value near ±6000 means integration is broken", got)
+	}
+}
+
+// TestFlushAudioFramePartialOverlap verifies the integration handles
+// a transition that lands AT a sample boundary correctly — sample N
+// should be 100% in the new state, sample N-1 should be 100% in the
+// old state, with no smearing.
+func TestFlushAudioFramePartialOverlap(t *testing.T) {
+	const tpf = 69888
+	const samples = audio.SamplesPerFrame
+	// Toggle exactly at the boundary between sample 100 and sample 101.
+	events := []audioEvent{
+		{tstateOffset: 101 * tpf / samples, state: true},
+	}
+	out, _ := generateBeeperFrame(events, false)
+
+	if out[100] != beeperLow {
+		t.Errorf("sample 100 (just before boundary): got %d, want %d", out[100], beeperLow)
+	}
+	if out[101] != beeperHigh {
+		t.Errorf("sample 101 (at boundary): got %d, want %d", out[101], beeperHigh)
+	}
+}
+
 // newAudioTestULA returns a bare ULA struct suitable for the audio
 // generator tests. It has no real memory or audio system attached;
 // the tests only use the per-frame event slice.
