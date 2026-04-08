@@ -14,16 +14,22 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 - **+3/+2A 4-ROM paging** — both port 0x7FFD and 0x1FFD with all four special paging modes
 - **ULA rendering** — pixel-accurate screen display with attribute colours, bright, and 16-frame flash cycle
 - **Mid-frame border effects** — border colour changes are tracked per-scanline for loading stripes and demo effects
-- **Audio** — beeper sound output via the ULA speaker bit
+- **Beeper audio** — ULA speaker bit driven through the host audio system
+- **AY-3-8912 sound chip** — fitted on every model except the original 48K, with correct register selection (port 0xFFFD) and data write (port 0xBFFD) decoding
 - **Keyboard** — full 8x5 matrix emulation with CAPS SHIFT, SYMBOL SHIFT, arrow keys, and modifier support
+- **Joysticks** — Kempston (port 0x1F), Sinclair Interface 2 left (1-5) and right (6-0), and Cursor/Protek
 - **Cycle-accurate timing** — memory contention during active display, port I/O contention with correct patterns for ULA/non-ULA ports, and model-specific contention (no ULA port contention on +2A/+3)
 - **R register** — correctly incremented only on M1 opcode fetch cycles
 
 ### File Formats
 - **Snapshots** — load and save in SNA, Z80 (v1/v2/v3), and SZX formats with full 48K and 128K support
-- **TAP tape loading** — load .tap files and play them into the emulator with accurate pilot tones, sync pulses, and data encoding
+- **TAP/TZX tapes** — load .tap and .tzx files with accurate pilot tones, sync pulses, and data encoding; save out as .tap; built-in tape browser with block listing
+- **Fast tape loading** — optional LD-BYTES ROM trap (0x0556 on 48K) that synthesises the load directly from the tape block, bypassing the slow real-time pulse decoding for instant loads
+- **+3 disk images** — DSK and EDSK (CPCEMU), UDI, MGT/IMG, TRD, SAD, D40/D80; load and save with full FUSE-level format coverage including weak sectors, IDAM-only sectors, and deleted DAMs
+- **RZX input recordings** — record and play back deterministic emulator sessions with FUSE-parity feature set: per-frame instruction count + IN-byte stream, embedded snapshots, autosave/rollback, multi-snapshot recordings, and competition mode
 
 ### Peripherals
+- **+3 floppy disk controller** — NEC µPD765A FDC implementation with full READ DATA, WRITE DATA, FORMAT TRACK, READ ID, READ DIAGNOSTIC, SCAN, and SEEK commands; supports two drives (A and B), write-protect toggles, and an optional Speedlock copy-protection workaround
 - **DISCiPLE** — Miles Gordon Technology disk interface with GDOS ROM and port-level emulation
 - **Multiface** — Romantic Robot Multiface 1, 128, and 3 with NMI trigger (F12) and ROM paging
 
@@ -32,6 +38,12 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 - **Full screen** — toggle from the View menu, press Esc to return to windowed mode
 - **4:3 aspect ratio** — maintained at all sizes with black letterbox/pillarbox bars
 - **Pixel-nearest scaling** — sharp pixels at all zoom levels
+- **CRT scanline filter** — optional 2x upscale with darkened alternate rows for a CRT look
+
+### Tools
+- **WAV recording** — capture the emulator's audio output to a .wav file
+- **Screenshot** — save the current frame as a PNG
+- **Poke entry** — apply numeric pokes via a dialog (address + byte)
 
 ### Built-in Debugger
 
@@ -82,11 +94,11 @@ go build -o zx_go ./cmd/zx_go
 
 The emulator starts in 48K mode by default. Use the menu bar to:
 
-- **File** — load/save snapshots (.sna, .z80, .szx), load TAP tapes, or select a ROM
+- **File** — load/save snapshots (.sna, .z80, .szx); load tapes (.tap, .tzx) and save as .tap; load +3 disks (.dsk, .edsk, .udi, .mgt/.img, .trd, .sad, .d40/.d80) and save as .dsk; open or record RZX sessions; save screenshot (.png); record audio to .wav; browse the loaded tape's block list; toggle write protection on either disk drive; load a custom ROM
 - **Machine** — switch between Spectrum models (48K, 128K, +2, +2A, +3)
-- **View** — scale the display (100%-300%) or go full screen
-- **Peripherals** — enable/disable DISCiPLE and Multiface interfaces
-- **Emulator** — reboot, pause/resume, open debugger, view ROM info, trigger NMI (F12)
+- **View** — scale the display (100%-300%), go full screen, or toggle the CRT scanline filter
+- **Peripherals** — enable/disable DISCiPLE and Multiface (1, 128, or 3) interfaces, select a joystick (Kempston, Sinclair left/right, Cursor)
+- **Emulator** — reboot, pause/resume, enter pokes, open the debugger, view ROM info, trigger NMI (F12)
 
 ### Keyboard mapping
 
@@ -120,11 +132,14 @@ You can override embedded ROMs by placing files in a `roms/` directory alongside
 cmd/zx_go/         Main application entry point (Fyne GUI)
 pkg/
   z80/             Z80 CPU core with StepInstruction for debugger
-  ula/             ULA — display, border, audio, tape, I/O ports
+  ula/             ULA — display, border, audio, tape (TAP/TZX), I/O ports
   memory/          Memory management, bank paging, contention
   keyboard/        Keyboard matrix emulation
   audio/           Beeper audio system
+  ay/              AY-3-8912 sound chip (128K and later)
   snapshot/        Snapshot load/save (SNA, Z80, SZX)
+  plus3fdc/        +3 floppy disk controller (uPD765A) and disk image parsers
+  rzx/             RZX input recording — playback and recording with FUSE parity
   roms/            ROM loading with embedded fallback
   peripherals/     Peripheral manager
   disciple/        DISCiPLE disk interface
