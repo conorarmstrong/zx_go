@@ -182,11 +182,23 @@ func applyCRTFilterInto(dst, src *image.RGBA) {
 	}
 }
 
-// keyboardWidget implements desktop.Keyable to receive KeyDown/KeyUp events
+// keyboardWidget implements desktop.Keyable to receive KeyDown/KeyUp
+// events, and desktop.Mouseable/desktop.Hoverable to receive mouse
+// button and motion events. It sits as a transparent overlay at the
+// top of the content stack so it catches events before they reach
+// the screen image underneath.
 type keyboardWidget struct {
 	widget.BaseWidget
-	onKeyDown func(*fyne.KeyEvent)
-	onKeyUp   func(*fyne.KeyEvent)
+	onKeyDown   func(*fyne.KeyEvent)
+	onKeyUp     func(*fyne.KeyEvent)
+	onMouseMove func(dx, dy int)
+	onMouseBtn  func(btn int, pressed bool)
+
+	// lastMousePos holds the last MouseMoved position so we can
+	// compute deltas. Reset on MouseIn so the first move after
+	// re-entering the window doesn't produce a giant jump.
+	lastMousePos fyne.Position
+	haveLastPos  bool
 }
 
 func newKeyboardWidget(onKeyDown, onKeyUp func(*fyne.KeyEvent)) *keyboardWidget {
@@ -221,11 +233,73 @@ func (kw *keyboardWidget) TypedRune(r rune) {
 func (kw *keyboardWidget) FocusGained() {}
 func (kw *keyboardWidget) FocusLost()   {}
 
+// MouseIn is called when the cursor enters the widget. Reset the
+// last-position cache so the first MouseMoved afterwards doesn't
+// deliver a stale delta.
+func (kw *keyboardWidget) MouseIn(ev *desktop.MouseEvent) {
+	kw.haveLastPos = false
+}
+
+// MouseOut clears the tracking state — no deltas produced while
+// the cursor is outside the window.
+func (kw *keyboardWidget) MouseOut() {
+	kw.haveLastPos = false
+}
+
+// MouseMoved is called on every cursor movement inside the widget.
+// We convert the absolute position to deltas against the previous
+// sample and forward them to onMouseMove.
+func (kw *keyboardWidget) MouseMoved(ev *desktop.MouseEvent) {
+	if kw.onMouseMove == nil {
+		return
+	}
+	if kw.haveLastPos {
+		dx := int(ev.Position.X - kw.lastMousePos.X)
+		dy := int(ev.Position.Y - kw.lastMousePos.Y)
+		if dx != 0 || dy != 0 {
+			kw.onMouseMove(dx, dy)
+		}
+	}
+	kw.lastMousePos = ev.Position
+	kw.haveLastPos = true
+}
+
+// MouseDown / MouseUp forward button press/release events to the
+// onMouseBtn callback. Button index follows FUSE's Kempston
+// convention: 0 = right button, 1 = left button.
+func (kw *keyboardWidget) MouseDown(ev *desktop.MouseEvent) {
+	if kw.onMouseBtn == nil {
+		return
+	}
+	switch ev.Button {
+	case desktop.MouseButtonPrimary:
+		kw.onMouseBtn(1, true) // left → bit 1
+	case desktop.MouseButtonSecondary:
+		kw.onMouseBtn(0, true) // right → bit 0
+	}
+}
+
+func (kw *keyboardWidget) MouseUp(ev *desktop.MouseEvent) {
+	if kw.onMouseBtn == nil {
+		return
+	}
+	switch ev.Button {
+	case desktop.MouseButtonPrimary:
+		kw.onMouseBtn(1, false)
+	case desktop.MouseButtonSecondary:
+		kw.onMouseBtn(0, false)
+	}
+}
+
 func (kw *keyboardWidget) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(container.NewWithoutLayout())
 }
 
-var _ desktop.Keyable = (*keyboardWidget)(nil)
+var (
+	_ desktop.Keyable   = (*keyboardWidget)(nil)
+	_ desktop.Mouseable = (*keyboardWidget)(nil)
+	_ desktop.Hoverable = (*keyboardWidget)(nil)
+)
 
 // savePlus3Disk opens a file save picker and writes the current disk in
 // the given drive to a DSK file.
@@ -534,6 +608,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 					frameCount++
 					atomic.AddInt32(&e.frameCounter, 1)
+					e.peripherals.Frame()
 
 					// Render at 50Hz
 					now := time.Now()
@@ -1213,11 +1288,20 @@ func main() {
 	screen := canvas.NewImageFromImage(initialImage)
 	screen.ScaleMode = canvas.ImageScalePixels
 
-	// Create keyboard widget with event handlers
+	// Create keyboard widget with event handlers. The mouse
+	// callbacks route to the peripheral manager's Kempston mouse
+	// — they're no-ops when the mouse isn't enabled, so the
+	// handlers can always be installed.
 	keyboardWidget := newKeyboardWidget(
 		emu.handleKeyDown,
 		emu.handleKeyUp,
 	)
+	keyboardWidget.onMouseMove = func(dx, dy int) {
+		emu.peripherals.KempstonMouseMove(dx, dy)
+	}
+	keyboardWidget.onMouseBtn = func(btn int, pressed bool) {
+		emu.peripherals.KempstonMouseButton(btn, pressed)
+	}
 
 	// Create model selection callback
 	switchModel := func(newModel roms.SpectrumModel) {
@@ -1553,6 +1637,44 @@ func main() {
 			}),
 			fyne.NewMenuItemSeparator(),
 			makeMicrodriveMenu(emu, w),
+			fyne.NewMenuItem("Save ZX Printer Output (PNG)...", func() {
+				if !emu.peripherals.IsZXPrinterEnabled() {
+					dialog.ShowInformation("ZX Printer", "ZX Printer is not enabled.\nEnable it from the Peripherals menu first.", w)
+					return
+				}
+				printer := emu.peripherals.ZXPrinter()
+				if printer.Rows() == 0 {
+					dialog.ShowInformation("ZX Printer", "Nothing has been printed yet.", w)
+					return
+				}
+				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if writer == nil {
+						return
+					}
+					path := writer.URI().Path()
+					_ = writer.Close()
+					if !strings.HasSuffix(strings.ToLower(path), ".png") {
+						path += ".png"
+					}
+					if err := printer.Save(path); err != nil {
+						dialog.ShowError(fmt.Errorf("save printer output: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("ZX Printer", fmt.Sprintf("Saved %d rows to:\n%s", printer.Rows(), filepath.Base(path)), w)
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
+				fd.Show()
+			}),
+			fyne.NewMenuItem("Clear ZX Printer Output", func() {
+				if !emu.peripherals.IsZXPrinterEnabled() {
+					return
+				}
+				emu.peripherals.ZXPrinter().Clear()
+			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Save Tape (TAP)...", func() {
 				tp := emu.ula.GetTapePlayer()
@@ -1765,6 +1887,8 @@ func main() {
 			joySinclair1Item := fyne.NewMenuItem("Joystick: Sinclair (left, 1-5)", nil)
 			joySinclair2Item := fyne.NewMenuItem("Joystick: Sinclair (right, 6-0)", nil)
 			joyCursorItem := fyne.NewMenuItem("Joystick: Cursor / Protek", nil)
+			kempMouseItem := fyne.NewMenuItem("Enable Kempston Mouse", nil)
+			zxPrinterItem := fyne.NewMenuItem("Enable ZX Printer", nil)
 
 			updateLabels := func() {
 				if emu.peripherals.IsDiscipleEnabled() {
@@ -1802,6 +1926,16 @@ func main() {
 				joySinclair1Item.Label = marker(JoystickSinclair1, "Joystick: Sinclair (left, 1-5)")
 				joySinclair2Item.Label = marker(JoystickSinclair2, "Joystick: Sinclair (right, 6-0)")
 				joyCursorItem.Label = marker(JoystickCursor, "Joystick: Cursor / Protek")
+				if emu.peripherals.IsKempstonMouseEnabled() {
+					kempMouseItem.Label = "Disable Kempston Mouse"
+				} else {
+					kempMouseItem.Label = "Enable Kempston Mouse"
+				}
+				if emu.peripherals.IsZXPrinterEnabled() {
+					zxPrinterItem.Label = "Disable ZX Printer"
+				} else {
+					zxPrinterItem.Label = "Enable ZX Printer"
+				}
 			}
 
 			discipleItem.Action = func() {
@@ -1876,6 +2010,30 @@ func main() {
 			joySinclair2Item.Action = func() { selectJoystick(JoystickSinclair2) }
 			joyCursorItem.Action = func() { selectJoystick(JoystickCursor) }
 
+			kempMouseItem.Action = func() {
+				if emu.peripherals.IsKempstonMouseEnabled() {
+					emu.peripherals.DisableKempstonMouse()
+				} else {
+					emu.peripherals.EnableKempstonMouse()
+				}
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
+			zxPrinterItem.Action = func() {
+				if emu.peripherals.IsZXPrinterEnabled() {
+					emu.peripherals.DisableZXPrinter()
+				} else {
+					emu.peripherals.EnableZXPrinter()
+				}
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
 			updateLabels()
 			return fyne.NewMenu("Peripherals",
 				discipleItem,
@@ -1889,6 +2047,9 @@ func main() {
 				joySinclair1Item,
 				joySinclair2Item,
 				joyCursorItem,
+				fyne.NewMenuItemSeparator(),
+				kempMouseItem,
+				zxPrinterItem,
 			)
 		}(),
 		fyne.NewMenu("Emulator",

@@ -107,13 +107,15 @@ func (h *Harness) Reboot() {
 
 // RunFrames executes n full emulator frames synchronously on the
 // calling goroutine. Each frame runs the CPU for TstatesPerFrame
-// T-states and then renders the screen. Use this to advance the
+// T-states, renders the screen, and ticks per-frame peripherals
+// (e.g. the ZX Printer drum timer). Use this to advance the
 // emulator past boot, between key presses, or while waiting for
 // asynchronous BASIC operations to complete.
 func (h *Harness) RunFrames(n int) {
 	for i := 0; i < n; i++ {
 		h.cpu.ExecuteFrame(TstatesPerFrame)
 		h.ula.Render()
+		h.peripherals.Frame()
 	}
 }
 

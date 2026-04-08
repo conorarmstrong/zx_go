@@ -34,6 +34,8 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 - **Interface 1 / Microdrive** — Sinclair's tape-loop mass storage for the 48K Spectrum: 8 daisy-chained microdrive slots with motor select, GAP/SYNC formatting model, write-protect, and full `.mdr` cartridge round-trip. The Interface 1 v2 ROM is embedded (Amstrad copyright, redistributed with permission via the [spectrumforeveryone/zx-roms](https://github.com/spectrumforeveryone/zx-roms) archive). RS-232 and SinclairNET ports are stubbed (no host plumbing)
 - **DISCiPLE** — Miles Gordon Technology disk interface with GDOS ROM and port-level emulation
 - **Multiface** — Romantic Robot Multiface 1, 128, and 3 with NMI trigger (F12) and ROM paging
+- **Kempston mouse** — 3-port mouse interface (X at 0xFBDF, Y at 0xFFDF, buttons at 0xFADF). Host mouse movement and button events forward to the Spectrum bus when enabled
+- **ZX Printer** — Sinclair's 1-bit thermal printer on port 0xFB. Emulates the drum timing so BASIC's `LPRINT` works; accumulates rows into a bitmap that can be saved as PNG via the File menu
 
 ### Display
 - **Scalable window** — View menu with 100%, 125%, 150%, 200%, and 300% scaling options
@@ -143,7 +145,10 @@ pkg/
   plus3fdc/        +3 floppy disk controller (uPD765A) and disk image parsers
   microdrive/      .mdr cartridge format (Sinclair Interface 1)
   if1/             Interface 1 — shadow ROM, microdrive bus, port I/O
+  kempmouse/       Kempston mouse interface
+  zxprinter/       Sinclair ZX Printer — 1-bit thermal printer at port 0xFB
   rzx/             RZX input recording — playback and recording with FUSE parity
+  testharness/     Headless scripted emulator for end-to-end integration tests
   roms/            ROM loading with embedded fallback
   peripherals/     Peripheral manager
   disciple/        DISCiPLE disk interface

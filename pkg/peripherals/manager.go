@@ -6,11 +6,13 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/disciple"
 	"github.com/conorarmstrong/zx_go/pkg/if1"
+	"github.com/conorarmstrong/zx_go/pkg/kempmouse"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/plus3fdc"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
+	"github.com/conorarmstrong/zx_go/pkg/zxprinter"
 )
 
 // PeripheralManager manages all peripheral devices
@@ -20,12 +22,27 @@ type PeripheralManager struct {
 	multiface *multiface.Multiface
 	plus3fdc  *plus3fdc.Plus3FDC
 	if1       *if1.IF1
+	kempmouse *kempmouse.Mouse
+	zxprinter *zxprinter.Printer
 
 	// Configuration
 	discipleEnabled  bool
 	multifaceEnabled bool
 	multifaceVariant multiface.MultifaceType
 	if1Enabled       bool
+	kempmouseEnabled bool
+	zxprinterEnabled bool
+}
+
+// currentTstates returns the CPU's current T-state counter via the
+// memory package's shared TStates pointer (set by the CPU at
+// construction for memory contention). Used by peripherals like the
+// ZX Printer that need cycle-accurate drum timing.
+func (pm *PeripheralManager) currentTstates() int64 {
+	if pm.memory.TStates == nil {
+		return 0
+	}
+	return int64(*pm.memory.TStates)
 }
 
 // NewPeripheralManager creates a new peripheral manager
@@ -154,6 +171,89 @@ func (pm *PeripheralManager) DisableInterface1() {
 	pm.if1Enabled = false
 	pm.if1 = nil
 	log.Println("Interface 1 disabled")
+}
+
+// Frame ticks any peripheral that needs a per-frame pulse. Call
+// once per emulator frame (50 Hz) after ExecuteFrame + Render.
+// Currently only the ZX Printer uses it — for drum-timing math
+// that needs to know "how many frames ago did the motor start".
+func (pm *PeripheralManager) Frame() {
+	if pm.zxprinter != nil {
+		pm.zxprinter.Frame()
+	}
+}
+
+// EnableZXPrinter attaches a ZX Printer to the peripheral bus.
+// Prints accumulate in a bitmap buffer the caller can access via
+// ZXPrinter() → Bitmap()/Save(). Idempotent.
+func (pm *PeripheralManager) EnableZXPrinter() {
+	if pm.zxprinterEnabled {
+		return
+	}
+	pm.zxprinter = zxprinter.New()
+	pm.zxprinterEnabled = true
+	log.Println("ZX Printer enabled")
+}
+
+// DisableZXPrinter detaches the ZX Printer. Any accumulated print
+// rows are dropped — callers who want to keep the bitmap should
+// Save() first.
+func (pm *PeripheralManager) DisableZXPrinter() {
+	pm.zxprinterEnabled = false
+	pm.zxprinter = nil
+	log.Println("ZX Printer disabled")
+}
+
+// IsZXPrinterEnabled reports whether the printer is attached.
+func (pm *PeripheralManager) IsZXPrinterEnabled() bool {
+	return pm.zxprinterEnabled
+}
+
+// ZXPrinter returns the attached printer or nil. Used by the UI
+// for Save / Clear menu actions.
+func (pm *PeripheralManager) ZXPrinter() *zxprinter.Printer {
+	return pm.zxprinter
+}
+
+// EnableKempstonMouse attaches a Kempston mouse to the peripheral
+// bus. The mouse is idle until Move / SetButton calls arrive from
+// the host event loop. Idempotent — calling again is a no-op.
+func (pm *PeripheralManager) EnableKempstonMouse() {
+	if pm.kempmouseEnabled {
+		return
+	}
+	pm.kempmouse = kempmouse.New()
+	pm.kempmouseEnabled = true
+	log.Println("Kempston mouse enabled")
+}
+
+// DisableKempstonMouse detaches the Kempston mouse.
+func (pm *PeripheralManager) DisableKempstonMouse() {
+	pm.kempmouseEnabled = false
+	pm.kempmouse = nil
+	log.Println("Kempston mouse disabled")
+}
+
+// IsKempstonMouseEnabled reports whether the Kempston mouse is
+// currently attached.
+func (pm *PeripheralManager) IsKempstonMouseEnabled() bool {
+	return pm.kempmouseEnabled
+}
+
+// KempstonMouseMove accumulates host mouse deltas into the
+// Kempston X / Y counters. No-op if the mouse isn't enabled.
+func (pm *PeripheralManager) KempstonMouseMove(dx, dy int) {
+	if pm.kempmouse != nil {
+		pm.kempmouse.Move(dx, dy)
+	}
+}
+
+// KempstonMouseButton presses or releases a Kempston mouse button.
+// btn is the button index (0 = right, 1 = left, per FUSE convention).
+func (pm *PeripheralManager) KempstonMouseButton(btn int, pressed bool) {
+	if pm.kempmouse != nil {
+		pm.kempmouse.SetButton(btn, pressed)
+	}
 }
 
 // IF1 returns the active Interface 1 device, or nil if not enabled.
@@ -312,6 +412,20 @@ func (pm *PeripheralManager) HandlePortRead(port uint16) (byte, bool) {
 		}
 	}
 
+	// Kempston mouse (any model).
+	if pm.kempmouseEnabled && pm.kempmouse != nil {
+		if value, handled := pm.kempmouse.HandlePortRead(port); handled {
+			return value, true
+		}
+	}
+
+	// ZX Printer — timing-sensitive, needs current T-states.
+	if pm.zxprinterEnabled && pm.zxprinter != nil {
+		if value, handled := pm.zxprinter.HandlePortRead(port, pm.currentTstates()); handled {
+			return value, true
+		}
+	}
+
 	return 0, false
 }
 
@@ -353,6 +467,13 @@ func (pm *PeripheralManager) HandlePortWrite(port uint16, value byte) bool {
 	// Interface 1 writes (48K only).
 	if pm.if1Enabled && pm.if1 != nil {
 		if pm.if1.HandlePortWrite(port, value) {
+			handled = true
+		}
+	}
+
+	// ZX Printer writes — timing-sensitive, needs current T-states.
+	if pm.zxprinterEnabled && pm.zxprinter != nil {
+		if pm.zxprinter.HandlePortWrite(port, value, pm.currentTstates()) {
 			handled = true
 		}
 	}
