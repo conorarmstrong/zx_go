@@ -56,6 +56,14 @@ type ULA struct {
 	// Allows accurate rendering of border effects that change colour during the frame.
 	borderChanges []borderChange
 
+	// Beeper audio event recording. Each port-0xFE write that flips
+	// bit 4 appends an (offset, state) tuple here. Render() walks the
+	// list at end of frame to synthesise audio samples and pushes
+	// them to the audio system. Reset at start of every frame.
+	audioEvents            []audioEvent
+	frameStartTstate       uint64
+	frameStartSpeakerState bool
+
 	// Tape loading state
 	tape *TapePlayer
 
@@ -76,6 +84,13 @@ type ULA struct {
 type borderChange struct {
 	scanline int
 	colour   byte
+}
+
+// audioEvent records a single speaker-bit toggle within a frame, with
+// the T-state offset (0..tstatesPerFrame) at which it happened.
+type audioEvent struct {
+	tstateOffset int
+	state        bool
 }
 
 // New creates a new ULA instance.
@@ -134,6 +149,10 @@ func (u *ULA) Render() *image.RGBA {
 	if u.tape != nil && u.tape.IsPlaying() {
 		u.TapeIn = u.tape.Update(69888)
 	}
+
+	// Synthesise audio for the frame from recorded speaker events
+	// and push to the audio system, then reset the per-frame state.
+	u.flushAudioFrame()
 
 	u.flashCount++
 	if u.flashCount >= FlashFrames {
@@ -340,13 +359,18 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 		}
 		u.Mic = (val & 0x08) != 0
 		
-		// Handle speaker state change
+		// Handle speaker state change. Each toggle is recorded with
+		// the T-state offset within the current frame so the audio
+		// generator can reconstruct the waveform at end-of-frame.
 		newSpeakerState := (val & 0x10) != 0
 		if newSpeakerState != u.Speaker {
 			u.Speaker = newSpeakerState
-			// Update audio system if available (but don't log every change)
-			if u.audio != nil {
-				u.audio.SetSpeakerState(newSpeakerState)
+			if u.audio != nil && u.mem.TStates != nil {
+				offset := int(*u.mem.TStates - u.frameStartTstate)
+				u.audioEvents = append(u.audioEvents, audioEvent{
+					tstateOffset: offset,
+					state:        newSpeakerState,
+				})
 			}
 		}
 	} else if u.ay != nil && (addr&0xC002) == 0xC000 {
@@ -478,4 +502,64 @@ func (u *ULA) Reset() {
 			}
 		}
 	}
+
+	// Reset beeper sample generation state.
+	u.audioEvents = u.audioEvents[:0]
+	u.frameStartSpeakerState = false
+	if u.mem.TStates != nil {
+		u.frameStartTstate = *u.mem.TStates
+	}
 }
+
+// flushAudioFrame synthesises the beeper waveform for the just-finished
+// frame from the recorded speaker events, pushes it to the audio
+// system, and resets the per-frame state for the next frame.
+func (u *ULA) flushAudioFrame() {
+	if u.audio == nil {
+		return
+	}
+	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	u.audio.PushBeeperSamples(samples)
+	u.frameStartSpeakerState = finalState
+	u.audioEvents = u.audioEvents[:0]
+	if u.mem.TStates != nil {
+		u.frameStartTstate = *u.mem.TStates
+	}
+}
+
+// generateBeeperFrame synthesises one frame's worth of mono beeper
+// samples from a list of speaker-toggle events. Returns the samples
+// and the speaker state at the end of the frame so the caller can
+// seed the next frame's initial state.
+//
+// Each event records the T-state offset within the frame at which
+// the speaker bit changed. For each output sample we look up which
+// state was active at that sample's midpoint by walking the events
+// forward — events are sorted by tstate, so this is a single linear
+// pass over both arrays.
+func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int16, finalState bool) {
+	const tstatesPerFrame = 69888
+	samples = make([]int16, audio.SamplesPerFrame)
+	state := initialState
+	eventIdx := 0
+	for i := 0; i < audio.SamplesPerFrame; i++ {
+		sampleTstate := (2*i + 1) * tstatesPerFrame / (2 * audio.SamplesPerFrame)
+		for eventIdx < len(events) && events[eventIdx].tstateOffset <= sampleTstate {
+			state = events[eventIdx].state
+			eventIdx++
+		}
+		if state {
+			samples[i] = beeperHigh
+		} else {
+			samples[i] = beeperLow
+		}
+	}
+	return samples, state
+}
+
+// Beeper amplitude levels — symmetric around zero so a constant
+// 50% duty cycle averages to silence.
+const (
+	beeperHigh int16 = 6000
+	beeperLow  int16 = -6000
+)
