@@ -31,7 +31,7 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 
 ### Peripherals
 - **+3 floppy disk controller** — NEC µPD765A FDC implementation with full READ DATA, WRITE DATA, FORMAT TRACK, READ ID, READ DIAGNOSTIC, SCAN, and SEEK commands; supports two drives (A and B), write-protect toggles, and an optional Speedlock copy-protection workaround
-- **Interface 1 / Microdrive** — Sinclair's tape-loop mass storage for the 48K Spectrum: 8 daisy-chained microdrive slots with motor select, GAP/SYNC formatting model, write-protect, and full `.mdr` cartridge round-trip. Requires the user to drop their own `if1-2.rom` (8KB, widely available from World of Spectrum) into `roms/`. RS-232 and SinclairNET ports are stubbed (no host plumbing)
+- **Interface 1 / Microdrive** — Sinclair's tape-loop mass storage for the 48K Spectrum: 8 daisy-chained microdrive slots with motor select, GAP/SYNC formatting model, write-protect, and full `.mdr` cartridge round-trip. The Interface 1 v2 ROM is embedded (Amstrad copyright, redistributed with permission via the [spectrumforeveryone/zx-roms](https://github.com/spectrumforeveryone/zx-roms) archive). RS-232 and SinclairNET ports are stubbed (no host plumbing)
 - **DISCiPLE** — Miles Gordon Technology disk interface with GDOS ROM and port-level emulation
 - **Multiface** — Romantic Robot Multiface 1, 128, and 3 with NMI trigger (F12) and ROM paging
 
