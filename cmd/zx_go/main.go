@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -30,6 +31,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
+	"github.com/conorarmstrong/zx_go/pkg/rzx"
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
@@ -93,6 +95,16 @@ type emulator struct {
 
 	// Currently active joystick interface. Mutated only from the UI thread.
 	joystickType JoystickType
+
+	// RZX session state. At most one of rzxPlayback / rzxRecord is
+	// non-nil at any given time (FUSE rzx.c:164,278). Atomic so the
+	// per-frame read in the emulation goroutine doesn't need a lock,
+	// and so menu-thread Set calls don't race the per-IN ULA hook.
+	// rzxRecordFilename is only touched from the UI thread (set on
+	// Start, read on Stop), so it doesn't need atomic protection.
+	rzxPlayback       atomic.Pointer[rzx.Playback]
+	rzxRecord         atomic.Pointer[rzx.Recording]
+	rzxRecordFilename string
 }
 
 // joystickKeySymbols returns the Spectrum keys (as fyne.KeyName values that
@@ -471,8 +483,54 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 			select {
 			case <-ticker.C:
 				if !e.paused.Load() {
-					// Execute CPU frame
-					e.cpu.ExecuteFrame(tstatesPerFrame)
+					// Three execution paths: RZX playback,
+					// RZX recording, or normal frame.
+					switch {
+					case e.rzxPlayback.Load() != nil:
+						playback := e.rzxPlayback.Load()
+						e.cpu.ExecuteRZXFrame(uint64(playback.Instructions()))
+						snapBlock, err := playback.Frame()
+						switch {
+						case errors.Is(err, rzx.ErrPlaybackFinished):
+							e.stopRZXPlayback()
+						case err != nil:
+							log.Printf("RZX playback error: %v", err)
+							e.stopRZXPlayback()
+						case snapBlock != nil:
+							// Intermediate snapshot — apply it before the next frame.
+							snap, derr := rzx.DecodeSnapshot(snapBlock)
+							if derr != nil {
+								log.Printf("RZX intermediate snapshot decode failed: %v; stopping playback", derr)
+								e.stopRZXPlayback()
+								break
+							}
+							if aerr := applySnapshotToEmulator(e, snap); aerr != nil {
+								log.Printf("RZX intermediate snapshot apply failed: %v; stopping playback", aerr)
+								e.stopRZXPlayback()
+							}
+						}
+					case e.rzxRecord.Load() != nil:
+						recorder := e.rzxRecord.Load()
+						before := e.cpu.InstructionCount()
+						e.cpu.ExecuteFrame(tstatesPerFrame)
+						delta := e.cpu.InstructionCount() - before
+						if delta > 0xFFFF {
+							log.Printf("RZX record: frame instruction count %d > 0xFFFF, clamping", delta)
+							delta = 0xFFFF
+						}
+						if err := recorder.StoreFrame(uint16(delta)); err != nil {
+							log.Printf("RZX record StoreFrame: %v", err)
+						}
+						if recorder.AutosaveDue() {
+							if snap, err := createSnapshotFromEmulator(e); err == nil {
+								if block, err := rzx.EncodeSnapshot(snap, rzx.SnapshotFormatSZX, true); err == nil {
+									recorder.AddAutosave(block, uint32(e.cpu.Tstates()))
+								}
+							}
+						}
+					default:
+						e.cpu.ExecuteFrame(tstatesPerFrame)
+					}
 
 					frameCount++
 					atomic.AddInt32(&e.frameCounter, 1)
@@ -674,6 +732,176 @@ func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
 	snap.CPU.BorderColor = emu.ula.BorderColour
 
 	return snap, nil
+}
+
+// withEmulationPaused runs fn with the emulation goroutine paused, then
+// restores the previous pause state. Used by RZX start/stop helpers
+// that mutate live CPU state and would otherwise race the emulation
+// loop. Matches the pattern used by applySnapshotToEmulator.
+func (e *emulator) withEmulationPaused(fn func() error) error {
+	wasPaused := e.paused.Load()
+	if !wasPaused {
+		e.paused.Store(true)
+	}
+	err := fn()
+	if !wasPaused {
+		e.paused.Store(false)
+	}
+	return err
+}
+
+// startRZXPlayback installs the supplied RZX session as the active
+// playback driver. Loads the embedded snapshot, wires the ULA's
+// playback hook to the file's IN-byte stream, and switches the main
+// loop into per-frame instruction-counted execution mode.
+//
+// Pauses the emulation goroutine for the duration of the state
+// mutation so the CPU can't be mid-frame when the snapshot apply +
+// T-state reset happens.
+func (e *emulator) startRZXPlayback(file *rzx.File) error {
+	if e.rzxRecord.Load() != nil {
+		return fmt.Errorf("cannot start playback while recording")
+	}
+	return e.withEmulationPaused(func() error {
+		pb := rzx.NewPlayback(file)
+		snapBlock, err := pb.Start(0)
+		if err != nil {
+			return fmt.Errorf("rzx start playback: %w", err)
+		}
+		if snapBlock != nil {
+			snap, err := rzx.DecodeSnapshot(snapBlock)
+			if err != nil {
+				return fmt.Errorf("rzx decode initial snapshot: %w", err)
+			}
+			if err := applySnapshotToEmulator(e, snap); err != nil {
+				return fmt.Errorf("rzx apply initial snapshot: %w", err)
+			}
+		}
+		e.cpu.SetTstates(uint64(pb.Tstates()))
+
+		// Wire the ULA hook so every IN read pulls from the
+		// recorded stream. Closure over pb avoids any pointer
+		// chase on the per-IN hot path.
+		e.ula.SetRZXPlaybackHook(func() (byte, bool) {
+			b, err := pb.NextByte()
+			if err != nil {
+				return 0, false
+			}
+			return b, true
+		})
+
+		e.rzxPlayback.Store(pb)
+		return nil
+	})
+}
+
+// stopRZXPlayback tears down an active playback session. Idempotent.
+// Safe to call from any goroutine — the atomic.Pointer clear plus the
+// ULA hook clear are both lock-free.
+func (e *emulator) stopRZXPlayback() {
+	if e.rzxPlayback.Swap(nil) == nil {
+		return
+	}
+	e.ula.SetRZXPlaybackHook(nil)
+}
+
+// startRZXRecording opens a new recording session that will be saved
+// to filename when stopRZXRecording is called. The current emulator
+// state is captured as the initial snapshot so playback starts from
+// this point. Pauses the emulation goroutine during snapshot capture
+// so the CPU state isn't sampled mid-frame.
+func (e *emulator) startRZXRecording(filename string, competition bool) error {
+	if e.rzxPlayback.Load() != nil {
+		return fmt.Errorf("cannot start recording while playback is active")
+	}
+	return e.withEmulationPaused(func() error {
+		rec := rzx.NewRecording()
+		rec.AddCreator(&rzx.CreatorBlock{Program: "zx_go", Major: 1, Minor: 0})
+
+		snap, err := createSnapshotFromEmulator(e)
+		if err != nil {
+			return fmt.Errorf("rzx capture snapshot: %w", err)
+		}
+		block, err := rzx.EncodeSnapshot(snap, rzx.SnapshotFormatSZX, false)
+		if err != nil {
+			return fmt.Errorf("rzx encode snapshot: %w", err)
+		}
+		rec.AddSnap(block, false)
+		rec.AutosavesEnabled = !competition
+		rec.CompetitionMode = competition
+		rec.StartInput(uint32(e.cpu.Tstates()))
+
+		e.ula.SetRZXRecordHook(rec.RecordIN)
+
+		e.rzxRecord.Store(rec)
+		e.rzxRecordFilename = filename
+		return nil
+	})
+}
+
+// stopRZXRecording finalises the in-progress recording (if any) and
+// writes it out. The Recording is cleared even on write failure so the
+// user can retry; pauses the emulation goroutine while sampling the
+// final snapshot so the CPU state isn't read mid-frame.
+func (e *emulator) stopRZXRecording() error {
+	rec := e.rzxRecord.Swap(nil)
+	if rec == nil {
+		return nil
+	}
+	filename := e.rzxRecordFilename
+	e.rzxRecordFilename = ""
+	e.ula.SetRZXRecordHook(nil)
+
+	// Embed a final snapshot so post-recording playback can resume
+	// from the end (FUSE rzx.c:199, skipped in competition mode).
+	if !rec.CompetitionMode {
+		err := e.withEmulationPaused(func() error {
+			snap, err := createSnapshotFromEmulator(e)
+			if err != nil {
+				return err
+			}
+			block, err := rzx.EncodeSnapshot(snap, rzx.SnapshotFormatSZX, false)
+			if err != nil {
+				return err
+			}
+			rec.AddSnap(block, false)
+			return nil
+		})
+		if err != nil {
+			log.Printf("RZX stop: final snapshot capture failed: %v", err)
+		}
+	}
+
+	if err := rec.WriteFile(filename, rzx.WriteOptions{Compress: true}); err != nil {
+		return fmt.Errorf("rzx write %s: %w", filename, err)
+	}
+	return nil
+}
+
+// rzxRollbackToLastSnapshot truncates the in-progress recording back
+// to the most recent snapshot block, restores that snapshot to the
+// live emulator, and reopens the input recording window. Bound to the
+// "RZX Rollback" menu item.
+func (e *emulator) rzxRollbackToLastSnapshot() error {
+	rec := e.rzxRecord.Load()
+	if rec == nil {
+		return fmt.Errorf("no recording in progress")
+	}
+	snapBlock, err := rec.Rollback()
+	if err != nil {
+		return fmt.Errorf("rollback: %w", err)
+	}
+	snap, err := rzx.DecodeSnapshot(snapBlock)
+	if err != nil {
+		return fmt.Errorf("decode rollback snapshot: %w", err)
+	}
+	return e.withEmulationPaused(func() error {
+		if err := applySnapshotToEmulator(e, snap); err != nil {
+			return err
+		}
+		rec.StartInput(uint32(e.cpu.Tstates()))
+		return nil
+	})
 }
 
 // installTapeTrap installs a fast-load trap on the CPU that intercepts the
@@ -1147,6 +1375,71 @@ func main() {
 				}
 				return item
 			}(),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Open RZX Recording...", func() {
+				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if reader == nil {
+						return
+					}
+					path := reader.URI().Path()
+					_ = reader.Close()
+					file, err := rzx.ReadFile(path)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("failed to load RZX: %w", err), w)
+						return
+					}
+					if err := emu.startRZXPlayback(file); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to start RZX playback: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("RZX Playback", fmt.Sprintf("Playing back:\n%s", filepath.Base(path)), w)
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
+				fd.Show()
+			}),
+			fyne.NewMenuItem("Stop RZX Playback", func() {
+				emu.stopRZXPlayback()
+			}),
+			fyne.NewMenuItem("Start RZX Recording...", func() {
+				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					if writer == nil {
+						return
+					}
+					path := writer.URI().Path()
+					_ = writer.Close()
+					if !strings.HasSuffix(strings.ToLower(path), ".rzx") {
+						path += ".rzx"
+					}
+					if err := emu.startRZXRecording(path, false); err != nil {
+						dialog.ShowError(fmt.Errorf("start RZX recording: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("RZX Recording", fmt.Sprintf("Recording to:\n%s", filepath.Base(path)), w)
+				}, w)
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
+				fd.Show()
+			}),
+			fyne.NewMenuItem("Stop RZX Recording", func() {
+				if err := emu.stopRZXRecording(); err != nil {
+					dialog.ShowError(fmt.Errorf("stop RZX recording: %w", err), w)
+					return
+				}
+				dialog.ShowInformation("RZX Recording", "Recording stopped and saved.", w)
+			}),
+			fyne.NewMenuItem("RZX Rollback (last snapshot)", func() {
+				if err := emu.rzxRollbackToLastSnapshot(); err != nil {
+					dialog.ShowError(fmt.Errorf("RZX rollback: %w", err), w)
+				}
+			}),
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Save Tape (TAP)...", func() {
 				tp := emu.ula.GetTapePlayer()
 				if tp == nil || tp.BlockCount() == 0 {
