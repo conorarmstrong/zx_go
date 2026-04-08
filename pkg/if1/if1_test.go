@@ -97,8 +97,8 @@ func TestHandlePortDelegatesToULA(t *testing.T) {
 		t.Error("HandlePortRead(0xFE): claimed by IF1")
 	}
 	// CTR port — claimed by IF1 (returns the no-peripherals stub value).
-	if _, ok := i.HandlePortRead(0xEF); !ok {
-		t.Error("HandlePortRead(0xEF): not claimed by IF1")
+	if _, ok := i.HandlePortRead(PortCTR); !ok {
+		t.Error("HandlePortRead(CTR): not claimed by IF1")
 	}
 }
 
@@ -109,7 +109,7 @@ func TestPreFetchHookTriggersPageIn(t *testing.T) {
 	if err := i.LoadROMBytes(fakeROM()); err != nil {
 		t.Fatalf("LoadROMBytes: %v", err)
 	}
-	for _, pc := range PageInTriggers {
+	for _, pc := range []uint16{PageInRST8, PageInCloseChannel} {
 		i.PageOut()
 		i.PreFetchHook(pc)
 		if !i.Active() {
@@ -130,12 +130,10 @@ func TestPostFetchHookTriggersPageOut(t *testing.T) {
 	if err := i.LoadROMBytes(fakeROM()); err != nil {
 		t.Fatalf("LoadROMBytes: %v", err)
 	}
-	for _, pc := range PageOutTriggers {
-		i.PageIn()
-		i.PostFetchHook(pc)
-		if i.Active() {
-			t.Errorf("PostFetchHook(0x%04X) did not page out", pc)
-		}
+	i.PageIn()
+	i.PostFetchHook(PageOutAddr)
+	if i.Active() {
+		t.Errorf("PostFetchHook(0x%04X) did not page out", PageOutAddr)
 	}
 }
 

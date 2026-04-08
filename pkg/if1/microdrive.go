@@ -48,7 +48,6 @@ type Drive struct {
 	headPos     int  // absolute byte offset into the cartridge
 	transferred int  // bytes consumed/produced since the last block boundary
 	maxBytes    int  // size of the current "window" — 15 (header) or 528 (record + data)
-	last        byte // last byte read off the tape (returned on subsequent reads beyond maxBytes)
 	gap         byte // GAP countdown (read by CTR port)
 	sync        byte // SYNC countdown (read by CTR port)
 
@@ -63,15 +62,6 @@ type Drive struct {
 	// The IF1 ROM walks the tape looking for syncOK to know which
 	// blocks contain real data; un-syncOK blocks read as 0xFF garbage.
 	pream [512]byte
-}
-
-// blockOffset returns the head position's offset within the current
-// block (0..BlockLen-1).
-func (d *Drive) blockOffset() int {
-	if d.Cartridge == nil || d.Cartridge.Length() == 0 {
-		return 0
-	}
-	return d.headPos % microdrive.BlockLen
 }
 
 // currentBlock returns the index of the block under the head.
@@ -111,33 +101,47 @@ func (d *Drive) incrementHead() {
 }
 
 // restart aligns the head to the next block boundary or header
-// boundary, then resets the transferred counter and recomputes the
-// window size. Called by the IF1 ULA after every CTR or NET access
-// (i.e. between operations on the tape) — see microdrives_restart at
-// fuse-1.6.0/peripherals/if1.c:1047-1065.
+// boundary, then resets the transferred / GAP / SYNC counters and
+// recomputes the window size. Called by the IF1 ULA after every CTR
+// or NET access (i.e. between operations on the tape) — see
+// microdrives_restart at fuse-1.6.0/peripherals/if1.c:1047-1065.
 //
-// The IF1 ROM "scans" the tape by reading short bursts in CTR mode and
-// then asking the controller to advance to a usable position. We
-// model this by stepping forward until headPos is either:
+// The IF1 ROM "scans" the tape by reading short bursts in CTR mode
+// and then asking the controller to advance to a usable position.
+// The next valid window after any head position is one of:
 //
-//   - at a block boundary (offset == 0) — start of a header window
-//   - at HeadLen (offset == 15)         — start of a record/data window
+//   - the same position, if it's already at offset 0 (header window)
+//   - the same position, if it's already at offset 15 (record window)
+//   - offset 15 inside the same block, if we're between 1 and 14
+//   - offset 0 of the NEXT block, if we're past offset 15
 //
-// then setting maxBytes to either HeadLen (15) or HeadLen + DataLen + 1
-// (528) accordingly.
+// We compute that directly with arithmetic instead of looping
+// incrementHead() up to ~543 times.
 func (d *Drive) restart() {
 	if d.Cartridge == nil || d.Cartridge.Length() == 0 {
 		return
 	}
-	for {
-		off := d.blockOffset()
-		if off == 0 || off == microdrive.HeadLen {
-			break
+	off := d.headPos % microdrive.BlockLen
+	switch {
+	case off == 0:
+		// Already at start of a header window — nothing to do.
+	case off < microdrive.HeadLen:
+		// In the middle of a header — advance to the start of
+		// the record window in the same block.
+		d.headPos += microdrive.HeadLen - off
+	case off == microdrive.HeadLen:
+		// Already at start of a record window — nothing to do.
+	default:
+		// Past the record window — wrap to the next block start.
+		d.headPos += microdrive.BlockLen - off
+		if d.headPos >= d.Cartridge.Length()*microdrive.BlockLen {
+			d.headPos = 0
 		}
-		d.incrementHead()
 	}
 	d.transferred = 0
-	if d.blockOffset() == 0 {
+	d.gap = 15
+	d.sync = 15
+	if d.headPos%microdrive.BlockLen == 0 {
 		d.maxBytes = microdrive.HeadLen
 	} else {
 		d.maxBytes = microdrive.HeadLen + microdrive.DataLen + 1
@@ -159,17 +163,20 @@ func (d *Drive) reset() {
 // Returns the byte; the controller's port_mdr_in code combines this
 // with the bytes from any other motor-on drives via AND (negative
 // logic on the bus). Returns 0xFF when no data is available
-// (uninserted, motor off, or past the end of the current window).
+// (uninserted, motor off, or past the end of the current window —
+// 0xFF is the active-low bus idle value, the AND identity).
 func (d *Drive) readByte() byte {
 	if !d.Inserted || !d.MotorOn || d.Cartridge == nil {
 		return 0xFF
 	}
-	if d.transferred < d.maxBytes {
-		d.last = d.Cartridge.DataAt(d.headPos)
-		d.incrementHead()
+	if d.transferred >= d.maxBytes {
+		d.transferred++
+		return 0xFF
 	}
+	b := d.Cartridge.DataAt(d.headPos)
+	d.incrementHead()
 	d.transferred++
-	return d.last
+	return b
 }
 
 // writeByte processes one byte coming in from the CPU. The IF1 ROM
@@ -275,7 +282,9 @@ func (b *MicrodriveBus) Drive(i int) *Drive {
 }
 
 // Insert places the supplied cartridge into drive i, ejecting any
-// existing cartridge first.
+// existing cartridge first. Calls restart() at the end so the drive
+// is in a consistent state (maxBytes set, head aligned) even before
+// the host issues its first CTR access.
 func (b *MicrodriveBus) Insert(i int, c *microdrive.Cartridge) {
 	d := b.Drive(i)
 	if d == nil || c == nil {
@@ -285,10 +294,8 @@ func (b *MicrodriveBus) Insert(i int, c *microdrive.Cartridge) {
 	d.Inserted = true
 	d.Modified = false
 	d.headPos = 0
-	d.transferred = 0
-	d.gap = 15
-	d.sync = 15
 	d.pream = [512]byte{}
+	d.restart()
 }
 
 // Eject removes the cartridge from drive i. Subsequent reads from

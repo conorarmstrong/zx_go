@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 )
 
 // ROMSize is the size of the Interface 1 shadow ROM. The IF1 ships
@@ -89,9 +91,13 @@ func (i *IF1) ROM() []byte {
 
 // Active reports whether the IF1 shadow ROM is currently paged in.
 // When true, MemoryRead returns IF1 ROM bytes for any address in
-// 0x0000-0x3FFF, hiding the Spectrum's main ROM.
+// 0x0000-0x3FFF, hiding the Spectrum's main ROM. The HasROM check
+// matches MemoryRead's gate so callers can use Active as a single
+// "is the overlay live?" predicate without worrying about whether a
+// ROM is loaded — the hot-path PreFetchHook intentionally skips the
+// ROM check to stay cheap.
 func (i *IF1) Active() bool {
-	return i.active
+	return i.active && i.HasROM()
 }
 
 // PageIn maps the IF1 shadow ROM over the Spectrum ROM area. The
@@ -132,6 +138,18 @@ func (i *IF1) MemoryRead(addr uint16) (byte, bool) {
 	return i.rom[addr&0x1FFF], true
 }
 
+// Cartridge returns the cartridge currently in microdrive slot
+// `which` (0-based), or nil if the slot is empty or out of range.
+// Convenience accessor so callers don't have to walk
+// IF1.ULA.Bus.Drive(slot).Cartridge themselves.
+func (i *IF1) Cartridge(which int) *microdrive.Cartridge {
+	d := i.ULA.Bus.Drive(which)
+	if d == nil {
+		return nil
+	}
+	return d.Cartridge
+}
+
 // HandlePortRead dispatches an IN instruction to the IF1 ULA. Returns
 // (value, true) if the address decoded to an IF1 port. The caller
 // should fall through on (_, false).
@@ -153,50 +171,41 @@ func (i *IF1) Reset() {
 	i.ULA.Reset()
 }
 
-// PageInTriggers and PageOutTriggers list the Spectrum-ROM PC values
-// at which the Interface 1 hardware switches its shadow ROM in and
-// out. Sourced from FUSE's z80_ops.c:228-289 (the if1p / if1u
-// CHECK blocks).
-//
-//	0x0008 — Spectrum ROM RST 8 error/syntax handler. The IF1 ROM
-//	         intercepts this so it can extend the BASIC interpreter
-//	         with new keywords (CAT, FORMAT, OPEN #, ...).
-//	0x1708 — Close-channel routine. Used by RS-232 stream cleanup.
-//	0x0700 — IF1 ROM exit point. After fetching the byte at 0x0700
-//	         (which lives in the IF1 ROM), the hardware unmaps the
-//	         shadow ROM so subsequent fetches go to the host ROM.
-var (
-	PageInTriggers  = []uint16{0x0008, 0x1708}
-	PageOutTriggers = []uint16{0x0700}
+// Spectrum-ROM PC values at which the Interface 1 hardware switches
+// its shadow ROM in and out. Sourced from FUSE's z80_ops.c:228-289
+// (the if1p / if1u CHECK blocks).
+const (
+	// PageInRST8 is the Spectrum ROM RST 8 error/syntax handler.
+	// The IF1 ROM intercepts this so it can extend the BASIC
+	// interpreter with new keywords (CAT, FORMAT, OPEN #, ...).
+	PageInRST8 uint16 = 0x0008
+	// PageInCloseChannel is the close-channel routine — RS-232
+	// stream cleanup taps in here too.
+	PageInCloseChannel uint16 = 0x1708
+	// PageOutAddr is the IF1 ROM exit point. After fetching the
+	// byte at this address (which lives in the IF1 ROM), the
+	// hardware unmaps the shadow ROM so subsequent fetches go
+	// back to the host ROM.
+	PageOutAddr uint16 = 0x0700
 )
 
 // PreFetchHook is the callback the Z80 should invoke before each
 // opcode fetch. Pages the IF1 ROM IN when PC matches one of the
-// page-in triggers. No-op when the IF1 has no ROM loaded.
+// page-in triggers. The check is inlined to keep the per-instruction
+// hot path to two integer compares — at ~4M instructions/sec the
+// slice-walk version was a measurable cost.
 func (i *IF1) PreFetchHook(pc uint16) {
-	if !i.HasROM() {
-		return
-	}
-	for _, addr := range PageInTriggers {
-		if pc == addr {
-			i.PageIn()
-			return
-		}
+	if pc == PageInRST8 || pc == PageInCloseChannel {
+		i.active = true
 	}
 }
 
 // PostFetchHook is the callback the Z80 should invoke after each
 // opcode fetch but before dispatch. Pages the IF1 ROM OUT when PC
-// matches one of the page-out triggers. The fetched byte still
-// executes — only subsequent reads see the host ROM again.
+// matches the page-out trigger. The fetched byte still executes —
+// only subsequent reads see the host ROM again.
 func (i *IF1) PostFetchHook(pc uint16) {
-	if !i.HasROM() {
-		return
-	}
-	for _, addr := range PageOutTriggers {
-		if pc == addr {
-			i.PageOut()
-			return
-		}
+	if pc == PageOutAddr {
+		i.active = false
 	}
 }

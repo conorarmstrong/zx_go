@@ -11,6 +11,19 @@ package if1
 // low 5 bits match the pattern triggers the IF1. We mirror that
 // behaviour so software that uses non-canonical addresses still works.
 const (
+	// PortMDR is the canonical microdrive data port. The IF1 ULA
+	// also decodes any address whose low 5 bits match
+	// (addr & 0x18) == 0x00.
+	PortMDR uint16 = 0xE7
+	// PortCTR is the canonical control / status port —
+	// (addr & 0x18) == 0x08.
+	PortCTR uint16 = 0xEF
+	// PortNET is the canonical RS-232 / SinclairNET port —
+	// (addr & 0x18) == 0x10.
+	PortNET uint16 = 0xF7
+)
+
+const (
 	ifPortMaskMDR = 0x0018
 	ifPortValMDR  = 0x0000
 	ifPortValCTR  = 0x0008
@@ -50,22 +63,12 @@ func decodePort(port uint16) portClass {
 type ULA struct {
 	Bus *MicrodriveBus
 
-	// commsClk holds the previous level of the comms clock signal
+	// commsClkHigh latches the previous level of the comms clock
 	// (CTR port bit 1). The motor-rotation step fires on the
-	// falling edge — `~~\__` in FUSE comments — so we need the
-	// previous value to detect that transition.
-	commsClk byte
-	// commsData latches the previous level of the comms data signal
-	// (CTR port bit 0). It's the input bit that gets shifted into
-	// the daisy chain on the next falling-edge step.
-	commsData byte
-	// wait is set when the IF1 ROM tells the ULA to assert WAIT to
-	// the CPU. We don't model contention timing, so this is just
-	// preserved for snapshot round-trips.
-	wait byte
-	// cts is set by CTR-port-out bit 4. RS-232 control line; only
-	// matters when serial is plugged in (we never plug it in).
-	cts byte
+	// falling edge (clock high → low with comms-data low) — see
+	// writeCTR — so we need the previous value to detect the
+	// transition.
+	commsClkHigh bool
 }
 
 // NewULA constructs a fresh IF1 ULA wrapping the supplied microdrive
@@ -80,10 +83,7 @@ func NewULA(bus *MicrodriveBus) *ULA {
 // Reset returns the ULA to power-on state. The microdrive bus is
 // reset too — see Bus.Reset for what that clears.
 func (u *ULA) Reset() {
-	u.commsClk = 0
-	u.commsData = 0
-	u.wait = 0
-	u.cts = 2 // FUSE init at if1.c:312 — "force to emit first cts status"
+	u.commsClkHigh = false
 	u.Bus.Reset()
 }
 
@@ -175,25 +175,21 @@ func (u *ULA) readNET() byte {
 //	bit 0 — DTA  (comms data — the bit shifted into the daisy chain
 //	             on the next falling clock edge)
 //
-// The motor rotation logic is the FUSE port_ctr_out at
+// We only act on bits 0 and 1 — the motor-select sequence. WAT, CTS,
+// and ERA matter only when serial peripherals are plugged in, which
+// we don't support. Mirrors the gate in port_ctr_out at
 // fuse-1.6.0/peripherals/if1.c:842-920.
 func (u *ULA) writeCTR(val byte) {
-	clk := val & 0x02
-	dta := val & 0x01
+	clkHigh := val&0x02 != 0
+	dtaLow := val&0x01 == 0
 
-	// Falling edge of comms clock with comms data low → "select
-	// next drive". The new drive 0 motor-on bit is the inverse of
-	// the data bit (active-low), exactly as port_ctr_out does at
-	// if1.c:846-852.
-	if clk == 0 && u.commsClk != 0 {
-		motorOn := dta == 0
-		u.Bus.AdvanceMotor(motorOn)
+	// Falling edge of comms clock → "select next drive". The new
+	// drive 0 motor-on bit is the inverse of the data bit (active
+	// low), exactly as port_ctr_out does at if1.c:846-852.
+	if !clkHigh && u.commsClkHigh {
+		u.Bus.AdvanceMotor(dtaLow)
 	}
-
-	u.commsClk = clk
-	u.commsData = dta
-	u.wait = val & 0x20
-	u.cts = val & 0x10
+	u.commsClkHigh = clkHigh
 }
 
 // writeNET processes a write to the NET (RS-232 / SinclairNET) port.

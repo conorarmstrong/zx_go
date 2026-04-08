@@ -47,12 +47,12 @@ func TestULAMotorSelectSequence(t *testing.T) {
 	}
 
 	// Initial state: clock high, data high (the IF1 ROM idles like this).
-	if !u.HandlePortWrite(0xEF, 0x03) { // bits 0 and 1 high
+	if !u.HandlePortWrite(PortCTR, 0x03) { // bits 0 and 1 high
 		t.Fatal("CTR write: not handled")
 	}
 
 	// Now drop both clock and data → falling edge with dta=0 → select drive 0.
-	if !u.HandlePortWrite(0xEF, 0x00) {
+	if !u.HandlePortWrite(PortCTR, 0x00) {
 		t.Fatal("CTR write 2: not handled")
 	}
 	if !u.Bus.Drive(0).MotorOn {
@@ -64,7 +64,7 @@ func TestULAMotorSelectSequence(t *testing.T) {
 // low (peripherals stubbed off) regardless of what the bus reports.
 func TestULACTRReadCombinesBusAndStub(t *testing.T) {
 	u := NewULA(nil)
-	val, ok := u.HandlePortRead(0xEF)
+	val, ok := u.HandlePortRead(PortCTR)
 	if !ok {
 		t.Fatal("CTR read: not handled")
 	}
@@ -87,10 +87,10 @@ func TestULAMDRReadAfterMotorSelect(t *testing.T) {
 
 	// Pulse the motor-select to engage drive 0 (clock falling edge with
 	// dta low → motorOn=true).
-	u.HandlePortWrite(0xEF, 0x03) // clock high, dta high
-	u.HandlePortWrite(0xEF, 0x00) // clock low, dta low → falling edge
+	u.HandlePortWrite(PortCTR, 0x03) // clock high, dta high
+	u.HandlePortWrite(PortCTR, 0x00) // clock low, dta low → falling edge
 
-	val, _ := u.HandlePortRead(0xE7) // MDR data
+	val, _ := u.HandlePortRead(PortMDR) // MDR data
 	if val != 0x42 {
 		t.Errorf("MDR read after motor select: got %02X, want 0x42", val)
 	}
@@ -100,7 +100,7 @@ func TestULAMDRReadAfterMotorSelect(t *testing.T) {
 // (nothing connected) when no serial peripherals are plugged.
 func TestULANetReadStubbed(t *testing.T) {
 	u := NewULA(nil)
-	val, ok := u.HandlePortRead(0xF7)
+	val, ok := u.HandlePortRead(PortNET)
 	if !ok {
 		t.Fatal("NET read: not handled")
 	}
@@ -114,8 +114,8 @@ func TestULANetReadStubbed(t *testing.T) {
 func TestULAResetClearsState(t *testing.T) {
 	u := NewULA(nil)
 	u.Bus.Insert(0, microdrive.New(180))
-	u.HandlePortWrite(0xEF, 0x03)
-	u.HandlePortWrite(0xEF, 0x00)
+	u.HandlePortWrite(PortCTR, 0x03)
+	u.HandlePortWrite(PortCTR, 0x00)
 	if !u.Bus.Drive(0).MotorOn {
 		t.Fatal("setup failed: motor not on")
 	}
@@ -123,7 +123,7 @@ func TestULAResetClearsState(t *testing.T) {
 	if u.Bus.Drive(0).MotorOn {
 		t.Errorf("after Reset: motor still on")
 	}
-	if u.commsClk != 0 || u.commsData != 0 {
-		t.Errorf("after Reset: comms signals not cleared (clk=%d data=%d)", u.commsClk, u.commsData)
+	if u.commsClkHigh {
+		t.Errorf("after Reset: commsClkHigh still set")
 	}
 }

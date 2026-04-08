@@ -28,7 +28,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
-	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
@@ -881,14 +880,14 @@ func (e *emulator) stopRZXRecording() error {
 
 // makeMicrodriveMenu builds an 8-drive Microdrive submenu. Each child
 // is itself a submenu with Insert / Save / Eject / Write Protect.
-// The whole tree disables itself when the IF1 isn't enabled, so
-// users get a clear visual cue that they need to enable the
-// peripheral first.
+// All four actions delegate to peripherals.PeripheralManager helpers
+// so the menu code stays a thin shell over the package boundary.
 func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 	root := fyne.NewMenuItem("Microdrives", nil)
 
-	driveItems := make([]*fyne.MenuItem, microdriveSlotCount)
-	for i := 0; i < microdriveSlotCount; i++ {
+	slotCount := emu.peripherals.MicrodriveSlotCount()
+	driveItems := make([]*fyne.MenuItem, slotCount)
+	for i := 0; i < slotCount; i++ {
 		slot := i // capture
 		insert := fyne.NewMenuItem("Insert Cartridge...", func() {
 			fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
@@ -901,13 +900,8 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 				}
 				path := reader.URI().Path()
 				_ = reader.Close()
-				cart, err := microdrive.ReadFile(path)
-				if err != nil {
+				if err := emu.peripherals.LoadMicrodrive(slot, path); err != nil {
 					dialog.ShowError(fmt.Errorf("load microdrive: %w", err), w)
-					return
-				}
-				if err := emu.peripherals.InsertMicrodrive(slot, cart); err != nil {
-					dialog.ShowError(err, w)
 					return
 				}
 				dialog.ShowInformation("Microdrive", fmt.Sprintf("Cartridge loaded into Drive %d:\n%s", slot+1, filepath.Base(path)), w)
@@ -916,13 +910,7 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 			fd.Show()
 		})
 		save := fyne.NewMenuItem("Save Cartridge...", func() {
-			dev := emu.peripherals.IF1()
-			if dev == nil {
-				dialog.ShowInformation("Microdrive", "Interface 1 is not enabled.", w)
-				return
-			}
-			d := dev.ULA.Bus.Drive(slot)
-			if d == nil || d.Cartridge == nil {
+			if !emu.peripherals.MicrodriveCartridgeInserted(slot) {
 				dialog.ShowInformation("Microdrive", fmt.Sprintf("Drive %d has no cartridge.", slot+1), w)
 				return
 			}
@@ -939,7 +927,7 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 				if !strings.HasSuffix(strings.ToLower(path), ".mdr") {
 					path += ".mdr"
 				}
-				if err := d.Cartridge.WriteFile(path); err != nil {
+				if err := emu.peripherals.SaveMicrodrive(slot, path); err != nil {
 					dialog.ShowError(fmt.Errorf("save microdrive: %w", err), w)
 					return
 				}
@@ -952,15 +940,7 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 			emu.peripherals.EjectMicrodrive(slot)
 		})
 		wp := fyne.NewMenuItem("Toggle Write Protect", func() {
-			dev := emu.peripherals.IF1()
-			if dev == nil {
-				return
-			}
-			d := dev.ULA.Bus.Drive(slot)
-			if d == nil || d.Cartridge == nil {
-				return
-			}
-			d.Cartridge.SetWriteProtect(!d.Cartridge.WriteProtect())
+			emu.peripherals.SetMicrodriveWriteProtect(slot, !emu.peripherals.MicrodriveWriteProtected(slot))
 		})
 
 		driveItem := fyne.NewMenuItem(fmt.Sprintf("Drive %d", slot+1), nil)
@@ -971,36 +951,43 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 	return root
 }
 
-// microdriveSlotCount is the number of microdrive slots the Interface
-// 1 supports — duplicated here from if1.NumDrives so the menu code
-// doesn't need to import pkg/if1 directly.
-const microdriveSlotCount = 8
-
 // enableInterface1 turns on the Interface 1 — pulls the IF1 ROM from
 // the ROM manager (which loads it from roms/if1-2.rom or the embedded
 // fallback), enables the IF1 in the peripheral manager, and installs
 // the per-instruction page-in/page-out hooks on the Z80. Returns an
 // error with a user-friendly message if the ROM is missing.
+//
+// State mutation runs under withEmulationPaused so the emulation
+// goroutine isn't reading the CPU's hook fields while the UI thread
+// is writing them — same race-avoidance pattern the snapshot loader
+// uses.
 func (e *emulator) enableInterface1() error {
 	rom, ok := e.mem.GetROMManager().GetROM(roms.ROMINTERFACE1)
 	if !ok {
 		return fmt.Errorf("interface 1 ROM not found — drop if1-2.rom (8KB) into the roms/ directory; available from World of Spectrum and similar archives")
 	}
-	if err := e.peripherals.EnableInterface1(rom); err != nil {
-		return err
-	}
-	dev := e.peripherals.IF1()
-	e.cpu.PreFetchHook = dev.PreFetchHook
-	e.cpu.PostFetchHook = dev.PostFetchHook
-	return nil
+	return e.withEmulationPaused(func() error {
+		if err := e.peripherals.EnableInterface1(rom); err != nil {
+			return err
+		}
+		dev := e.peripherals.IF1()
+		e.cpu.PreFetchHook = dev.PreFetchHook
+		e.cpu.PostFetchHook = dev.PostFetchHook
+		return nil
+	})
 }
 
 // disableInterface1 tears down the Interface 1: removes the Z80 page
-// hooks and disables the device in the peripheral manager.
+// hooks and disables the device in the peripheral manager. Paired
+// with enableInterface1's withEmulationPaused so the hook nil-out
+// can't race with the emulation goroutine's per-instruction read.
 func (e *emulator) disableInterface1() {
-	e.cpu.PreFetchHook = nil
-	e.cpu.PostFetchHook = nil
-	e.peripherals.DisableInterface1()
+	_ = e.withEmulationPaused(func() error {
+		e.cpu.PreFetchHook = nil
+		e.cpu.PostFetchHook = nil
+		e.peripherals.DisableInterface1()
+		return nil
+	})
 }
 
 // rzxRollbackToLastSnapshot truncates the in-progress recording back

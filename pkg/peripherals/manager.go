@@ -175,8 +175,47 @@ func (pm *PeripheralManager) CanEnableInterface1() bool {
 	return pm.modelHasIF1()
 }
 
+// MicrodriveSlotCount returns the number of microdrive slots the
+// Interface 1 hardware supports (8). Exposed via the peripheral
+// manager so UI code can iterate the drives without importing
+// pkg/if1 directly.
+func (pm *PeripheralManager) MicrodriveSlotCount() int {
+	return if1.NumDrives
+}
+
+// LoadMicrodrive parses a .mdr cartridge file from disk and inserts
+// it into the IF1's drive `which` (0-based). Mirrors the shape of
+// LoadPlus3Disk so the menu code can be a one-liner.
+func (pm *PeripheralManager) LoadMicrodrive(which int, path string) error {
+	if pm.if1 == nil {
+		return fmt.Errorf("interface 1 is not enabled")
+	}
+	cart, err := microdrive.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	pm.if1.ULA.Bus.Insert(which, cart)
+	return nil
+}
+
+// SaveMicrodrive writes the cartridge currently in drive `which`
+// back to disk as a .mdr file. Returns an error if the drive is
+// empty or the IF1 isn't enabled.
+func (pm *PeripheralManager) SaveMicrodrive(which int, path string) error {
+	if pm.if1 == nil {
+		return fmt.Errorf("interface 1 is not enabled")
+	}
+	cart := pm.if1.Cartridge(which)
+	if cart == nil {
+		return fmt.Errorf("microdrive %d has no cartridge", which+1)
+	}
+	return cart.WriteFile(path)
+}
+
 // InsertMicrodrive places the supplied cartridge into the IF1's
-// drive `which` (0-based). Returns an error if no IF1 is enabled.
+// drive `which` (0-based). Used by tests and any caller that has
+// already parsed a *microdrive.Cartridge in memory; the menu code
+// uses LoadMicrodrive instead.
 func (pm *PeripheralManager) InsertMicrodrive(which int, cart *microdrive.Cartridge) error {
 	if pm.if1 == nil {
 		return fmt.Errorf("interface 1 is not enabled")
@@ -199,11 +238,35 @@ func (pm *PeripheralManager) SetMicrodriveWriteProtect(which int, wp bool) {
 	if pm.if1 == nil {
 		return
 	}
-	d := pm.if1.ULA.Bus.Drive(which)
-	if d == nil || d.Cartridge == nil {
+	cart := pm.if1.Cartridge(which)
+	if cart == nil {
 		return
 	}
-	d.Cartridge.SetWriteProtect(wp)
+	cart.SetWriteProtect(wp)
+}
+
+// MicrodriveWriteProtected reports whether the cartridge in drive
+// `which` is currently write-protected. Returns false if the slot
+// is empty or the IF1 isn't enabled.
+func (pm *PeripheralManager) MicrodriveWriteProtected(which int) bool {
+	if pm.if1 == nil {
+		return false
+	}
+	cart := pm.if1.Cartridge(which)
+	if cart == nil {
+		return false
+	}
+	return cart.WriteProtect()
+}
+
+// MicrodriveCartridgeInserted reports whether drive `which` has a
+// cartridge. Used by the UI to grey out menu items when there's
+// nothing to save / eject / write-protect.
+func (pm *PeripheralManager) MicrodriveCartridgeInserted(which int) bool {
+	if pm.if1 == nil {
+		return false
+	}
+	return pm.if1.Cartridge(which) != nil
 }
 
 // IF1MemoryRead is the memory.PeripheralRead-compatible callback the

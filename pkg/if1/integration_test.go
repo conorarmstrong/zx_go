@@ -31,8 +31,8 @@ func TestEndToEndCartridgeRead(t *testing.T) {
 	// Bit-bang the motor-select sequence: clock high+data high,
 	// then clock low+data low → falling edge with dta low →
 	// engage drive 0.
-	i.HandlePortWrite(0xEF, 0x03)
-	i.HandlePortWrite(0xEF, 0x00)
+	i.HandlePortWrite(PortCTR, 0x03)
+	i.HandlePortWrite(PortCTR, 0x00)
 
 	if !i.ULA.Bus.Drive(0).MotorOn {
 		t.Fatal("setup failed: drive 0 motor still off after select pulse")
@@ -40,7 +40,7 @@ func TestEndToEndCartridgeRead(t *testing.T) {
 
 	for offset := 0; offset < microdrive.HeadLen; offset++ {
 		want := cart.DataAt(offset)
-		got, ok := i.HandlePortRead(0xE7)
+		got, ok := i.HandlePortRead(PortMDR)
 		if !ok {
 			t.Fatalf("MDR port read at offset %d: not handled", offset)
 		}
@@ -64,24 +64,24 @@ func TestEndToEndCartridgeReadAcrossWindows(t *testing.T) {
 	i.ULA.Bus.Insert(0, cart)
 
 	// Engage drive 0.
-	i.HandlePortWrite(0xEF, 0x03)
-	i.HandlePortWrite(0xEF, 0x00)
+	i.HandlePortWrite(PortCTR, 0x03)
+	i.HandlePortWrite(PortCTR, 0x00)
 
 	// Read the 15-byte header window.
 	for offset := 0; offset < microdrive.HeadLen; offset++ {
-		_, _ = i.HandlePortRead(0xE7)
+		_, _ = i.HandlePortRead(PortMDR)
 	}
 	// CTR access advances the window — restart() runs as a side
 	// effect of HandlePortRead(CTR). The next MDR reads should
 	// stream the record header + data, starting at cartridge
 	// offset HeadLen (15).
-	_, _ = i.HandlePortRead(0xEF)
+	_, _ = i.HandlePortRead(PortCTR)
 
 	// Now read 15 more bytes — the record header. They should
 	// match cart.DataAt(15..29).
 	for offset := 0; offset < microdrive.HeadLen; offset++ {
 		want := cart.DataAt(microdrive.HeadLen + offset)
-		got, _ := i.HandlePortRead(0xE7)
+		got, _ := i.HandlePortRead(PortMDR)
 		if got != want {
 			t.Errorf("after CTR-restart: offset %d (cart byte %d): got %02X, want %02X",
 				offset, microdrive.HeadLen+offset, got, want)
@@ -99,20 +99,20 @@ func TestEndToEndWriteThenReadBack(t *testing.T) {
 	i.ULA.Bus.Insert(0, cart)
 
 	// Engage drive 0.
-	i.HandlePortWrite(0xEF, 0x03)
-	i.HandlePortWrite(0xEF, 0x00)
+	i.HandlePortWrite(PortCTR, 0x03)
+	i.HandlePortWrite(PortCTR, 0x00)
 
 	// 12-byte preamble + 15-byte header. The preamble bytes are
 	// consumed by the controller's syncing logic and don't reach
 	// the cartridge; the 15 header bytes do.
 	for k := 0; k < 10; k++ {
-		i.HandlePortWrite(0xE7, 0x00)
+		i.HandlePortWrite(PortMDR, 0x00)
 	}
 	for k := 0; k < 2; k++ {
-		i.HandlePortWrite(0xE7, 0xFF)
+		i.HandlePortWrite(PortMDR, 0xFF)
 	}
 	for k := 0; k < microdrive.HeadLen; k++ {
-		i.HandlePortWrite(0xE7, byte(0x80+k))
+		i.HandlePortWrite(PortMDR, byte(0x80+k))
 	}
 
 	// The 15 header bytes should now be at cartridge offsets 0..14.
