@@ -29,11 +29,22 @@ const (
 	// exactly this many samples to the audio system per frame.
 	SamplesPerFrame = SampleRate / 50
 
-	// queueCapacity is the size of the beeper sample ring buffer in
-	// mono samples. Roughly 6 frames worth of audio — wide enough
-	// to absorb scheduler jitter between the emulation goroutine
-	// (50Hz, bursty) and the oto callback goroutine (continuous).
-	queueCapacity = SamplesPerFrame * 6
+	// queueCapacity is the ring buffer size in mono samples — about
+	// 12 frames at 50Hz (~240 ms). Wide enough to absorb scheduler
+	// jitter, GC pauses, and the natural push/pull oscillation
+	// between the 50Hz producer and the ~43Hz consumer.
+	queueCapacity = SamplesPerFrame * 12
+
+	// queuePrefill is how many silence samples we seed the queue
+	// with at startup so the consumer's first pull doesn't drain
+	// the queue to zero. Without this cushion, the producer is
+	// always exactly one push behind the consumer (they have equal
+	// average rates but different periods), and every pull cycle
+	// returns a partial buffer plus DC silence — audible as
+	// stutter at the consumer's pull rate. Four frames give the
+	// queue enough headroom that the discrete-event oscillation
+	// never reaches the bottom.
+	queuePrefill = SamplesPerFrame * 4
 )
 
 // AudioSystem handles audio output for the ZX Spectrum beeper and (on 128K+
@@ -95,8 +106,25 @@ func New() (*AudioSystem, error) {
 		buffer:    make([]byte, BufferSize*ChannelCount*2),
 		mixBuffer: make([]int16, BufferSize),
 	}
+	as.prefillSilence()
 	as.player = ctx.NewPlayer(as.reader)
 	return as, nil
+}
+
+// prefillSilence seeds the ring buffer with queuePrefill silent
+// samples so the consumer's first few pulls are satisfied without
+// draining the queue. See the queuePrefill doc comment for the rate-
+// matching reasoning.
+func (as *AudioSystem) prefillSilence() {
+	as.queueMu.Lock()
+	defer as.queueMu.Unlock()
+	as.queueHead = queuePrefill % queueCapacity
+	as.queueTail = 0
+	as.queueSize = queuePrefill
+	for i := 0; i < queuePrefill; i++ {
+		as.queue[i] = 0
+	}
+	as.lastSample = 0
 }
 
 // PushBeeperSamples enqueues a batch of mono beeper samples generated
@@ -215,15 +243,12 @@ func (as *AudioSystem) Close() error {
 	return nil
 }
 
-// Reset clears the beeper sample queue. Used on machine reset so the
-// new session doesn't start with stale audio in the buffer.
+// Reset clears the beeper sample queue and re-seeds it with the
+// startup silence cushion. Used on machine reset so the new session
+// doesn't start with stale audio in the buffer AND immediately
+// benefits from the same cushion that startup gets.
 func (as *AudioSystem) Reset() {
-	as.queueMu.Lock()
-	defer as.queueMu.Unlock()
-	as.queueHead = 0
-	as.queueTail = 0
-	as.queueSize = 0
-	as.lastSample = 0
+	as.prefillSilence()
 }
 
 // StartRecording opens path for writing and begins capturing the mixed

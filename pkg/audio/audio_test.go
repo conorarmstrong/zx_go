@@ -72,10 +72,9 @@ func TestPopFromEmptyHoldsZero(t *testing.T) {
 func TestQueueOverflowDropsOldest(t *testing.T) {
 	as := fakeSystem()
 
-	// Fill past capacity. queueCapacity is SamplesPerFrame*6 = 5292.
-	// Push 7 frames (6174 samples) — the first frame should be
-	// overwritten.
-	const burst = SamplesPerFrame * 7
+	// Push two ring-buffers worth of distinguishable samples in
+	// one go. The first half should be overwritten by the second.
+	const burst = queueCapacity * 2
 	in := make([]int16, burst)
 	for i := range in {
 		in[i] = int16(i % 32767)
@@ -83,7 +82,7 @@ func TestQueueOverflowDropsOldest(t *testing.T) {
 	as.PushBeeperSamples(in)
 
 	// Drain everything and verify the first sample is from the
-	// SECOND frame onwards (the oldest got dropped).
+	// SECOND half of the input (the oldest got dropped).
 	out := make([]int16, queueCapacity)
 	as.popBeeperSamples(out)
 
@@ -94,7 +93,8 @@ func TestQueueOverflowDropsOldest(t *testing.T) {
 }
 
 // TestResetClearsQueue verifies that Reset drops any buffered samples
-// and resets the held-on-underflow value to silence.
+// and replaces them with the silence pre-fill cushion. The first
+// queuePrefill samples drained after Reset must all be zero.
 func TestResetClearsQueue(t *testing.T) {
 	as := fakeSystem()
 	as.PushBeeperSamples([]int16{1, 2, 3})
@@ -108,6 +108,30 @@ func TestResetClearsQueue(t *testing.T) {
 	for i, v := range out {
 		if v != 0 {
 			t.Errorf("after Reset: sample %d = %d, want 0", i, v)
+		}
+	}
+}
+
+// TestPrefillSilenceProvidesCushion verifies that a fresh AudioSystem
+// already has queuePrefill silent samples queued up, so the first few
+// consumer pulls don't drain the queue and trigger DC underflow.
+// This is the regression test for the "stuttery BEEP" bug — without
+// the pre-fill, every pull was 882 real samples + 142 DC samples,
+// audible as 14% silence ratio.
+func TestPrefillSilenceProvidesCushion(t *testing.T) {
+	as := fakeSystem()
+	as.prefillSilence()
+
+	if as.queueSize != queuePrefill {
+		t.Fatalf("after prefillSilence: queueSize = %d, want %d", as.queueSize, queuePrefill)
+	}
+
+	out := make([]int16, queuePrefill)
+	as.popBeeperSamples(out)
+	for i, v := range out {
+		if v != 0 {
+			t.Errorf("prefill sample %d = %d, want 0 (silence)", i, v)
+			break
 		}
 	}
 }
