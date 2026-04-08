@@ -5,7 +5,9 @@ import (
 	"log"
 
 	"github.com/conorarmstrong/zx_go/pkg/disciple"
+	"github.com/conorarmstrong/zx_go/pkg/if1"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/plus3fdc"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
@@ -17,11 +19,13 @@ type PeripheralManager struct {
 	disciple  *disciple.Disciple
 	multiface *multiface.Multiface
 	plus3fdc  *plus3fdc.Plus3FDC
+	if1       *if1.IF1
 
 	// Configuration
 	discipleEnabled  bool
 	multifaceEnabled bool
 	multifaceVariant multiface.MultifaceType
+	if1Enabled       bool
 }
 
 // NewPeripheralManager creates a new peripheral manager
@@ -118,6 +122,102 @@ func (pm *PeripheralManager) DisableMultiface() {
 	log.Println("Multiface disabled")
 }
 
+// modelHasIF1 reports whether the current Spectrum model can have an
+// Interface 1 attached. The IF1 was a 48K-only peripheral — its edge
+// connector and shadow ROM were never adapted to the 128K series.
+func (pm *PeripheralManager) modelHasIF1() bool {
+	return pm.memory.GetCurrentModel() == roms.Model48K
+}
+
+// EnableInterface1 attaches an Interface 1 with the supplied ROM
+// image bytes. Allowed only on the 48K Spectrum.
+func (pm *PeripheralManager) EnableInterface1(romBytes []byte) error {
+	if !pm.modelHasIF1() {
+		return fmt.Errorf("interface 1 is only supported on the 48K Spectrum")
+	}
+	if pm.if1Enabled {
+		return nil
+	}
+	dev := if1.New()
+	if err := dev.LoadROMBytes(romBytes); err != nil {
+		return fmt.Errorf("if1: load ROM: %w", err)
+	}
+	pm.if1 = dev
+	pm.if1Enabled = true
+	log.Println("Interface 1 enabled")
+	return nil
+}
+
+// DisableInterface1 detaches the Interface 1 — any inserted
+// microdrive cartridges are dropped.
+func (pm *PeripheralManager) DisableInterface1() {
+	pm.if1Enabled = false
+	pm.if1 = nil
+	log.Println("Interface 1 disabled")
+}
+
+// IF1 returns the active Interface 1 device, or nil if not enabled.
+// Used by the UI for cartridge insertion / ejection / write-protect.
+func (pm *PeripheralManager) IF1() *if1.IF1 {
+	return pm.if1
+}
+
+// IsInterface1Enabled reports whether the Interface 1 is currently
+// active.
+func (pm *PeripheralManager) IsInterface1Enabled() bool {
+	return pm.if1Enabled
+}
+
+// CanEnableInterface1 reports whether the current machine model can
+// host an Interface 1. The IF1 was a 48K-only peripheral; the menu
+// item should be disabled on other models to make this clear.
+func (pm *PeripheralManager) CanEnableInterface1() bool {
+	return pm.modelHasIF1()
+}
+
+// InsertMicrodrive places the supplied cartridge into the IF1's
+// drive `which` (0-based). Returns an error if no IF1 is enabled.
+func (pm *PeripheralManager) InsertMicrodrive(which int, cart *microdrive.Cartridge) error {
+	if pm.if1 == nil {
+		return fmt.Errorf("interface 1 is not enabled")
+	}
+	pm.if1.ULA.Bus.Insert(which, cart)
+	return nil
+}
+
+// EjectMicrodrive removes the cartridge from drive `which`.
+func (pm *PeripheralManager) EjectMicrodrive(which int) {
+	if pm.if1 == nil {
+		return
+	}
+	pm.if1.ULA.Bus.Eject(which)
+}
+
+// SetMicrodriveWriteProtect toggles the write-protect flag on the
+// cartridge currently in drive `which`.
+func (pm *PeripheralManager) SetMicrodriveWriteProtect(which int, wp bool) {
+	if pm.if1 == nil {
+		return
+	}
+	d := pm.if1.ULA.Bus.Drive(which)
+	if d == nil || d.Cartridge == nil {
+		return
+	}
+	d.Cartridge.SetWriteProtect(wp)
+}
+
+// IF1MemoryRead is the memory.PeripheralRead-compatible callback the
+// emulator wires into the memory package so the IF1 shadow ROM can
+// overlay the Spectrum ROM when paged in. Returns (0, false) when
+// the IF1 isn't installed or isn't paged in — the memory package
+// then falls through to the host ROM.
+func (pm *PeripheralManager) IF1MemoryRead(addr uint16) (byte, bool) {
+	if pm.if1 == nil {
+		return 0, false
+	}
+	return pm.if1.MemoryRead(addr)
+}
+
 // HandlePortRead handles I/O port reads from peripherals
 func (pm *PeripheralManager) HandlePortRead(port uint16) (byte, bool) {
 	// Check Disciple first (lower port addresses)
@@ -138,6 +238,13 @@ func (pm *PeripheralManager) HandlePortRead(port uint16) (byte, bool) {
 	// hit the disk controller via floating-bus reads at 0x2FFD/0x3FFD.
 	if pm.plus3fdc != nil && pm.modelHasFDC() {
 		if value, handled := pm.plus3fdc.HandlePortRead(port); handled {
+			return value, true
+		}
+	}
+
+	// Interface 1 (48K only — see modelHasIF1).
+	if pm.if1Enabled && pm.if1 != nil {
+		if value, handled := pm.if1.HandlePortRead(port); handled {
 			return value, true
 		}
 	}
@@ -176,6 +283,13 @@ func (pm *PeripheralManager) HandlePortWrite(port uint16, value byte) bool {
 	// +3 FDC writes (gated on the model — see HandlePortRead).
 	if pm.plus3fdc != nil && pm.modelHasFDC() {
 		if pm.plus3fdc.HandlePortWrite(port, value) {
+			handled = true
+		}
+	}
+
+	// Interface 1 writes (48K only).
+	if pm.if1Enabled && pm.if1 != nil {
+		if pm.if1.HandlePortWrite(port, value) {
 			handled = true
 		}
 	}
@@ -222,7 +336,16 @@ func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
 			return rom[addr], true
 		}
 	}
-	
+
+	// Check if the Interface 1 shadow ROM is paged in. The 8 KB
+	// IF1 ROM is mirrored across the full 0x0000-0x3FFF window —
+	// see if1.IF1.MemoryRead.
+	if pm.if1Enabled && pm.if1 != nil {
+		if val, ok := pm.if1.MemoryRead(addr); ok {
+			return val, true
+		}
+	}
+
 	return 0, false
 }
 

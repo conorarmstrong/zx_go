@@ -30,6 +30,7 @@ const (
 	ROMDISCIPLE
 	ROMTRDOS
 	ROMPENTAGON
+	ROMINTERFACE1 // 8 KB Sinclair Interface 1 shadow ROM (if1-2.rom)
 )
 
 // SpectrumModel represents different ZX Spectrum models
@@ -117,7 +118,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 	// Determine expected size based on ROM type
 	var expectedSize int
 	switch romType {
-	case ROMMULTIFACE1, ROMMULTIFACE128, ROMMULTIFACE3, ROMDISCIPLE:
+	case ROMMULTIFACE1, ROMMULTIFACE128, ROMMULTIFACE3, ROMDISCIPLE, ROMINTERFACE1:
 		expectedSize = 8192 // 8KB for peripherals
 	default:
 		expectedSize = 16384 // 16KB for system ROMs
@@ -151,7 +152,13 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 	return nil
 }
 
-// LoadPeripheralROMs loads ROMs for peripheral devices
+// LoadPeripheralROMs loads ROMs for peripheral devices.
+//
+// Each ROM is treated as optional: if the file isn't present in the
+// user's roms/ directory or in the embedded ROMs, we log a warning
+// and continue. The peripheral that depends on the missing ROM will
+// then refuse to enable when the user tries to turn it on, with an
+// error message that points at the expected filename.
 func (rm *ROMManager) LoadPeripheralROMs() error {
 	peripheralROMs := map[ROMType]string{
 		ROMMULTIFACE1:   "mf1_official.rom",
@@ -160,14 +167,20 @@ func (rm *ROMManager) LoadPeripheralROMs() error {
 		ROMDISCIPLE:     "gdos.rom",
 		ROMTRDOS:        "trdos.rom",
 		ROMPENTAGON:     "pentagon.rom",
+		// The Interface 1 ROM (if1-2.rom) is widely available from
+		// World of Spectrum and similar archives but copyrighted by
+		// Sinclair, so we don't ship it embedded. Users who want
+		// the Interface 1 / Microdrive functionality drop the file
+		// in their roms/ directory.
+		ROMINTERFACE1: "if1-2.rom",
 	}
-	
+
 	for romType, filename := range peripheralROMs {
 		if err := rm.LoadROM(romType, filename); err != nil {
 			log.Printf("Warning: Peripheral ROM %s not found: %v\n", filename, err)
 		}
 	}
-	
+
 	return nil
 }
 

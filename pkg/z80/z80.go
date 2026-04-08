@@ -67,6 +67,22 @@ type CPU struct {
 	// LD-BYTES tape loader at 0x0556.
 	TrapCheck func(pc uint16) bool
 
+	// PreFetchHook fires before every opcode fetch with the current
+	// PC. The fetched byte will come from whatever ROM/RAM the
+	// memory map currently selects at PC, so this hook can change
+	// that mapping (e.g. page in a peripheral ROM) and have the
+	// effect take hold for the very next byte read. Used by
+	// Interface 1 to page in the shadow ROM at 0x0008 / 0x1708.
+	PreFetchHook func(pc uint16)
+
+	// PostFetchHook fires after every opcode fetch but before the
+	// instruction is dispatched. The pc parameter is the address
+	// the opcode came from (i.e. the value of PC before fetch
+	// incremented it). Used by Interface 1 to page out the shadow
+	// ROM at 0x0700 — the byte fetched from the IF1 ROM still gets
+	// executed, but subsequent fetches come from the host ROM.
+	PostFetchHook func(pc uint16)
+
 	// PendingNMI is set from any goroutine to signal an NMI. The CPU
 	// processes it at the next safe point in ExecuteFrame.
 	PendingNMI atomic.Bool
@@ -255,7 +271,14 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 }
 
 func (c *CPU) executeInstruction() {
+	if c.PreFetchHook != nil {
+		c.PreFetchHook(c.PC)
+	}
+	pc := c.PC
 	opcode := c.fetch()
+	if c.PostFetchHook != nil {
+		c.PostFetchHook(pc)
+	}
 	c.executeBaseInstruction(opcode)
 }
 
