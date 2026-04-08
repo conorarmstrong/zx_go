@@ -104,6 +104,29 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 	}
 }
 
+// PressMatrixKey directly sets or clears the given bit of the
+// Spectrum keyboard matrix, bypassing the host-key-to-Spectrum-key
+// mapping entirely. Used by the test harness to simulate specific
+// Spectrum key combinations (CAPS SHIFT alone, SYMBOL SHIFT alone,
+// extended-mode sequences) that are awkward to express through
+// the host modifier-based API.
+//
+// row is 0..7, mask selects the bit (0x01..0x10 on most rows),
+// pressed=true drives the bit low (the Spectrum matrix is
+// active-low — a pressed key is a 0).
+func (k *Keyboard) PressMatrixKey(row int, mask byte, pressed bool) {
+	if row < 0 || row >= 8 {
+		return
+	}
+	k.matrixMu.Lock()
+	defer k.matrixMu.Unlock()
+	if pressed {
+		k.matrix[row] &= ^mask
+	} else {
+		k.matrix[row] |= mask
+	}
+}
+
 // Scan reads the keyboard matrix for a given port address.
 // The high byte of the address determines which rows are being scanned.
 func (k *Keyboard) Scan(addr uint16) byte {

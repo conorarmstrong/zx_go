@@ -101,10 +101,18 @@ func (d *Drive) incrementHead() {
 }
 
 // restart aligns the head to the next block boundary or header
-// boundary, then resets the transferred / GAP / SYNC counters and
-// recomputes the window size. Called by the IF1 ULA after every CTR
-// or NET access (i.e. between operations on the tape) — see
-// microdrives_restart at fuse-1.6.0/peripherals/if1.c:1047-1065.
+// boundary, then resets the transferred counter and recomputes the
+// window size. Called by the IF1 ULA after every CTR or NET access
+// (i.e. between operations on the tape) — see microdrives_restart
+// at fuse-1.6.0/peripherals/if1.c:1047-1065.
+//
+// IMPORTANT: this does NOT reset the GAP / SYNC countdowns. The
+// IF1 ROM polls the CTR port hundreds of times waiting for the
+// GAP→SYNC→GAP pulse pattern; if restart() reset the counters on
+// every poll they'd never reach zero and the IF1 ROM would report
+// "Microdrive not present" even with a valid formatted cartridge.
+// FUSE's microdrives_restart deliberately omits the reset for the
+// same reason.
 //
 // The IF1 ROM "scans" the tape by reading short bursts in CTR mode
 // and then asking the controller to advance to a usable position.
@@ -139,8 +147,6 @@ func (d *Drive) restart() {
 		}
 	}
 	d.transferred = 0
-	d.gap = 15
-	d.sync = 15
 	if d.headPos%microdrive.BlockLen == 0 {
 		d.maxBytes = microdrive.HeadLen
 	} else {
@@ -285,6 +291,14 @@ func (b *MicrodriveBus) Drive(i int) *Drive {
 // existing cartridge first. Calls restart() at the end so the drive
 // is in a consistent state (maxBytes set, head aligned) even before
 // the host issues its first CTR access.
+//
+// The per-block pream[] markers are seeded with syncOK for every
+// block in the cartridge — "we assume formatted cartridges", in
+// FUSE's words at if1.c:1168. Without this, the IF1 ROM walks the
+// tape looking for syncOK markers (the "this block was formatted
+// by the microdrive" sentinel), doesn't find any, and reports
+// "Microdrive not present" — even though the cartridge data is
+// all there.
 func (b *MicrodriveBus) Insert(i int, c *microdrive.Cartridge) {
 	d := b.Drive(i)
 	if d == nil || c == nil {
@@ -295,6 +309,13 @@ func (b *MicrodriveBus) Insert(i int, c *microdrive.Cartridge) {
 	d.Modified = false
 	d.headPos = 0
 	d.pream = [512]byte{}
+	// Assume formatted: mark every block's header and record
+	// window as syncOK so the IF1 ROM's tape-scanning state
+	// machine reports "drive present" on the CTR port.
+	for k := 0; k < c.Length(); k++ {
+		d.pream[k] = syncOK     // block-header window
+		d.pream[256+k] = syncOK // record window
+	}
 	d.restart()
 }
 
