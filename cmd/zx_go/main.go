@@ -28,6 +28,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
@@ -878,6 +879,130 @@ func (e *emulator) stopRZXRecording() error {
 	return nil
 }
 
+// makeMicrodriveMenu builds an 8-drive Microdrive submenu. Each child
+// is itself a submenu with Insert / Save / Eject / Write Protect.
+// The whole tree disables itself when the IF1 isn't enabled, so
+// users get a clear visual cue that they need to enable the
+// peripheral first.
+func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
+	root := fyne.NewMenuItem("Microdrives", nil)
+
+	driveItems := make([]*fyne.MenuItem, microdriveSlotCount)
+	for i := 0; i < microdriveSlotCount; i++ {
+		slot := i // capture
+		insert := fyne.NewMenuItem("Insert Cartridge...", func() {
+			fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if reader == nil {
+					return
+				}
+				path := reader.URI().Path()
+				_ = reader.Close()
+				cart, err := microdrive.ReadFile(path)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("load microdrive: %w", err), w)
+					return
+				}
+				if err := emu.peripherals.InsertMicrodrive(slot, cart); err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				dialog.ShowInformation("Microdrive", fmt.Sprintf("Cartridge loaded into Drive %d:\n%s", slot+1, filepath.Base(path)), w)
+			}, w)
+			fd.SetFilter(storage.NewExtensionFileFilter([]string{".mdr"}))
+			fd.Show()
+		})
+		save := fyne.NewMenuItem("Save Cartridge...", func() {
+			dev := emu.peripherals.IF1()
+			if dev == nil {
+				dialog.ShowInformation("Microdrive", "Interface 1 is not enabled.", w)
+				return
+			}
+			d := dev.ULA.Bus.Drive(slot)
+			if d == nil || d.Cartridge == nil {
+				dialog.ShowInformation("Microdrive", fmt.Sprintf("Drive %d has no cartridge.", slot+1), w)
+				return
+			}
+			fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if writer == nil {
+					return
+				}
+				path := writer.URI().Path()
+				_ = writer.Close()
+				if !strings.HasSuffix(strings.ToLower(path), ".mdr") {
+					path += ".mdr"
+				}
+				if err := d.Cartridge.WriteFile(path); err != nil {
+					dialog.ShowError(fmt.Errorf("save microdrive: %w", err), w)
+					return
+				}
+				dialog.ShowInformation("Microdrive", fmt.Sprintf("Drive %d saved to:\n%s", slot+1, filepath.Base(path)), w)
+			}, w)
+			fd.SetFilter(storage.NewExtensionFileFilter([]string{".mdr"}))
+			fd.Show()
+		})
+		eject := fyne.NewMenuItem("Eject", func() {
+			emu.peripherals.EjectMicrodrive(slot)
+		})
+		wp := fyne.NewMenuItem("Toggle Write Protect", func() {
+			dev := emu.peripherals.IF1()
+			if dev == nil {
+				return
+			}
+			d := dev.ULA.Bus.Drive(slot)
+			if d == nil || d.Cartridge == nil {
+				return
+			}
+			d.Cartridge.SetWriteProtect(!d.Cartridge.WriteProtect())
+		})
+
+		driveItem := fyne.NewMenuItem(fmt.Sprintf("Drive %d", slot+1), nil)
+		driveItem.ChildMenu = fyne.NewMenu("", insert, save, eject, wp)
+		driveItems[i] = driveItem
+	}
+	root.ChildMenu = fyne.NewMenu("", driveItems...)
+	return root
+}
+
+// microdriveSlotCount is the number of microdrive slots the Interface
+// 1 supports — duplicated here from if1.NumDrives so the menu code
+// doesn't need to import pkg/if1 directly.
+const microdriveSlotCount = 8
+
+// enableInterface1 turns on the Interface 1 — pulls the IF1 ROM from
+// the ROM manager (which loads it from roms/if1-2.rom or the embedded
+// fallback), enables the IF1 in the peripheral manager, and installs
+// the per-instruction page-in/page-out hooks on the Z80. Returns an
+// error with a user-friendly message if the ROM is missing.
+func (e *emulator) enableInterface1() error {
+	rom, ok := e.mem.GetROMManager().GetROM(roms.ROMINTERFACE1)
+	if !ok {
+		return fmt.Errorf("interface 1 ROM not found — drop if1-2.rom (8KB) into the roms/ directory; available from World of Spectrum and similar archives")
+	}
+	if err := e.peripherals.EnableInterface1(rom); err != nil {
+		return err
+	}
+	dev := e.peripherals.IF1()
+	e.cpu.PreFetchHook = dev.PreFetchHook
+	e.cpu.PostFetchHook = dev.PostFetchHook
+	return nil
+}
+
+// disableInterface1 tears down the Interface 1: removes the Z80 page
+// hooks and disables the device in the peripheral manager.
+func (e *emulator) disableInterface1() {
+	e.cpu.PreFetchHook = nil
+	e.cpu.PostFetchHook = nil
+	e.peripherals.DisableInterface1()
+}
+
 // rzxRollbackToLastSnapshot truncates the in-progress recording back
 // to the most recent snapshot block, restores that snapshot to the
 // live emulator, and reopens the input recording window. Bound to the
@@ -1440,6 +1565,8 @@ func main() {
 				}
 			}),
 			fyne.NewMenuItemSeparator(),
+			makeMicrodriveMenu(emu, w),
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Save Tape (TAP)...", func() {
 				tp := emu.ula.GetTapePlayer()
 				if tp == nil || tp.BlockCount() == 0 {
@@ -1645,6 +1772,7 @@ func main() {
 			mf1Item := fyne.NewMenuItem("Enable Multiface 1", nil)
 			mf128Item := fyne.NewMenuItem("Enable Multiface 128", nil)
 			mf3Item := fyne.NewMenuItem("Enable Multiface 3", nil)
+			if1Item := fyne.NewMenuItem("Enable Interface 1", nil)
 			joyNoneItem := fyne.NewMenuItem("Joystick: None", nil)
 			joyKempstonItem := fyne.NewMenuItem("Joystick: Kempston", nil)
 			joySinclair1Item := fyne.NewMenuItem("Joystick: Sinclair (left, 1-5)", nil)
@@ -1668,6 +1796,13 @@ func main() {
 					mf128Item.Disabled = false
 					mf3Item.Disabled = false
 				}
+				if emu.peripherals.IsInterface1Enabled() {
+					if1Item.Label = "Disable Interface 1"
+				} else {
+					if1Item.Label = "Enable Interface 1"
+				}
+				// IF1 is 48K-only — grey the menu out on other models.
+				if1Item.Disabled = !emu.peripherals.CanEnableInterface1() && !emu.peripherals.IsInterface1Enabled()
 				// Show a check next to the active joystick by re-labelling.
 				marker := func(t JoystickType, base string) string {
 					if emu.joystickType == t {
@@ -1714,6 +1849,20 @@ func main() {
 			mf128Item.Action = func() { toggleMF(multiface.Multiface128) }
 			mf3Item.Action = func() { toggleMF(multiface.Multiface3) }
 
+			if1Item.Action = func() {
+				if emu.peripherals.IsInterface1Enabled() {
+					emu.disableInterface1()
+				} else {
+					if err := emu.enableInterface1(); err != nil {
+						dialog.ShowError(fmt.Errorf("failed to enable Interface 1: %w", err), w)
+					}
+				}
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
 			selectJoystick := func(t JoystickType) {
 				// Release whatever's currently held on the active interface
 				// so a held direction doesn't stick in the keyboard matrix
@@ -1745,6 +1894,8 @@ func main() {
 				discipleItem,
 				fyne.NewMenuItemSeparator(),
 				mf1Item, mf128Item, mf3Item,
+				fyne.NewMenuItemSeparator(),
+				if1Item,
 				fyne.NewMenuItemSeparator(),
 				joyNoneItem,
 				joyKempstonItem,

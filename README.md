@@ -27,9 +27,11 @@ The ZX Spectrum 48K was my first computer, and this project was created as a lea
 - **Fast tape loading** — optional LD-BYTES ROM trap (0x0556 on 48K) that synthesises the load directly from the tape block, bypassing the slow real-time pulse decoding for instant loads
 - **+3 disk images** — DSK and EDSK (CPCEMU), UDI, MGT/IMG, TRD, SAD, D40/D80; load and save with full FUSE-level format coverage including weak sectors, IDAM-only sectors, and deleted DAMs
 - **RZX input recordings** — record and play back deterministic emulator sessions with FUSE-parity feature set: per-frame instruction count + IN-byte stream, embedded snapshots, autosave/rollback, multi-snapshot recordings, and competition mode
+- **Microdrive cartridges** — `.mdr` cartridges for the Sinclair ZX Interface 1 microdrive, the same format used by FUSE / libspectrum (load, save, write-protect, full block-level access)
 
 ### Peripherals
 - **+3 floppy disk controller** — NEC µPD765A FDC implementation with full READ DATA, WRITE DATA, FORMAT TRACK, READ ID, READ DIAGNOSTIC, SCAN, and SEEK commands; supports two drives (A and B), write-protect toggles, and an optional Speedlock copy-protection workaround
+- **Interface 1 / Microdrive** — Sinclair's tape-loop mass storage for the 48K Spectrum: 8 daisy-chained microdrive slots with motor select, GAP/SYNC formatting model, write-protect, and full `.mdr` cartridge round-trip. Requires the user to drop their own `if1-2.rom` (8KB, widely available from World of Spectrum) into `roms/`. RS-232 and SinclairNET ports are stubbed (no host plumbing)
 - **DISCiPLE** — Miles Gordon Technology disk interface with GDOS ROM and port-level emulation
 - **Multiface** — Romantic Robot Multiface 1, 128, and 3 with NMI trigger (F12) and ROM paging
 
@@ -94,10 +96,10 @@ go build -o zx_go ./cmd/zx_go
 
 The emulator starts in 48K mode by default. Use the menu bar to:
 
-- **File** — load/save snapshots (.sna, .z80, .szx); load tapes (.tap, .tzx) and save as .tap; load +3 disks (.dsk, .edsk, .udi, .mgt/.img, .trd, .sad, .d40/.d80) and save as .dsk; open or record RZX sessions; save screenshot (.png); record audio to .wav; browse the loaded tape's block list; toggle write protection on either disk drive; load a custom ROM
+- **File** — load/save snapshots (.sna, .z80, .szx); load tapes (.tap, .tzx) and save as .tap; load +3 disks (.dsk, .edsk, .udi, .mgt/.img, .trd, .sad, .d40/.d80) and save as .dsk; insert/save/eject `.mdr` microdrive cartridges into any of 8 drives; open or record RZX sessions; save screenshot (.png); record audio to .wav; browse the loaded tape's block list; toggle write protection on either disk drive; load a custom ROM
 - **Machine** — switch between Spectrum models (48K, 128K, +2, +2A, +3)
 - **View** — scale the display (100%-300%), go full screen, or toggle the CRT scanline filter
-- **Peripherals** — enable/disable DISCiPLE and Multiface (1, 128, or 3) interfaces, select a joystick (Kempston, Sinclair left/right, Cursor)
+- **Peripherals** — enable/disable DISCiPLE, Interface 1 (48K only), and Multiface (1, 128, or 3) interfaces, select a joystick (Kempston, Sinclair left/right, Cursor)
 - **Emulator** — reboot, pause/resume, enter pokes, open the debugger, view ROM info, trigger NMI (F12)
 
 ### Keyboard mapping
@@ -139,6 +141,8 @@ pkg/
   ay/              AY-3-8912 sound chip (128K and later)
   snapshot/        Snapshot load/save (SNA, Z80, SZX)
   plus3fdc/        +3 floppy disk controller (uPD765A) and disk image parsers
+  microdrive/      .mdr cartridge format (Sinclair Interface 1)
+  if1/             Interface 1 — shadow ROM, microdrive bus, port I/O
   rzx/             RZX input recording — playback and recording with FUSE parity
   roms/            ROM loading with embedded fallback
   peripherals/     Peripheral manager
