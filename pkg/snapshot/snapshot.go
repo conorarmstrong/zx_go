@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,6 +101,46 @@ func (s *Snapshot) Load(path string) error {
 	default:
 		return fmt.Errorf("unsupported format: %d", format)
 	}
+}
+
+// LoadBytes parses a snapshot from an in-memory byte slice using the
+// supplied format. Used by callers that have the snapshot bytes
+// available without a backing file — in particular the RZX package,
+// which embeds snapshots inside its own container format.
+func (s *Snapshot) LoadBytes(data []byte, format SnapshotFormat) error {
+	s.Format = format
+	r := bytes.NewReader(data)
+	switch format {
+	case FormatSNA:
+		return s.loadSNA(r)
+	case FormatZ80:
+		return s.loadZ80(r)
+	case FormatSZX:
+		return s.loadSZX(r)
+	default:
+		return fmt.Errorf("unsupported format: %d", format)
+	}
+}
+
+// SaveBytes serialises the snapshot to a byte slice in the requested
+// format. Symmetric counterpart to LoadBytes for the RZX embedding path.
+func (s *Snapshot) SaveBytes(format SnapshotFormat) ([]byte, error) {
+	var buf bytes.Buffer
+	var err error
+	switch format {
+	case FormatSNA:
+		err = s.saveSNA(&buf)
+	case FormatZ80:
+		err = s.saveZ80(&buf)
+	case FormatSZX:
+		err = s.saveSZX(&buf)
+	default:
+		return nil, fmt.Errorf("unsupported format: %d", format)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Save saves a snapshot to a file.

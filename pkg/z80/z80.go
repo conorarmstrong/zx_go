@@ -46,6 +46,13 @@ type CPU struct {
 	// T-state counter for timing
 	tstates uint64
 
+	// instructionCount is a free-running tally of opcode fetches
+	// (M1 cycles), incremented in fetch() and NMI() alongside the
+	// hardware R register. Unlike R it doesn't wrap, so RZX playback
+	// can use it as a per-frame instruction counter without needing
+	// the offset-tracking trick FUSE uses (z80.h:43).
+	instructionCount uint64
+
 	// IM2 interrupt vector low byte (0xFF on ZX Spectrum)
 	IM2Vector byte
 
@@ -122,6 +129,85 @@ func (c *CPU) Run() {
 
 	for range ticker.C {
 		c.ExecuteFrame(69888) // 48K: 69888, 128K+: 70908
+	}
+}
+
+// InstructionCount returns the number of opcode fetches the CPU has
+// performed since boot or the last ResetInstructionCount call. RZX
+// playback uses this to time frame boundaries from the per-frame
+// instruction counts in the recorded file. The value is the same metric
+// libspectrum exposes via R + rzx_instructions_offset, but kept in a
+// uint64 so it never wraps.
+func (c *CPU) InstructionCount() uint64 {
+	return c.instructionCount
+}
+
+// Tstates returns the absolute T-state counter. Used by RZX recording
+// to seed input recording blocks with the T-state offset at which the
+// recording window opened (matches FUSE's libspectrum_rzx_start_input
+// at libspectrum/rzx.c:268).
+func (c *CPU) Tstates() uint64 {
+	return c.tstates
+}
+
+// SetTstates overrides the T-state counter. Used by RZX playback to
+// align timing with the recorded T-state offset before resuming the
+// CPU from a snapshot.
+func (c *CPU) SetTstates(t uint64) {
+	c.tstates = t
+}
+
+// ResetInstructionCount zeros the instruction counter. RZX playback
+// calls this at the start of each frame so the per-frame target from
+// the recording can be compared directly against InstructionCount.
+func (c *CPU) ResetInstructionCount() {
+	c.instructionCount = 0
+}
+
+// ExecuteRZXFrame runs the CPU until it has executed exactly
+// `instructions` opcode fetches relative to the count at entry, then
+// fires an end-of-frame interrupt if interrupts are enabled. This
+// replaces ExecuteFrame for RZX playback: the per-frame instruction
+// count is pulled from the recorded file rather than from a fixed
+// T-states-per-frame budget. Traps must be disabled by the caller for
+// the duration of playback — short-circuiting ROM routines would skip
+// instruction-count increments and desync the recording.
+func (c *CPU) ExecuteRZXFrame(instructions uint64) {
+	target := c.instructionCount + instructions
+	for c.instructionCount < target {
+		if c.Halted {
+			// While halted, the real Z80 keeps issuing M1
+			// cycles for the HALT opcode (FUSE models this
+			// with the PC--/PC++ trick at
+			// opcodes_base.c:523). Each iteration counts as
+			// one instruction for RZX timing.
+			if c.PendingNMI.CompareAndSwap(true, false) {
+				if c.NMICallback != nil {
+					c.NMICallback()
+				}
+				c.NMI()
+				continue
+			}
+			c.instructionCount++
+			c.tstates += 4
+			continue
+		}
+		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
+			return
+		}
+		// Traps intentionally NOT consulted here — see doc comment.
+		c.executeInstruction()
+		if c.PendingNMI.CompareAndSwap(true, false) {
+			if c.NMICallback != nil {
+				c.NMICallback()
+			}
+			c.NMI()
+		}
+	}
+
+	// End-of-frame interrupt — same as ExecuteFrame.
+	if c.IFF1 {
+		c.interrupt()
 	}
 }
 
@@ -1934,6 +2020,7 @@ func (c *CPU) fetch() byte {
 	val := c.mem.Read(c.PC)
 	c.PC++
 	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7f)
+	c.instructionCount++
 	return val
 }
 
@@ -2671,6 +2758,7 @@ func (c *CPU) NMI() {
 
 	// Bump the R register like a real Z80 M1 cycle
 	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
+	c.instructionCount++
 
 	// NMI always jumps to 0x0066
 	c.push(c.PC)

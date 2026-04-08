@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"log"
+	"sync/atomic"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/ay"
@@ -57,6 +58,19 @@ type ULA struct {
 
 	// Tape loading state
 	tape *TapePlayer
+
+	// RZX playback/recording hooks. The RZX driver installs these
+	// to intercept IN-port traffic: the playback hook substitutes
+	// the recorded byte (skipping the real peripheral path), the
+	// record hook logs the byte the peripherals returned. At most
+	// one of the two should be set at a time — playback and
+	// recording are mutually exclusive in FUSE (rzx.c:164, 278).
+	//
+	// Stored as atomic.Pointer because the UI thread installs and
+	// clears them while the emulation goroutine reads them in
+	// ReadPort — a plain func field would race.
+	rzxPlaybackHook atomic.Pointer[func() (byte, bool)]
+	rzxRecordHook   atomic.Pointer[func(byte)]
 }
 
 type borderChange struct {
@@ -207,8 +221,36 @@ func (u *ULA) Render() *image.RGBA {
 	return u.img
 }
 
-// ReadPort handles CPU reads from ULA-controlled ports.
+// ReadPort handles CPU reads from ULA-controlled ports. The single
+// chokepoint at which the RZX driver intercepts the IN stream:
+//
+//  1. If RZX playback is active, the substitute byte is returned
+//     directly without consulting any real peripheral.
+//  2. Otherwise the normal port-dispatch logic runs.
+//  3. If RZX recording is active, the resulting byte is logged so the
+//     session can be replayed later.
+//
+// Mirrors FUSE's readport_internal at periph.c:310-355.
 func (u *ULA) ReadPort(addr uint16) (byte, bool) {
+	if hp := u.rzxPlaybackHook.Load(); hp != nil {
+		if val, ok := (*hp)(); ok {
+			return val, true
+		}
+		// Stream exhausted — fall through to normal dispatch.
+	}
+
+	val, handled := u.readPortInternal(addr)
+
+	if hr := u.rzxRecordHook.Load(); hr != nil {
+		(*hr)(val)
+	}
+	return val, handled
+}
+
+// readPortInternal contains the real port-dispatch logic, free of any
+// RZX bookkeeping. Pulled out so ReadPort can sandwich it between the
+// playback and recording hooks without duplicating dispatch code.
+func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	if addr&0x01 == 0 { // Port 0xFE
 		val := byte(0x1F) // Default value for unused bits
 		if u.TapeIn {
@@ -239,6 +281,30 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 
 	// Floating bus: return 0xFF for unhandled ports
 	return 0xFF, false
+}
+
+// SetRZXPlaybackHook installs (or removes, with hook=nil) the RZX
+// playback IN-byte source. The hook returns ok=true with the next
+// recorded byte, or ok=false if the stream has been exhausted.
+// Safe to call from any goroutine — the hook field is atomic.
+func (u *ULA) SetRZXPlaybackHook(hook func() (byte, bool)) {
+	if hook == nil {
+		u.rzxPlaybackHook.Store(nil)
+		return
+	}
+	u.rzxPlaybackHook.Store(&hook)
+}
+
+// SetRZXRecordHook installs (or removes, with hook=nil) the RZX
+// recording sink. The hook is called once per IN-port read with the
+// value the real peripherals returned, BEFORE that value is delivered
+// to the CPU. Safe to call from any goroutine.
+func (u *ULA) SetRZXRecordHook(hook func(byte)) {
+	if hook == nil {
+		u.rzxRecordHook.Store(nil)
+		return
+	}
+	u.rzxRecordHook.Store(&hook)
 }
 
 // Kempston joystick bit constants for KempstonState.
