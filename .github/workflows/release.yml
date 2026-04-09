@@ -57,15 +57,18 @@ jobs:
           CC: ${{ matrix.cc || '' }}
         run: go build -o ${{ matrix.artifact }} ./cmd/zx_go
 
-      - name: Package binary
+      - name: Package binary (Unix)
+        if: matrix.goos != 'windows'
         shell: bash
         run: |
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip ${{ matrix.artifact }}.zip ${{ matrix.artifact }}
-          else
-            chmod +x ${{ matrix.artifact }}
-            tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
-          fi
+          chmod +x ${{ matrix.artifact }}
+          tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+
+      - name: Package binary (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path ${{ matrix.artifact }} -DestinationPath ${{ matrix.artifact }}.zip
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
