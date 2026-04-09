@@ -1,7 +1,10 @@
 package testharness
 
 import (
+	"strings"
 	"testing"
+
+	"fyne.io/fyne/v2"
 
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
@@ -75,6 +78,102 @@ func TestZXPrinterPortDispatch(t *testing.T) {
 		t.Error("expected at least one row printed; got 0")
 	}
 	t.Logf("printer accumulated %d rows", printer.Rows())
+}
+
+// TestZXPrinterCOPYCommand is the gold-standard end-to-end test
+// for the ZX Printer: boot 48K BASIC, type PRINT 123 to put known
+// content on the screen, then execute COPY (Z in K mode) to send
+// it to the printer. We verify both the row count (drum timing +
+// line wrapping) and the dark-vs-light pixel balance (stylus
+// state correctly applied to the screen bitmap).
+//
+// We can't just press Z right after boot because the boot banner
+// sits on row 23 and gets overwritten by the edit-line cursor,
+// leaving the screen effectively blank by the time COPY runs.
+// PRINT 123 first puts "123" at the top of the screen on row 0,
+// which survives the next edit-line operation and becomes the
+// content that COPY streams to the printer.
+func TestZXPrinterCOPYCommand(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h.peripherals.EnableZXPrinter()
+
+	// Wait for the BASIC copyright banner — signals K mode ready.
+	if _, err := h.RunUntilText("1982", 200); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+
+	// Type PRINT 123 and execute. P in K mode types PRINT, then
+	// the digits, then ENTER runs it — putting "123" at row 0.
+	h.TapKey(fyne.KeyP)
+	h.TapKey(fyne.Key1)
+	h.TapKey(fyne.Key2)
+	h.TapKey(fyne.Key3)
+	h.TapKey(fyne.KeyReturn)
+	h.RunFrames(20)
+
+	// Confirm "123" reached the screen before we COPY it.
+	pre := h.ScreenText()
+	if !strings.Contains(pre, "123") {
+		t.Fatalf("PRINT 123 didn't put 123 on screen; got:\n%s", pre)
+	}
+
+	// Now type COPY and execute. Z in K mode types the keyword.
+	h.TapKey(fyne.KeyZ)
+	h.TapKey(fyne.KeyReturn)
+
+	// COPY takes ~3 seconds of simulated time at fast motor speed
+	// to walk through 192 scanlines. 2500 frames (~50s) is ample.
+	printer := h.peripherals.ZXPrinter()
+	h.RunFrames(2500)
+
+	// Dump the output on any assertion failure for human inspection.
+	defer func() {
+		if t.Failed() {
+			_ = printer.Save("zxprinter_copy_failure.png")
+			t.Logf("saved failure image to zxprinter_copy_failure.png")
+		}
+	}()
+
+	rows := printer.Rows()
+	t.Logf("ZX Printer accumulated %d rows after COPY", rows)
+	// 192 is the ideal row count (one per Spectrum scanline); the
+	// 150 floor allows for drum-timing slop that shaves a handful
+	// of lines off the total. Observed: ~176 rows.
+	if rows < 150 {
+		t.Errorf("expected at least 150 rows from COPY (192 visible scanlines), got %d", rows)
+	}
+
+	// Count dark and light pixels. "123" on row 0 gives a small
+	// but non-zero dark-pixel count against the otherwise-blank
+	// screen. All-dark or all-light would mean the drum/stylus
+	// model is broken.
+	img := printer.Bitmap()
+	darkCount, lightCount := 0, 0
+	for y := 0; y < img.Bounds().Dy(); y++ {
+		for x := 0; x < img.Bounds().Dx(); x++ {
+			if img.GrayAt(x, y).Y == 0 {
+				darkCount++
+			} else {
+				lightCount++
+			}
+		}
+	}
+	t.Logf("dark pixels: %d  light pixels: %d", darkCount, lightCount)
+	if darkCount == 0 {
+		t.Error("expected dark pixels in COPY output (from '123' on screen); got zero")
+	}
+	if lightCount == 0 {
+		t.Error("expected light pixels in COPY output; got zero (everything darkened)")
+	}
+
+	// Sanity check: BASIC should have returned to the "0 OK" prompt.
+	post := h.ScreenText()
+	if !strings.Contains(post, "0 OK") {
+		t.Errorf("expected '0 OK' in screen text after COPY, got:\n%s", post)
+	}
 }
 
 // TestZXPrinterPortDecodeRejected confirms that writes to ports

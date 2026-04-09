@@ -5,8 +5,11 @@
 //
 //	OUT (0xFB), a:
 //	  bit 7 = stylus (1 = darken / burn the current pixel)
-//	  bits 0-1 = motor speed (non-zero = motor on)
-//	  bit 2 = (unused for timing — part of the decode gate)
+//	  bit 2 = motor off (1 = stop; 0 = run)
+//	  bit 1 = slow feed (1 = slow speed; 0 = fast speed)
+//
+// Port address decode: only A2 is checked, so any port with A2=0
+// matches (0xFB is canonical; 0xF3, 0xFA, etc. also match).
 //
 //	IN (0xFB):
 //	  bit 0 = drum has advanced past the last pixel written
@@ -64,7 +67,8 @@ type Printer struct {
 	// Everything is measured as deltas from these anchors.
 	frameAt    int64
 	tstatesAt  int64
-	pixel      int  // current X on the line being built (-1 before start)
+	pixel      int  // fill cursor — pixels 0..pixel are finalized (-1 = empty)
+	ackPos     int  // drum X at time of last OUT; bit 0 goes high when drum > ackPos
 	stylusDark bool // current stylus state (darken next pixel?)
 
 	// frames is the running frame counter, bumped by Frame().
@@ -84,7 +88,7 @@ type Printer struct {
 // New constructs an idle printer. The motor is off, no rows are
 // buffered. Attach via PeripheralManager.EnableZXPrinter.
 func New() *Printer {
-	return &Printer{pixel: -1}
+	return &Printer{pixel: -1, ackPos: -1}
 }
 
 // Reset clears transient drum state but KEEPS accumulated rows —
@@ -96,6 +100,7 @@ func (p *Printer) Reset() {
 	p.speed = 0
 	p.newSpeed = 0
 	p.pixel = -1
+	p.ackPos = -1
 	p.stylusDark = false
 }
 
@@ -115,6 +120,12 @@ func (p *Printer) Frame() {
 // with software that hits non-canonical addresses.
 //
 // tstates is the CPU's current absolute T-state counter.
+//
+// Reads also advance the drum: the ROM polls this port in a tight
+// loop while waiting for the drum to reach the next line's sync
+// point, and during that window there are no writes. If we only
+// advanced the drum on writes, the in-progress line would never
+// flush. So we do the full drum-advance-and-wrap dance here too.
 func (p *Printer) HandlePortRead(port uint16, tstates int64) (byte, bool) {
 	if port&0x04 != 0 {
 		return 0, false
@@ -127,18 +138,53 @@ func (p *Printer) HandlePortRead(port uint16, tstates int64) (byte, bool) {
 		return 0x3e, true
 	}
 
-	x := p.drumPos(tstates)
+	x := p.advance(tstates)
 	ans := byte(0x3e)
 	// Stylus-sync window at the very start of each line (before
 	// the visible area): return the sync bit set so the ROM can
-	// calibrate. Also light bit 6 when the stylus is darkening.
+	// calibrate. Also light bit 7 when the stylus is darkening.
 	if (x > -10 && x < 0) || p.stylusDark {
 		ans = 0xbe
 	}
-	if x > p.pixel {
-		ans |= 0x01 // drum has advanced past last pixel written
+	if x > p.ackPos {
+		ans |= 0x01 // drum has advanced past last stylus write
 	}
 	return ans, true
+}
+
+// advance moves the drum forward to the position implied by the
+// current T-state, filling pixels with the current stylus state
+// and wrapping lines as needed. Returns the post-advance drum X
+// (which may be in the sync area, x < 0, if a wrap just happened).
+// Must be called with p.mu held and only when p.speed != 0.
+//
+// This function is called from BOTH HandlePortRead and
+// HandlePortWrite because the ROM polls the IN port in a tight
+// loop while waiting for line sync, during which there are no
+// writes — so the only way the in-progress line ever gets flushed
+// is if reads drive the wrap detection too.
+func (p *Printer) advance(tstates int64) int {
+	x := p.drumPos(tstates)
+	p.fillPixelsTo(x)
+	for x >= 320 {
+		cpp := 440 / p.speed
+		p.tstatesAt += int64(cpp * 384)
+		if p.tstatesAt >= TstatesPerFrame {
+			p.tstatesAt -= TstatesPerFrame
+			p.frameAt++
+		}
+		x -= 384
+		if p.newSpeed != 0 {
+			p.speed = p.newSpeed
+			p.newSpeed = 0
+		}
+		p.pixel = -1
+		p.ackPos = -1
+		if x > 0 {
+			p.fillPixelsTo(x)
+		}
+	}
+	return x
 }
 
 // HandlePortWrite handles OUT (0xFB). Updates drum state from
@@ -165,6 +211,7 @@ func (p *Printer) HandlePortWrite(port uint16, val byte, tstates int64) bool {
 			p.tstatesAt = tstates
 			p.stylusDark = val&0x80 != 0
 			p.pixel = -1
+			p.ackPos = -1
 		}
 		return true
 	}
@@ -172,52 +219,24 @@ func (p *Printer) HandlePortWrite(port uint16, val byte, tstates int64) bool {
 	// Motor already running — apply pixels up to the current drum
 	// position with the current stylus state, then pick up the
 	// new stylus bit for future pixels.
-	x := p.drumPos(tstates)
-	p.fillPixelsTo(x)
-	for x >= 320 {
-		// Drum has wrapped past the end of the visible line and
-		// the gap. Advance to the next line: push the line to
-		// rows, reset pixel, consume 384 drum positions worth
-		// of time from the anchor.
-		cpp := 440 / p.speed
-		p.tstatesAt += int64(cpp * 384)
-		if p.tstatesAt >= TstatesPerFrame {
-			p.tstatesAt -= TstatesPerFrame
-			p.frameAt++
-		}
-		x -= 384
-		if p.newSpeed != 0 {
-			p.speed = p.newSpeed
-			p.newSpeed = 0
-		}
-		p.pixel = -1
-		// If any pixels in the new line's visible area have
-		// already been "passed" by the drum (x > 0), fill them.
-		if x > 0 {
-			p.fillPixelsTo(x)
-		}
-	}
-	if x < 0 {
-		x = -1
-	}
+	x := p.advance(tstates)
 
 	// Bit 2 set = motor off request. Pad out the remaining
 	// pixels on the current line with the last stylus state,
-	// flush, and park the motor.
+	// flush, and park the motor. Skip when the line is empty
+	// (p.pixel == -1, fresh after a wrap): nothing to flush.
 	if val&0x04 != 0 {
-		if x >= 0 && x < LineWidth {
-			for i := x; i < LineWidth; i++ {
-				if p.stylusDark {
-					p.line[i] = 255
-				}
-			}
-			p.flushLine()
+		if p.pixel >= 0 {
+			p.fillPixelsTo(LineWidth - 1)
 		}
 		p.speed = 0
 		p.pixel = -1
+		p.ackPos = -1
 	} else {
 		p.stylusDark = val&0x80 != 0
-		p.pixel = x
+		// Acknowledge the drum-advance signal — bit 0 of IN
+		// won't go high again until the drum passes x.
+		p.ackPos = x
 	}
 	return true
 }
@@ -240,26 +259,37 @@ func (p *Printer) drumPos(tstates int64) int {
 }
 
 // fillPixelsTo writes the current stylus state into all pixels
-// from p.pixel+1 through min(x, LineWidth-1), then flushes the
-// line if we filled to the end. Must be called with p.mu held.
+// from p.pixel+1 through min(x, LineWidth-1), advances the fill
+// cursor p.pixel, and flushes the line the first time it fills
+// pixel LineWidth-1. After flush, p.pixel is set to LineWidth as
+// a "line is done, awaiting wrap" sentinel; subsequent fills on
+// the same line are no-ops until advance's wrap handler resets
+// p.pixel = -1 for the next line.
+// Must be called with p.mu held.
 func (p *Printer) fillPixelsTo(x int) {
-	start := p.pixel
+	if p.pixel >= LineWidth {
+		return // line already flushed, waiting for wrap
+	}
+	start := p.pixel + 1
 	if start < 0 {
 		start = 0
-	} else {
-		start++
 	}
-	end := x
+	end := x + 1
 	if end > LineWidth {
 		end = LineWidth
+	}
+	if end <= start {
+		return
 	}
 	for i := start; i < end; i++ {
 		if p.stylusDark {
 			p.line[i] = 255
 		}
 	}
-	if x >= LineWidth && p.pixel < LineWidth {
+	p.pixel = end - 1
+	if p.pixel == LineWidth-1 {
 		p.flushLine()
+		p.pixel = LineWidth // await wrap
 	}
 }
 
