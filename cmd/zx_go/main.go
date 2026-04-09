@@ -329,6 +329,57 @@ func savePlus3Disk(emu *emulator, w fyne.Window, drive int) {
 	fd.Show()
 }
 
+// insertInterface2Cartridge opens a file picker for a 16KB .rom
+// cartridge image and inserts it into the Interface 2 cartridge
+// slot. Refuses (with explanation) on non-48K models, since the
+// IF2 only worked on the original 48K Spectrum. On success, the
+// emulator is rebooted so the cartridge code starts executing
+// from PC=0x0000.
+func insertInterface2Cartridge(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel) {
+	if currentModel != roms.Model48K {
+		dialog.ShowInformation("Interface 2",
+			"Interface 2 ROM cartridges only work on the 48K Spectrum.\n"+
+				"Switch the machine model from the Machine menu first.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		_ = reader.Close()
+		if err := emu.peripherals.InsertInterface2Cartridge(path); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to insert cartridge: %w", err), w)
+			return
+		}
+		emu.reboot()
+		dialog.ShowInformation("Cartridge Inserted",
+			"Inserted "+emu.peripherals.Interface2CartridgeName()+
+				".\n\nThe emulator has been rebooted into the cartridge.", w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
+	fd.Show()
+}
+
+// ejectInterface2Cartridge removes any inserted Interface 2
+// cartridge and reboots into the normal BASIC ROM.
+func ejectInterface2Cartridge(emu *emulator, w fyne.Window) {
+	if !emu.peripherals.IsInterface2CartridgeInserted() {
+		dialog.ShowInformation("Interface 2",
+			"No cartridge is currently inserted.", w)
+		return
+	}
+	name := emu.peripherals.Interface2CartridgeName()
+	emu.peripherals.RemoveInterface2Cartridge()
+	emu.reboot()
+	dialog.ShowInformation("Cartridge Ejected",
+		"Ejected "+name+". The emulator has been rebooted into BASIC.", w)
+}
+
 // loadPlus3Disk opens a file picker for a DSK image and mounts it in the
 // given +3 FDC drive (0 = A, 1 = B). Refuses (with explanation) on
 // non-+3/+2A models.
@@ -1323,6 +1374,14 @@ func main() {
 			return
 		}
 
+		// Interface 2 cartridges are 48K-only. If the user switches
+		// to a 128K-series model while a cartridge is inserted,
+		// eject it — otherwise the cartridge ROM would shadow the
+		// 128K ROM and break the new machine.
+		if newModel != roms.Model48K && emu.peripherals.IsInterface2CartridgeInserted() {
+			emu.peripherals.RemoveInterface2Cartridge()
+		}
+
 		currentModel = newModel
 
 		// Automatic reboot after model switch
@@ -1507,6 +1566,12 @@ func main() {
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
 				fd.Show()
+			}),
+			fyne.NewMenuItem("Insert Interface 2 Cartridge...", func() {
+				insertInterface2Cartridge(emu, w, currentModel)
+			}),
+			fyne.NewMenuItem("Eject Interface 2 Cartridge", func() {
+				ejectInterface2Cartridge(emu, w)
 			}),
 			fyne.NewMenuItem("Load Disk A...", func() {
 				loadPlus3Disk(emu, w, currentModel, 0)

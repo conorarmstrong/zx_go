@@ -6,6 +6,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/disciple"
 	"github.com/conorarmstrong/zx_go/pkg/if1"
+	"github.com/conorarmstrong/zx_go/pkg/if2"
 	"github.com/conorarmstrong/zx_go/pkg/kempmouse"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/microdrive"
@@ -22,6 +23,7 @@ type PeripheralManager struct {
 	multiface *multiface.Multiface
 	plus3fdc  *plus3fdc.Plus3FDC
 	if1       *if1.IF1
+	if2       *if2.Cartridge // nil when no cartridge is inserted
 	kempmouse *kempmouse.Mouse
 	zxprinter *zxprinter.Printer
 
@@ -171,6 +173,51 @@ func (pm *PeripheralManager) DisableInterface1() {
 	pm.if1Enabled = false
 	pm.if1 = nil
 	log.Println("Interface 1 disabled")
+}
+
+// InsertInterface2Cartridge loads a 16KB .rom file and inserts it
+// into the Interface 2 cartridge slot. On subsequent memory reads
+// in the 0x0000-0x3FFF window, the cartridge bytes are returned
+// instead of the internal BASIC ROM — caller is responsible for
+// rebooting the CPU so the cartridge code starts executing from
+// PC=0x0000. The IF2 was a 48K-only peripheral; inserting on any
+// other model returns an error.
+func (pm *PeripheralManager) InsertInterface2Cartridge(path string) error {
+	if pm.memory.GetCurrentModel() != roms.Model48K {
+		return fmt.Errorf("interface 2 cartridges are only supported on the 48K Spectrum")
+	}
+	cart, err := if2.Load(path)
+	if err != nil {
+		return err
+	}
+	pm.if2 = cart
+	log.Printf("Interface 2 cartridge inserted: %s", cart.Name)
+	return nil
+}
+
+// RemoveInterface2Cartridge ejects any currently inserted cartridge.
+// Memory reads at 0x0000-0x3FFF fall back to the internal BASIC
+// ROM on the next read. Caller should reboot afterwards to restart
+// BASIC cleanly.
+func (pm *PeripheralManager) RemoveInterface2Cartridge() {
+	if pm.if2 == nil {
+		return
+	}
+	log.Printf("Interface 2 cartridge ejected: %s", pm.if2.Name)
+	pm.if2 = nil
+}
+
+func (pm *PeripheralManager) IsInterface2CartridgeInserted() bool {
+	return pm.if2 != nil
+}
+
+// Interface2CartridgeName returns the display name of the currently
+// inserted cartridge, or an empty string if none is inserted.
+func (pm *PeripheralManager) Interface2CartridgeName() string {
+	if pm.if2 == nil {
+		return ""
+	}
+	return pm.if2.Name
 }
 
 // Frame ticks any peripheral that needs a per-frame pulse. Call
@@ -501,6 +548,16 @@ func (pm *PeripheralManager) HandleOpcodeRead(addr uint16) bool {
 
 // HandleMemoryRead handles memory reads that might be intercepted by peripherals
 func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
+	// Interface 2 cartridge: when inserted on a 48K machine, the
+	// cartridge ROM completely replaces the internal BASIC ROM at
+	// 0x0000-0x3FFF. Check this first — an IF2 cartridge takes
+	// precedence over any overlay peripheral ROM because on real
+	// hardware the cartridge asserts ROMCS, which disables the
+	// internal ROM outright.
+	if pm.if2 != nil && addr < 0x4000 {
+		return pm.if2.Read(addr), true
+	}
+
 	// Check if Multiface ROM/RAM is paged in
 	if pm.multifaceEnabled && pm.multiface != nil && pm.multiface.IsROMPaged() {
 		if addr < 0x2000 { // Multiface ROM area (0x0000-0x1FFF)

@@ -273,6 +273,25 @@ func (h *Harness) InsertMicrodrive(slot int, path string) error {
 	return h.peripherals.LoadMicrodrive(slot, path)
 }
 
+// InsertInterface2Cartridge loads a 16KB .rom cartridge image and
+// inserts it into the Interface 2 cartridge slot, then resets the
+// CPU so the cartridge code starts at PC=0x0000. Only works in
+// 48K mode — returns an error on any other model.
+func (h *Harness) InsertInterface2Cartridge(path string) error {
+	if err := h.peripherals.InsertInterface2Cartridge(path); err != nil {
+		return err
+	}
+	h.cpu.Reset()
+	return nil
+}
+
+// RemoveInterface2Cartridge ejects any inserted IF2 cartridge and
+// resets the CPU back into BASIC.
+func (h *Harness) RemoveInterface2Cartridge() {
+	h.peripherals.RemoveInterface2Cartridge()
+	h.cpu.Reset()
+}
+
 // Wait runs frames continuously for the given wall-clock duration
 // at the simulated 50Hz frame rate (i.e. d / 20ms frames). Used
 // for tests that just need "let the emulator settle for half a
