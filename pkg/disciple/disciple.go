@@ -564,21 +564,22 @@ func (d *Disciple) DiskPath(drive int) string {
 }
 
 // PreFetchHook pages in the DISCiPLE when the CPU fetches from
-// 0x0066 (NMI vector). On the real hardware, the DISCiPLE's NMI
-// button simultaneously asserts NMI, pages in the ROM/RAM, and
-// enables memswap (so 0x0000-0x1FFF reads from RAM, where GDOS
-// has copied its handlers and workspace during init).
+// specific trigger addresses, matching FUSE's z80_ops.c:
 //
-// RST 8 (0x0008) is NOT auto-paged here. GDOS intercepts RST 8
-// through hooks installed in Spectrum RAM during its cold-boot
-// init sequence. Those hooks read port 0xBB to page in on demand.
+//	0x0001 — second byte of cold boot (re-page after reset)
+//	0x0008 — RST 8 (GDOS intercepts error/command handler)
+//	0x0066 — NMI vector (snapshot button)
+//	0x028E — GDOS internal re-entry point
+//
+// No memswap change — GDOS handles memswap itself via port 0x7B.
+// GDOS pages itself out via port 0xBB writes when done.
 func (d *Disciple) PreFetchHook(pc uint16) {
 	if d.inhibited || !d.enabled {
 		return
 	}
-	if pc == 0x0066 {
+	switch pc {
+	case 0x0001, 0x0008, 0x0066, 0x028E:
 		d.romPaged = true
-		d.memswap = true
 	}
 }
 

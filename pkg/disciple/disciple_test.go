@@ -434,13 +434,21 @@ func TestPreFetchHook_NMI(t *testing.T) {
 	}
 }
 
-func TestPreFetchHook_NoPageOnRST8(t *testing.T) {
+func TestPreFetchHook_Triggers(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
 
-	d.PreFetchHook(0x0008)
+	for _, pc := range []uint16{0x0001, 0x0008, 0x0066, 0x028E} {
+		d, _ := NewDisciple(dir, mem)
+		d.PreFetchHook(pc)
+		if !d.IsROMPaged() {
+			t.Errorf("PC=0x%04X should page in", pc)
+		}
+	}
+	// Non-trigger address should NOT page in
+	d, _ := NewDisciple(dir, mem)
+	d.PreFetchHook(0x1234)
 	if d.IsROMPaged() {
-		t.Error("RST 8 should NOT auto-page (GDOS uses RAM hooks instead)")
+		t.Error("PC=0x1234 should not page in")
 	}
 }
