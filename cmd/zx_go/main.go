@@ -737,6 +737,14 @@ func (e *emulator) reboot() {
 	e.cpu.Reset()
 	e.ula.Reset()
 
+	// If the DISCiPLE is enabled, page it in so its boot code at
+	// ROM 0x0000 runs on the next frame (cold boot).
+	if e.peripherals.IsDiscipleEnabled() {
+		if disc := e.peripherals.GetDisciple(); disc != nil {
+			disc.PageIn()
+		}
+	}
+
 	// Clear key states on reboot
 	e.keyMutex.Lock()
 	e.physicalKeys = make(map[fyne.KeyName]bool)
@@ -2045,6 +2053,7 @@ func main() {
 					emu.cpu.PreFetchHook = nil
 					emu.cpu.PostFetchHook = nil
 					emu.peripherals.DisableDisciple()
+					emu.reboot()
 				} else {
 					if err := emu.peripherals.EnableDisciple("roms"); err != nil {
 						dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
@@ -2052,6 +2061,7 @@ func main() {
 						dev := emu.peripherals.GetDisciple()
 						emu.cpu.PreFetchHook = dev.PreFetchHook
 						emu.cpu.PostFetchHook = dev.PostFetchHook
+						emu.reboot() // cold boot GDOS
 					}
 				}
 				fyne.Do(func() {
