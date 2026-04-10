@@ -611,16 +611,14 @@ func (pm *PeripheralManager) HandleMemoryWrite(addr uint16, value byte) bool {
 		}
 	}
 	
-	// Check if Disciple RAM is accessible (writes only go to RAM,
-	// never to ROM, regardless of memswap).
+	// DISCiPLE: writes to 0x0000-0x3FFF always go to the 8KB RAM,
+	// regardless of memswap. On real hardware, the ROM chip is
+	// read-only and doesn't respond to writes; the RAM chip
+	// accepts writes at any address in the paged range. The RAM
+	// is addressed via addr & 0x1FFF (8KB window).
 	if pm.discipleEnabled && pm.disciple != nil && pm.disciple.IsROMPaged() {
-		swapped := pm.disciple.IsMemSwapped()
-		if !swapped && addr >= 0x2000 && addr < 0x4000 {
-			pm.disciple.GetRAM()[addr-0x2000] = value
-			return true
-		}
-		if swapped && addr < 0x2000 {
-			pm.disciple.GetRAM()[addr] = value
+		if addr < 0x4000 {
+			pm.disciple.GetRAM()[addr&0x1FFF] = value
 			return true
 		}
 	}

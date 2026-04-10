@@ -95,8 +95,8 @@ func TestNewDisciple_WithRealROM(t *testing.T) {
 	if !d.IsEnabled() {
 		t.Error("should be enabled")
 	}
-	if !d.IsROMPaged() {
-		t.Error("should start paged in (GDOS boot)")
+	if d.IsROMPaged() {
+		t.Error("should start paged out")
 	}
 	if len(d.GetROM()) != 0x2000 {
 		t.Errorf("ROM size = %d", len(d.GetROM()))
@@ -211,10 +211,8 @@ func TestPatchPage(t *testing.T) {
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Starts paged in; page out first via write to 0xBB
-	d.HandlePortWrite(portPatch, 0)
 	if d.IsROMPaged() {
-		t.Error("should be unpaged after port 0xBB write")
+		t.Error("should start unpaged")
 	}
 	// Read port 0xBB → page in
 	d.HandlePortRead(portPatch)
@@ -441,8 +439,6 @@ func TestPreFetchHook_NoPageOnRST8(t *testing.T) {
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Page out first, then verify RST 8 doesn't page back in.
-	d.HandlePortWrite(portPatch, 0)
 	d.PreFetchHook(0x0008)
 	if d.IsROMPaged() {
 		t.Error("should NOT page in on RST 8")

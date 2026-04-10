@@ -153,7 +153,7 @@ func (d *Disciple) reset() {
 	d.controlReg = 0
 	d.enabled = true
 	d.inhibited = false
-	d.romPaged = true // GDOS ROM starts paged in so its boot code runs
+	d.romPaged = false
 	d.memswap = false
 }
 
