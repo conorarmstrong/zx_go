@@ -60,12 +60,9 @@ Priority markers in square brackets at the start of each item:
   remove the menu item and the README mention entirely. Honesty
   beats a broken feature.
 
-- [ ] **[blocker]** Fix or remove Multiface `SaveSnapshot` /
-  `LoadSnapshot` stubs at `pkg/multiface/multiface.go:385, 402`.
-  Both return "not yet implemented". If the Multiface red-button
-  overlay offers save-as-snapshot, this must work. If it doesn't
-  use these methods, delete them so they don't mislead future
-  readers.
+- [x] **[blocker]** ~~Fix or remove Multiface `SaveSnapshot` /
+  `LoadSnapshot` stubs~~ — deleted. Neither method was called from
+  the UI; dead code all the way through to `PeripheralManager`.
 
 ## Peripherals — emulation gaps
 
@@ -112,7 +109,7 @@ Priority markers in square brackets at the start of each item:
 
 ## Testing and CI
 
-- [ ] **[blocker]** Run `go test ./...` on all three OSes in CI.
+- [x] **[blocker]** ~~Run `go test ./...` on all three OSes in CI.~~
   Currently `ci.yml` runs tests only on `ubuntu-latest`. The
   `release.yml` builds binaries for Linux / macOS-arm64 /
   macOS-amd64 / Windows but never runs tests on any of them. A
@@ -126,23 +123,16 @@ Priority markers in square brackets at the start of each item:
   simulation, demo, utility). Doesn't have to be exhaustive — the
   goal is "v1.0 is known to work on this known-good corpus".
 
-- [ ] **[should-do]** Add a test coverage metric. `go test -cover`
-  per package, published as a README badge or an uploaded report
-  artifact. Helps identify thinly-tested packages before v1.0.
+- [x] **[should-do]** ~~Add a test coverage metric.~~ `-cover` flag
+  added to CI test job. Badge/artifact upload deferred.
 
 ## Documentation and repo hygiene
 
-- [ ] **[blocker]** Delete or rewrite stale Z80 docs:
-  `opcode_matrix.md` and `Z80_INSTRUCTION_MATRIX.md`. Both compare
-  the project against `jsspeccy` and show ❌ for opcodes that are
-  in fact implemented (spot-checked: RLCA / RRCA marked ❌ but exist
-  at `pkg/z80/z80.go:430` and `:434`). Same stale-doc pattern as
-  the `todo.md` and `FEATURES.md` we already deleted. Delete both
-  unless someone has time to rewrite them accurately.
+- [x] **[blocker]** ~~Delete or rewrite stale Z80 docs:
+  `opcode_matrix.md` and `Z80_INSTRUCTION_MATRIX.md`.~~ Deleted.
 
-- [ ] **[blocker]** Remove the broken symlink at the repo root:
-  `./LEGACY → ../jsspeccy3-main_LEGACY`. The target doesn't exist
-  in the current checkout, so this is a dead pointer.
+- [x] **[blocker]** ~~Remove the broken symlink at the repo root:
+  `./LEGACY`.~~ Deleted.
 
 - [ ] **[blocker]** Review `KEYBOARD_GUIDE.md` for staleness.
   Verify it matches the current `pkg/keyboard/` behaviour. If the
@@ -158,12 +148,8 @@ Priority markers in square brackets at the start of each item:
   style guidance. v1.0 is the point where outside contributions
   become plausible; onboarding docs pay off.
 
-- [ ] **[nice-to-have]** Decide whether to keep the stray `zx_go`
-  binary at the repo root post-build. It's `.gitignore`-d so not
-  tracked, but it clutters the working tree of anyone who builds
-  from the repo root. Either change the README's build command to
-  put the binary elsewhere (e.g. `go build -o bin/zx_go ./cmd/zx_go`)
-  or leave as-is (gitignore already covers it).
+- [x] **[nice-to-have]** ~~Stray `zx_go` binary at repo root.~~
+  README now builds to `bin/zx_go`; `.gitignore` updated to `/bin/`.
 
 ## User experience
 

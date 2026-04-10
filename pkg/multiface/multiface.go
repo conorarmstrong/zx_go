@@ -373,35 +373,6 @@ func GetVariantName(variant MultifaceType) string {
 	}
 }
 
-// SaveSnapshot saves a memory snapshot (placeholder implementation)
-func (mf *Multiface) SaveSnapshot(filename string) error {
-	if !mf.enabled || !mf.romPaged {
-		return fmt.Errorf("multiface not active")
-	}
-	
-	// In a real implementation, this would save the entire Spectrum memory
-	// as a snapshot file (.sna, .z80, etc.)
-	
-	return fmt.Errorf("snapshot saving not yet implemented")
-}
-
-// LoadSnapshot loads a memory snapshot (placeholder implementation)
-func (mf *Multiface) LoadSnapshot(filename string) error {
-	if !mf.enabled {
-		return fmt.Errorf("multiface not enabled")
-	}
-	
-	// Check if file exists
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		return fmt.Errorf("snapshot file not found: %s", filename)
-	}
-	
-	// In a real implementation, this would load a snapshot file
-	// and restore the Spectrum memory state
-	
-	return fmt.Errorf("snapshot loading not yet implemented")
-}
-
 // GetCompatibleModel returns the compatible Spectrum model for this Multiface
 func (mf *Multiface) GetCompatibleModel() roms.SpectrumModel {
 	switch mf.variant {

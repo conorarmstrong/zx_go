@@ -581,26 +581,3 @@ func TestLoadDiscipleDisk_NotEnabled(t *testing.T) {
 	}
 }
 
-// --- SaveMultifaceSnapshot / LoadMultifaceSnapshot ---
-
-func TestSaveMultifaceSnapshot_NotEnabled(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	pm := NewPeripheralManager(mem, dir)
-
-	err := pm.SaveMultifaceSnapshot("test.sna")
-	if err == nil {
-		t.Error("SaveMultifaceSnapshot should fail when Multiface is not enabled")
-	}
-}
-
-func TestLoadMultifaceSnapshot_NotEnabled(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	pm := NewPeripheralManager(mem, dir)
-
-	err := pm.LoadMultifaceSnapshot("test.sna")
-	if err == nil {
-		t.Error("LoadMultifaceSnapshot should fail when Multiface is not enabled")
-	}
-}

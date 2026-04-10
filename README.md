@@ -88,13 +88,13 @@ tar xzf zx_go-macos-arm64.tar.gz
 Requires Go 1.25+ and the system dependencies for [Fyne](https://fyne.io/) (OpenGL, C compiler).
 
 ```bash
-go build -o zx_go ./cmd/zx_go
+go build -o bin/zx_go ./cmd/zx_go
 ```
 
 ## Running
 
 ```bash
-./zx_go
+./bin/zx_go
 ```
 
 The emulator starts in 48K mode by default. Use the menu bar to:

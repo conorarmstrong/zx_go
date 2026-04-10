@@ -663,24 +663,6 @@ func (pm *PeripheralManager) LoadDiscipleDisk(drive int, filename string) error 
 	return pm.disciple.LoadDisk(drive, filename)
 }
 
-// SaveMultifaceSnapshot saves a snapshot using the Multiface
-func (pm *PeripheralManager) SaveMultifaceSnapshot(filename string) error {
-	if !pm.multifaceEnabled || pm.multiface == nil {
-		return fmt.Errorf("multiface not enabled")
-	}
-	
-	return pm.multiface.SaveSnapshot(filename)
-}
-
-// LoadMultifaceSnapshot loads a snapshot using the Multiface
-func (pm *PeripheralManager) LoadMultifaceSnapshot(filename string) error {
-	if !pm.multifaceEnabled || pm.multiface == nil {
-		return fmt.Errorf("multiface not enabled")
-	}
-	
-	return pm.multiface.LoadSnapshot(filename)
-}
-
 // SetDiscipleInhibit sets the Disciple inhibit state
 func (pm *PeripheralManager) SetDiscipleInhibit(inhibit bool) {
 	if pm.discipleEnabled && pm.disciple != nil {
