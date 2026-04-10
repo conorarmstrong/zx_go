@@ -2,24 +2,26 @@
 // interface. The DISCiPLE plugs into the Spectrum's edge connector and
 // provides a WD1770 floppy disk controller with two drive ports, 8KB
 // of ROM (GDOS or G+DOS), and 8KB of RAM. When the DISCiPLE's memory
-// is paged in, ROM appears at 0x0000-0x1FFF and RAM at 0x2000-0x3FFF.
+// is paged in, ROM appears at 0x0000-0x1FFF and RAM at 0x2000-0x3FFF
+// (or swapped via the boot port).
 //
 // Disk images are loaded via LoadDisk and parsed using the plus3fdc
 // package's raw-sector parsers (ParseMGT, ParseIMG, ParseSAD). The
 // internal representation is FUSE's track byte stream model, which
 // lets the WD1770 emulation find sectors by walking IDAMs and DAMs.
 //
-// Port decode (low byte of address):
+// Port decode (low byte of address), matching FUSE's disciple.c:
 //
 //	0x1B — WD1770 Status (R) / Command (W)
-//	0x3B — WD1770 Track register (R/W)
-//	0x5B — WD1770 Sector register (R/W)
-//	0x7B — WD1770 Data register (R/W)
-//	0x1F — DISCiPLE control register (see controlWrite / controlRead)
+//	0x5B — WD1770 Track register (R/W)
+//	0x9B — WD1770 Sector register (R/W)
+//	0xDB — WD1770 Data register (R/W)
+//	0x1F — Control register (W) / Joystick-printer status (R)
+//	0x7B — Boot memswap (R = normal, W = swapped ROM/RAM)
+//	0xBB — Patch page (R = page in, W = page out)
 //
 // The control register at 0x1F conflicts with the Kempston joystick.
-// This is historically accurate: on the real Spectrum, the DISCiPLE
-// intercepted port 0x1F and Kempston joystick would not work.
+// This is historically accurate.
 package disciple
 
 import (
@@ -34,15 +36,15 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// Port addresses. The WD1770 registers are selected by bits 6-5 of
-// the port low byte when bit 7 is 0 and bit 2 is 0. The control
-// register is selected when bit 7 is 0 and bit 2 is 1.
+// Port addresses matching FUSE's disciple.c.
 const (
 	portFDCCmdStatus = 0x1B // WD1770 Command (W) / Status (R)
-	portFDCTrack     = 0x3B // WD1770 Track register
-	portFDCSector    = 0x5B // WD1770 Sector register
-	portFDCData      = 0x7B // WD1770 Data register
-	portControl      = 0x1F // DISCiPLE control / status
+	portFDCTrack     = 0x5B // WD1770 Track register
+	portFDCSector    = 0x9B // WD1770 Sector register
+	portFDCData      = 0xDB // WD1770 Data register
+	portControl      = 0x1F // Control (W) / Joystick-printer status (R)
+	portBoot         = 0x7B // Boot memswap (R=normal, W=swapped)
+	portPatch        = 0xBB // Patch page (R=page in, W=page out)
 )
 
 // WD1770 status register bits.
@@ -63,7 +65,6 @@ const (
 
 // Disciple represents the DISCiPLE disk interface.
 type Disciple struct {
-	// ROM/RAM
 	rom []byte // 8KB GDOS ROM
 	ram []byte // 8KB RAM
 
@@ -74,14 +75,14 @@ type Disciple struct {
 	dataReg   byte
 
 	// WD1770 transfer state
-	xferBuf   []byte // sector data buffer
-	xferPos   int    // current byte position in transfer
-	xferLen   int    // expected transfer length
-	xferWrite bool   // true = writing to disk
-	busy      bool
-	drq       bool  // data request
-	intrq     bool  // interrupt request
-	lastCmdType1 bool // true if last command was Type I (affects status format)
+	xferBuf      []byte
+	xferPos      int
+	xferLen      int
+	xferWrite    bool
+	busy         bool
+	drq          bool
+	intrq        bool
+	lastCmdType1 bool
 
 	// Drive/head state
 	drive int // 0 or 1
@@ -98,8 +99,8 @@ type Disciple struct {
 	enabled   bool
 	inhibited bool
 	romPaged  bool
+	memswap   bool // true = ROM/RAM positions swapped
 
-	// Memory reference
 	memory *memory.Memory
 }
 
@@ -116,7 +117,6 @@ func NewDisciple(romPath string, memory *memory.Memory) (*Disciple, error) {
 	return d, nil
 }
 
-// loadROM loads the GDOS ROM.
 func (d *Disciple) loadROM(romPath string) error {
 	romFiles := []string{"gdos.rom", "disciple.rom", "GDOS_3d.rom"}
 	for _, filename := range romFiles {
@@ -130,12 +130,11 @@ func (d *Disciple) loadROM(romPath string) error {
 		}
 	}
 	d.rom = make([]byte, 0x2000)
-	copy(d.rom[0:], []byte{0xF3, 0xC3, 0x00, 0x20}) // DI, JP 0x2000
+	copy(d.rom[0:], []byte{0xF3, 0xC3, 0x00, 0x20})
 	log.Println("Warning: Using placeholder GDOS ROM - disk functionality will be limited")
 	return nil
 }
 
-// reset resets the DISCiPLE to initial state.
 func (d *Disciple) reset() {
 	d.statusReg = 0
 	d.trackReg = 0
@@ -154,7 +153,8 @@ func (d *Disciple) reset() {
 	d.controlReg = 0
 	d.enabled = true
 	d.inhibited = false
-	d.romPaged = false
+	d.romPaged = true // GDOS ROM starts paged in so its boot code runs
+	d.memswap = false
 }
 
 // HandlePortRead handles reads from DISCiPLE I/O ports.
@@ -174,6 +174,12 @@ func (d *Disciple) HandlePortRead(port uint16) (byte, bool) {
 		return d.readData(), true
 	case portControl:
 		return d.controlRead(), true
+	case portBoot:
+		d.memswap = false
+		return 0, true
+	case portPatch:
+		d.romPaged = true
+		return 0, true
 	}
 	return 0, false
 }
@@ -199,49 +205,39 @@ func (d *Disciple) HandlePortWrite(port uint16, value byte) bool {
 	case portControl:
 		d.controlWrite(value)
 		return true
+	case portBoot:
+		d.memswap = true
+		return true
+	case portPatch:
+		d.romPaged = false
+		return true
 	}
 	return false
 }
 
 // controlWrite handles a write to the DISCiPLE control register.
+// Matches FUSE's disciple_cn_write:
 //
-//	Bit 0: Drive 1 select
-//	Bit 1: Drive 2 select
-//	Bit 2: Side select (0 = side 0, 1 = side 1)
-//	Bit 3: Density (ignored — we always use MFM)
-//	Bit 4: DISCiPLE ROM/RAM page control (1 = paged in)
+//	Bit 0: Drive select (1 = drive 0, 0 = drive 1)
+//	Bit 1: Side select (0 = side 0, 1 = side 1)
+//	Bit 6: Printer strobe (ignored)
 func (d *Disciple) controlWrite(val byte) {
 	d.controlReg = val
-	if val&0x02 != 0 {
-		d.drive = 1
-	} else {
+	if val&0x01 != 0 {
 		d.drive = 0
-	}
-	d.head = int((val >> 2) & 1)
-	if val&0x10 != 0 {
-		d.romPaged = true
 	} else {
-		d.romPaged = false
+		d.drive = 1
 	}
+	d.head = int((val >> 1) & 1)
 }
 
-// controlRead returns the control register read value.
-//
-//	Bit 6: INTRQ from WD1770
-//	Bit 7: DRQ from WD1770
+// controlRead returns joystick/printer status. Bit 6 = printer busy
+// (0 = busy). We report "not busy" always.
 func (d *Disciple) controlRead() byte {
-	var val byte
-	if d.intrq {
-		val |= 0x40
-	}
-	if d.drq {
-		val |= 0x80
-	}
-	return val
+	return 0xFF
 }
 
-// readStatus builds the WD1770 status register. The bit layout differs
-// between Type I and Type II/III commands.
+// readStatus builds the WD1770 status register.
 func (d *Disciple) readStatus() byte {
 	var st byte
 	disk := d.disks[d.drive]
@@ -249,13 +245,11 @@ func (d *Disciple) readStatus() byte {
 	if disk == nil {
 		st |= stNotReady
 	}
-
 	if d.busy {
 		st |= stBusy
 	}
 
 	if d.lastCmdType1 {
-		// Type I status
 		if disk != nil {
 			st |= stHeadLoaded
 		}
@@ -263,20 +257,15 @@ func (d *Disciple) readStatus() byte {
 			st |= stTrack0
 		}
 	} else {
-		// Type II/III status
 		if d.drq {
 			st |= stDRQ
 		}
 	}
 
-	// Preserve error bits from statusReg
 	st |= d.statusReg & (stCRCError | stRNF | stSeekError | stRecordType | stWriteProtect)
-
 	return st
 }
 
-// readData returns the next byte from the FDC data register during a
-// read operation, advancing the transfer buffer position.
 func (d *Disciple) readData() byte {
 	if d.drq && d.xferBuf != nil && d.xferPos < d.xferLen {
 		val := d.xferBuf[d.xferPos]
@@ -292,7 +281,6 @@ func (d *Disciple) readData() byte {
 	return d.dataReg
 }
 
-// writeData accepts the next byte from the CPU during a write operation.
 func (d *Disciple) writeData(val byte) {
 	d.dataReg = val
 	if d.drq && d.xferWrite && d.xferBuf != nil && d.xferPos < d.xferLen {
@@ -307,9 +295,7 @@ func (d *Disciple) writeData(val byte) {
 	}
 }
 
-// executeCommand dispatches a WD1770 command.
 func (d *Disciple) executeCommand(cmd byte) {
-	// Clear error bits from previous command.
 	d.statusReg = 0
 
 	switch {
@@ -343,11 +329,11 @@ func (d *Disciple) executeCommand(cmd byte) {
 
 	case cmd&0xE0 == 0x80: // Read Sector
 		d.lastCmdType1 = false
-		d.cmdReadSector(cmd)
+		d.cmdReadSector()
 
 	case cmd&0xE0 == 0xA0: // Write Sector
 		d.lastCmdType1 = false
-		d.cmdWriteSector(cmd)
+		d.cmdWriteSector()
 
 	case cmd&0xF0 == 0xC0: // Read Address
 		d.lastCmdType1 = false
@@ -372,11 +358,7 @@ func (d *Disciple) executeCommand(cmd byte) {
 	}
 }
 
-// cmdReadSector implements the WD1770 Read Sector command. It finds the
-// sector matching sectorReg on the current track and loads its data
-// into the transfer buffer for byte-by-byte reading via the data
-// register.
-func (d *Disciple) cmdReadSector(cmd byte) {
+func (d *Disciple) cmdReadSector() {
 	disk := d.disks[d.drive]
 	if disk == nil {
 		d.statusReg |= stRNF
@@ -403,10 +385,7 @@ func (d *Disciple) cmdReadSector(cmd byte) {
 	d.drq = true
 }
 
-// cmdWriteSector implements the WD1770 Write Sector command. It sets up
-// an empty buffer for the CPU to fill via data register writes; when
-// full, the sector is committed to the disk image.
-func (d *Disciple) cmdWriteSector(cmd byte) {
+func (d *Disciple) cmdWriteSector() {
 	disk := d.disks[d.drive]
 	if disk == nil {
 		d.statusReg |= stRNF
@@ -419,9 +398,6 @@ func (d *Disciple) cmdWriteSector(cmd byte) {
 		d.intrq = true
 		return
 	}
-	// Look up the sector to determine its size, then allocate a write
-	// buffer. The actual commit happens in commitWriteSector once the
-	// buffer is full.
 	sec := tr.FindSector(d.sectorReg)
 	if sec == nil {
 		d.statusReg |= stRNF
@@ -436,8 +412,6 @@ func (d *Disciple) cmdWriteSector(cmd byte) {
 	d.drq = true
 }
 
-// commitWriteSector writes the transfer buffer back to the track's
-// byte stream, overwriting the data field of the target sector.
 func (d *Disciple) commitWriteSector() {
 	disk := d.disks[d.drive]
 	if disk == nil {
@@ -447,9 +421,6 @@ func (d *Disciple) commitWriteSector() {
 	if tr == nil {
 		return
 	}
-	// Walk the track to find the matching IDAM, then locate its data
-	// field and overwrite the bytes. This writes directly into the
-	// Track's internal byte stream.
 	pos := 0
 	for {
 		_, _, r, _, idEnd, ok := tr.IdAt(pos)
@@ -467,9 +438,6 @@ func (d *Disciple) commitWriteSector() {
 	}
 }
 
-// cmdReadAddress implements the WD1770 Read Address command. It reads
-// the first IDAM on the current track and returns its 6-byte contents
-// (C, H, R, N, CRC1, CRC2) via the data register.
 func (d *Disciple) cmdReadAddress() {
 	disk := d.disks[d.drive]
 	if disk == nil {
@@ -489,13 +457,13 @@ func (d *Disciple) cmdReadAddress() {
 		d.intrq = true
 		return
 	}
-	d.xferBuf = []byte{c, h, r, n, 0, 0} // CRC bytes not critical
+	d.xferBuf = []byte{c, h, r, n, 0, 0}
 	d.xferLen = 6
 	d.xferPos = 0
 	d.xferWrite = false
 	d.busy = true
 	d.drq = true
-	d.trackReg = c // WD1770 updates track register to match
+	d.trackReg = c
 }
 
 // LoadDisk loads a disk image into the specified drive.
@@ -516,14 +484,10 @@ func (d *Disciple) LoadDisk(drive int, path string) error {
 	return nil
 }
 
-// parseDiskImage dispatches to the correct parser based on file
-// extension, falling back to signature detection.
 func parseDiskImage(path string, data []byte) (*plus3fdc.Disk, error) {
-	// Try signature-based detection first (covers DSK, EDSK, UDI, SAD).
 	if disk, err := plus3fdc.ParseDiskImage(data); err == nil {
 		return disk, nil
 	}
-	// Extension fallback for headerless raw-sector formats.
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".mgt":
 		return plus3fdc.ParseMGT(data)
@@ -534,7 +498,6 @@ func parseDiskImage(path string, data []byte) (*plus3fdc.Disk, error) {
 	case ".d40", ".d80":
 		return plus3fdc.ParseD40D80(data)
 	}
-	// Last resort: try MGT (most common DISCiPLE format).
 	return plus3fdc.ParseMGT(data)
 }
 
@@ -559,6 +522,11 @@ func (d *Disciple) IsInhibited() bool {
 // IsROMPaged reports whether the DISCiPLE ROM/RAM is paged in.
 func (d *Disciple) IsROMPaged() bool {
 	return d.romPaged
+}
+
+// IsMemSwapped reports whether ROM and RAM positions are swapped.
+func (d *Disciple) IsMemSwapped() bool {
+	return d.memswap
 }
 
 // GetROM returns the 8KB GDOS ROM.
@@ -595,37 +563,17 @@ func (d *Disciple) DiskPath(drive int) string {
 	return d.diskPaths[drive]
 }
 
-// Page-in trigger addresses. The DISCiPLE hardware monitors the
-// address bus during M1 (opcode fetch) cycles and automatically
-// pages in its ROM/RAM when the CPU fetches from these addresses:
-//
-//   - 0x0066: NMI handler — triggered by the DISCiPLE's snapshot
-//     button (mapped to F12 in the emulator).
-//   - 0x0008: RST 8 — the Spectrum's error/command handler. GDOS
-//     intercepts this to add disk commands (CAT, LOAD, SAVE, etc.)
-//     to BASIC.
-const (
-	PageInNMI  uint16 = 0x0066
-	PageInRST8 uint16 = 0x0008
-)
-
-// PreFetchHook is the callback the Z80 should invoke before each
-// opcode fetch. Pages the DISCiPLE ROM/RAM in when PC matches one
-// of the auto-paging trigger addresses.
+// PreFetchHook pages in the DISCiPLE when the CPU fetches from
+// 0x0066 (NMI vector). On the real hardware, the DISCiPLE's NMI
+// button simultaneously asserts NMI and pages in the ROM.
 func (d *Disciple) PreFetchHook(pc uint16) {
 	if d.inhibited || !d.enabled {
 		return
 	}
-	if pc == PageInNMI || pc == PageInRST8 {
+	if pc == 0x0066 {
 		d.romPaged = true
 	}
 }
 
-// PostFetchHook is provided for symmetry with the IF1 hook
-// interface. The DISCiPLE pages out via the control register
-// (port 0x1F, bit 4 = 0) rather than an address trigger, so
-// this is a no-op.
-func (d *Disciple) PostFetchHook(pc uint16) {
-	// No page-out trigger — GDOS pages itself out via the
-	// control register.
-}
+// PostFetchHook is a no-op — GDOS pages itself out via port 0xBB.
+func (d *Disciple) PostFetchHook(pc uint16) {}

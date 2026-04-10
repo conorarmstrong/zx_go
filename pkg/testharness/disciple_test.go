@@ -59,57 +59,29 @@ func TestDiscipleSectorReadViaZ80(t *testing.T) {
 		t.Fatalf("LoadDiscipleDisk: %v", err)
 	}
 
-	// Z80 program at 0x8000:
-	//   LD A, 0x01     ; select drive 1, side 0
-	//   OUT (0x1F), A  ; DISCiPLE control register
-	//   LD A, 0x00     ; Restore command
-	//   OUT (0x1B), A  ; FDC command/status
-	//   LD A, 0x05     ; target track
-	//   OUT (0x1B+20h),A ; → actually write to track reg: need Seek
-	// ... let me use Seek instead:
-	//
-	//   LD A, 0x01       ; drive 1, side 0
-	//   OUT (0x1F), A
-	//   LD A, 0x05       ; target track in data register
-	//   OUT (0x7B), A    ; FDC data register
-	//   LD A, 0x10       ; Seek command
-	//   OUT (0x1B), A    ; FDC command
-	//   LD A, 0x03       ; sector 3
-	//   OUT (0x5B), A    ; FDC sector register
-	//   LD A, 0x80       ; Read Sector command
-	//   OUT (0x1B), A    ; FDC command
-	//   LD HL, 0x9000    ; destination
-	//   LD BC, 0x0200    ; 512 bytes
-	// .loop:
-	//   IN A, (0x7B)     ; read FDC data
-	//   LD (HL), A
-	//   INC HL
-	//   DEC BC
-	//   LD A, B
-	//   OR C
-	//   JR NZ, .loop
-	//   HALT
+	// Z80 program at 0x8000 using FUSE-correct port addresses:
+	//   0x1F control, 0xDB FDC data, 0x1B FDC cmd, 0x9B FDC sector
 	code := []byte{
 		0x3E, 0x01, // LD A, 0x01
-		0xD3, 0x1F, // OUT (0x1F), A   ; control: drive 1, side 0
+		0xD3, 0x1F, // OUT (0x1F), A   ; control: drive 0, side 0
 		0x3E, 0x05, // LD A, 0x05
-		0xD3, 0x7B, // OUT (0x7B), A   ; data reg = 5 (target track)
+		0xD3, 0xDB, // OUT (0xDB), A   ; FDC data reg = 5 (target track)
 		0x3E, 0x10, // LD A, 0x10
 		0xD3, 0x1B, // OUT (0x1B), A   ; Seek command
 		0x3E, 0x03, // LD A, 0x03
-		0xD3, 0x5B, // OUT (0x5B), A   ; sector reg = 3
+		0xD3, 0x9B, // OUT (0x9B), A   ; FDC sector reg = 3
 		0x3E, 0x80, // LD A, 0x80
 		0xD3, 0x1B, // OUT (0x1B), A   ; Read Sector command
 		0x21, 0x00, 0x90, // LD HL, 0x9000
 		0x01, 0x00, 0x02, // LD BC, 0x0200 (512)
 		// .loop:
-		0xDB, 0x7B, // IN A, (0x7B)
+		0xDB, 0xDB, // IN A, (0xDB)   ; FDC data
 		0x77,       // LD (HL), A
 		0x23,       // INC HL
 		0x0B,       // DEC BC
 		0x78,       // LD A, B
 		0xB1,       // OR C
-		0x20, 0xF7, // JR NZ, .loop (-9 → back to IN A)
+		0x20, 0xF7, // JR NZ, .loop
 		0x76, // HALT
 	}
 
@@ -151,8 +123,9 @@ func TestDiscipleSectorReadViaZ80(t *testing.T) {
 }
 
 // TestDiscipleAutoPageOnNMI verifies that the DISCiPLE ROM pages in
-// when the CPU fetches from 0x0066 (the NMI vector). This is the
-// auto-paging mechanism that lets the GDOS snapshot button work.
+// when the CPU fetches from 0x0066 (the NMI vector). We inject a
+// sentinel instruction into the GDOS ROM at 0x0066 that writes a
+// known value to RAM, proving the NMI handler ran from GDOS.
 func TestDiscipleAutoPageOnNMI(t *testing.T) {
 	h, err := New(roms.Model48K)
 	if err != nil {
@@ -163,31 +136,35 @@ func TestDiscipleAutoPageOnNMI(t *testing.T) {
 	}
 
 	disc := h.Peripherals().GetDisciple()
-	if disc.IsROMPaged() {
-		t.Fatal("ROM should not be paged in initially")
+
+	// Patch the GDOS ROM at 0x0066 with a small program:
+	//   LD A, 0x42
+	//   LD (0x9000), A
+	//   HALT
+	rom := disc.GetROM()
+	rom[0x0066] = 0x3E // LD A, 0x42
+	rom[0x0067] = 0x42
+	rom[0x0068] = 0x32 // LD (0x9000), A
+	rom[0x0069] = 0x00
+	rom[0x006A] = 0x90
+	rom[0x006B] = 0x76 // HALT
+
+	// Verify sentinel location is clear.
+	if h.Memory(0x9000) == 0x42 {
+		t.Fatal("sentinel should not be set before NMI")
 	}
 
-	// Trigger NMI — the CPU will push PC and jump to 0x0066.
-	// The PreFetchHook should page in the DISCiPLE ROM.
 	h.NMI()
-	h.RunFrames(2) // let the NMI fire
+	h.RunFrames(5)
 
-	if !disc.IsROMPaged() {
-		t.Error("DISCiPLE ROM should be paged in after NMI (auto-paging at 0x0066)")
-	}
-
-	// Verify memory at 0x0000 returns the GDOS ROM, not the 48K ROM.
-	gdosROM := disc.GetROM()
-	val := h.Memory(0x0000)
-	if val != gdosROM[0] {
-		t.Errorf("memory at 0x0000 = 0x%02X, want 0x%02X (GDOS ROM byte)", val, gdosROM[0])
+	if h.Memory(0x9000) != 0x42 {
+		t.Errorf("sentinel at 0x9000 = 0x%02X, want 0x42 (GDOS NMI handler ran)", h.Memory(0x9000))
 	}
 }
 
-// TestDiscipleAutoPageOnRST8 verifies that the DISCiPLE ROM pages in
-// when the CPU fetches from 0x0008. The Spectrum ROM uses RST 8 as
-// its error/syntax handler; GDOS intercepts this to add disk commands.
-func TestDiscipleAutoPageOnRST8(t *testing.T) {
+// TestDisciplePageViaPortBB verifies paging through the port 0xBB
+// mechanism — the way GDOS's RAM hook actually triggers page-in.
+func TestDisciplePageViaPortBB(t *testing.T) {
 	h, err := New(roms.Model48K)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -198,17 +175,17 @@ func TestDiscipleAutoPageOnRST8(t *testing.T) {
 
 	disc := h.Peripherals().GetDisciple()
 
-	// Inject a tiny program: RST 8 followed by HALT.
-	// RST 8 = opcode 0xCF, pushes PC onto stack and jumps to 0x0008.
-	h.WriteMemory(0x8000, 0xCF) // RST 8
-	h.WriteMemory(0x8001, 0x76) // HALT (never reached if RST 8 works)
+	// IN A, (0xBB) pages in; OUT (0xBB), A pages out.
+	// Inject: IN A,(0xBB); HALT
+	h.WriteMemory(0x8000, 0xDB) // IN A, (0xBB)
+	h.WriteMemory(0x8001, 0xBB)
+	h.WriteMemory(0x8002, 0x76) // HALT
 
 	h.CPU().PC = 0x8000
-	h.CPU().SP = 0xFFF0 // give it stack space
 	h.RunFrames(2)
 
 	if !disc.IsROMPaged() {
-		t.Error("DISCiPLE ROM should be paged in after RST 8 (auto-paging at 0x0008)")
+		t.Error("should be paged in after IN A,(0xBB)")
 	}
 }
 
@@ -233,29 +210,23 @@ func TestDiscipleROMPagingViaZ80(t *testing.T) {
 	// Record the normal 48K ROM byte at 0x0000.
 	normalROM0 := h.Memory(0x0000)
 
-	// Z80 program at 0x8000 — the program itself observes the paging
-	// effects and records them in RAM so we can verify from Go.
-	//
-	//   LD A, 0x10         ; page in DISCiPLE
-	//   OUT (0x1F), A
+	// Z80 program at 0x8000 — uses port 0xBB to page in/out:
+	//   IN A, (0xBB)       ; page in (read = page in)
 	//   LD A, (0x0000)     ; read from DISCiPLE ROM
-	//   LD (0x9000), A     ; store for verification
+	//   LD (0x9000), A
 	//   LD A, (0x2000)     ; read from DISCiPLE RAM
-	//   LD (0x9001), A     ; store
-	//   LD A, 0x00         ; page out DISCiPLE
-	//   OUT (0x1F), A
+	//   LD (0x9001), A
+	//   OUT (0xBB), A      ; page out (write = page out)
 	//   LD A, (0x0000)     ; read from 48K ROM
-	//   LD (0x9002), A     ; store
-	//   JR $               ; spin
+	//   LD (0x9002), A
+	//   JR $
 	code := []byte{
-		0x3E, 0x10,             // LD A, 0x10
-		0xD3, 0x1F,             // OUT (0x1F), A
+		0xDB, 0xBB,             // IN A, (0xBB)     ; page in
 		0x3A, 0x00, 0x00,       // LD A, (0x0000)
 		0x32, 0x00, 0x90,       // LD (0x9000), A
 		0x3A, 0x00, 0x20,       // LD A, (0x2000)
 		0x32, 0x01, 0x90,       // LD (0x9001), A
-		0x3E, 0x00,             // LD A, 0x00
-		0xD3, 0x1F,             // OUT (0x1F), A
+		0xD3, 0xBB,             // OUT (0xBB), A    ; page out
 		0x3A, 0x00, 0x00,       // LD A, (0x0000)
 		0x32, 0x02, 0x90,       // LD (0x9002), A
 		0x18, 0xFE,             // JR $

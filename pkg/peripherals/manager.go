@@ -570,15 +570,21 @@ func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
 		}
 	}
 	
-	// Check if Disciple ROM/RAM is paged in
+	// Check if Disciple ROM/RAM is paged in. The memswap flag
+	// swaps which 8K block (ROM or RAM) appears at each half.
 	if pm.discipleEnabled && pm.disciple != nil && pm.disciple.IsROMPaged() {
+		swapped := pm.disciple.IsMemSwapped()
 		if addr < 0x2000 {
-			rom := pm.disciple.GetROM()
-			return rom[addr], true
+			if !swapped {
+				return pm.disciple.GetROM()[addr], true
+			}
+			return pm.disciple.GetRAM()[addr], true
 		}
 		if addr >= 0x2000 && addr < 0x4000 {
-			ram := pm.disciple.GetRAM()
-			return ram[addr-0x2000], true
+			if !swapped {
+				return pm.disciple.GetRAM()[addr-0x2000], true
+			}
+			return pm.disciple.GetROM()[addr-0x2000], true
 		}
 	}
 
@@ -605,11 +611,16 @@ func (pm *PeripheralManager) HandleMemoryWrite(addr uint16, value byte) bool {
 		}
 	}
 	
-	// Check if Disciple RAM is accessible
+	// Check if Disciple RAM is accessible (writes only go to RAM,
+	// never to ROM, regardless of memswap).
 	if pm.discipleEnabled && pm.disciple != nil && pm.disciple.IsROMPaged() {
-		if addr >= 0x2000 && addr < 0x4000 { // Disciple RAM area (hypothetical)
-			ram := pm.disciple.GetRAM()
-			ram[addr-0x2000] = value
+		swapped := pm.disciple.IsMemSwapped()
+		if !swapped && addr >= 0x2000 && addr < 0x4000 {
+			pm.disciple.GetRAM()[addr-0x2000] = value
+			return true
+		}
+		if swapped && addr < 0x2000 {
+			pm.disciple.GetRAM()[addr] = value
 			return true
 		}
 	}
