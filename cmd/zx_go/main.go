@@ -380,6 +380,37 @@ func ejectInterface2Cartridge(emu *emulator, w fyne.Window) {
 		"Ejected "+name+". The emulator has been rebooted into BASIC.", w)
 }
 
+// loadDiscipleDisk opens a file picker for an MGT/IMG/SAD disk image and
+// mounts it in the DISCiPLE's drive (0 = 1, 1 = 2).
+func loadDiscipleDisk(emu *emulator, w fyne.Window, drive int) {
+	if !emu.peripherals.IsDiscipleEnabled() {
+		dialog.ShowInformation("Load DISCiPLE Disk",
+			"Enable the DISCiPLE interface first from the Peripherals menu.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		_ = reader.Close()
+		if err := emu.peripherals.LoadDiscipleDisk(drive, path); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to load disk: %w", err), w)
+			return
+		}
+		dialog.ShowInformation("Disk Loaded",
+			"Inserted "+filepath.Base(path)+" into DISCiPLE drive "+fmt.Sprintf("%d", drive+1)+".", w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{
+		".mgt", ".img", ".sad", ".dsk", ".trd", ".d40", ".d80",
+	}))
+	fd.Show()
+}
+
 // loadPlus3Disk opens a file picker for a DSK image and mounts it in the
 // given +3 FDC drive (0 = A, 1 = B). Refuses (with explanation) on
 // non-+3/+2A models.
@@ -1572,6 +1603,12 @@ func main() {
 			}),
 			fyne.NewMenuItem("Eject Interface 2 Cartridge", func() {
 				ejectInterface2Cartridge(emu, w)
+			}),
+			fyne.NewMenuItem("Load DISCiPLE Disk 1...", func() {
+				loadDiscipleDisk(emu, w, 0)
+			}),
+			fyne.NewMenuItem("Load DISCiPLE Disk 2...", func() {
+				loadDiscipleDisk(emu, w, 1)
 			}),
 			fyne.NewMenuItem("Load Disk A...", func() {
 				loadPlus3Disk(emu, w, currentModel, 0)
