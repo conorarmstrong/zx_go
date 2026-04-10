@@ -2005,10 +2005,16 @@ func main() {
 
 			discipleItem.Action = func() {
 				if emu.peripherals.IsDiscipleEnabled() {
+					emu.cpu.PreFetchHook = nil
+					emu.cpu.PostFetchHook = nil
 					emu.peripherals.DisableDisciple()
 				} else {
 					if err := emu.peripherals.EnableDisciple("roms"); err != nil {
 						dialog.ShowError(fmt.Errorf("failed to enable Disciple: %w", err), w)
+					} else {
+						dev := emu.peripherals.GetDisciple()
+						emu.cpu.PreFetchHook = dev.PreFetchHook
+						emu.cpu.PostFetchHook = dev.PostFetchHook
 					}
 				}
 				fyne.Do(func() {

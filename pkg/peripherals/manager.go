@@ -570,11 +570,15 @@ func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
 		}
 	}
 	
-	// Check if Disciple ROM is paged in
+	// Check if Disciple ROM/RAM is paged in
 	if pm.discipleEnabled && pm.disciple != nil && pm.disciple.IsROMPaged() {
-		if addr < 0x2000 { // Disciple ROM area
+		if addr < 0x2000 {
 			rom := pm.disciple.GetROM()
 			return rom[addr], true
+		}
+		if addr >= 0x2000 && addr < 0x4000 {
+			ram := pm.disciple.GetRAM()
+			return ram[addr-0x2000], true
 		}
 	}
 

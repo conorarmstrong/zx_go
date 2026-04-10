@@ -292,6 +292,23 @@ func (h *Harness) RemoveInterface2Cartridge() {
 	h.cpu.Reset()
 }
 
+// EnableDisciple enables the DISCiPLE disk interface with auto-paging
+// hooks on the CPU, mirroring the path the GUI takes.
+func (h *Harness) EnableDisciple() error {
+	if err := h.peripherals.EnableDisciple("roms"); err != nil {
+		return err
+	}
+	dev := h.peripherals.GetDisciple()
+	h.cpu.PreFetchHook = dev.PreFetchHook
+	h.cpu.PostFetchHook = dev.PostFetchHook
+	return nil
+}
+
+// LoadDiscipleDisk loads a disk image into the specified DISCiPLE drive.
+func (h *Harness) LoadDiscipleDisk(drive int, path string) error {
+	return h.peripherals.LoadDiscipleDisk(drive, path)
+}
+
 // Wait runs frames continuously for the given wall-clock duration
 // at the simulated 50Hz frame rate (i.e. d / 20ms frames). Used
 // for tests that just need "let the emulator settle for half a

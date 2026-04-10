@@ -594,3 +594,38 @@ func (d *Disciple) DiskPath(drive int) string {
 	}
 	return d.diskPaths[drive]
 }
+
+// Page-in trigger addresses. The DISCiPLE hardware monitors the
+// address bus during M1 (opcode fetch) cycles and automatically
+// pages in its ROM/RAM when the CPU fetches from these addresses:
+//
+//   - 0x0066: NMI handler — triggered by the DISCiPLE's snapshot
+//     button (mapped to F12 in the emulator).
+//   - 0x0008: RST 8 — the Spectrum's error/command handler. GDOS
+//     intercepts this to add disk commands (CAT, LOAD, SAVE, etc.)
+//     to BASIC.
+const (
+	PageInNMI  uint16 = 0x0066
+	PageInRST8 uint16 = 0x0008
+)
+
+// PreFetchHook is the callback the Z80 should invoke before each
+// opcode fetch. Pages the DISCiPLE ROM/RAM in when PC matches one
+// of the auto-paging trigger addresses.
+func (d *Disciple) PreFetchHook(pc uint16) {
+	if d.inhibited || !d.enabled {
+		return
+	}
+	if pc == PageInNMI || pc == PageInRST8 {
+		d.romPaged = true
+	}
+}
+
+// PostFetchHook is provided for symmetry with the IF1 hook
+// interface. The DISCiPLE pages out via the control register
+// (port 0x1F, bit 4 = 0) rather than an address trigger, so
+// this is a no-op.
+func (d *Disciple) PostFetchHook(pc uint16) {
+	// No page-out trigger — GDOS pages itself out via the
+	// control register.
+}
