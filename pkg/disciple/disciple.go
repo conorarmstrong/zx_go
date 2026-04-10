@@ -153,7 +153,7 @@ func (d *Disciple) reset() {
 	d.controlReg = 0
 	d.enabled = true
 	d.inhibited = false
-	d.romPaged = false
+	d.romPaged = true // GDOS boot code at 0x0000 runs on power-on
 	d.memswap = false
 }
 
