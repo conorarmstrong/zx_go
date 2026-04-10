@@ -293,7 +293,9 @@ func (h *Harness) RemoveInterface2Cartridge() {
 }
 
 // EnableDisciple enables the DISCiPLE disk interface with auto-paging
-// hooks on the CPU, mirroring the path the GUI takes.
+// hooks on the CPU. The DISCiPLE starts paged out (safe for mid-session
+// enable). Use EnableDiscipleColdBoot to simulate power-on with the
+// DISCiPLE installed.
 func (h *Harness) EnableDisciple() error {
 	if err := h.peripherals.EnableDisciple("roms"); err != nil {
 		return err
@@ -301,6 +303,18 @@ func (h *Harness) EnableDisciple() error {
 	dev := h.peripherals.GetDisciple()
 	h.cpu.PreFetchHook = dev.PreFetchHook
 	h.cpu.PostFetchHook = dev.PostFetchHook
+	return nil
+}
+
+// EnableDiscipleColdBoot enables the DISCiPLE and pages it in,
+// simulating a power-on with the DISCiPLE installed. The CPU should
+// be at PC=0 (fresh reset) so the GDOS boot code at ROM 0x0000 runs.
+func (h *Harness) EnableDiscipleColdBoot() error {
+	if err := h.EnableDisciple(); err != nil {
+		return err
+	}
+	// Page in so GDOS boot code runs from 0x0000
+	h.peripherals.GetDisciple().HandlePortRead(0xBB)
 	return nil
 }
 

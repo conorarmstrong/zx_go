@@ -3,7 +3,10 @@ package testharness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"fyne.io/fyne/v2"
 
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
@@ -119,6 +122,33 @@ func TestDiscipleSectorReadViaZ80(t *testing.T) {
 	// whatever RAM was initialised to — certainly not 0xCC).
 	if h.Memory(0x9200) == 0xCC {
 		t.Error("byte past sector end is 0xCC — transfer overran")
+	}
+}
+
+// TestDiscipleColdBootAndKeypress simulates a power-on with the
+// DISCiPLE installed. GDOS runs its boot code, pages out, the
+// Spectrum ROM boots to BASIC, and a keypress is echoed on screen.
+func TestDiscipleColdBootAndKeypress(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := h.EnableDiscipleColdBoot(); err != nil {
+		t.Fatalf("EnableDiscipleColdBoot: %v", err)
+	}
+	diskPath := buildTestMGT(t)
+	if err := h.LoadDiscipleDisk(0, diskPath); err != nil {
+		t.Fatalf("LoadDiscipleDisk: %v", err)
+	}
+
+	h.RunFrames(500) // GDOS boot + Spectrum boot + settle
+
+	h.TapKey(fyne.KeyP)
+	h.RunFrames(20)
+
+	text := h.ScreenText()
+	if !strings.Contains(text, "PRINT") {
+		t.Errorf("BASIC not responding after DISCiPLE cold boot. Screen:\n%s", text)
 	}
 }
 
