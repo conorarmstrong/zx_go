@@ -582,11 +582,29 @@ func (d *Disciple) PreFetchHook(pc uint16) {
 	}
 }
 
-// PageIn pages in the DISCiPLE ROM/RAM. Used by the emulator's
-// reboot path to start GDOS cold boot from 0x0000.
+// PageIn pages in the DISCiPLE ROM/RAM and pre-initializes the RAM
+// workspace. Used by the emulator's reboot path to start GDOS cold
+// boot from 0x0000.
+//
+// The real GDOS performs a two-stage init: the cold boot at ROM
+// 0x02F2 does minimal hardware setup, then a second stage (reached
+// via RST 8 dispatch at ROM 0x02BF) copies ROM code into RAM and
+// sets the "initialized" flag. We perform the second stage here so
+// GDOS is fully ready after the cold boot without requiring RST 8
+// interception.
 func (d *Disciple) PageIn() {
 	d.romPaged = true
 	d.memswap = false
+	// Copy ROM[0x0000-0x091E] to RAM, matching the LDIR at ROM 0x02C7:
+	//   LD HL, 0x0000; LD DE, 0x2000; LD BC, 0x091F; LDIR
+	// Writes to 0x2000+ go to RAM[addr & 0x1FFF], so this populates
+	// RAM[0x0000-0x091E] with the NMI handler, RST 8 handler, and
+	// other GDOS routines that execute from RAM when memswap is on.
+	copy(d.ram[:0x091F], d.rom[:0x091F])
+	// Set the "GDOS initialized" flag. The NMI handler at RAM 0x0066
+	// checks RAM[0x1DE5] == 0x47 ('G') before proceeding; without
+	// this flag, it immediately pages out and returns.
+	d.ram[0x1DE5] = 0x47
 }
 
 // PostFetchHook is a no-op — GDOS pages itself out via port 0xBB.
