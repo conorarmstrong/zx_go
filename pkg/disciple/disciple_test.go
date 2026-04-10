@@ -436,14 +436,18 @@ func TestPreFetchHook_NMI(t *testing.T) {
 	}
 }
 
-func TestPreFetchHook_NoPageOnRST8(t *testing.T) {
+func TestPreFetchHook_RST8PagesIn(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
 	d.HandlePortWrite(portPatch, 0) // page out first
 	d.PreFetchHook(0x0008)
-	if d.IsROMPaged() {
-		t.Error("should NOT page in on RST 8")
+	if !d.IsROMPaged() {
+		t.Error("RST 8 should page in (GDOS intercepts error handler)")
+	}
+	// memswap should NOT be enabled by RST 8 (only NMI does that)
+	if d.IsMemSwapped() {
+		t.Error("RST 8 should not enable memswap")
 	}
 }

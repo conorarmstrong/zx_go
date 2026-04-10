@@ -137,17 +137,16 @@ func TestDiscipleAutoPageOnNMI(t *testing.T) {
 
 	disc := h.Peripherals().GetDisciple()
 
-	// Patch the GDOS ROM at 0x0066 with a small program:
-	//   LD A, 0x42
-	//   LD (0x9000), A
-	//   HALT
-	rom := disc.GetROM()
-	rom[0x0066] = 0x3E // LD A, 0x42
-	rom[0x0067] = 0x42
-	rom[0x0068] = 0x32 // LD (0x9000), A
-	rom[0x0069] = 0x00
-	rom[0x006A] = 0x90
-	rom[0x006B] = 0x76 // HALT
+	// Patch the DISCiPLE RAM at 0x0066 with a small program.
+	// NMI enables memswap (RAM at 0x0000), so the CPU fetches
+	// from RAM, not ROM.
+	ram := disc.GetRAM()
+	ram[0x0066] = 0x3E // LD A, 0x42
+	ram[0x0067] = 0x42
+	ram[0x0068] = 0x32 // LD (0x9000), A
+	ram[0x0069] = 0x00
+	ram[0x006A] = 0x90
+	ram[0x006B] = 0x76 // HALT
 
 	// Verify sentinel location is clear.
 	if h.Memory(0x9000) == 0x42 {

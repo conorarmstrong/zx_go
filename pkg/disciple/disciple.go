@@ -564,14 +564,27 @@ func (d *Disciple) DiskPath(drive int) string {
 }
 
 // PreFetchHook pages in the DISCiPLE when the CPU fetches from
-// 0x0066 (NMI vector). On the real hardware, the DISCiPLE's NMI
-// button simultaneously asserts NMI and pages in the ROM.
+// trigger addresses:
+//
+//   - 0x0008 (RST 8): the Spectrum's error/command handler. GDOS
+//     intercepts this to check for disk commands and to perform
+//     its second-stage initialization (the cold boot only does
+//     minimal hardware setup; the RST 8 handler writes 0x47 to
+//     the init flag at RAM[0x1DE5] via the code at ROM 0x0190).
+//
+//   - 0x0066 (NMI): the DISCiPLE snapshot button. On real hardware
+//     this also enables memswap so the NMI handler reads from RAM
+//     (where GDOS copied its code and workspace during init).
 func (d *Disciple) PreFetchHook(pc uint16) {
 	if d.inhibited || !d.enabled {
 		return
 	}
+	if pc == 0x0008 {
+		d.romPaged = true
+	}
 	if pc == 0x0066 {
 		d.romPaged = true
+		d.memswap = true
 	}
 }
 
