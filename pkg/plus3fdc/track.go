@@ -380,6 +380,31 @@ func crcUpdate(crc uint16, b byte) uint16 {
 	return crc
 }
 
+// IdAt is the exported entry point for walking a track's byte stream
+// to find the next IDAM. Used by external packages (e.g. disciple)
+// that implement their own FDC command logic.
+func (t *Track) IdAt(start int) (c, h, r, n byte, idEnd int, ok bool) {
+	return t.idAt(start)
+}
+
+// DataAt is the exported entry point for locating the data address
+// mark following an IDAM. Returns the position of the first data byte.
+func (t *Track) DataAt(start int) (dataStart int, deleted bool, ok bool) {
+	return t.dataAt(start)
+}
+
+// WriteData overwrites the track byte stream starting at position pos
+// with the given bytes. Used by peripheral packages that implement
+// write-sector operations.
+func (t *Track) WriteData(pos int, data []byte) {
+	for i, b := range data {
+		if pos+i >= t.bpt {
+			break
+		}
+		t.data[pos+i] = b
+	}
+}
+
 // readByte returns the byte at position i, substituting random data if
 // the byte is marked weak. Used by the FDC's data transfer path; speed
 // matters more than cryptographic randomness here.

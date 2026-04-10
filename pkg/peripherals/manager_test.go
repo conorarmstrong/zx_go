@@ -216,8 +216,8 @@ func TestHandlePortRead_DiscipleEnabled(t *testing.T) {
 
 	_ = pm.EnableDisciple(dir)
 
-	// Disciple status port (0x2F) should be handled
-	_, handled := pm.HandlePortRead(0x2F)
+	// Disciple FDC status port (0x1B) should be handled
+	_, handled := pm.HandlePortRead(0x1B)
 	if !handled {
 		t.Error("Disciple status port should be handled when Disciple is enabled")
 	}
@@ -230,7 +230,7 @@ func TestHandlePortWrite_DiscipleEnabled(t *testing.T) {
 
 	_ = pm.EnableDisciple(dir)
 
-	handled := pm.HandlePortWrite(0x3F, 0x10) // Track register
+	handled := pm.HandlePortWrite(0x3B, 0x10) // FDC Track register
 	if !handled {
 		t.Error("Disciple track port write should be handled")
 	}
@@ -434,8 +434,8 @@ func TestHandleMemoryRead_DiscipleROMPaged(t *testing.T) {
 	_ = pm.EnableDisciple(dir)
 
 	disc := pm.GetDisciple()
-	// Page in the Disciple ROM via NMI control port
-	disc.HandlePortWrite(0x7F, 0x01)
+	// Page in the Disciple ROM/RAM via control register (bit 4)
+	disc.HandlePortWrite(0x1F, 0x10)
 	if !disc.IsROMPaged() {
 		t.Fatal("Disciple ROM should be paged in")
 	}

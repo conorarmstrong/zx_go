@@ -18,14 +18,10 @@ Priority markers in square brackets at the start of each item:
 
 ## Emulation accuracy
 
-- [ ] **[blocker]** Audit the Z80 ED-prefix opcode table for missing
-  documented instructions. `pkg/z80/z80.go:1557-1559` silently treats
-  any unrecognised ED opcode as an 8-T-state NOP (correct for
-  *undocumented* ED opcodes, but there's no verification that all
-  *documented* ED instructions are implemented). Cross-reference
-  against a full Z80 opcode table (Zilog docs / Zaks / FUSE's
-  `z80_ed.c`). Add any missing documented instruction with correct
-  flags + cycle count.
+- [x] **[blocker]** ~~Audit the Z80 ED-prefix opcode table.~~ All 51
+  documented ED instructions verified present. Two commonly-documented
+  undocumented opcodes (ED 70: IN F,(C) and ED 71: OUT (C),0) are
+  also explicitly handled.
 
 - [ ] **[should-do]** Wire Z80 accuracy test suites into CI. Standard
   tests: Zexdoc (documented instruction behaviour) and Zexall
@@ -40,25 +36,12 @@ Priority markers in square brackets at the start of each item:
 
 ## Peripherals — blockers
 
-- [ ] **[blocker]** Fix or remove the DISCiPLE disk interface.
-  `pkg/disciple/disciple.go` is almost entirely a stub and the
-  Peripherals menu enables something that does almost nothing.
-  Specifics:
-  - `readSector()` (line 284-289) returns zero bytes —
-    "In a real implementation, this would read from an MGT disk image"
-  - `writeSector()` (line 291-296) is a no-op
-  - `pageInROM()` (line 332-341) sets `d.romPaged = true` but
-    doesn't actually modify the memory map — "In a real
-    implementation, this would modify the memory map to page in the
-    Disciple ROM at 0x0000-0x1FFF"
-  - `LoadDisk()` (line 381) is a placeholder
-  - Falls back to a hand-rolled 4-byte placeholder ROM if the real
-    one isn't bundled (line 104-108)
-
-  Either finish the implementation (port from FUSE `disciple.c`, or
-  reuse the WD1770 patterns from `pkg/plus3fdc/` as a reference) or
-  remove the menu item and the README mention entirely. Honesty
-  beats a broken feature.
+- [x] **[blocker]** ~~Fix or remove the DISCiPLE disk interface.~~
+  Full rewrite: correct WD1770 FDC port decode (0x1B/0x3B/0x5B/0x7B),
+  control register at 0x1F with drive/side/page bits, sector read/write
+  with byte-by-byte DRQ transfer, Read Address command. Disk images
+  parsed via plus3fdc's MGT/IMG/SAD/DSK/TRD loaders. ULA port priority
+  fixed so DISCiPLE intercepts 0x1F before Kempston (matching real HW).
 
 - [x] **[blocker]** ~~Fix or remove Multiface `SaveSnapshot` /
   `LoadSnapshot` stubs~~ — deleted. Neither method was called from

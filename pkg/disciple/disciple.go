@@ -1,3 +1,25 @@
+// Package disciple implements the Miles Gordon Technology DISCiPLE disk
+// interface. The DISCiPLE plugs into the Spectrum's edge connector and
+// provides a WD1770 floppy disk controller with two drive ports, 8KB
+// of ROM (GDOS or G+DOS), and 8KB of RAM. When the DISCiPLE's memory
+// is paged in, ROM appears at 0x0000-0x1FFF and RAM at 0x2000-0x3FFF.
+//
+// Disk images are loaded via LoadDisk and parsed using the plus3fdc
+// package's raw-sector parsers (ParseMGT, ParseIMG, ParseSAD). The
+// internal representation is FUSE's track byte stream model, which
+// lets the WD1770 emulation find sectors by walking IDAMs and DAMs.
+//
+// Port decode (low byte of address):
+//
+//	0x1B — WD1770 Status (R) / Command (W)
+//	0x3B — WD1770 Track register (R/W)
+//	0x5B — WD1770 Sector register (R/W)
+//	0x7B — WD1770 Data register (R/W)
+//	0x1F — DISCiPLE control register (see controlWrite / controlRead)
+//
+// The control register at 0x1F conflicts with the Kempston joystick.
+// This is historically accurate: on the real Spectrum, the DISCiPLE
+// intercepted port 0x1F and Kempston joystick would not work.
 package disciple
 
 import (
@@ -5,390 +27,570 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/plus3fdc"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// Disciple represents the DISCiPLE disk interface by Miles Gordon Technology
+// Port addresses. The WD1770 registers are selected by bits 6-5 of
+// the port low byte when bit 7 is 0 and bit 2 is 0. The control
+// register is selected when bit 7 is 0 and bit 2 is 1.
+const (
+	portFDCCmdStatus = 0x1B // WD1770 Command (W) / Status (R)
+	portFDCTrack     = 0x3B // WD1770 Track register
+	portFDCSector    = 0x5B // WD1770 Sector register
+	portFDCData      = 0x7B // WD1770 Data register
+	portControl      = 0x1F // DISCiPLE control / status
+)
+
+// WD1770 status register bits.
+const (
+	stBusy         = 0x01
+	stDRQ          = 0x02 // Type II/III: data request
+	stIndex        = 0x02 // Type I: index pulse
+	stTrack0       = 0x04 // Type I: at track 0
+	stLostData     = 0x04 // Type II/III: lost data
+	stCRCError     = 0x08
+	stSeekError    = 0x10 // Type I: seek error
+	stRNF          = 0x10 // Type II/III: record not found
+	stHeadLoaded   = 0x20 // Type I
+	stRecordType   = 0x20 // Type II/III: deleted data
+	stWriteProtect = 0x40
+	stNotReady     = 0x80
+)
+
+// Disciple represents the DISCiPLE disk interface.
 type Disciple struct {
-	// ROM data (8KB GDOS)
-	rom []byte
-	
-	// RAM data (8KB)
-	ram []byte
-	
-	// Control registers
-	control   byte
-	status    byte
-	track     byte
-	sector    byte
-	data      byte
-	
-	// Drive status
-	drive       byte
-	currentDisk string
-	
-	// Interface status
-	enabled    bool
-	inhibited  bool
-	romPaged   bool
-	
-	// NMI button state
-	nmiPressed bool
-	
-	// Memory reference for paging
+	// ROM/RAM
+	rom []byte // 8KB GDOS ROM
+	ram []byte // 8KB RAM
+
+	// WD1770 registers
+	statusReg byte
+	trackReg  byte
+	sectorReg byte
+	dataReg   byte
+
+	// WD1770 transfer state
+	xferBuf   []byte // sector data buffer
+	xferPos   int    // current byte position in transfer
+	xferLen   int    // expected transfer length
+	xferWrite bool   // true = writing to disk
+	busy      bool
+	drq       bool  // data request
+	intrq     bool  // interrupt request
+	lastCmdType1 bool // true if last command was Type I (affects status format)
+
+	// Drive/head state
+	drive int // 0 or 1
+	head  int // 0 or 1
+
+	// Disk images
+	disks     [2]*plus3fdc.Disk
+	diskPaths [2]string
+
+	// Control register (last written value)
+	controlReg byte
+
+	// Interface state
+	enabled   bool
+	inhibited bool
+	romPaged  bool
+
+	// Memory reference
 	memory *memory.Memory
 }
 
-// Port addresses for Disciple interface
-const (
-	PortControl = 0x1F   // Control register
-	PortStatus  = 0x2F   // Status register  
-	PortTrack   = 0x3F   // Track register
-	PortSector  = 0x4F   // Sector register
-	PortData    = 0x5F   // Data register
-	PortDrive   = 0x6F   // Drive select
-	PortNMI     = 0x7F   // NMI control
-	PortSystem  = 0x8F   // System control
-)
-
-// Commands for the disk controller
-const (
-	CmdRestore      = 0x00
-	CmdSeek         = 0x10
-	CmdStep         = 0x20
-	CmdStepIn       = 0x40
-	CmdStepOut      = 0x60
-	CmdReadSector   = 0x80
-	CmdWriteSector  = 0xA0
-	CmdReadAddress  = 0xC0
-	CmdForceInt     = 0xD0
-	CmdReadTrack    = 0xE0
-	CmdWriteTrack   = 0xF0
-)
-
-// NewDisciple creates a new Disciple interface
+// NewDisciple creates a new DISCiPLE interface.
 func NewDisciple(romPath string, memory *memory.Memory) (*Disciple, error) {
 	d := &Disciple{
-		ram:    make([]byte, 0x2000), // 8KB RAM
+		ram:    make([]byte, 0x2000),
 		memory: memory,
 	}
-	
-	// Load GDOS ROM
 	if err := d.loadROM(romPath); err != nil {
 		return nil, fmt.Errorf("failed to load Disciple ROM: %w", err)
 	}
-	
 	d.reset()
 	return d, nil
 }
 
-// loadROM loads the GDOS ROM
+// loadROM loads the GDOS ROM.
 func (d *Disciple) loadROM(romPath string) error {
-	// Try filesystem then embedded for each possible ROM filename
 	romFiles := []string{"gdos.rom", "disciple.rom", "GDOS_3d.rom"}
 	for _, filename := range romFiles {
-		// Filesystem first
 		if data, err := os.ReadFile(filepath.Join(romPath, filename)); err == nil && len(data) == 0x2000 {
 			d.rom = data
 			return nil
 		}
-		// Embedded fallback
 		if data, err := roms.ReadEmbeddedROM(filename); err == nil && len(data) == 0x2000 {
 			d.rom = data
 			return nil
 		}
 	}
-
-	// Create a minimal placeholder ROM if no real ROM found
 	d.rom = make([]byte, 0x2000)
-	// Add basic GDOS signature
 	copy(d.rom[0:], []byte{0xF3, 0xC3, 0x00, 0x20}) // DI, JP 0x2000
 	log.Println("Warning: Using placeholder GDOS ROM - disk functionality will be limited")
-	
 	return nil
 }
 
-// Reset resets the Disciple interface to initial state
+// reset resets the DISCiPLE to initial state.
 func (d *Disciple) reset() {
-	d.control = 0
-	d.status = 0
-	d.track = 0
-	d.sector = 1
-	d.data = 0
+	d.statusReg = 0
+	d.trackReg = 0
+	d.sectorReg = 1
+	d.dataReg = 0
+	d.xferBuf = nil
+	d.xferPos = 0
+	d.xferLen = 0
+	d.xferWrite = false
+	d.busy = false
+	d.drq = false
+	d.intrq = false
+	d.lastCmdType1 = true
 	d.drive = 0
+	d.head = 0
+	d.controlReg = 0
 	d.enabled = true
 	d.inhibited = false
 	d.romPaged = false
-	d.nmiPressed = false
 }
 
-// HandlePortRead handles reads from Disciple I/O ports
+// HandlePortRead handles reads from DISCiPLE I/O ports.
 func (d *Disciple) HandlePortRead(port uint16) (byte, bool) {
 	if d.inhibited || !d.enabled {
 		return 0, false
 	}
-	
 	switch port & 0xFF {
-	case PortControl:
-		return d.control, true
-	case PortStatus:
-		return d.getStatus(), true
-	case PortTrack:
-		return d.track, true
-	case PortSector:
-		return d.sector, true
-	case PortData:
-		return d.data, true
-	case PortDrive:
-		return d.drive, true
-	case PortSystem:
-		return d.getSystemStatus(), true
+	case portFDCCmdStatus:
+		d.intrq = false
+		return d.readStatus(), true
+	case portFDCTrack:
+		return d.trackReg, true
+	case portFDCSector:
+		return d.sectorReg, true
+	case portFDCData:
+		return d.readData(), true
+	case portControl:
+		return d.controlRead(), true
 	}
-	
 	return 0, false
 }
 
-// HandlePortWrite handles writes to Disciple I/O ports
+// HandlePortWrite handles writes to DISCiPLE I/O ports.
 func (d *Disciple) HandlePortWrite(port uint16, value byte) bool {
 	if d.inhibited || !d.enabled {
 		return false
 	}
-	
 	switch port & 0xFF {
-	case PortControl:
+	case portFDCCmdStatus:
 		d.executeCommand(value)
 		return true
-	case PortTrack:
-		d.track = value
+	case portFDCTrack:
+		d.trackReg = value
 		return true
-	case PortSector:
-		d.sector = value
+	case portFDCSector:
+		d.sectorReg = value
 		return true
-	case PortData:
-		d.data = value
+	case portFDCData:
+		d.writeData(value)
 		return true
-	case PortDrive:
-		d.selectDrive(value)
-		return true
-	case PortNMI:
-		d.handleNMIControl(value)
-		return true
-	case PortSystem:
-		d.handleSystemControl(value)
+	case portControl:
+		d.controlWrite(value)
 		return true
 	}
-	
 	return false
 }
 
-// getStatus returns the current status register
-func (d *Disciple) getStatus() byte {
-	status := byte(0)
-	
-	// Bit 0: Not ready (drive not ready)
-	if d.currentDisk == "" {
-		status |= 0x01
+// controlWrite handles a write to the DISCiPLE control register.
+//
+//	Bit 0: Drive 1 select
+//	Bit 1: Drive 2 select
+//	Bit 2: Side select (0 = side 0, 1 = side 1)
+//	Bit 3: Density (ignored — we always use MFM)
+//	Bit 4: DISCiPLE ROM/RAM page control (1 = paged in)
+func (d *Disciple) controlWrite(val byte) {
+	d.controlReg = val
+	if val&0x02 != 0 {
+		d.drive = 1
+	} else {
+		d.drive = 0
 	}
-	
-	// Bit 1: Write protect (assume not protected)
-	// status |= 0x02
-	
-	// Bit 2: Head loaded (assume loaded if disk present)
-	if d.currentDisk != "" {
-		status |= 0x04
+	d.head = int((val >> 2) & 1)
+	if val&0x10 != 0 {
+		d.romPaged = true
+	} else {
+		d.romPaged = false
 	}
-	
-	// Bit 3: Seek error (assume no error)
-	// status |= 0x08
-	
-	// Bit 4: CRC error (assume no error)
-	// status |= 0x10
-	
-	// Bit 5: Lost data (assume no error)
-	// status |= 0x20
-	
-	// Bit 6: Data request (assume ready)
-	status |= 0x40
-	
-	// Bit 7: Not busy (assume ready)
-	status |= 0x80
-	
-	return status
 }
 
-// getSystemStatus returns system control status
-func (d *Disciple) getSystemStatus() byte {
-	status := byte(0)
-	
-	if d.romPaged {
-		status |= 0x01
+// controlRead returns the control register read value.
+//
+//	Bit 6: INTRQ from WD1770
+//	Bit 7: DRQ from WD1770
+func (d *Disciple) controlRead() byte {
+	var val byte
+	if d.intrq {
+		val |= 0x40
 	}
-	
-	if d.nmiPressed {
-		status |= 0x02
+	if d.drq {
+		val |= 0x80
 	}
-	
-	return status
+	return val
 }
 
-// executeCommand executes a disk controller command
+// readStatus builds the WD1770 status register. The bit layout differs
+// between Type I and Type II/III commands.
+func (d *Disciple) readStatus() byte {
+	var st byte
+	disk := d.disks[d.drive]
+
+	if disk == nil {
+		st |= stNotReady
+	}
+
+	if d.busy {
+		st |= stBusy
+	}
+
+	if d.lastCmdType1 {
+		// Type I status
+		if disk != nil {
+			st |= stHeadLoaded
+		}
+		if d.trackReg == 0 {
+			st |= stTrack0
+		}
+	} else {
+		// Type II/III status
+		if d.drq {
+			st |= stDRQ
+		}
+	}
+
+	// Preserve error bits from statusReg
+	st |= d.statusReg & (stCRCError | stRNF | stSeekError | stRecordType | stWriteProtect)
+
+	return st
+}
+
+// readData returns the next byte from the FDC data register during a
+// read operation, advancing the transfer buffer position.
+func (d *Disciple) readData() byte {
+	if d.drq && d.xferBuf != nil && d.xferPos < d.xferLen {
+		val := d.xferBuf[d.xferPos]
+		d.xferPos++
+		if d.xferPos >= d.xferLen {
+			d.drq = false
+			d.busy = false
+			d.intrq = true
+		}
+		d.dataReg = val
+		return val
+	}
+	return d.dataReg
+}
+
+// writeData accepts the next byte from the CPU during a write operation.
+func (d *Disciple) writeData(val byte) {
+	d.dataReg = val
+	if d.drq && d.xferWrite && d.xferBuf != nil && d.xferPos < d.xferLen {
+		d.xferBuf[d.xferPos] = val
+		d.xferPos++
+		if d.xferPos >= d.xferLen {
+			d.commitWriteSector()
+			d.drq = false
+			d.busy = false
+			d.intrq = true
+		}
+	}
+}
+
+// executeCommand dispatches a WD1770 command.
 func (d *Disciple) executeCommand(cmd byte) {
-	d.control = cmd
-	
-	cmdType := cmd & 0xF0
-	
-	switch cmdType {
-	case CmdRestore:
-		d.track = 0
-		d.status = 0x80 // Not busy
-		
-	case CmdSeek:
-		// Seek to track in data register
-		d.track = d.data
-		d.status = 0x80 // Not busy
-		
-	case CmdStep:
-		d.status = 0x80 // Not busy
+	// Clear error bits from previous command.
+	d.statusReg = 0
 
-	case CmdStepIn:
-		if d.track < 79 {
-			d.track++
+	switch {
+	case cmd&0xF0 == 0x00: // Restore
+		d.lastCmdType1 = true
+		d.trackReg = 0
+		d.intrq = true
+
+	case cmd&0xF0 == 0x10: // Seek
+		d.lastCmdType1 = true
+		d.trackReg = d.dataReg
+		d.intrq = true
+
+	case cmd&0xE0 == 0x20: // Step
+		d.lastCmdType1 = true
+		d.intrq = true
+
+	case cmd&0xE0 == 0x40: // Step-In
+		d.lastCmdType1 = true
+		if d.trackReg < 79 {
+			d.trackReg++
 		}
-		d.status = 0x80 // Not busy
+		d.intrq = true
 
-	case CmdStepOut:
-		if d.track > 0 {
-			d.track--
+	case cmd&0xE0 == 0x60: // Step-Out
+		d.lastCmdType1 = true
+		if d.trackReg > 0 {
+			d.trackReg--
 		}
-		d.status = 0x80 // Not busy
-		
-	case CmdReadSector:
-		d.readSector()
-		
-	case CmdWriteSector:
-		d.writeSector()
-		
-	case CmdForceInt:
-		// Force interrupt - clear status
-		d.status = 0x80
-		
-	default:
-		// Unknown command
-		d.status = 0x80
+		d.intrq = true
+
+	case cmd&0xE0 == 0x80: // Read Sector
+		d.lastCmdType1 = false
+		d.cmdReadSector(cmd)
+
+	case cmd&0xE0 == 0xA0: // Write Sector
+		d.lastCmdType1 = false
+		d.cmdWriteSector(cmd)
+
+	case cmd&0xF0 == 0xC0: // Read Address
+		d.lastCmdType1 = false
+		d.cmdReadAddress()
+
+	case cmd&0xF0 == 0xD0: // Force Interrupt
+		d.busy = false
+		d.drq = false
+		d.xferBuf = nil
+		d.intrq = true
+		d.lastCmdType1 = true
+
+	case cmd&0xF0 == 0xE0: // Read Track (not implemented)
+		d.lastCmdType1 = false
+		d.statusReg |= stRNF
+		d.intrq = true
+
+	case cmd&0xF0 == 0xF0: // Write Track (not implemented)
+		d.lastCmdType1 = false
+		d.statusReg |= stRNF
+		d.intrq = true
 	}
 }
 
-// readSector reads a sector from disk
-func (d *Disciple) readSector() {
-	// Placeholder implementation
-	// In a real implementation, this would read from an MGT disk image
-	d.data = 0x00
-	d.status = 0x80 // Not busy
-}
-
-// writeSector writes a sector to disk
-func (d *Disciple) writeSector() {
-	// Placeholder implementation
-	// In a real implementation, this would write to an MGT disk image
-	d.status = 0x80 // Not busy
-}
-
-// selectDrive selects the active drive
-func (d *Disciple) selectDrive(value byte) {
-	d.drive = value & 0x03 // Only 2 drives supported
-}
-
-// handleNMIControl handles NMI button control
-func (d *Disciple) handleNMIControl(value byte) {
-	if value&0x01 != 0 {
-		d.nmiPressed = true
-		d.pageInROM()
-	} else {
-		d.nmiPressed = false
-		d.pageOutROM()
-	}
-}
-
-// handleSystemControl handles system control commands
-func (d *Disciple) handleSystemControl(value byte) {
-	// Bit 0: ROM page control
-	if value&0x01 != 0 {
-		d.pageInROM()
-	} else {
-		d.pageOutROM()
-	}
-	
-	// Bit 1: Inhibit control
-	if value&0x02 != 0 {
-		d.inhibited = true
-		d.pageOutROM()
-	} else {
-		d.inhibited = false
-	}
-}
-
-// pageInROM pages in the Disciple ROM
-func (d *Disciple) pageInROM() {
-	if d.inhibited {
+// cmdReadSector implements the WD1770 Read Sector command. It finds the
+// sector matching sectorReg on the current track and loads its data
+// into the transfer buffer for byte-by-byte reading via the data
+// register.
+func (d *Disciple) cmdReadSector(cmd byte) {
+	disk := d.disks[d.drive]
+	if disk == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
 		return
 	}
-	
-	// In a real implementation, this would modify the memory map
-	// to page in the Disciple ROM at 0x0000-0x1FFF
-	d.romPaged = true
+	tr := disk.Track(d.head, int(d.trackReg))
+	if tr == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	sec := tr.FindSector(d.sectorReg)
+	if sec == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	d.xferBuf = sec.Data
+	d.xferLen = len(sec.Data)
+	d.xferPos = 0
+	d.xferWrite = false
+	d.busy = true
+	d.drq = true
 }
 
-// pageOutROM pages out the Disciple ROM
-func (d *Disciple) pageOutROM() {
-	d.romPaged = false
+// cmdWriteSector implements the WD1770 Write Sector command. It sets up
+// an empty buffer for the CPU to fill via data register writes; when
+// full, the sector is committed to the disk image.
+func (d *Disciple) cmdWriteSector(cmd byte) {
+	disk := d.disks[d.drive]
+	if disk == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	tr := disk.Track(d.head, int(d.trackReg))
+	if tr == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	// Look up the sector to determine its size, then allocate a write
+	// buffer. The actual commit happens in commitWriteSector once the
+	// buffer is full.
+	sec := tr.FindSector(d.sectorReg)
+	if sec == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	d.xferBuf = make([]byte, len(sec.Data))
+	d.xferLen = len(sec.Data)
+	d.xferPos = 0
+	d.xferWrite = true
+	d.busy = true
+	d.drq = true
 }
 
-// IsEnabled returns whether the Disciple is enabled
+// commitWriteSector writes the transfer buffer back to the track's
+// byte stream, overwriting the data field of the target sector.
+func (d *Disciple) commitWriteSector() {
+	disk := d.disks[d.drive]
+	if disk == nil {
+		return
+	}
+	tr := disk.Track(d.head, int(d.trackReg))
+	if tr == nil {
+		return
+	}
+	// Walk the track to find the matching IDAM, then locate its data
+	// field and overwrite the bytes. This writes directly into the
+	// Track's internal byte stream.
+	pos := 0
+	for {
+		_, _, r, _, idEnd, ok := tr.IdAt(pos)
+		if !ok {
+			break
+		}
+		if r == d.sectorReg {
+			ds, _, dok := tr.DataAt(idEnd)
+			if dok {
+				tr.WriteData(ds, d.xferBuf)
+			}
+			return
+		}
+		pos = idEnd
+	}
+}
+
+// cmdReadAddress implements the WD1770 Read Address command. It reads
+// the first IDAM on the current track and returns its 6-byte contents
+// (C, H, R, N, CRC1, CRC2) via the data register.
+func (d *Disciple) cmdReadAddress() {
+	disk := d.disks[d.drive]
+	if disk == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	tr := disk.Track(d.head, int(d.trackReg))
+	if tr == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	c, h, r, n, _, ok := tr.IdAt(0)
+	if !ok {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	d.xferBuf = []byte{c, h, r, n, 0, 0} // CRC bytes not critical
+	d.xferLen = 6
+	d.xferPos = 0
+	d.xferWrite = false
+	d.busy = true
+	d.drq = true
+	d.trackReg = c // WD1770 updates track register to match
+}
+
+// LoadDisk loads a disk image into the specified drive.
+func (d *Disciple) LoadDisk(drive int, path string) error {
+	if drive < 0 || drive > 1 {
+		return fmt.Errorf("invalid drive: %d", drive)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("disciple: read %s: %w", path, err)
+	}
+	disk, err := parseDiskImage(path, data)
+	if err != nil {
+		return fmt.Errorf("disciple: parse %s: %w", path, err)
+	}
+	d.disks[drive] = disk
+	d.diskPaths[drive] = path
+	return nil
+}
+
+// parseDiskImage dispatches to the correct parser based on file
+// extension, falling back to signature detection.
+func parseDiskImage(path string, data []byte) (*plus3fdc.Disk, error) {
+	// Try signature-based detection first (covers DSK, EDSK, UDI, SAD).
+	if disk, err := plus3fdc.ParseDiskImage(data); err == nil {
+		return disk, nil
+	}
+	// Extension fallback for headerless raw-sector formats.
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mgt":
+		return plus3fdc.ParseMGT(data)
+	case ".img", ".opd":
+		return plus3fdc.ParseIMG(data)
+	case ".trd":
+		return plus3fdc.ParseTRD(data)
+	case ".d40", ".d80":
+		return plus3fdc.ParseD40D80(data)
+	}
+	// Last resort: try MGT (most common DISCiPLE format).
+	return plus3fdc.ParseMGT(data)
+}
+
+// EjectDisk removes the disk from the specified drive.
+func (d *Disciple) EjectDisk(drive int) {
+	if drive >= 0 && drive <= 1 {
+		d.disks[drive] = nil
+		d.diskPaths[drive] = ""
+	}
+}
+
+// IsEnabled reports whether the DISCiPLE is enabled and not inhibited.
 func (d *Disciple) IsEnabled() bool {
 	return d.enabled && !d.inhibited
 }
 
-// IsInhibited returns whether the Disciple is inhibited
+// IsInhibited reports whether the DISCiPLE is inhibited.
 func (d *Disciple) IsInhibited() bool {
 	return d.inhibited
 }
 
-// IsROMPaged returns whether the Disciple ROM is paged in
+// IsROMPaged reports whether the DISCiPLE ROM/RAM is paged in.
 func (d *Disciple) IsROMPaged() bool {
 	return d.romPaged
 }
 
-// GetROM returns the Disciple ROM data
+// GetROM returns the 8KB GDOS ROM.
 func (d *Disciple) GetROM() []byte {
 	return d.rom
 }
 
-// GetRAM returns the Disciple RAM data
+// GetRAM returns the 8KB RAM.
 func (d *Disciple) GetRAM() []byte {
 	return d.ram
 }
 
-// SetInhibit sets the inhibit state
+// SetInhibit sets the inhibit state.
 func (d *Disciple) SetInhibit(inhibit bool) {
 	d.inhibited = inhibit
 	if inhibit {
-		d.pageOutROM()
+		d.romPaged = false
 	}
 }
 
-// LoadDisk loads a disk image (placeholder)
-func (d *Disciple) LoadDisk(drive int, filename string) error {
+// HasDisk reports whether a disk is loaded in the given drive.
+func (d *Disciple) HasDisk(drive int) bool {
 	if drive < 0 || drive > 1 {
-		return fmt.Errorf("invalid drive: %d", drive)
+		return false
 	}
-	
-	// Check if file exists
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		return fmt.Errorf("disk image not found: %s", filename)
+	return d.disks[drive] != nil
+}
+
+// DiskPath returns the path of the disk loaded in the given drive.
+func (d *Disciple) DiskPath(drive int) string {
+	if drive < 0 || drive > 1 {
+		return ""
 	}
-	
-	d.currentDisk = filename
-	return nil
+	return d.diskPaths[drive]
 }

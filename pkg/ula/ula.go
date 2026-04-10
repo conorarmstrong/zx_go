@@ -285,17 +285,19 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		return u.ay.ReadSelected(), true
 	}
 
-	// Kempston joystick: port 0x1F. Decoded as A7..A5 = 0 and A4..A0 = 0x1F.
-	// We use the conventional decode (addr & 0x00E0 == 0 and addr & 0x001F == 0x001F).
-	if u.KempstonEnabled && (addr&0x00E0) == 0x0000 && (addr&0x001F) == 0x001F {
-		return u.KempstonState & 0x1F, true
-	}
-
-	// Delegate to peripherals
+	// Delegate to peripherals before Kempston — plug-in hardware
+	// (DISCiPLE, IF1, etc.) intercepts the bus first. The DISCiPLE
+	// control register at port 0x1F conflicts with Kempston; when the
+	// DISCiPLE is active it takes priority, matching real hardware.
 	if u.peripherals != nil {
 		if value, handled := u.peripherals.HandlePortRead(addr); handled {
 			return value, true
 		}
+	}
+
+	// Kempston joystick: port 0x1F. Decoded as A7..A5 = 0 and A4..A0 = 0x1F.
+	if u.KempstonEnabled && (addr&0x00E0) == 0x0000 && (addr&0x001F) == 0x001F {
+		return u.KempstonState & 0x1F, true
 	}
 
 	// Floating bus: return 0xFF for unhandled ports

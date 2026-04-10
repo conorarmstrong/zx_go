@@ -14,8 +14,6 @@ import (
 func createTestROMDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-
-	// 48K system ROM (16KB) -- required by memory.New
 	sysROM := make([]byte, 16384)
 	for i := range sysROM {
 		sysROM[i] = byte(i & 0xFF)
@@ -23,8 +21,6 @@ func createTestROMDir(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "48.rom"), sysROM, 0644); err != nil {
 		t.Fatalf("write 48.rom: %v", err)
 	}
-
-	// GDOS ROM for Disciple (8KB)
 	gdosROM := make([]byte, 8192)
 	for i := range gdosROM {
 		gdosROM[i] = byte((i + 0x42) & 0xFF)
@@ -32,11 +28,9 @@ func createTestROMDir(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "gdos.rom"), gdosROM, 0644); err != nil {
 		t.Fatalf("write gdos.rom: %v", err)
 	}
-
 	return dir
 }
 
-// newTestMemory creates a *memory.Memory backed by the test ROM directory.
 func newTestMemory(t *testing.T, dir string) *memory.Memory {
 	t.Helper()
 	mem, err := memory.New(dir, roms.Model48K)
@@ -46,25 +40,73 @@ func newTestMemory(t *testing.T, dir string) *memory.Memory {
 	return mem
 }
 
+// buildTestMGT creates a standard 2-side, 80-cylinder, 10-sector, 512-byte
+// MGT disk image where each sector's first three bytes are (cylinder, head,
+// sector number) followed by 0xCC fill.
+func buildTestMGT(t *testing.T) (string, []byte) {
+	t.Helper()
+	const (
+		sides   = 2
+		cyls    = 80
+		sectors = 10
+		secSize = 512
+	)
+	img := make([]byte, sides*cyls*sectors*secSize)
+	// MGT is side-alternating: cyl0/head0, cyl0/head1, cyl1/head0, ...
+	for logical := 0; logical < sides*cyls; logical++ {
+		cyl := logical / sides
+		head := logical % sides
+		for s := 0; s < sectors; s++ {
+			off := (logical*sectors + s) * secSize
+			img[off] = byte(cyl)
+			img[off+1] = byte(head)
+			img[off+2] = byte(s + 1) // sector IDs are 1-based
+			for i := 3; i < secSize; i++ {
+				img[i+off] = 0xCC
+			}
+		}
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.mgt")
+	if err := os.WriteFile(path, img, 0644); err != nil {
+		t.Fatalf("write test.mgt: %v", err)
+	}
+	return path, img
+}
+
+// newTestDiscipleWithDisk creates a DISCiPLE with a test MGT disk in drive 0.
+func newTestDiscipleWithDisk(t *testing.T) *Disciple {
+	t.Helper()
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir)
+	d, err := NewDisciple(dir, mem)
+	if err != nil {
+		t.Fatalf("NewDisciple: %v", err)
+	}
+	path, _ := buildTestMGT(t)
+	if err := d.LoadDisk(0, path); err != nil {
+		t.Fatalf("LoadDisk: %v", err)
+	}
+	return d
+}
+
 // --- Creation ---
 
 func TestNewDisciple_WithRealROM(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
-
 	d, err := NewDisciple(dir, mem)
 	if err != nil {
-		t.Fatalf("NewDisciple with real ROM failed: %v", err)
+		t.Fatalf("NewDisciple: %v", err)
 	}
-
 	if !d.IsEnabled() {
 		t.Error("newly created Disciple should be enabled")
 	}
 	if d.IsInhibited() {
-		t.Error("newly created Disciple should not be inhibited")
+		t.Error("should not be inhibited")
 	}
 	if d.IsROMPaged() {
-		t.Error("newly created Disciple should not have ROM paged in")
+		t.Error("should not have ROM paged in")
 	}
 	if len(d.GetROM()) != 0x2000 {
 		t.Errorf("ROM size = %d, want 8192", len(d.GetROM()))
@@ -72,430 +114,444 @@ func TestNewDisciple_WithRealROM(t *testing.T) {
 	if len(d.GetRAM()) != 0x2000 {
 		t.Errorf("RAM size = %d, want 8192", len(d.GetRAM()))
 	}
-
-	// Verify the ROM contents match what we wrote
 	if d.GetROM()[0] != byte(0x42&0xFF) {
 		t.Errorf("ROM[0] = 0x%02X, want 0x42", d.GetROM()[0])
 	}
 }
 
-func TestNewDisciple_WithoutRealROM(t *testing.T) {
-	// Use an empty directory -- Disciple falls back to a placeholder ROM
+func TestNewDisciple_FallbackROM(t *testing.T) {
 	dir := t.TempDir()
-
-	// We still need system ROMs for memory.New; create just 48.rom
 	sysROM := make([]byte, 16384)
 	if err := os.WriteFile(filepath.Join(dir, "48.rom"), sysROM, 0644); err != nil {
 		t.Fatal(err)
 	}
 	mem := newTestMemory(t, dir)
-
 	d, err := NewDisciple(dir, mem)
 	if err != nil {
-		t.Fatalf("NewDisciple with placeholder ROM should not fail: %v", err)
+		t.Fatalf("NewDisciple: %v", err)
 	}
-
 	if len(d.GetROM()) != 0x2000 {
-		t.Errorf("placeholder ROM size = %d, want 8192", len(d.GetROM()))
+		t.Errorf("ROM size = %d, want 8192", len(d.GetROM()))
 	}
-	// Placeholder starts with DI (0xF3)
 	if d.GetROM()[0] != 0xF3 {
-		t.Errorf("placeholder ROM[0] = 0x%02X, want 0xF3", d.GetROM()[0])
+		t.Errorf("ROM[0] = 0x%02X, want 0xF3 (DI)", d.GetROM()[0])
 	}
 }
 
-// --- Port reads ---
+// --- Port decode ---
 
-func TestHandlePortRead_AllPorts(t *testing.T) {
+func TestPortDecode_FDCPorts(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	tests := []struct {
-		name string
-		port uint16
-	}{
-		{"Control", PortControl},
-		{"Status", PortStatus},
-		{"Track", PortTrack},
-		{"Sector", PortSector},
-		{"Data", PortData},
-		{"Drive", PortDrive},
-		{"System", PortSystem},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, handled := d.HandlePortRead(tc.port)
-			if !handled {
-				t.Errorf("port 0x%02X should be handled", tc.port)
-			}
-		})
+	for _, port := range []uint16{portFDCCmdStatus, portFDCTrack, portFDCSector, portFDCData, portControl} {
+		if _, handled := d.HandlePortRead(port); !handled {
+			t.Errorf("port 0x%02X should be handled", port)
+		}
 	}
 }
 
-func TestHandlePortRead_UnknownPort(t *testing.T) {
+func TestPortDecode_UnknownPort(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	_, handled := d.HandlePortRead(0xFF)
-	if handled {
-		t.Error("unknown port 0xFF should not be handled")
+	if _, handled := d.HandlePortRead(0xFF); handled {
+		t.Error("port 0xFF should not be handled")
 	}
 }
 
-func TestHandlePortRead_WhenInhibited(t *testing.T) {
+func TestPortDecode_Inhibited(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
-
 	d.SetInhibit(true)
 
-	_, handled := d.HandlePortRead(PortControl)
-	if handled {
-		t.Error("port reads should not be handled when inhibited")
+	if _, handled := d.HandlePortRead(portFDCCmdStatus); handled {
+		t.Error("should not handle ports when inhibited")
+	}
+	if handled := d.HandlePortWrite(portFDCTrack, 0x10); handled {
+		t.Error("should not handle writes when inhibited")
 	}
 }
 
-func TestHandlePortRead_StatusRegister(t *testing.T) {
+// --- Register read/write ---
+
+func TestTrackRegister(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Without a disk loaded, status should have "not ready" (bit 0) set
-	val, _ := d.HandlePortRead(PortStatus)
-	if val&0x01 == 0 {
-		t.Error("status bit 0 (not ready) should be set without a disk")
-	}
-	// Data request (bit 6) should be set
-	if val&0x40 == 0 {
-		t.Error("status bit 6 (data request) should be set")
-	}
-}
-
-// --- Port writes ---
-
-func TestHandlePortWrite_TrackRegister(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	handled := d.HandlePortWrite(PortTrack, 0x2A)
-	if !handled {
-		t.Error("track port write should be handled")
-	}
-
-	val, _ := d.HandlePortRead(PortTrack)
+	d.HandlePortWrite(portFDCTrack, 0x2A)
+	val, _ := d.HandlePortRead(portFDCTrack)
 	if val != 0x2A {
 		t.Errorf("track = 0x%02X, want 0x2A", val)
 	}
 }
 
-func TestHandlePortWrite_SectorRegister(t *testing.T) {
+func TestSectorRegister(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortSector, 0x05)
-
-	val, _ := d.HandlePortRead(PortSector)
+	d.HandlePortWrite(portFDCSector, 0x05)
+	val, _ := d.HandlePortRead(portFDCSector)
 	if val != 0x05 {
 		t.Errorf("sector = 0x%02X, want 0x05", val)
 	}
 }
 
-func TestHandlePortWrite_DataRegister(t *testing.T) {
+// --- Type I commands ---
+
+func TestRestore(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortData, 0xBB)
+	d.HandlePortWrite(portFDCTrack, 0x20)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore
 
-	val, _ := d.HandlePortRead(PortData)
-	if val != 0xBB {
-		t.Errorf("data = 0x%02X, want 0xBB", val)
-	}
-}
-
-func TestHandlePortWrite_WhenInhibited(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	d.SetInhibit(true)
-
-	handled := d.HandlePortWrite(PortTrack, 0x10)
-	if handled {
-		t.Error("port writes should not be handled when inhibited")
-	}
-}
-
-func TestHandlePortWrite_UnknownPort(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	handled := d.HandlePortWrite(0xFF, 0x00)
-	if handled {
-		t.Error("unknown port 0xFF should not be handled")
-	}
-}
-
-// --- Drive selection ---
-
-func TestDriveSelection(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	// Select drive 1
-	d.HandlePortWrite(PortDrive, 0x01)
-	val, _ := d.HandlePortRead(PortDrive)
-	if val != 0x01 {
-		t.Errorf("drive = %d, want 1", val)
-	}
-
-	// Select drive 2 -- should be masked to 2 bits (0-3)
-	d.HandlePortWrite(PortDrive, 0x02)
-	val, _ = d.HandlePortRead(PortDrive)
-	if val != 0x02 {
-		t.Errorf("drive = %d, want 2", val)
-	}
-
-	// High bits should be masked off
-	d.HandlePortWrite(PortDrive, 0xFF)
-	val, _ = d.HandlePortRead(PortDrive)
-	if val != 0x03 {
-		t.Errorf("drive = %d after 0xFF, want 3 (masked)", val)
-	}
-}
-
-// --- Disk controller commands ---
-
-func TestCommand_Restore(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	// Move to a non-zero track first
-	d.HandlePortWrite(PortTrack, 0x20)
-	// Issue Restore command
-	d.HandlePortWrite(PortControl, CmdRestore)
-
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 0 {
 		t.Errorf("track after Restore = %d, want 0", track)
 	}
 }
 
-func TestCommand_Seek(t *testing.T) {
+func TestSeek(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Set data register to target track
-	d.HandlePortWrite(PortData, 0x15)
-	// Issue Seek command
-	d.HandlePortWrite(PortControl, CmdSeek)
+	d.HandlePortWrite(portFDCData, 0x15)
+	d.HandlePortWrite(portFDCCmdStatus, 0x10) // Seek
 
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 0x15 {
 		t.Errorf("track after Seek = 0x%02X, want 0x15", track)
 	}
 }
 
-func TestCommand_StepIn(t *testing.T) {
+func TestStepIn(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Start at track 0
-	d.HandlePortWrite(PortControl, CmdRestore)
-	// Step in
-	d.HandlePortWrite(PortControl, CmdStepIn)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore (track=0)
+	d.HandlePortWrite(portFDCCmdStatus, 0x40) // Step-In
 
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 1 {
 		t.Errorf("track after StepIn from 0 = %d, want 1", track)
 	}
 }
 
-func TestCommand_StepIn_MaxTrack(t *testing.T) {
+func TestStepIn_MaxTrack(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Set track to 79 (max)
-	d.HandlePortWrite(PortTrack, 79)
-	// Step in -- should stay at 79
-	d.HandlePortWrite(PortControl, CmdStepIn)
+	d.HandlePortWrite(portFDCTrack, 79)
+	d.HandlePortWrite(portFDCCmdStatus, 0x40) // Step-In
 
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 79 {
-		t.Errorf("track after StepIn at max = %d, want 79", track)
+		t.Errorf("track = %d, want 79 (clamped)", track)
 	}
 }
 
-func TestCommand_StepOut(t *testing.T) {
+func TestStepOut(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortTrack, 5)
-	d.HandlePortWrite(PortControl, CmdStepOut)
+	d.HandlePortWrite(portFDCTrack, 5)
+	d.HandlePortWrite(portFDCCmdStatus, 0x60) // Step-Out
 
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 4 {
-		t.Errorf("track after StepOut from 5 = %d, want 4", track)
+		t.Errorf("track = %d, want 4", track)
 	}
 }
 
-func TestCommand_StepOut_MinTrack(t *testing.T) {
+func TestStepOut_MinTrack(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortControl, CmdRestore) // track = 0
-	d.HandlePortWrite(PortControl, CmdStepOut)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore
+	d.HandlePortWrite(portFDCCmdStatus, 0x60) // Step-Out
 
-	track, _ := d.HandlePortRead(PortTrack)
+	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 0 {
-		t.Errorf("track after StepOut at min = %d, want 0", track)
+		t.Errorf("track = %d, want 0 (clamped)", track)
 	}
 }
 
-func TestCommand_ForceInterrupt(t *testing.T) {
+func TestForceInterrupt(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortControl, CmdForceInt)
-	// After ForceInt the controller should report not-busy (status = 0x80)
-	// We can verify by reading the control register (last command)
-	ctrl, _ := d.HandlePortRead(PortControl)
-	if ctrl != CmdForceInt {
-		t.Errorf("control register = 0x%02X, want 0x%02X", ctrl, CmdForceInt)
+	d.HandlePortWrite(portFDCCmdStatus, 0xD0)
+	// After ForceInt, INTRQ should be set
+	ctrl, _ := d.HandlePortRead(portControl)
+	if ctrl&0x40 == 0 {
+		t.Error("INTRQ (bit 6 of control read) should be set after Force Interrupt")
 	}
 }
 
-func TestCommand_ReadSector(t *testing.T) {
+// --- Type I status bits ---
+
+func TestStatus_NotReady_NoDisk(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	d.HandlePortWrite(PortControl, CmdReadSector)
-	// The placeholder implementation returns data = 0x00
-	data, _ := d.HandlePortRead(PortData)
-	if data != 0x00 {
-		t.Errorf("data after ReadSector = 0x%02X, want 0x00", data)
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stNotReady == 0 {
+		t.Error("Not Ready (bit 7) should be set without a disk")
 	}
 }
 
-func TestCommand_WriteSector(t *testing.T) {
+func TestStatus_Track0(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stTrack0 == 0 {
+		t.Error("Track 0 (bit 2) should be set when at track 0")
+	}
+}
+
+func TestStatus_HeadLoaded(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Type I command
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stHeadLoaded == 0 {
+		t.Error("Head Loaded (bit 5) should be set with disk present")
+	}
+}
+
+// --- Read Sector ---
+
+func TestReadSector(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+
+	// Seek to track 5
+	d.HandlePortWrite(portFDCData, 5)
+	d.HandlePortWrite(portFDCCmdStatus, 0x10) // Seek
+
+	// Select side 0 via control register
+	d.HandlePortWrite(portControl, 0x01) // drive 1, side 0
+
+	// Read sector 3
+	d.HandlePortWrite(portFDCSector, 3)
+	d.HandlePortWrite(portFDCCmdStatus, 0x80) // Read Sector
+
+	// Status should show DRQ
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stDRQ == 0 {
+		t.Fatal("DRQ should be set during read")
+	}
+	if st&stBusy == 0 {
+		t.Fatal("Busy should be set during read")
+	}
+
+	// Read the full sector (512 bytes)
+	buf := make([]byte, 512)
+	for i := range buf {
+		val, _ := d.HandlePortRead(portFDCData)
+		buf[i] = val
+	}
+
+	// The test MGT has: sector[0]=cylinder, [1]=head, [2]=sectorID
+	if buf[0] != 5 {
+		t.Errorf("sector data[0] = %d, want 5 (cylinder)", buf[0])
+	}
+	if buf[1] != 0 {
+		t.Errorf("sector data[1] = %d, want 0 (head)", buf[1])
+	}
+	if buf[2] != 3 {
+		t.Errorf("sector data[2] = %d, want 3 (sector R)", buf[2])
+	}
+	if buf[3] != 0xCC {
+		t.Errorf("sector data[3] = 0x%02X, want 0xCC (fill)", buf[3])
+	}
+
+	// After full sector, DRQ and Busy should be clear
+	st, _ = d.HandlePortRead(portFDCCmdStatus)
+	if st&stDRQ != 0 {
+		t.Error("DRQ should be clear after full sector read")
+	}
+	if st&stBusy != 0 {
+		t.Error("Busy should be clear after full sector read")
+	}
+}
+
+func TestReadSector_NoDisk(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Just verify it does not panic
-	d.HandlePortWrite(PortControl, CmdWriteSector)
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0x80) // Read Sector
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stRNF == 0 {
+		t.Error("RNF should be set when no disk loaded")
+	}
 }
 
-// --- ROM paging ---
+func TestReadSector_BadSector(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
 
-func TestROMPaging_NMIControl(t *testing.T) {
+	d.HandlePortWrite(portFDCSector, 99) // non-existent
+	d.HandlePortWrite(portFDCCmdStatus, 0x80)
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stRNF == 0 {
+		t.Error("RNF should be set for non-existent sector")
+	}
+}
+
+// --- Write Sector ---
+
+func TestWriteSector(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+
+	// Select side 0, drive 1
+	d.HandlePortWrite(portControl, 0x01)
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore (track 0)
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0xA0) // Write Sector
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stDRQ == 0 {
+		t.Fatal("DRQ should be set for write")
+	}
+
+	// Write 512 bytes of 0xAA
+	for i := 0; i < 512; i++ {
+		d.HandlePortWrite(portFDCData, 0xAA)
+	}
+
+	// Verify transfer completed
+	st, _ = d.HandlePortRead(portFDCCmdStatus)
+	if st&stBusy != 0 {
+		t.Error("Busy should be clear after write completes")
+	}
+
+	// Read back the same sector to verify the write
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0x80) // Read Sector
+
+	buf := make([]byte, 512)
+	for i := range buf {
+		b, _ := d.HandlePortRead(portFDCData)
+		buf[i] = b
+	}
+	for i, b := range buf {
+		if b != 0xAA {
+			t.Errorf("readback[%d] = 0x%02X, want 0xAA", i, b)
+			break
+		}
+	}
+}
+
+// --- Read Address ---
+
+func TestReadAddress(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portControl, 0x01) // drive 1, side 0
+	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore
+
+	d.HandlePortWrite(portFDCCmdStatus, 0xC0) // Read Address
+
+	st, _ := d.HandlePortRead(portFDCCmdStatus)
+	if st&stDRQ == 0 {
+		t.Fatal("DRQ should be set for Read Address")
+	}
+
+	// Read 6 bytes: C, H, R, N, CRC1, CRC2
+	id := make([]byte, 6)
+	for i := range id {
+		b, _ := d.HandlePortRead(portFDCData)
+		id[i] = b
+	}
+	if id[0] != 0 {
+		t.Errorf("C = %d, want 0 (track 0)", id[0])
+	}
+	if id[1] != 0 {
+		t.Errorf("H = %d, want 0 (head 0)", id[1])
+	}
+	// R should be the first sector on the track (1)
+	if id[2] != 1 {
+		t.Errorf("R = %d, want 1 (first sector)", id[2])
+	}
+}
+
+// --- Control register ---
+
+func TestControlRegister_DriveSelect(t *testing.T) {
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir)
+	d, _ := NewDisciple(dir, mem)
+
+	d.HandlePortWrite(portControl, 0x02) // drive 2
+	if d.drive != 1 {
+		t.Errorf("drive = %d, want 1", d.drive)
+	}
+	d.HandlePortWrite(portControl, 0x01) // drive 1
+	if d.drive != 0 {
+		t.Errorf("drive = %d, want 0", d.drive)
+	}
+}
+
+func TestControlRegister_SideSelect(t *testing.T) {
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir)
+	d, _ := NewDisciple(dir, mem)
+
+	d.HandlePortWrite(portControl, 0x04) // side 1
+	if d.head != 1 {
+		t.Errorf("head = %d, want 1", d.head)
+	}
+	d.HandlePortWrite(portControl, 0x00) // side 0
+	if d.head != 0 {
+		t.Errorf("head = %d, want 0", d.head)
+	}
+}
+
+func TestControlRegister_PageIn(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
 	if d.IsROMPaged() {
-		t.Error("ROM should not be paged in initially")
+		t.Error("ROM should not be paged initially")
 	}
-
-	// NMI with bit 0 set pages in ROM
-	d.HandlePortWrite(PortNMI, 0x01)
+	d.HandlePortWrite(portControl, 0x10) // page in
 	if !d.IsROMPaged() {
-		t.Error("ROM should be paged in after NMI with bit 0 set")
+		t.Error("ROM should be paged in")
 	}
-
-	// NMI with bit 0 clear pages out ROM
-	d.HandlePortWrite(PortNMI, 0x00)
+	d.HandlePortWrite(portControl, 0x00) // page out
 	if d.IsROMPaged() {
-		t.Error("ROM should be paged out after NMI with bit 0 clear")
+		t.Error("ROM should be paged out")
 	}
 }
 
-func TestROMPaging_SystemControl(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
+func TestControlRead_DRQ(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portControl, 0x01) // drive 1, side 0
 
-	// System control bit 0 = ROM page in
-	d.HandlePortWrite(PortSystem, 0x01)
-	if !d.IsROMPaged() {
-		t.Error("ROM should be paged in via system control")
-	}
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0x80) // Read Sector
 
-	// System control bit 1 = inhibit (also pages out ROM)
-	d.HandlePortWrite(PortSystem, 0x02)
-	if d.IsROMPaged() {
-		t.Error("ROM should be paged out when inhibited")
-	}
-	if !d.IsInhibited() {
-		t.Error("Disciple should be inhibited after system control bit 1")
-	}
-}
-
-func TestROMPaging_InhibitPreventsPageIn(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	d.SetInhibit(true)
-
-	// Try to page in via NMI -- should be ignored because inhibited
-	// (port writes are blocked when inhibited)
-	handled := d.HandlePortWrite(PortNMI, 0x01)
-	if handled {
-		t.Error("port write should not be handled when inhibited")
-	}
-	if d.IsROMPaged() {
-		t.Error("ROM should not be paged in when inhibited")
-	}
-}
-
-// --- SetInhibit ---
-
-func TestSetInhibit(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	// Page in ROM first
-	d.HandlePortWrite(PortNMI, 0x01)
-	if !d.IsROMPaged() {
-		t.Fatal("ROM should be paged in")
-	}
-
-	// Inhibit should also page out ROM
-	d.SetInhibit(true)
-	if !d.IsInhibited() {
-		t.Error("should be inhibited")
-	}
-	if d.IsROMPaged() {
-		t.Error("ROM should be paged out after inhibit")
-	}
-	if d.IsEnabled() {
-		t.Error("IsEnabled should be false when inhibited")
-	}
-
-	// Uninhibit
-	d.SetInhibit(false)
-	if d.IsInhibited() {
-		t.Error("should not be inhibited after SetInhibit(false)")
-	}
-	if !d.IsEnabled() {
-		t.Error("IsEnabled should be true after uninhibit")
+	ctrl, _ := d.HandlePortRead(portControl)
+	if ctrl&0x80 == 0 {
+		t.Error("DRQ (bit 7) should be set in control read during transfer")
 	}
 }
 
@@ -507,10 +563,10 @@ func TestLoadDisk_InvalidDrive(t *testing.T) {
 	d, _ := NewDisciple(dir, mem)
 
 	if err := d.LoadDisk(-1, "test.mgt"); err == nil {
-		t.Error("LoadDisk with drive -1 should fail")
+		t.Error("drive -1 should fail")
 	}
 	if err := d.LoadDisk(2, "test.mgt"); err == nil {
-		t.Error("LoadDisk with drive 2 should fail")
+		t.Error("drive 2 should fail")
 	}
 }
 
@@ -519,49 +575,63 @@ func TestLoadDisk_FileNotFound(t *testing.T) {
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	err := d.LoadDisk(0, "/nonexistent/disk.mgt")
-	if err == nil {
-		t.Error("LoadDisk with nonexistent file should fail")
+	if err := d.LoadDisk(0, "/nonexistent/disk.mgt"); err == nil {
+		t.Error("missing file should fail")
 	}
 }
 
-func TestLoadDisk_ValidFile(t *testing.T) {
+func TestLoadDisk_ValidMGT(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+
+	if !d.HasDisk(0) {
+		t.Error("drive 0 should have a disk")
+	}
+	if d.HasDisk(1) {
+		t.Error("drive 1 should not have a disk")
+	}
+}
+
+func TestEjectDisk(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.EjectDisk(0)
+	if d.HasDisk(0) {
+		t.Error("drive 0 should be empty after eject")
+	}
+}
+
+// --- SetInhibit ---
+
+func TestSetInhibit(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 
-	// Create a dummy disk image
-	diskPath := filepath.Join(dir, "test.mgt")
-	if err := os.WriteFile(diskPath, make([]byte, 819200), 0644); err != nil {
-		t.Fatal(err)
+	d.HandlePortWrite(portControl, 0x10) // page in
+	if !d.IsROMPaged() {
+		t.Fatal("ROM should be paged in")
 	}
 
-	if err := d.LoadDisk(0, diskPath); err != nil {
-		t.Fatalf("LoadDisk failed: %v", err)
+	d.SetInhibit(true)
+	if !d.IsInhibited() {
+		t.Error("should be inhibited")
+	}
+	if d.IsROMPaged() {
+		t.Error("ROM should be paged out on inhibit")
+	}
+	if d.IsEnabled() {
+		t.Error("should not be enabled when inhibited")
 	}
 
-	// After loading a disk, status should show ready (bit 0 clear) and head loaded (bit 2 set)
-	status, _ := d.HandlePortRead(PortStatus)
-	if status&0x01 != 0 {
-		t.Error("status bit 0 (not ready) should be clear after disk load")
+	d.SetInhibit(false)
+	if d.IsInhibited() {
+		t.Error("should not be inhibited")
 	}
-	if status&0x04 == 0 {
-		t.Error("status bit 2 (head loaded) should be set after disk load")
+	if !d.IsEnabled() {
+		t.Error("should be enabled after un-inhibit")
 	}
 }
 
 // --- GetROM / GetRAM ---
-
-func TestGetROM_ReturnsCorrectData(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
-
-	rom := d.GetROM()
-	if len(rom) != 0x2000 {
-		t.Errorf("ROM length = %d, want 8192", len(rom))
-	}
-}
 
 func TestGetRAM_IsWritable(t *testing.T) {
 	dir := createTestROMDir(t)
@@ -570,36 +640,37 @@ func TestGetRAM_IsWritable(t *testing.T) {
 
 	ram := d.GetRAM()
 	ram[0] = 0xAB
-	// Verify we got the same backing array
 	if d.GetRAM()[0] != 0xAB {
 		t.Error("GetRAM should return the same backing slice")
 	}
 }
 
-// --- System status ---
+// --- Side 1 read ---
 
-func TestSystemStatus(t *testing.T) {
-	dir := createTestROMDir(t)
-	mem := newTestMemory(t, dir)
-	d, _ := NewDisciple(dir, mem)
+func TestReadSector_Side1(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
 
-	// Initial system status
-	sys, _ := d.HandlePortRead(PortSystem)
-	if sys&0x01 != 0 {
-		t.Error("system status bit 0 (ROM paged) should be clear initially")
+	// Select side 1
+	d.HandlePortWrite(portControl, 0x05) // drive 1 + side 1
+	d.HandlePortWrite(portFDCData, 10)
+	d.HandlePortWrite(portFDCCmdStatus, 0x10) // Seek to track 10
+
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0x80) // Read Sector
+
+	buf := make([]byte, 512)
+	for i := range buf {
+		b, _ := d.HandlePortRead(portFDCData)
+		buf[i] = b
 	}
-	if sys&0x02 != 0 {
-		t.Error("system status bit 1 (NMI pressed) should be clear initially")
-	}
 
-	// Page in ROM and press NMI
-	d.HandlePortWrite(PortNMI, 0x01)
-
-	sys, _ = d.HandlePortRead(PortSystem)
-	if sys&0x01 == 0 {
-		t.Error("system status bit 0 should be set when ROM is paged in")
+	if buf[0] != 10 {
+		t.Errorf("data[0] = %d, want 10 (cylinder)", buf[0])
 	}
-	if sys&0x02 == 0 {
-		t.Error("system status bit 1 should be set when NMI is pressed")
+	if buf[1] != 1 {
+		t.Errorf("data[1] = %d, want 1 (head/side 1)", buf[1])
+	}
+	if buf[2] != 1 {
+		t.Errorf("data[2] = %d, want 1 (sector R)", buf[2])
 	}
 }
