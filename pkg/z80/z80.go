@@ -4,8 +4,6 @@ import (
 	"log"
 	"sync/atomic"
 	"time"
-
-	"github.com/conorarmstrong/zx_go/pkg/memory"
 )
 
 // Flag bit positions
@@ -40,7 +38,7 @@ type CPU struct {
 	Halted bool
 
 	// Memory and ULA interfaces
-	mem *memory.Memory
+	mem Memory
 	ula ULA
 
 	// T-state counter for timing
@@ -109,17 +107,39 @@ type ULA interface {
 	WritePort(addr uint16, val byte)
 }
 
+// Memory is the interface the CPU uses to talk to the address space.
+// Z80 memory accesses don't fail — every 16-bit address is valid — so
+// Read/Write don't return errors. ContendPort applies the
+// model-specific I/O contention timing for the given port address.
+type Memory interface {
+	Read(addr uint16) byte
+	Write(addr uint16, val byte)
+	ContendPort(port uint16)
+}
+
+// contentionWirer is an optional interface implemented by memory
+// backends that participate in cycle-accurate contention timing. The
+// CPU passes them a pointer to its T-state counter so reads/writes can
+// add contention stalls relative to the current cycle. Memory
+// implementations that don't model contention (e.g. test mocks) can
+// simply omit this method.
+type contentionWirer interface {
+	SetTStatePtr(p *uint64)
+}
+
 // New creates a new Z80 CPU instance.
-func New(mem *memory.Memory, ula ULA) *CPU {
+func New(mem Memory, ula ULA) *CPU {
 	c := &CPU{
 		mem: mem,
 		ula: ula,
 	}
 	c.initTables()
 	c.Reset()
-	// Enable contention by sharing T-state counter with memory
-	mem.TStates = &c.tstates
-	mem.ContentionEnabled = true
+	// Enable contention by sharing T-state counter with memory, if the
+	// memory backend supports it.
+	if cw, ok := mem.(contentionWirer); ok {
+		cw.SetTStatePtr(&c.tstates)
+	}
 	return c
 }
 

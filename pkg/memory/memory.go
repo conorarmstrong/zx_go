@@ -63,6 +63,15 @@ type Memory struct {
 	PagingFrozen bool
 }
 
+// SetTStatePtr wires this memory to a CPU's T-state counter and
+// enables contention. Implements the optional contention-wiring
+// interface that z80.New looks for; callers don't normally need to
+// invoke this themselves.
+func (m *Memory) SetTStatePtr(p *uint64) {
+	m.TStates = p
+	m.ContentionEnabled = true
+}
+
 // Contention delay pattern (repeats every 8 T-states in contended region)
 var contentionPattern = [8]uint64{6, 5, 4, 3, 2, 1, 0, 0}
 
