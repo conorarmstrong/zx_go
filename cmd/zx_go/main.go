@@ -1185,11 +1185,14 @@ func (e *emulator) rzxRollbackToLastSnapshot() error {
 // 48K ROM LD-BYTES routine at 0x0556 and synthesises the load directly from
 // the next tape block, avoiding the slow real-time pulse decoding.
 //
-// On entry to LD-BYTES the contract is:
-//   A'         expected flag byte (header=0x00, data=0xFF)
-//   F' carry   set means LOAD, clear means VERIFY
+// On entry to LD-BYTES (PC=0x0556) the contract is:
+//   A          expected flag byte (header=0x00, data=0xFF)
+//   F carry    set means LOAD, clear means VERIFY
 //   IX         destination address
 //   DE         number of bytes to load (excluding flag/checksum)
+//
+// Note: A/F (not A'/F') — the EX AF,AF' is the routine's *second*
+// instruction, so it has not run yet at the trap point.
 //
 // The routine returns with carry set on success, carry clear on failure.
 // We replicate this contract by reading bytes directly from the current
@@ -1215,10 +1218,8 @@ func installTapeTrap(emu *emulator) {
 			return false
 		}
 
-		// Use A' as the expected flag (the routine swaps AF/AF' on entry).
-		expectedFlag := emu.cpu.A_
-		// Carry of F' = 1 means LOAD, 0 means VERIFY.
-		isLoad := (emu.cpu.F_ & z80.FLAG_C) != 0
+		expectedFlag := emu.cpu.A
+		isLoad := (emu.cpu.F & z80.FLAG_C) != 0
 
 		dst := emu.cpu.IX
 		count := uint16(emu.cpu.D)<<8 | uint16(emu.cpu.E)
