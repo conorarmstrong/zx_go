@@ -737,6 +737,15 @@ func (e *emulator) reboot() {
 	e.cpu.Reset()
 	e.ula.Reset()
 
+	// Restore paging to the model's power-on defaults. Without this,
+	// 128K/+2A/+3 reboots inherit whatever banks/ROM the previously
+	// running program had selected — e.g. after loading a +3 .dsk the
+	// boot ROM index is no longer 0, so the +3 main menu never
+	// reappears and BASIC starts up over corrupted system variables.
+	if err := e.mem.Reset(); err != nil {
+		log.Printf("memory reset failed: %v", err)
+	}
+
 	// If the DISCiPLE is enabled, page it in so its boot code at
 	// ROM 0x0000 runs on the next frame (cold boot).
 	if e.peripherals.IsDiscipleEnabled() {

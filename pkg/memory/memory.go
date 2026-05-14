@@ -320,6 +320,20 @@ func (m *Memory) GetROMManager() *roms.ROMManager {
 	return m.romManager
 }
 
+// Reset restores the paging state to the model's power-on defaults:
+// port 7FFD = 0, port 1FFD = 0, special paging disabled, page map back to
+// the standard ROM/screen/bank layout. Equivalent to the /RESET pulse on
+// real hardware. RAM contents are NOT cleared (real hardware preserves
+// them across reset too); the BIOS / BASIC ROM is responsible for
+// reinitialising system variables.
+func (m *Memory) Reset() error {
+	m.port7FFD = 0
+	m.port1FFD = 0
+	m.specialPaging = false
+	m.PagingFrozen = false
+	return m.setupModel(m.currentModel)
+}
+
 // SwitchModel changes the current Spectrum model and reconfigures memory
 func (m *Memory) SwitchModel(model roms.SpectrumModel) error {
 	// Load ROMs for the new model if not already loaded

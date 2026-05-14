@@ -456,6 +456,57 @@ func TestPlus3SpecialPaging(t *testing.T) {
 	mem.PageMemoryPlus3(0x00) // bit 0 clear = normal mode
 }
 
+// TestReset checks that Reset restores the model's power-on paging
+// state — port 7FFD and 1FFD zeroed, special paging cleared, page map
+// back to defaults. This is what unblocks Emulator/Reboot after a +3
+// disk has paged a non-default ROM in: without Reset the boot ROM
+// index stays whatever the game last selected and the +3 main menu
+// never reappears.
+func TestReset(t *testing.T) {
+	testDir := "test_roms_reset"
+	createTestROMs(t, testDir)
+	defer cleanupTestROMs(testDir)
+
+	for _, name := range []string{"plus3-0.rom", "plus3-1.rom", "plus3-2.rom", "plus3-3.rom"} {
+		if err := os.WriteFile(filepath.Join(testDir, name), make([]byte, PageSize), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mem, err := New(testDir, roms.ModelPlus3)
+	if err != nil {
+		t.Fatalf("New +3: %v", err)
+	}
+
+	// Simulate a game leaving the paging in a non-default state, like
+	// Loopz +3 does after its loader runs: 7FFD=0x10 (ROM-low bit set),
+	// 1FFD=0x0C (ROM-high bit set) — combined ROM index 3 (BASIC),
+	// which is NOT the +3 boot-menu ROM.
+	mem.PageMemory(0x10)
+	mem.PageMemoryPlus3(0x0C)
+	p7, p1, special := mem.GetPortState()
+	if p7 != 0x10 || p1 != 0x0C || special {
+		t.Fatalf("setup failed: 7FFD=%02X 1FFD=%02X special=%v", p7, p1, special)
+	}
+	readMap, _ := mem.GetPageMap()
+	if readMap[0] == 16 {
+		t.Fatalf("setup failed: still ROM 0 at slot 0 (readMap[0]=%d)", readMap[0])
+	}
+
+	if err := mem.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	p7, p1, special = mem.GetPortState()
+	if p7 != 0 || p1 != 0 || special {
+		t.Errorf("after Reset: 7FFD=%02X 1FFD=%02X special=%v, want 0/0/false", p7, p1, special)
+	}
+	readMap, _ = mem.GetPageMap()
+	if readMap[0] != 16 {
+		t.Errorf("after Reset: slot 0 = %d, want 16 (ROM 0 = +3 boot menu)", readMap[0])
+	}
+}
+
 func BenchmarkMemoryPaging(b *testing.B) {
 	testDir := "test_roms"
 	createTestROMs(&testing.T{}, testDir)

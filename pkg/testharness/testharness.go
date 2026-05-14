@@ -97,12 +97,14 @@ func (h *Harness) ULA() *ula.ULA { return h.ula }
 func (h *Harness) Peripherals() *peripherals.PeripheralManager { return h.peripherals }
 
 // Reboot performs a hard reset: CPU registers cleared, ULA reset,
-// peripherals reset. Microdrive cartridges and other inserted media
-// are NOT removed. The Spectrum boot sequence will run on the next
-// RunFrames call.
+// memory paging restored to the current model's power-on defaults.
+// Inserted media (microdrive cartridges, +3 disks, IF2 cartridges) are
+// NOT removed; RAM is NOT cleared. The Spectrum boot sequence will run
+// on the next RunFrames call.
 func (h *Harness) Reboot() {
 	h.cpu.Reset()
 	h.ula.Reset()
+	_ = h.mem.Reset()
 }
 
 // RunFrames executes n full emulator frames synchronously on the
