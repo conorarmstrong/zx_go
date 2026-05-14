@@ -3692,3 +3692,72 @@ func TestDDCB_RLC(t *testing.T) {
 		t.Errorf("DDCB RLC: carry flag should be set")
 	}
 }
+
+// TestDDIXhalfRegisters exercises the undocumented 8-bit IXh / IXl ops
+// (DD-prefixed forms of base instructions that touch H or L). Cobra +3
+// uses DD 67 / DD 6F to build IX during its level-load fast-PUSH setup;
+// before these cases were implemented, the DD prefix was silently
+// dropped and the base instruction modified HL instead — corrupting
+// the IM2 trampoline at 0xFFFF and crashing the game.
+func TestDDIXhalfRegisters(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// LD IXh, A — must update IXh, not H
+	cpu.A = 0x37
+	cpu.H, cpu.L = 0x40, 0x80
+	cpu.IX = 0x1234
+	cpu.executeDDInstruction(0x67)
+	if cpu.IX != 0x3734 || cpu.H != 0x40 || cpu.L != 0x80 {
+		t.Errorf("DD 67 (LD IXh,A): IX=%04X H=%02X L=%02X, want IX=0x3734 H=0x40 L=0x80",
+			cpu.IX, cpu.H, cpu.L)
+	}
+
+	// LD IXl, A — must update IXl, not L
+	cpu.IX = 0x1234
+	cpu.executeDDInstruction(0x6F)
+	if cpu.IX != 0x1237 || cpu.H != 0x40 || cpu.L != 0x80 {
+		t.Errorf("DD 6F (LD IXl,A): IX=%04X H=%02X L=%02X, want IX=0x1237 H=0x40 L=0x80",
+			cpu.IX, cpu.H, cpu.L)
+	}
+
+	// LD A, IXh — read from IXh, not H
+	cpu.IX = 0xAB00
+	cpu.A = 0
+	cpu.executeDDInstruction(0x7C)
+	if cpu.A != 0xAB {
+		t.Errorf("DD 7C (LD A,IXh): A=%02X, want 0xAB", cpu.A)
+	}
+
+	// LD A, IXl
+	cpu.IX = 0x00CD
+	cpu.A = 0
+	cpu.executeDDInstruction(0x7D)
+	if cpu.A != 0xCD {
+		t.Errorf("DD 7D (LD A,IXl): A=%02X, want 0xCD", cpu.A)
+	}
+}
+
+// TestFDIYhalfRegisters exercises the same undocumented operations
+// under the FD prefix (IY halves). Cobra +3 uses FD 67 / FD 6F to build
+// IY in the same fast-PUSH setup.
+func TestFDIYhalfRegisters(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	cpu.A = 0x99
+	cpu.H, cpu.L = 0x11, 0x22
+	cpu.IY = 0xCAFE
+	cpu.executeFDInstruction(0x67) // LD IYh, A
+	if cpu.IY != 0x99FE || cpu.H != 0x11 || cpu.L != 0x22 {
+		t.Errorf("FD 67 (LD IYh,A): IY=%04X H=%02X L=%02X, want IY=0x99FE H=0x11 L=0x22",
+			cpu.IY, cpu.H, cpu.L)
+	}
+
+	cpu.IY = 0xCAFE
+	cpu.executeFDInstruction(0x6F) // LD IYl, A
+	if cpu.IY != 0xCA99 || cpu.H != 0x11 || cpu.L != 0x22 {
+		t.Errorf("FD 6F (LD IYl,A): IY=%04X H=%02X L=%02X, want IY=0xCA99 H=0x11 L=0x22",
+			cpu.IY, cpu.H, cpu.L)
+	}
+}

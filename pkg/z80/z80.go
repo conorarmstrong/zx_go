@@ -1723,6 +1723,146 @@ func (c *CPU) executeDDInstruction(opcode byte) {
 		c.executeDDCBInstruction(opcode, addr)
 		c.tstates += 8 // Base timing, individual instructions add more
 
+	// Undocumented 8-bit IXh / IXl operations: DD-prefixed forms of any
+	// base instruction that operates on H or L access IXh / IXl instead.
+	// These are widely used by commercial software (e.g. Cobra +3).
+	case 0x24: // INC IXh
+		c.setIXh(c.inc(c.ixh()))
+		c.tstates += 8
+	case 0x25: // DEC IXh
+		c.setIXh(c.dec(c.ixh()))
+		c.tstates += 8
+	case 0x26: // LD IXh, n
+		c.setIXh(c.fetch())
+		c.tstates += 11
+	case 0x2C: // INC IXl
+		c.setIXl(c.inc(c.ixl()))
+		c.tstates += 8
+	case 0x2D: // DEC IXl
+		c.setIXl(c.dec(c.ixl()))
+		c.tstates += 8
+	case 0x2E: // LD IXl, n
+		c.setIXl(c.fetch())
+		c.tstates += 11
+	case 0x44: // LD B, IXh
+		c.B = c.ixh()
+		c.tstates += 8
+	case 0x45: // LD B, IXl
+		c.B = c.ixl()
+		c.tstates += 8
+	case 0x4C: // LD C, IXh
+		c.C = c.ixh()
+		c.tstates += 8
+	case 0x4D: // LD C, IXl
+		c.C = c.ixl()
+		c.tstates += 8
+	case 0x54: // LD D, IXh
+		c.D = c.ixh()
+		c.tstates += 8
+	case 0x55: // LD D, IXl
+		c.D = c.ixl()
+		c.tstates += 8
+	case 0x5C: // LD E, IXh
+		c.E = c.ixh()
+		c.tstates += 8
+	case 0x5D: // LD E, IXl
+		c.E = c.ixl()
+		c.tstates += 8
+	case 0x60: // LD IXh, B
+		c.setIXh(c.B)
+		c.tstates += 8
+	case 0x61: // LD IXh, C
+		c.setIXh(c.C)
+		c.tstates += 8
+	case 0x62: // LD IXh, D
+		c.setIXh(c.D)
+		c.tstates += 8
+	case 0x63: // LD IXh, E
+		c.setIXh(c.E)
+		c.tstates += 8
+	case 0x64: // LD IXh, IXh (no-op)
+		c.tstates += 8
+	case 0x65: // LD IXh, IXl
+		c.setIXh(c.ixl())
+		c.tstates += 8
+	case 0x67: // LD IXh, A
+		c.setIXh(c.A)
+		c.tstates += 8
+	case 0x68: // LD IXl, B
+		c.setIXl(c.B)
+		c.tstates += 8
+	case 0x69: // LD IXl, C
+		c.setIXl(c.C)
+		c.tstates += 8
+	case 0x6A: // LD IXl, D
+		c.setIXl(c.D)
+		c.tstates += 8
+	case 0x6B: // LD IXl, E
+		c.setIXl(c.E)
+		c.tstates += 8
+	case 0x6C: // LD IXl, IXh
+		c.setIXl(c.ixh())
+		c.tstates += 8
+	case 0x6D: // LD IXl, IXl (no-op)
+		c.tstates += 8
+	case 0x6F: // LD IXl, A
+		c.setIXl(c.A)
+		c.tstates += 8
+	case 0x7C: // LD A, IXh
+		c.A = c.ixh()
+		c.tstates += 8
+	case 0x7D: // LD A, IXl
+		c.A = c.ixl()
+		c.tstates += 8
+	case 0x84: // ADD A, IXh
+		c.add(c.ixh())
+		c.tstates += 8
+	case 0x85: // ADD A, IXl
+		c.add(c.ixl())
+		c.tstates += 8
+	case 0x8C: // ADC A, IXh
+		c.adc(c.ixh())
+		c.tstates += 8
+	case 0x8D: // ADC A, IXl
+		c.adc(c.ixl())
+		c.tstates += 8
+	case 0x94: // SUB IXh
+		c.sub(c.ixh())
+		c.tstates += 8
+	case 0x95: // SUB IXl
+		c.sub(c.ixl())
+		c.tstates += 8
+	case 0x9C: // SBC A, IXh
+		c.sbc(c.ixh())
+		c.tstates += 8
+	case 0x9D: // SBC A, IXl
+		c.sbc(c.ixl())
+		c.tstates += 8
+	case 0xA4: // AND IXh
+		c.and(c.ixh())
+		c.tstates += 8
+	case 0xA5: // AND IXl
+		c.and(c.ixl())
+		c.tstates += 8
+	case 0xAC: // XOR IXh
+		c.xor(c.ixh())
+		c.tstates += 8
+	case 0xAD: // XOR IXl
+		c.xor(c.ixl())
+		c.tstates += 8
+	case 0xB4: // OR IXh
+		c.or(c.ixh())
+		c.tstates += 8
+	case 0xB5: // OR IXl
+		c.or(c.ixl())
+		c.tstates += 8
+	case 0xBC: // CP IXh
+		c.cp(c.ixh())
+		c.tstates += 8
+	case 0xBD: // CP IXl
+		c.cp(c.ixl())
+		c.tstates += 8
+
 	default:
 		// On real Z80 hardware, a DD prefix followed by an opcode that
 		// doesn't use IX simply executes the base opcode (the prefix is
@@ -2007,6 +2147,145 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 		c.executeFDCBInstruction(opcode, d)
 		c.tstates += 8 // Base timing, individual instructions add more
 
+	// Undocumented 8-bit IYh / IYl operations (FD-prefixed forms of any
+	// base instruction that operates on H or L access IYh / IYl instead).
+	case 0x24: // INC IYh
+		c.setIYh(c.inc(c.iyh()))
+		c.tstates += 8
+	case 0x25: // DEC IYh
+		c.setIYh(c.dec(c.iyh()))
+		c.tstates += 8
+	case 0x26: // LD IYh, n
+		c.setIYh(c.fetch())
+		c.tstates += 11
+	case 0x2C: // INC IYl
+		c.setIYl(c.inc(c.iyl()))
+		c.tstates += 8
+	case 0x2D: // DEC IYl
+		c.setIYl(c.dec(c.iyl()))
+		c.tstates += 8
+	case 0x2E: // LD IYl, n
+		c.setIYl(c.fetch())
+		c.tstates += 11
+	case 0x44: // LD B, IYh
+		c.B = c.iyh()
+		c.tstates += 8
+	case 0x45: // LD B, IYl
+		c.B = c.iyl()
+		c.tstates += 8
+	case 0x4C: // LD C, IYh
+		c.C = c.iyh()
+		c.tstates += 8
+	case 0x4D: // LD C, IYl
+		c.C = c.iyl()
+		c.tstates += 8
+	case 0x54: // LD D, IYh
+		c.D = c.iyh()
+		c.tstates += 8
+	case 0x55: // LD D, IYl
+		c.D = c.iyl()
+		c.tstates += 8
+	case 0x5C: // LD E, IYh
+		c.E = c.iyh()
+		c.tstates += 8
+	case 0x5D: // LD E, IYl
+		c.E = c.iyl()
+		c.tstates += 8
+	case 0x60: // LD IYh, B
+		c.setIYh(c.B)
+		c.tstates += 8
+	case 0x61: // LD IYh, C
+		c.setIYh(c.C)
+		c.tstates += 8
+	case 0x62: // LD IYh, D
+		c.setIYh(c.D)
+		c.tstates += 8
+	case 0x63: // LD IYh, E
+		c.setIYh(c.E)
+		c.tstates += 8
+	case 0x64: // LD IYh, IYh (no-op)
+		c.tstates += 8
+	case 0x65: // LD IYh, IYl
+		c.setIYh(c.iyl())
+		c.tstates += 8
+	case 0x67: // LD IYh, A
+		c.setIYh(c.A)
+		c.tstates += 8
+	case 0x68: // LD IYl, B
+		c.setIYl(c.B)
+		c.tstates += 8
+	case 0x69: // LD IYl, C
+		c.setIYl(c.C)
+		c.tstates += 8
+	case 0x6A: // LD IYl, D
+		c.setIYl(c.D)
+		c.tstates += 8
+	case 0x6B: // LD IYl, E
+		c.setIYl(c.E)
+		c.tstates += 8
+	case 0x6C: // LD IYl, IYh
+		c.setIYl(c.iyh())
+		c.tstates += 8
+	case 0x6D: // LD IYl, IYl (no-op)
+		c.tstates += 8
+	case 0x6F: // LD IYl, A
+		c.setIYl(c.A)
+		c.tstates += 8
+	case 0x7C: // LD A, IYh
+		c.A = c.iyh()
+		c.tstates += 8
+	case 0x7D: // LD A, IYl
+		c.A = c.iyl()
+		c.tstates += 8
+	case 0x84: // ADD A, IYh
+		c.add(c.iyh())
+		c.tstates += 8
+	case 0x85: // ADD A, IYl
+		c.add(c.iyl())
+		c.tstates += 8
+	case 0x8C: // ADC A, IYh
+		c.adc(c.iyh())
+		c.tstates += 8
+	case 0x8D: // ADC A, IYl
+		c.adc(c.iyl())
+		c.tstates += 8
+	case 0x94: // SUB IYh
+		c.sub(c.iyh())
+		c.tstates += 8
+	case 0x95: // SUB IYl
+		c.sub(c.iyl())
+		c.tstates += 8
+	case 0x9C: // SBC A, IYh
+		c.sbc(c.iyh())
+		c.tstates += 8
+	case 0x9D: // SBC A, IYl
+		c.sbc(c.iyl())
+		c.tstates += 8
+	case 0xA4: // AND IYh
+		c.and(c.iyh())
+		c.tstates += 8
+	case 0xA5: // AND IYl
+		c.and(c.iyl())
+		c.tstates += 8
+	case 0xAC: // XOR IYh
+		c.xor(c.iyh())
+		c.tstates += 8
+	case 0xAD: // XOR IYl
+		c.xor(c.iyl())
+		c.tstates += 8
+	case 0xB4: // OR IYh
+		c.or(c.iyh())
+		c.tstates += 8
+	case 0xB5: // OR IYl
+		c.or(c.iyl())
+		c.tstates += 8
+	case 0xBC: // CP IYh
+		c.cp(c.iyh())
+		c.tstates += 8
+	case 0xBD: // CP IYl
+		c.cp(c.iyl())
+		c.tstates += 8
+
 	default:
 		// On real Z80 hardware, an FD prefix followed by an opcode that
 		// doesn't use IY simply executes the base opcode (the prefix is
@@ -2095,6 +2374,15 @@ func (c *CPU) setAF(val uint16) { c.A = byte(val >> 8); c.F = byte(val) }
 func (c *CPU) setBC(val uint16) { c.B = byte(val >> 8); c.C = byte(val) }
 func (c *CPU) setDE(val uint16) { c.D = byte(val >> 8); c.E = byte(val) }
 func (c *CPU) setHL(val uint16) { c.H = byte(val >> 8); c.L = byte(val) }
+
+func (c *CPU) ixh() byte     { return byte(c.IX >> 8) }
+func (c *CPU) ixl() byte     { return byte(c.IX) }
+func (c *CPU) iyh() byte     { return byte(c.IY >> 8) }
+func (c *CPU) iyl() byte     { return byte(c.IY) }
+func (c *CPU) setIXh(v byte) { c.IX = (uint16(v) << 8) | (c.IX & 0xFF) }
+func (c *CPU) setIXl(v byte) { c.IX = (c.IX & 0xFF00) | uint16(v) }
+func (c *CPU) setIYh(v byte) { c.IY = (uint16(v) << 8) | (c.IY & 0xFF) }
+func (c *CPU) setIYl(v byte) { c.IY = (c.IY & 0xFF00) | uint16(v) }
 
 // initTables initializes the lookup tables for flag calculation
 func (c *CPU) initTables() {
