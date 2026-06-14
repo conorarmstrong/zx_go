@@ -7,7 +7,8 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"log"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,23 +26,53 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/conorarmstrong/zx_go/pkg/config"
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
+	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+	"github.com/conorarmstrong/zx_go/pkg/next/dac"
+	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
+	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
+	"github.com/conorarmstrong/zx_go/pkg/next/install"
+	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
+	"github.com/conorarmstrong/zx_go/pkg/next/nex"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
+	"github.com/conorarmstrong/zx_go/pkg/next/palette"
+	"github.com/conorarmstrong/zx_go/pkg/next/sdcard"
+	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
+	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/rzx"
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
+	"github.com/conorarmstrong/zx_go/pkg/version"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
+	"github.com/conorarmstrong/zx_go/pkg/zxlog"
 )
 
 const (
-	windowWidth     = 320 * 2
-	windowHeight    = 240 * 2
+	// tstatesPerFrame is the 48K ULA frame length. The 128K family and
+	// the Next use a longer frame — see frameTStatesForModel, which the
+	// ExecuteFrame loops use so the maskable INT cadence is model-correct
+	// (timing.md §1a; the Next previously ran the 48K 69888 by mistake).
 	tstatesPerFrame = 69888
 )
+
+// frameTStatesForModel returns the ULA frame length in 3.5 MHz T-states
+// for a machine model: 48K = 69888; the 128K family (128K/+2/+2A/+3) and
+// the Spectrum Next (which boots in +3/128K timing) = 70908. Matches the
+// per-model convention in z80.ExecuteFrame and the 70908 stepFrameBudget
+// used by StepInstructionWithIRQ, and the FPGA frame geometry
+// (zxula_timing.vhd c_max_hc/c_max_vc → (456·311)/2 = 70908).
+func frameTStatesForModel(model roms.SpectrumModel) int {
+	if model == roms.Model48K {
+		return tstatesPerFrame // 69888
+	}
+	return 70908
+}
 
 type keyState struct {
 	key     fyne.KeyName
@@ -53,19 +84,30 @@ type keyState struct {
 type JoystickType int
 
 const (
-	JoystickNone     JoystickType = iota
-	JoystickKempston              // Hardware port 0x1F (handled by ULA)
+	JoystickNone      JoystickType = iota
+	JoystickKempston               // Hardware port 0x1F (handled by ULA)
 	JoystickSinclair1              // Sinclair Interface 2 left joystick (keys 1..5)
 	JoystickSinclair2              // Sinclair Interface 2 right joystick (keys 6..0)
 	JoystickCursor                 // Protek/Cursor joystick (keys 5/6/7/8/0)
 )
 
 type emulator struct {
-	cpu         *z80.CPU
-	mem         *memory.Memory
+	cpu *z80.CPU
+	mem *memory.Memory
+
+	// SD write-back (opt-in via --sd-writeback): the mounted image
+	// source + its file path, so guest writes can be persisted at
+	// exit. nil/"" when the flag is off or no file-backed image is
+	// mounted.
+	sdImageSrc  *sdcard.ImageSource
+	sdImagePath string
 	ula         *ula.ULA
 	kbd         *keyboard.Keyboard
 	peripherals *peripherals.PeripheralManager
+	// model is the machine this emulator was built for. Used to pick the
+	// ULA frame length (frameTStatesForModel) so the maskable INT cadence
+	// is model-correct in the GUI render loop too (timing.md §1a).
+	model roms.SpectrumModel
 
 	paused atomic.Bool
 	ticker *time.Ticker
@@ -105,6 +147,69 @@ type emulator struct {
 	rzxPlayback       atomic.Pointer[rzx.Playback]
 	rzxRecord         atomic.Pointer[rzx.Recording]
 	rzxRecordFilename string
+
+	// Spectrum Next subsystem refs. Non-nil only on ModelNext.
+	// nextEsxdos is the RST 8 dispatcher (used to attach an SD
+	// mount); nextDAC is the four-channel DAC bank (used to
+	// verify mixing). nextRegs is the NextReg file (used by the
+	// debugger for read-back). All owned by the Next bus
+	// constructed in newNextEmulator.
+	nextEsxdos  *esxdos.Dispatcher
+	nextDAC     *dac.Bank
+	nextRegs    *nextregs.Dispatcher
+	nextPalette *palette.Bank
+	nextTilemap *tilemap.Tilemap
+	nextCopper  *copper.Copper
+	nextSprites *sprite.Engine
+	nextLayer2  *layer2.Layer2
+
+	// debugHistory is the shared M1-fetch ring populated by the
+	// CPU pre-fetch hook. Both the telnet `history` / `prev`
+	// commands and the visual debugger's History tab read from it.
+	// nil until the first surface that needs it (telnet via
+	// --debugger-history, or the visual debugger menu) creates it.
+	debugHistory *debugger.History
+
+	// debugBreakpoints is the SINGLE shared breakpoint store used by
+	// both the telnet and visual debuggers, so a breakpoint set from
+	// one surface is visible and active in the other. Lazily created
+	// by whichever debugger initialises first (see sharedBreakpoints).
+	debugBreakpoints *debugger.BreakpointSet
+
+	// debugRegWatches is the SINGLE shared register-watchpoint set,
+	// likewise shared between the telnet and visual debuggers.
+	debugRegWatches *debugger.RegWatchSet
+
+	// timeTravel is the rolling snapshot ring, owned by the emulator
+	// so BOTH the telnet `tt-*` commands and the visual debugger's
+	// Time-Travel tab drive the same buffer. nil when disabled.
+	timeTravel *timeTravelBuffer
+
+	// rdbg is the optional ZRCP-style telnet debugger. Constructed
+	// in main when --debugger-port>0; nil otherwise. WaitIfPaused
+	// is safe on a nil receiver, so the GUI loop can call it
+	// unconditionally.
+	rdbg *remoteDebugger
+}
+
+// sharedBreakpoints returns the emulator's single shared breakpoint
+// store, creating it on first use. Both the telnet debugger and the
+// visual debugger call this so they operate on the same set.
+func (e *emulator) sharedBreakpoints() *debugger.BreakpointSet {
+	if e.debugBreakpoints == nil {
+		e.debugBreakpoints = debugger.NewBreakpointSet()
+	}
+	return e.debugBreakpoints
+}
+
+// sharedRegWatches returns the emulator's single shared
+// register-watchpoint set (telnet `watch-reg` + the GUI Watchpoints
+// tab operate on the same instance).
+func (e *emulator) sharedRegWatches() *debugger.RegWatchSet {
+	if e.debugRegWatches == nil {
+		e.debugRegWatches = debugger.NewRegWatchSet()
+	}
+	return e.debugRegWatches
 }
 
 // joystickKeySymbols returns the Spectrum keys (as fyne.KeyName values that
@@ -449,21 +554,29 @@ func loadPlus3Disk(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel
 }
 
 // userKeymapPath returns the absolute path to the user's keymap override
-// file (~/.config/zxgo/keymap.json). It does not create the file or
-// directory; the caller decides whether missing files matter.
+// file under the platform-appropriate config dir: keymap.json inside
+// `<os.UserConfigDir>/zx_go/` (= `%AppData%\zx_go\keymap.json` on
+// Windows, `~/Library/Application Support/zx_go/keymap.json` on macOS,
+// `$XDG_CONFIG_HOME/zx_go/keymap.json` or `~/.config/zx_go/keymap.json`
+// on Linux). Matches the convention used by `pkg/config/config.go::Path()`
+// for `config.json`. Does not create the file or directory; the caller
+// decides whether missing files matter.
 func userKeymapPath() string {
-	home, err := os.UserHomeDir()
+	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "zxgo", "keymap.json")
+	return filepath.Join(cfg, "zx_go", "keymap.json")
 }
 
 func newEmulator(model roms.SpectrumModel) (*emulator, error) {
+	if model == roms.ModelNext {
+		return newNextEmulator()
+	}
 	kbd := keyboard.New()
 	if path := userKeymapPath(); path != "" {
 		if err := kbd.LoadOverrides(path); err != nil {
-			log.Printf("Warning: failed to load custom keymap: %v", err)
+			slog.Warn("failed to load custom keymap", "err", err)
 		}
 	}
 	mem, err := memory.New("roms", model)
@@ -473,8 +586,12 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	ula := ula.New(mem, kbd)
 	cpu := z80.New(mem, ula)
 
-	// Initialize audio
-	ula.EnableAudio()
+	// Initialize audio unless --no-sound was passed
+	if cliFlagsActive == nil || !cliFlagsActive.noSound {
+		ula.EnableAudio()
+	} else {
+		slog.Info("--no-sound: audio disabled")
+	}
 
 	// Create peripheral manager and wire it to ULA and memory
 	pm := peripherals.NewPeripheralManager(mem, "roms")
@@ -502,6 +619,7 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 		ula:          ula,
 		kbd:          kbd,
 		peripherals:  pm,
+		model:        model,
 		physicalKeys: make(map[fyne.KeyName]bool),
 		keyQueue:     make(chan keyState, 10),
 		stopChan:     make(chan struct{}),
@@ -639,6 +757,11 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 			select {
 			case <-ticker.C:
 				if !e.paused.Load() {
+					// Honour the remote debugger's pause state.
+					// WaitIfPaused is nil-safe and a no-op when
+					// not paused, so the GUI hot path is unaffected
+					// when --debugger-port wasn't supplied.
+					e.rdbg.WaitIfPaused()
 					// Three execution paths: RZX playback,
 					// RZX recording, or normal frame.
 					switch {
@@ -650,32 +773,32 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						case errors.Is(err, rzx.ErrPlaybackFinished):
 							e.stopRZXPlayback()
 						case err != nil:
-							log.Printf("RZX playback error: %v", err)
+							slog.Error("RZX playback error", "err", err)
 							e.stopRZXPlayback()
 						case snapBlock != nil:
 							// Intermediate snapshot — apply it before the next frame.
 							snap, derr := rzx.DecodeSnapshot(snapBlock)
 							if derr != nil {
-								log.Printf("RZX intermediate snapshot decode failed: %v; stopping playback", derr)
+								slog.Error("RZX intermediate snapshot decode failed; stopping playback", "err", derr)
 								e.stopRZXPlayback()
 								break
 							}
 							if aerr := applySnapshotToEmulator(e, snap); aerr != nil {
-								log.Printf("RZX intermediate snapshot apply failed: %v; stopping playback", aerr)
+								slog.Error("RZX intermediate snapshot apply failed; stopping playback", "err", aerr)
 								e.stopRZXPlayback()
 							}
 						}
 					case e.rzxRecord.Load() != nil:
 						recorder := e.rzxRecord.Load()
 						before := e.cpu.InstructionCount()
-						e.cpu.ExecuteFrame(tstatesPerFrame)
+						e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
 						delta := e.cpu.InstructionCount() - before
 						if delta > 0xFFFF {
-							log.Printf("RZX record: frame instruction count %d > 0xFFFF, clamping", delta)
+							slog.Warn("RZX record: frame instruction count exceeded 0xFFFF, clamping", "count", delta)
 							delta = 0xFFFF
 						}
 						if err := recorder.StoreFrame(uint16(delta)); err != nil {
-							log.Printf("RZX record StoreFrame: %v", err)
+							slog.Error("RZX record StoreFrame", "err", err)
 						}
 						if recorder.AutosaveDue() {
 							if snap, err := createSnapshotFromEmulator(e); err == nil {
@@ -685,7 +808,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							}
 						}
 					default:
-						e.cpu.ExecuteFrame(tstatesPerFrame)
+						e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
 					}
 
 					frameCount++
@@ -733,17 +856,45 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 }
 
 func (e *emulator) reboot() {
-	log.Println("Rebooting emulator...")
+	slog.Info("rebooting emulator")
 	e.cpu.Reset()
 	e.ula.Reset()
+
+	// On ModelNext, drop the NextReg file back to its power-on
+	// values BEFORE memory.Reset re-enables the FPGA bootrom. The
+	// dispatcher's Reset drives every OnWrite handler so the
+	// tilemap layer, Layer 2, MMU8, palette and divMMC pager also
+	// fall back to power-on state — otherwise the previous boot's
+	// tilemap stays enabled and renders stale bank-5 data over the
+	// fresh boot output, manifesting as the vertical-stripe
+	// corruption the user reported (see B.png from 2026-05-19).
+	//
+	if e.nextRegs != nil {
+		e.nextRegs.Reset()
+	}
+	// The palette bank carries the NR$44 two-byte write latch
+	// (pending9/have9). nextRegs.Reset's Phase 1 zero-pass writes a
+	// single 0 byte to NR$44 which leaves the latch in "got high,
+	// awaiting low" state — the next boot.bin NR$44 write would
+	// then commit (high=0, low=guest_val&1) and corrupt every
+	// subsequent palette write, producing the all-blue testcard
+	// reported on reboot. Reset the latch AFTER nextRegs.Reset so
+	// the half-pair set during Phase 1 is cleared.
+	if e.nextPalette != nil {
+		e.nextPalette.ResetWriteLatches()
+	}
 
 	// Restore paging to the model's power-on defaults. Without this,
 	// 128K/+2A/+3 reboots inherit whatever banks/ROM the previously
 	// running program had selected — e.g. after loading a +3 .dsk the
 	// boot ROM index is no longer 0, so the +3 main menu never
 	// reappears and BASIC starts up over corrupted system variables.
+	// On ModelNext, memory.Reset re-activates the FPGA bootrom (so
+	// the loader runs again), then setupNext rewires the 128K-style
+	// page map. Both are required to make Reboot reproduce a cold
+	// power-on for the Next.
 	if err := e.mem.Reset(); err != nil {
-		log.Printf("memory reset failed: %v", err)
+		slog.Error("memory reset failed", "err", err)
 	}
 
 	// If the DISCiPLE is enabled, page it in so its boot code at
@@ -763,19 +914,47 @@ func (e *emulator) reboot() {
 	for len(e.keyQueue) > 0 {
 		<-e.keyQueue
 	}
+
+	// Re-apply warm-boot on ModelNext if (and ONLY if) the user
+	// explicitly opted into the warm-boot debug shortcut. Per the
+	// project's "no hacks" rule, the captured-state replay must be
+	// opt-in only — see also cmd/zx_go/next.go for the parallel
+	// gating during initial boot.
+	//
+	// Triggers (any of):
+	//   - --warm-boot CLI flag       (cliFlagsActive.warmBoot)
+	//   - $ZX_GO_WARM_BOOT=1         (env var)
+	//
+	// $ZX_GO_NO_WARM_BOOT=1 still honoured as a force-off override
+	// for backward compatibility.
+	warmBootOptedIn := os.Getenv("ZX_GO_WARM_BOOT") != "" ||
+		(cliFlagsActive != nil && cliFlagsActive.warmBoot)
+	if os.Getenv("ZX_GO_NO_WARM_BOOT") != "" {
+		warmBootOptedIn = false
+	}
+	if warmBootOptedIn && e.cpu != nil && e.mem != nil && e.nextRegs != nil &&
+		e.mem.GetCurrentModel() == roms.ModelNext {
+		if err := applyWarmBoot(e.cpu, e.mem, e.nextRegs); err != nil {
+			if !errors.Is(err, install.ErrROMNotInstalled) {
+				slog.Warn("warm-boot reapply after reboot failed", "err", err)
+			}
+		} else {
+			slog.Info("warm-boot reapplied after reboot (debug shortcut)")
+		}
+	}
 }
 
 func (e *emulator) togglePause() {
 	e.paused.Store(!e.paused.Load())
 	if e.paused.Load() {
-		log.Println("Emulator paused")
+		slog.Info("emulator paused")
 	} else {
-		log.Println("Emulator resumed")
+		slog.Info("emulator resumed")
 	}
 }
 
 func (e *emulator) cleanup() {
-	log.Println("Cleaning up emulator resources...")
+	slog.Info("cleaning up emulator resources")
 	e.paused.Store(true)
 	close(e.stopChan)
 	if e.ticker != nil {
@@ -799,6 +978,69 @@ func getFormatName(format snapshot.SnapshotFormat) string {
 }
 
 // applySnapshotToEmulator applies a loaded snapshot to the running emulator
+
+// fileSubmenu groups a run of menu items under a single labelled
+// parent entry (a fyne submenu via ChildMenu). Used to tame the
+// otherwise huge flat File menu into a handful of cohesive groups.
+func fileSubmenu(label string, items ...*fyne.MenuItem) *fyne.MenuItem {
+	mi := fyne.NewMenuItem(label, nil)
+	mi.ChildMenu = fyne.NewMenu("", items...)
+	return mi
+}
+
+// ensureFileExt appends ext to path (and renames the file on disk)
+// when path doesn't already end in ext, case-insensitively. Used by
+// the save dialogs so a user who types "shot" instead of "shot.png"
+// still gets a correctly-named file. If the rename fails (e.g. the
+// target already exists) the original path is returned unchanged.
+func ensureFileExt(path, ext string) string {
+	if strings.HasSuffix(strings.ToLower(path), strings.ToLower(ext)) {
+		return path
+	}
+	withExt := path + ext
+	// Don't clobber an unrelated existing file: os.Rename overwrites
+	// silently on Unix, so if "shot.png" already exists and the user
+	// typed "shot", keep the file at the name they actually chose
+	// rather than destroying the other one.
+	if _, err := os.Stat(withExt); err == nil {
+		return path
+	}
+	if err := os.Rename(path, withExt); err != nil {
+		return path
+	}
+	return withExt
+}
+
+// writeScreenshotPNG renders the current frame and writes it as a
+// PNG to w. Works for every machine type: emu.ula.Render() returns
+// the composited framebuffer — the classic ULA bitmap for 48K…+3,
+// and the full Spectrum Next composite (ULA + Layer 2 + sprites +
+// tilemap + LoRes through the active palette and SLU priority) for
+// ModelNext, at whatever resolution the active Next video mode
+// produces. The pixel data is copied before encode so the PNG write
+// can't race the emulator goroutine mutating the framebuffer.
+func writeScreenshotPNG(emu *emulator, w io.Writer) error {
+	src := emu.ula.Render()
+	imgCopy := image.NewRGBA(src.Bounds())
+	copy(imgCopy.Pix, src.Pix)
+	return png.Encode(w, imgCopy)
+}
+
+// flushSDWriteback persists guest SD-image writes to disk when the
+// user opted in via --sd-writeback. The previous file is kept as
+// .bak (see ImageSource.WriteBackTo). No-op when the flag is off,
+// no image is mounted, or the guest never wrote.
+func (e *emulator) flushSDWriteback() {
+	if e.sdImageSrc == nil || e.sdImagePath == "" || !e.sdImageSrc.Dirty() {
+		return
+	}
+	if err := e.sdImageSrc.WriteBackTo(e.sdImagePath); err != nil {
+		slog.Error("sd-writeback failed", "path", e.sdImagePath, "err", err)
+		return
+	}
+	slog.Info("sd-writeback complete", "path", e.sdImagePath, "backup", e.sdImagePath+".bak")
+}
+
 func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
 	// Pause emulation during snapshot loading
 	wasPaused := emu.paused.Load()
@@ -832,6 +1074,7 @@ func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
 	emu.cpu.I = snap.CPU.I
 	emu.cpu.R = snap.CPU.R
 	emu.cpu.IFF1 = snap.CPU.IFF1
+	emu.cpu.Halted = snap.CPU.Halted
 	emu.cpu.IFF2 = snap.CPU.IFF2
 	emu.cpu.IM = snap.CPU.IM
 
@@ -887,6 +1130,7 @@ func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
 	snap.CPU.I = emu.cpu.I
 	snap.CPU.R = emu.cpu.R
 	snap.CPU.IFF1 = emu.cpu.IFF1
+	snap.CPU.Halted = emu.cpu.Halted
 	snap.CPU.IFF2 = emu.cpu.IFF2
 	snap.CPU.IM = emu.cpu.IM
 
@@ -1042,7 +1286,7 @@ func (e *emulator) stopRZXRecording() error {
 			return nil
 		})
 		if err != nil {
-			log.Printf("RZX stop: final snapshot capture failed: %v", err)
+			slog.Error("RZX stop: final snapshot capture failed", "err", err)
 		}
 	}
 
@@ -1195,10 +1439,11 @@ func (e *emulator) rzxRollbackToLastSnapshot() error {
 // the next tape block, avoiding the slow real-time pulse decoding.
 //
 // On entry to LD-BYTES (PC=0x0556) the contract is:
-//   A          expected flag byte (header=0x00, data=0xFF)
-//   F carry    set means LOAD, clear means VERIFY
-//   IX         destination address
-//   DE         number of bytes to load (excluding flag/checksum)
+//
+//	A          expected flag byte (header=0x00, data=0xFF)
+//	F carry    set means LOAD, clear means VERIFY
+//	IX         destination address
+//	DE         number of bytes to load (excluding flag/checksum)
 //
 // Note: A/F (not A'/F') — the EX AF,AF' is the routine's *second*
 // instruction, so it has not run yet at the trap point.
@@ -1278,7 +1523,7 @@ func installTapeTrap(emu *emulator) {
 		emu.cpu.SP += 2
 		emu.cpu.PC = uint16(high)<<8 | uint16(low)
 
-		log.Printf("Tape trap: loaded %d bytes at 0x%04X (success=%v)", count, dst, success)
+		slog.Debug("tape trap: loaded bytes", "count", count, "addr", fmt.Sprintf("$%04X", dst), "success", success)
 		return true
 	}
 }
@@ -1363,22 +1608,354 @@ func (a *aspectRatioLayout) Layout(objects []fyne.CanvasObject, containerSize fy
 	objects[0].Resize(fyne.NewSize(float32(w), float32(h)))
 }
 
+// modelToConfigString maps a roms.SpectrumModel to its on-disk
+// config representation. Stable strings so future renames in the
+// roms package don't invalidate existing config files.
+func modelToConfigString(m roms.SpectrumModel) string {
+	switch m {
+	case roms.Model128K:
+		return "128K"
+	case roms.ModelPlus2:
+		return "+2"
+	case roms.ModelPlus2A:
+		return "+2A"
+	case roms.ModelPlus3:
+		return "+3"
+	case roms.ModelNext:
+		return "Next"
+	}
+	return "48K"
+}
+
+func joystickToConfigString(j JoystickType) string {
+	switch j {
+	case JoystickKempston:
+		return "Kempston"
+	case JoystickSinclair1:
+		return "Sinclair1"
+	case JoystickSinclair2:
+		return "Sinclair2"
+	case JoystickCursor:
+		return "Cursor"
+	}
+	return "None"
+}
+
+func configStringToJoystick(s string) JoystickType {
+	switch s {
+	case "Kempston":
+		return JoystickKempston
+	case "Sinclair1":
+		return JoystickSinclair1
+	case "Sinclair2":
+		return JoystickSinclair2
+	case "Cursor":
+		return JoystickCursor
+	}
+	return JoystickNone
+}
+
+// multifaceVariantToConfigString maps a multiface variant to its
+// stable on-disk representation. Empty string means "no Multiface".
+func multifaceVariantToConfigString(v multiface.MultifaceType) string {
+	switch v {
+	case multiface.Multiface1:
+		return "MF1"
+	case multiface.Multiface128:
+		return "MF128"
+	case multiface.Multiface3:
+		return "MF3"
+	}
+	return ""
+}
+
+// configStringToMultifaceVariant inverts the above. An unrecognised
+// or empty string returns Multiface128 (the package default) — callers
+// must gate on cfg.Multiface != "" before calling.
+func configStringToMultifaceVariant(s string) multiface.MultifaceType {
+	switch s {
+	case "MF1":
+		return multiface.Multiface1
+	case "MF3":
+		return multiface.Multiface3
+	}
+	return multiface.Multiface128
+}
+
+// scaleToWindowSize maps a percentage (100/125/150/200/300) to the
+// fyne window size. Unknown values fall back to 200%.
+func scaleToWindowSize(scale int) (float32, float32) {
+	switch scale {
+	case 100:
+		return 320, 240
+	case 125:
+		return 400, 300
+	case 150:
+		return 480, 360
+	case 300:
+		return 960, 720
+	}
+	return 640, 480 // 200% — the existing default
+}
+
 func main() {
+	flags := parseCLI()
+	zxlog.Setup(flags.logLevel)
+	zxlog.Banner()
+
+	// Capture-Next-snapshot mode: connect to a reference Next
+	// emulator's ZRCP debug protocol, dump its full state, write
+	// to install dir, exit. Skips emulator startup entirely.
+	if flags.captureNextSnapshot != "" {
+		if err := runCaptureNextSnapshot(flags.captureNextSnapshot); err != nil {
+			fmt.Fprintf(os.Stderr, "capture-next-snapshot failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// First-divergence bisection mode (DEV): our Next boot vs a live
+	// reference emulator, checkpointed at the n-th hit of an anchor PC.
+	if flags.nextBisect != "" {
+		if err := runNextBisectFromSpec(flags.nextBisect); err != nil {
+			fmt.Fprintf(os.Stderr, "next-bisect failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Instruction-level PC-lockstep mode (DEV): step our Next and a live
+	// reference emulator one instruction at a time from a matching checkpoint;
+	// report the first instruction where the reference emulator doesn't follow our path.
+	if flags.nextLockstep != "" {
+		if err := runNextLockstepFromSpec(flags.nextLockstep); err != nil {
+			fmt.Fprintf(os.Stderr, "next-lockstep failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// NextReg read-back diff mode (DEV): dump every NextReg ($00-$FF)
+	// read-back from our Next and a live reference emulator at a checkpoint and
+	// report which differ — finds read-back faithfulness gaps.
+	if flags.nextNRDiff != "" {
+		if err := runNextNRDiffFromSpec(flags.nextNRDiff); err != nil {
+			fmt.Fprintf(os.Stderr, "next-nrdiff failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Logical-memory diff mode (DEV): compare our Next's full 64 KB logical
+	// memory image to a live reference emulator at a checkpoint. Aimed at the
+	// last register-matched hit — a memory diff there isolates the stale
+	// cell forking the path; no diff redirects the hunt to port inputs.
+	if flags.nextMemDiff != "" {
+		if err := runNextMemDiffFromSpec(flags.nextMemDiff); err != nil {
+			fmt.Fprintf(os.Stderr, "next-memdiff failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Headless mode skips the entire Fyne / GUI path. Wire trace
+	// hooks against a freshly-constructed emulator, run frames,
+	// optionally dump state, exit.
+	if flags.headless {
+		runHeadless(flags)
+		return
+	}
+
 	a := app.NewWithID("com.conorarmstrong.zxgo")
 	a.SetIcon(spectrumIcon())
 
-	// Start with 48K model by default
-	currentModel := roms.Model48K
+	// Load persisted settings. Missing or corrupt config falls back
+	// to defaults so a fresh install (or a future-incompatible file)
+	// still launches.
+	cfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		slog.Warn("config load failed; using defaults", "err", cfgErr)
+		cfg = &config.Config{}
+	}
+	// Hand off the SD-card paths to pkg/next/install so its
+	// SDCardRoot / SDCardImage helpers find them. Done early
+	// because setupNextSubsystems consults them.
+	install.ConfiguredSDDir = cfg.NextSDDir
+	install.ConfiguredSDImage = cfg.NextSDImage
 
-	w := a.NewWindow(fmt.Sprintf("ZX Spectrum Emulator - %s", roms.GetModelName(currentModel)))
+	// Every launch starts in 48K — matches real Spectrum hardware
+	// behaviour (cold boot is always 48K BASIC) and keeps Next mode
+	// an opt-in per session, since it depends on user-installed
+	// ROMs that may not be present on every machine. cfg.Model
+	// is still persisted (the Machine menu writes it), but ignored
+	// at startup. --next on the command line overrides this so
+	// trace / debug runs can jump straight into Next mode.
+	currentModel := roms.Model48K
+	if flags.startInNext {
+		currentModel = roms.ModelNext
+	}
+	_ = cfg.Model
+	currentScale := 200
+	if cfg.Scale != 0 {
+		currentScale = cfg.Scale
+	}
+
+	w := a.NewWindow(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(currentModel)))
 	w.SetIcon(spectrumIcon())
-	w.Resize(fyne.NewSize(windowWidth, windowHeight))
+	wScaleW, wScaleH := scaleToWindowSize(currentScale)
+	w.Resize(fyne.NewSize(wScaleW, wScaleH))
 
 	emu, err := newEmulator(currentModel)
 	if err != nil {
-		log.Fatalf("Failed to create emulator: %v", err)
+		slog.Error("failed to create emulator", "err", err)
+		os.Exit(1)
 	}
 	emu.window = w
+	// Wire trace hooks for the GUI emulator if any channels were
+	// requested on the command line. closeFn flushes any open
+	// trace-output file at process exit.
+	_, closeTrace := installTraceHooks(emu, flags)
+	defer closeTrace()
+
+	// --trace-db in GUI mode (the development log): same ring recorder as
+	// headless so a GUI-only crash flow can be captured and diffed
+	// against a healthy headless boot.
+	if flags.traceDB != "" {
+		if tdb := newTraceDB(flags.traceDBKeep); tdb != nil {
+			cpu := emu.cpu
+			var dmcPager *divmmc.Pager
+			if p, ok := emu.ula.NextDivMMC().(*divmmc.Pager); ok {
+				dmcPager = p
+			}
+			emu.cpu.AddPreFetchHook("trace-db", func(pc uint16) {
+				p7, p1, _ := emu.mem.GetPortState()
+				bank := int((p7>>4)&1) | int((p1>>1)&2)
+				alt := int(emu.mem.AltROMReg())
+				dmc := 0
+				if dmcPager != nil && dmcPager.IsPagedIn() {
+					dmc = 1
+				}
+				tdb.record(traceDBRow{
+					insn: cpu.InstructionCount(), pc: pc, sp: cpu.SP, bank: bank,
+					alt: alt, dmc: dmc, frame: int(atomic.LoadInt32(&emu.frameCounter)),
+					af: uint16(cpu.A)<<8 | uint16(cpu.F),
+					bc: uint16(cpu.B)<<8 | uint16(cpu.C),
+					de: uint16(cpu.D)<<8 | uint16(cpu.E),
+					hl: uint16(cpu.H)<<8 | uint16(cpu.L),
+					ix: cpu.IX, iy: cpu.IY,
+				})
+			})
+			defer func() {
+				if n, err := tdb.flushSQLite(flags.traceDB); err == nil {
+					slog.Info("trace-db flushed", "path", flags.traceDB, "rows", n)
+				}
+			}()
+			slog.Info("trace-db recording (GUI)", "path", flags.traceDB, "keep", flags.traceDBKeep)
+		}
+	}
+
+	// Remote-debugger TCP server. Same wiring as headless — gated
+	// by --debugger-port>0, the constructor returns nil when the
+	// flag is off and WaitIfPaused is nil-safe. Installed before
+	// the emulation goroutine starts so breakpoints set via
+	// --debugger-pause-at-start fire on the very first M1 fetch.
+	emu.rdbg = newRemoteDebugger(emu, flags.debuggerPort, flags.debuggerPauseAtStart, flags.debuggerHistory, flags.debuggerHistoryWide)
+	if cfg.CRTFilter {
+		emu.crtFilter.Store(true)
+	}
+	emu.joystickType = configStringToJoystick(cfg.Joystick)
+	if emu.joystickType == JoystickKempston {
+		emu.ula.KempstonEnabled = true
+	}
+	if os.Getenv("ZX_GO_BORDER_TRACE") != "" {
+		var n int
+		emu.ula.SetBorderTracer(func(port uint16, val byte, newBorder byte, scanline int) {
+			if n < 200 {
+				slog.Info("border-change",
+					"port_full", fmt.Sprintf("$%04X", port),
+					"port_lo", fmt.Sprintf("$%02X", byte(port)),
+					"val", fmt.Sprintf("$%02X", val),
+					"border", newBorder,
+					"scanline", scanline,
+					"pc", fmt.Sprintf("$%04X", emu.cpu.PC))
+			}
+			n++
+		})
+	}
+
+	// saveConfig persists the current settings. Called from menu
+	// handlers after they mutate state. Errors are logged but not
+	// raised to the user — a failed persist shouldn't break the
+	// emulation session.
+	saveConfig := func() {
+		cfg.Model = modelToConfigString(currentModel)
+		cfg.Scale = currentScale
+		cfg.Joystick = joystickToConfigString(emu.joystickType)
+		cfg.CRTFilter = emu.crtFilter.Load()
+		cfg.Disciple = emu.peripherals.IsDiscipleEnabled()
+		cfg.Interface1 = emu.peripherals.IsInterface1Enabled()
+		cfg.KempstonMouse = emu.peripherals.IsKempstonMouseEnabled()
+		cfg.ZXPrinter = emu.peripherals.IsZXPrinterEnabled()
+		if emu.peripherals.IsMultifaceEnabled() {
+			if mf := emu.peripherals.GetMultiface(); mf != nil {
+				cfg.Multiface = multifaceVariantToConfigString(mf.GetVariant())
+			}
+		} else {
+			cfg.Multiface = ""
+		}
+		if err := cfg.Save(); err != nil {
+			slog.Warn("config save failed", "err", err)
+		}
+	}
+
+	// Restore peripheral enable states. Best-effort — a missing
+	// peripheral ROM (e.g. if1-2.rom) just logs and leaves the
+	// peripheral disabled. DISCiPLE / Multiface / IF1 changes need
+	// a cold-boot to install their hooks correctly, so reboot once
+	// at the end if anything that affects boot was restored.
+	peripheralNeedsReboot := false
+	// Classic-bus peripherals (DISCiPLE, Multiface, IF1) do not
+	// exist on Spectrum Next hardware and their port decodes clash
+	// with the Next's I/O space — the DISCiPLE control port \$1F
+	// shadows the Kempston read the TBBLUE firmware polls during
+	// boot, feeding it garbage and crashing the boot into a DI/HALT
+	// (the development log; the user-reported GUI black screen). Skip
+	// restoring them when the current model is the Next.
+	classicPeripheralsOK := currentModel != roms.ModelNext
+	if cfg.Disciple && classicPeripheralsOK {
+		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
+			slog.Warn("config: enable Disciple failed", "err", err)
+		} else {
+			dev := emu.peripherals.GetDisciple()
+			emu.cpu.PreFetchHook = dev.PreFetchHook
+			emu.cpu.PostFetchHook = dev.PostFetchHook
+			peripheralNeedsReboot = true
+		}
+	}
+	if cfg.Multiface != "" && classicPeripheralsOK {
+		variant := configStringToMultifaceVariant(cfg.Multiface)
+		if err := emu.peripherals.EnableMultiface(variant, "roms"); err != nil {
+			slog.Warn("config: enable Multiface failed", "variant", cfg.Multiface, "err", err)
+		} else {
+			peripheralNeedsReboot = true
+		}
+	}
+	if cfg.Interface1 {
+		if err := emu.enableInterface1(); err != nil {
+			slog.Warn("config: enable Interface 1 failed", "err", err)
+		} else {
+			peripheralNeedsReboot = true
+		}
+	}
+	if cfg.KempstonMouse {
+		emu.peripherals.EnableKempstonMouse()
+	}
+	if cfg.ZXPrinter {
+		emu.peripherals.EnableZXPrinter()
+	}
+	if peripheralNeedsReboot {
+		emu.reboot()
+	}
 
 	// Install fast tape loading trap (no-op until a tape is loaded).
 	installTapeTrap(emu)
@@ -1404,8 +1981,28 @@ func main() {
 	}
 
 	// Create model selection callback
-	switchModel := func(newModel roms.SpectrumModel) {
-		log.Printf("Switching to %s...", roms.GetModelName(newModel))
+	// var-declared (not :=) so the body can reference switchModel
+	// itself — the ROM-download retry path re-invokes it on success.
+	var switchModel func(newModel roms.SpectrumModel)
+	switchModel = func(newModel roms.SpectrumModel) {
+		slog.Info("switching model", "to", roms.GetModelName(newModel))
+
+		// Pre-flight for ModelNext: surface a friendly dialog when
+		// the distro ROM isn't installed, rather than letting the
+		// memory layer error out with a wrapped sentinel the user
+		// has to decode. We do this BEFORE pausing or touching any
+		// subsystem state so a "no, I'll install it first" path
+		// leaves the running emulator completely undisturbed.
+		if newModel == roms.ModelNext {
+			if _, err := install.LoadROM(install.DistroROM); err != nil {
+				slog.Warn("Spectrum Next switch: distro ROM not installed — offering download", "err", err)
+				// The NextZXOS ROMs are licensed and NOT bundled with
+				// the emulator. Offer to fetch them from the official
+				// source; on success, retry the switch.
+				offerNextROMDownload(w, func() { switchModel(newModel) })
+				return
+			}
+		}
 
 		// Pause emulation during switch
 		wasPaused := emu.paused.Load()
@@ -1413,14 +2010,50 @@ func main() {
 			emu.togglePause()
 		}
 
+		// Tear down Next-only wiring BEFORE the memory swap when
+		// leaving the Next: divMMC, esxDOS, Layer 2 etc all hold
+		// pointers into the current memory map and need to be
+		// detached before mem.SwitchModel reshuffles the bank
+		// allocations.
+		wasNext := currentModel == roms.ModelNext
+		if wasNext && newModel != roms.ModelNext {
+			unwireNextSubsystems(emu)
+		}
+
 		if err := emu.mem.SwitchModel(newModel); err != nil {
-			log.Printf("Failed to switch model: %v", err)
+			slog.Error("failed to switch model", "err", err)
 			dialog.ShowError(fmt.Errorf("failed to switch to %s: %w", roms.GetModelName(newModel), err), w)
-			// Restore previous state
+			// Best-effort revert: if we detached Next subsystems
+			// above, re-attach them so the user is back where they
+			// started rather than in a half-wired state.
+			if wasNext && newModel != roms.ModelNext {
+				if rerr := wireNextSubsystems(emu); rerr != nil {
+					slog.Error("failed to re-wire Next subsystems after switch failure", "err", rerr)
+				}
+			}
 			if !wasPaused {
 				emu.togglePause()
 			}
 			return
+		}
+
+		// Bring Next-only wiring up AFTER the memory swap when
+		// entering the Next: the subsystems' divMMC ROM mapping,
+		// Layer 2 framebuffer, and 8K MMU all expect the
+		// ModelNext bank layout to already be in place.
+		if newModel == roms.ModelNext && !wasNext {
+			// Tear down edge-connector peripherals that clash with
+			// the Next's I/O space first — a lingering DISCiPLE
+			// (port $1F) crashes the firmware boot (the development log).
+			disableClassicBusPeripherals(emu)
+			if err := wireNextSubsystems(emu); err != nil {
+				slog.Error("failed to wire Next subsystems", "err", err)
+				dialog.ShowError(fmt.Errorf("failed to enable Next subsystems: %w", err), w)
+				if !wasPaused {
+					emu.togglePause()
+				}
+				return
+			}
 		}
 
 		// Interface 2 cartridges are 48K-only. If the user switches
@@ -1432,267 +2065,159 @@ func main() {
 		}
 
 		currentModel = newModel
+		saveConfig()
 
 		// Automatic reboot after model switch
 		emu.reboot()
 
 		// Update window title to show current model
-		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator - %s", roms.GetModelName(currentModel)))
+		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(currentModel)))
 
 		// Resume emulation if it was running
 		if !wasPaused {
 			emu.togglePause()
 		}
 
-		log.Printf("Successfully switched to %s", roms.GetModelName(currentModel))
+		slog.Info("model switched", "model", roms.GetModelName(currentModel))
 		dialog.ShowInformation("Model Changed", fmt.Sprintf("Successfully switched to %s\n\nThe emulator has been automatically rebooted with the new ROM.", roms.GetModelName(currentModel)), w)
 	}
 
+	// loadFileByPath auto-detects file type by extension and routes
+	// to the appropriate loader. Used by the unified "Open File..."
+	// menu item, the Recent submenu, and the drag-and-drop window
+	// handler. On success the path is prepended to cfg.RecentFiles
+	// and a config save is triggered; the caller decides whether to
+	// refresh the recent submenu UI.
+	loadFileByPath := func(path string) (string, error) {
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".tap":
+			tp := ula.NewTapePlayer()
+			if err := tp.LoadTAP(path); err != nil {
+				return "", fmt.Errorf("load TAP: %w", err)
+			}
+			emu.ula.SetTapePlayer(tp)
+			tp.Play()
+			return "tape", nil
+		case ".tzx":
+			tp := ula.NewTapePlayer()
+			if err := tp.LoadTZX(path); err != nil {
+				return "", fmt.Errorf("load TZX: %w", err)
+			}
+			emu.ula.SetTapePlayer(tp)
+			tp.Play()
+			return "tape", nil
+		case ".z80", ".sna", ".szx":
+			snap := snapshot.New()
+			if err := snap.Load(path); err != nil {
+				return "", fmt.Errorf("load snapshot: %w", err)
+			}
+			if err := applySnapshotToEmulator(emu, snap); err != nil {
+				return "", fmt.Errorf("apply snapshot: %w", err)
+			}
+			return "snapshot", nil
+		case ".rzx":
+			file, err := rzx.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("load RZX: %w", err)
+			}
+			if err := emu.startRZXPlayback(file); err != nil {
+				return "", fmt.Errorf("start RZX playback: %w", err)
+			}
+			return "RZX recording", nil
+		case ".nex":
+			if currentModel != roms.ModelNext {
+				return "", fmt.Errorf(".nex requires Spectrum Next mode (Machine → ZX Spectrum Next, then restart)")
+			}
+			n, err := nex.ParseFile(path)
+			if err != nil {
+				return "", fmt.Errorf("parse NEX: %w", err)
+			}
+			for bank, data := range n.Banks {
+				page := emu.mem.GetPage(bank)
+				if page == nil {
+					slog.Warn(".nex load: bank not allocated; skipping", "bank", bank)
+					continue
+				}
+				copy(page, data)
+			}
+			emu.cpu.SP = n.Header.SP
+			emu.cpu.PC = n.Header.PC
+			if n.Header.EntryBank >= 8 {
+				slog.Warn(".nex load: entry bank > 7; file must self-page via NextReg $50..$57 before reaching its entry",
+					"entryBank", n.Header.EntryBank)
+			}
+			emu.mem.PageMemory(n.Header.EntryBank & 0x07)
+			return ".nex", nil
+		default:
+			return "", fmt.Errorf("unrecognised file extension %q (supported: .tap .tzx .z80 .sna .szx .rzx; .nex requires Next mode)", ext)
+		}
+	}
+
+	// recentSubmenu is rebuilt from cfg.RecentFiles after each
+	// successful load. The menu items array is replaced wholesale
+	// rather than mutated so Fyne re-lays out the menu on Refresh.
+	recentSubmenu := fyne.NewMenuItem("Recent", nil)
+	recentSubmenu.ChildMenu = fyne.NewMenu("")
+
+	var refreshRecentMenu func()
+	refreshRecentMenu = func() {
+		if len(cfg.RecentFiles) == 0 {
+			empty := fyne.NewMenuItem("(empty)", nil)
+			empty.Disabled = true
+			recentSubmenu.ChildMenu.Items = []*fyne.MenuItem{empty}
+			return
+		}
+		// Recent files in MRU order, then a separator, then
+		// "Clear Recent Files" so a corrupt/stale MRU isn't
+		// trapped behind manual config.json editing.
+		items := make([]*fyne.MenuItem, 0, len(cfg.RecentFiles)+2)
+		for _, p := range cfg.RecentFiles {
+			p := p // capture
+			item := fyne.NewMenuItem(filepath.Base(p), func() {
+				if _, err := loadFileByPath(p); err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				cfg.AddRecent(p)
+				saveConfig()
+				refreshRecentMenu()
+				fyne.Do(func() { w.MainMenu().Refresh() })
+			})
+			items = append(items, item)
+		}
+		items = append(items, fyne.NewMenuItemSeparator())
+		items = append(items, fyne.NewMenuItem("Clear Recent Files", func() {
+			cfg.RecentFiles = nil
+			saveConfig()
+			refreshRecentMenu()
+			fyne.Do(func() { w.MainMenu().Refresh() })
+		}))
+		recentSubmenu.ChildMenu.Items = items
+	}
+	refreshRecentMenu()
+
+	// Window-wide drag-and-drop: any URI dropped on the window
+	// dispatches to loadFileByPath. Multiple files are loaded in
+	// order; the last successful one wins (snapshots can replace
+	// the running state, tapes replace each other, etc.).
+	w.SetOnDropped(func(_ fyne.Position, items []fyne.URI) {
+		for _, u := range items {
+			path := u.Path()
+			if _, err := loadFileByPath(path); err != nil {
+				dialog.ShowError(err, w)
+				continue
+			}
+			cfg.AddRecent(path)
+		}
+		saveConfig()
+		refreshRecentMenu()
+		fyne.Do(func() { w.MainMenu().Refresh() })
+	})
+
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
-			fyne.NewMenuItem("Load ROM...", func() {
-				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if reader == nil {
-						return
-					}
-					romPath := reader.URI().Path()
-					_ = reader.Close()
-
-					// Read the ROM file
-					data, readErr := os.ReadFile(romPath)
-					if readErr != nil {
-						dialog.ShowError(fmt.Errorf("failed to read ROM: %w", readErr), w)
-						return
-					}
-
-					// Validate size: 16KB for system ROMs, 8KB for peripheral ROMs
-					if len(data) != 16384 && len(data) != 8192 {
-						dialog.ShowError(fmt.Errorf("invalid ROM size: %d bytes (expected 16384 or 8192)", len(data)), w)
-						return
-					}
-
-					// Pause, load the ROM into slot 0, reboot
-					wasPaused := emu.paused.Load()
-					if !emu.paused.Load() {
-						emu.togglePause()
-					}
-
-					if len(data) == 16384 {
-						// Replace the current model's primary ROM
-						page := emu.mem.GetROMPage(0)
-						if page != nil {
-							copy(page, data)
-						}
-					}
-
-					emu.reboot()
-
-					if !wasPaused {
-						emu.togglePause()
-					}
-
-					log.Printf("Loaded ROM: %s (%d bytes)", romPath, len(data))
-					dialog.ShowInformation("ROM Loaded", fmt.Sprintf("Loaded %s\n(%d bytes)\n\nEmulator rebooted.", reader.URI().Name(), len(data)), w)
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Load Snapshot...", func() {
-				log.Println("Load Snapshot...")
-				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if reader == nil {
-						return
-					}
-					log.Println("Snapshot selected:", reader.URI().Path())
-
-					// Load the snapshot
-					snap := snapshot.New()
-					if err := snap.Load(reader.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to load snapshot: %w", err), w)
-						_ = reader.Close()
-						return
-					}
-
-					// Apply snapshot to emulator
-					if err := applySnapshotToEmulator(emu, snap); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to apply snapshot: %w", err), w)
-						_ = reader.Close()
-						return
-					}
-
-					log.Printf("Successfully loaded %s snapshot", getFormatName(snap.Format))
-					dialog.ShowInformation("Snapshot Loaded", fmt.Sprintf("Successfully loaded %s snapshot from:\n%s", getFormatName(snap.Format), reader.URI().Name()), w)
-					_ = reader.Close()
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Save Snapshot...", func() {
-				log.Println("Save Snapshot...")
-				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if writer == nil {
-						return
-					}
-					log.Println("Snapshot save location:", writer.URI().Path())
-
-					// Create snapshot from current emulator state
-					snap, err := createSnapshotFromEmulator(emu)
-					if err != nil {
-						dialog.ShowError(fmt.Errorf("failed to create snapshot: %w", err), w)
-						_ = writer.Close()
-						return
-					}
-
-					// Save the snapshot
-					if err := snap.Save(writer.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to save snapshot: %w", err), w)
-						_ = writer.Close()
-						return
-					}
-
-					log.Printf("Successfully saved %s snapshot", getFormatName(snap.Format))
-					dialog.ShowInformation("Snapshot Saved", fmt.Sprintf("Successfully saved %s snapshot to:\n%s", getFormatName(snap.Format), writer.URI().Name()), w)
-					_ = writer.Close()
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Load Tape (TAP)...", func() {
-				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if reader == nil {
-						return
-					}
-					tp := ula.NewTapePlayer()
-					if err := tp.LoadTAP(reader.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to load TAP: %w", err), w)
-						_ = reader.Close()
-						return
-					}
-					emu.ula.SetTapePlayer(tp)
-					tp.Play()
-					dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
-					_ = reader.Close()
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Load Tape (TZX)...", func() {
-				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if reader == nil {
-						return
-					}
-					tp := ula.NewTapePlayer()
-					if err := tp.LoadTZX(reader.URI().Path()); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to load TZX: %w", err), w)
-						_ = reader.Close()
-						return
-					}
-					emu.ula.SetTapePlayer(tp)
-					tp.Play()
-					dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
-					_ = reader.Close()
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Insert Interface 2 Cartridge...", func() {
-				insertInterface2Cartridge(emu, w, currentModel)
-			}),
-			fyne.NewMenuItem("Eject Interface 2 Cartridge", func() {
-				ejectInterface2Cartridge(emu, w)
-			}),
-			fyne.NewMenuItem("Load DISCiPLE Disk 1...", func() {
-				loadDiscipleDisk(emu, w, 0)
-			}),
-			fyne.NewMenuItem("Load DISCiPLE Disk 2...", func() {
-				loadDiscipleDisk(emu, w, 1)
-			}),
-			fyne.NewMenuItem("Load Disk A...", func() {
-				loadPlus3Disk(emu, w, currentModel, 0)
-			}),
-			fyne.NewMenuItem("Load Disk B...", func() {
-				loadPlus3Disk(emu, w, currentModel, 1)
-			}),
-			fyne.NewMenuItem("Save Disk A (DSK)...", func() {
-				savePlus3Disk(emu, w, 0)
-			}),
-			fyne.NewMenuItem("Save Disk B (DSK)...", func() {
-				savePlus3Disk(emu, w, 1)
-			}),
-			fyne.NewMenuItem("Eject Disk A", func() {
-				emu.peripherals.EjectPlus3Disk(0)
-			}),
-			fyne.NewMenuItem("Eject Disk B", func() {
-				emu.peripherals.EjectPlus3Disk(1)
-			}),
-			func() *fyne.MenuItem {
-				wpA := false
-				item := fyne.NewMenuItem("Write Protect Disk A", nil)
-				item.Action = func() {
-					wpA = !wpA
-					emu.peripherals.SetPlus3WriteProtect(0, wpA)
-					if wpA {
-						item.Label = "Unprotect Disk A"
-					} else {
-						item.Label = "Write Protect Disk A"
-					}
-					fyne.Do(func() { w.MainMenu().Refresh() })
-				}
-				return item
-			}(),
-			func() *fyne.MenuItem {
-				wpB := false
-				item := fyne.NewMenuItem("Write Protect Disk B", nil)
-				item.Action = func() {
-					wpB = !wpB
-					emu.peripherals.SetPlus3WriteProtect(1, wpB)
-					if wpB {
-						item.Label = "Unprotect Disk B"
-					} else {
-						item.Label = "Write Protect Disk B"
-					}
-					fyne.Do(func() { w.MainMenu().Refresh() })
-				}
-				return item
-			}(),
-			func() *fyne.MenuItem {
-				speedlockOn := false
-				item := fyne.NewMenuItem("Enable Speedlock Workaround", nil)
-				item.Action = func() {
-					speedlockOn = !speedlockOn
-					emu.peripherals.SetPlus3Speedlock(speedlockOn)
-					if speedlockOn {
-						item.Label = "Disable Speedlock Workaround"
-					} else {
-						item.Label = "Enable Speedlock Workaround"
-					}
-					fyne.Do(func() { w.MainMenu().Refresh() })
-				}
-				return item
-			}(),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Open RZX Recording...", func() {
+			fyne.NewMenuItem("Open File...", func() {
 				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 					if err != nil {
 						dialog.ShowError(err, w)
@@ -1703,187 +2228,552 @@ func main() {
 					}
 					path := reader.URI().Path()
 					_ = reader.Close()
-					file, err := rzx.ReadFile(path)
-					if err != nil {
-						dialog.ShowError(fmt.Errorf("failed to load RZX: %w", err), w)
-						return
-					}
-					if err := emu.startRZXPlayback(file); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to start RZX playback: %w", err), w)
-						return
-					}
-					dialog.ShowInformation("RZX Playback", fmt.Sprintf("Playing back:\n%s", filepath.Base(path)), w)
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Stop RZX Playback", func() {
-				emu.stopRZXPlayback()
-			}),
-			fyne.NewMenuItem("Start RZX Recording...", func() {
-				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+					kind, err := loadFileByPath(path)
 					if err != nil {
 						dialog.ShowError(err, w)
 						return
 					}
-					if writer == nil {
-						return
-					}
-					path := writer.URI().Path()
-					_ = writer.Close()
-					if !strings.HasSuffix(strings.ToLower(path), ".rzx") {
-						path += ".rzx"
-					}
-					if err := emu.startRZXRecording(path, false); err != nil {
-						dialog.ShowError(fmt.Errorf("start RZX recording: %w", err), w)
-						return
-					}
-					dialog.ShowInformation("RZX Recording", fmt.Sprintf("Recording to:\n%s", filepath.Base(path)), w)
+					cfg.AddRecent(path)
+					saveConfig()
+					refreshRecentMenu()
+					fyne.Do(func() { w.MainMenu().Refresh() })
+					dialog.ShowInformation("Opened", fmt.Sprintf("Loaded %s from:\n%s", kind, filepath.Base(path)), w)
 				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap", ".tzx", ".z80", ".sna", ".szx", ".rzx"}))
 				fd.Show()
 			}),
-			fyne.NewMenuItem("Stop RZX Recording", func() {
-				if err := emu.stopRZXRecording(); err != nil {
-					dialog.ShowError(fmt.Errorf("stop RZX recording: %w", err), w)
-					return
-				}
-				dialog.ShowInformation("RZX Recording", "Recording stopped and saved.", w)
-			}),
-			fyne.NewMenuItem("RZX Rollback (last snapshot)", func() {
-				if err := emu.rzxRollbackToLastSnapshot(); err != nil {
-					dialog.ShowError(fmt.Errorf("RZX rollback: %w", err), w)
-				}
-			}),
+			recentSubmenu,
 			fyne.NewMenuItemSeparator(),
-			makeMicrodriveMenu(emu, w),
-			fyne.NewMenuItem("Save ZX Printer Output (PNG)...", func() {
-				if !emu.peripherals.IsZXPrinterEnabled() {
-					dialog.ShowInformation("ZX Printer", "ZX Printer is not enabled.\nEnable it from the Peripherals menu first.", w)
-					return
-				}
-				printer := emu.peripherals.ZXPrinter()
-				if printer.Rows() == 0 {
-					dialog.ShowInformation("ZX Printer", "Nothing has been printed yet.", w)
-					return
-				}
-				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if writer == nil {
-						return
-					}
-					path := writer.URI().Path()
-					_ = writer.Close()
-					if !strings.HasSuffix(strings.ToLower(path), ".png") {
-						path += ".png"
-					}
-					if err := printer.Save(path); err != nil {
-						dialog.ShowError(fmt.Errorf("save printer output: %w", err), w)
-						return
-					}
-					dialog.ShowInformation("ZX Printer", fmt.Sprintf("Saved %d rows to:\n%s", printer.Rows(), filepath.Base(path)), w)
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Clear ZX Printer Output", func() {
-				if !emu.peripherals.IsZXPrinterEnabled() {
-					return
-				}
-				emu.peripherals.ZXPrinter().Clear()
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Save Tape (TAP)...", func() {
-				tp := emu.ula.GetTapePlayer()
-				if tp == nil || tp.BlockCount() == 0 {
-					dialog.ShowInformation("Save Tape", "No tape loaded.", w)
-					return
-				}
-				fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-					if err != nil {
-						dialog.ShowError(err, w)
-						return
-					}
-					if writer == nil {
-						return
-					}
-					path := writer.URI().Path()
-					_ = writer.Close()
-					if err := tp.SaveTAP(path); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to save TAP: %w", err), w)
-						return
-					}
-					dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
-				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
-				fd.Show()
-			}),
-			fyne.NewMenuItem("Stop Tape", func() {
-				if emu.ula != nil {
-					emu.ula.SetTapePlayer(nil)
-					emu.ula.TapeIn = false
-				}
-			}),
-			fyne.NewMenuItem("Tape Browser...", func() {
-				tp := emu.ula.GetTapePlayer()
-				if tp == nil {
-					dialog.ShowInformation("Tape Browser", "No tape loaded.", w)
-					return
-				}
-				blocks := tp.Blocks()
-				if len(blocks) == 0 {
-					dialog.ShowInformation("Tape Browser", "Tape contains no blocks.", w)
-					return
-				}
-				current := tp.CurrentBlock()
-				items := make([]string, len(blocks))
-				for i, b := range blocks {
-					marker := "  "
-					if i == current {
-						marker = "▶ "
-					}
-					if b.Title != "" {
-						items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  %q", marker, b.Index, b.Type, b.Length, b.Title)
-					} else {
-						items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  flag=0x%02X", marker, b.Index, b.Type, b.Length, b.FlagByte)
-					}
-				}
-				list := widget.NewList(
-					func() int { return len(items) },
-					func() fyne.CanvasObject { return widget.NewLabel("") },
-					func(id widget.ListItemID, obj fyne.CanvasObject) {
-						obj.(*widget.Label).SetText(items[id])
-					},
-				)
-				selected := current
-				list.OnSelected = func(id widget.ListItemID) { selected = id }
-				list.Select(current)
-
-				content := container.NewBorder(
-					widget.NewLabel(fmt.Sprintf("%d blocks  •  current: %d", len(blocks), current)),
-					nil, nil, nil,
-					list,
-				)
-				d := dialog.NewCustomConfirm(
-					"Tape Browser",
-					"Jump to selected",
-					"Close",
-					content,
-					func(ok bool) {
-						if !ok {
+			fileSubmenu("Snapshots & ROM",
+				fyne.NewMenuItem("Load ROM...", func() {
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
 							return
 						}
-						tp.SeekToBlock(selected)
+						if reader == nil {
+							return
+						}
+						romPath := reader.URI().Path()
+						_ = reader.Close()
+
+						// Read the ROM file
+						data, readErr := os.ReadFile(romPath)
+						if readErr != nil {
+							dialog.ShowError(fmt.Errorf("failed to read ROM: %w", readErr), w)
+							return
+						}
+
+						// Validate size: 16KB for system ROMs, 8KB for peripheral ROMs
+						if len(data) != 16384 && len(data) != 8192 {
+							dialog.ShowError(fmt.Errorf("invalid ROM size: %d bytes (expected 16384 or 8192)", len(data)), w)
+							return
+						}
+
+						// Pause, load the ROM into slot 0, reboot
+						wasPaused := emu.paused.Load()
+						if !emu.paused.Load() {
+							emu.togglePause()
+						}
+
+						if len(data) == 16384 {
+							// Replace the current model's primary ROM
+							page := emu.mem.GetROMPage(0)
+							if page != nil {
+								copy(page, data)
+							}
+						}
+
+						emu.reboot()
+
+						if !wasPaused {
+							emu.togglePause()
+						}
+
+						slog.Info("loaded ROM", "path", romPath, "size", len(data))
+						dialog.ShowInformation("ROM Loaded", fmt.Sprintf("Loaded %s\n(%d bytes)\n\nEmulator rebooted.", reader.URI().Name(), len(data)), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Load Snapshot...", func() {
+					slog.Debug("load snapshot dialog opened")
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if reader == nil {
+							return
+						}
+						slog.Info("snapshot selected", "path", reader.URI().Path())
+
+						// Load the snapshot
+						snap := snapshot.New()
+						if err := snap.Load(reader.URI().Path()); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to load snapshot: %w", err), w)
+							_ = reader.Close()
+							return
+						}
+
+						// Apply snapshot to emulator
+						if err := applySnapshotToEmulator(emu, snap); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to apply snapshot: %w", err), w)
+							_ = reader.Close()
+							return
+						}
+
+						slog.Info("snapshot loaded", "format", getFormatName(snap.Format))
+						dialog.ShowInformation("Snapshot Loaded", fmt.Sprintf("Successfully loaded %s snapshot from:\n%s", getFormatName(snap.Format), reader.URI().Name()), w)
+						_ = reader.Close()
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Save Snapshot...", func() {
+					slog.Debug("save snapshot dialog opened")
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						slog.Info("snapshot save location selected", "path", writer.URI().Path())
+
+						// Create snapshot from current emulator state
+						snap, err := createSnapshotFromEmulator(emu)
+						if err != nil {
+							dialog.ShowError(fmt.Errorf("failed to create snapshot: %w", err), w)
+							_ = writer.Close()
+							return
+						}
+
+						// Save the snapshot
+						if err := snap.Save(writer.URI().Path()); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to save snapshot: %w", err), w)
+							_ = writer.Close()
+							return
+						}
+
+						slog.Info("snapshot saved", "format", getFormatName(snap.Format))
+						dialog.ShowInformation("Snapshot Saved", fmt.Sprintf("Successfully saved %s snapshot to:\n%s", getFormatName(snap.Format), writer.URI().Name()), w)
+						_ = writer.Close()
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
+					fd.Show()
+				}),
+			),
+			fileSubmenu("Spectrum Next",
+				fyne.NewMenuItem("Install Next ROMs...", func() { installNextROM(w) }),
+				fyne.NewMenuItem("Set Next SD Card Directory...", func() {
+					fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if uri == nil {
+							return
+						}
+						dir := uri.Path()
+						cfg.NextSDDir = dir
+						cfg.NextSDImage = "" // dir takes precedence — clear image
+						install.ConfiguredSDDir = dir
+						install.ConfiguredSDImage = ""
+						if err := cfg.Save(); err != nil {
+							slog.Warn("config save failed", "err", err)
+						}
+						dialog.ShowInformation("Next SD Card",
+							"SD card directory set to:\n"+dir+
+								"\n\nRestart ModelNext (Machine menu) to pick up the change.",
+							w)
+					}, w)
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Set Next SD Card Image (.img/.mmc)...", func() {
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if reader == nil {
+							return
+						}
+						path := reader.URI().Path()
+						_ = reader.Close()
+						cfg.NextSDImage = path
+						cfg.NextSDDir = "" // image takes precedence — clear dir
+						install.ConfiguredSDImage = path
+						install.ConfiguredSDDir = ""
+						if err := cfg.Save(); err != nil {
+							slog.Warn("config save failed", "err", err)
+						}
+						dialog.ShowInformation("Next SD Card",
+							"SD card image set to:\n"+path+
+								"\n\nRestart ModelNext (Machine menu) to pick up the change.",
+							w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".img", ".mmc", ".IMG", ".MMC"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Clear Next SD Card Setting", func() {
+					cfg.NextSDDir = ""
+					cfg.NextSDImage = ""
+					install.ConfiguredSDDir = ""
+					install.ConfiguredSDImage = ""
+					if err := cfg.Save(); err != nil {
+						slog.Warn("config save failed", "err", err)
+					}
+					dialog.ShowInformation("Next SD Card",
+						"SD card setting cleared. The emulator will fall back to "+
+							"its default search (roms/next/sd if present).", w)
+				}),
+			),
+			fileSubmenu("Tapes, Disks & Cartridges",
+				fyne.NewMenuItem("Load Tape (TAP)...", func() {
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if reader == nil {
+							return
+						}
+						tp := ula.NewTapePlayer()
+						if err := tp.LoadTAP(reader.URI().Path()); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to load TAP: %w", err), w)
+							_ = reader.Close()
+							return
+						}
+						emu.ula.SetTapePlayer(tp)
 						tp.Play()
-					},
-					w,
-				)
-				d.Resize(fyne.NewSize(520, 400))
-				d.Show()
-			}),
+						dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
+						_ = reader.Close()
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Load Tape (TZX)...", func() {
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if reader == nil {
+							return
+						}
+						tp := ula.NewTapePlayer()
+						if err := tp.LoadTZX(reader.URI().Path()); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to load TZX: %w", err), w)
+							_ = reader.Close()
+							return
+						}
+						emu.ula.SetTapePlayer(tp)
+						tp.Play()
+						dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
+						_ = reader.Close()
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Insert Interface 2 Cartridge...", func() {
+					insertInterface2Cartridge(emu, w, currentModel)
+				}),
+				fyne.NewMenuItem("Eject Interface 2 Cartridge", func() {
+					ejectInterface2Cartridge(emu, w)
+				}),
+				fyne.NewMenuItem("Load DISCiPLE Disk 1...", func() {
+					loadDiscipleDisk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Load DISCiPLE Disk 2...", func() {
+					loadDiscipleDisk(emu, w, 1)
+				}),
+				fyne.NewMenuItem("Load Disk A...", func() {
+					loadPlus3Disk(emu, w, currentModel, 0)
+				}),
+				fyne.NewMenuItem("Load Disk B...", func() {
+					loadPlus3Disk(emu, w, currentModel, 1)
+				}),
+				fyne.NewMenuItem("Save Disk A (DSK)...", func() {
+					savePlus3Disk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Save Disk B (DSK)...", func() {
+					savePlus3Disk(emu, w, 1)
+				}),
+				fyne.NewMenuItem("Eject Disk A", func() {
+					emu.peripherals.EjectPlus3Disk(0)
+				}),
+				fyne.NewMenuItem("Eject Disk B", func() {
+					emu.peripherals.EjectPlus3Disk(1)
+				}),
+				func() *fyne.MenuItem {
+					wpA := false
+					item := fyne.NewMenuItem("Write Protect Disk A", nil)
+					item.Action = func() {
+						wpA = !wpA
+						emu.peripherals.SetPlus3WriteProtect(0, wpA)
+						if wpA {
+							item.Label = "Unprotect Disk A"
+						} else {
+							item.Label = "Write Protect Disk A"
+						}
+						fyne.Do(func() { w.MainMenu().Refresh() })
+					}
+					return item
+				}(),
+				func() *fyne.MenuItem {
+					wpB := false
+					item := fyne.NewMenuItem("Write Protect Disk B", nil)
+					item.Action = func() {
+						wpB = !wpB
+						emu.peripherals.SetPlus3WriteProtect(1, wpB)
+						if wpB {
+							item.Label = "Unprotect Disk B"
+						} else {
+							item.Label = "Write Protect Disk B"
+						}
+						fyne.Do(func() { w.MainMenu().Refresh() })
+					}
+					return item
+				}(),
+				func() *fyne.MenuItem {
+					speedlockOn := false
+					item := fyne.NewMenuItem("Enable Speedlock Workaround", nil)
+					item.Action = func() {
+						speedlockOn = !speedlockOn
+						emu.peripherals.SetPlus3Speedlock(speedlockOn)
+						if speedlockOn {
+							item.Label = "Disable Speedlock Workaround"
+						} else {
+							item.Label = "Enable Speedlock Workaround"
+						}
+						fyne.Do(func() { w.MainMenu().Refresh() })
+					}
+					return item
+				}(),
+			),
+			fileSubmenu("Recording (RZX)",
+				fyne.NewMenuItem("Open RZX Recording...", func() {
+					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if reader == nil {
+							return
+						}
+						path := reader.URI().Path()
+						_ = reader.Close()
+						file, err := rzx.ReadFile(path)
+						if err != nil {
+							dialog.ShowError(fmt.Errorf("failed to load RZX: %w", err), w)
+							return
+						}
+						if err := emu.startRZXPlayback(file); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to start RZX playback: %w", err), w)
+							return
+						}
+						dialog.ShowInformation("RZX Playback", fmt.Sprintf("Playing back:\n%s", filepath.Base(path)), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Stop RZX Playback", func() {
+					emu.stopRZXPlayback()
+				}),
+				fyne.NewMenuItem("Start RZX Recording...", func() {
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						path := writer.URI().Path()
+						_ = writer.Close()
+						if !strings.HasSuffix(strings.ToLower(path), ".rzx") {
+							path += ".rzx"
+						}
+						if err := emu.startRZXRecording(path, false); err != nil {
+							dialog.ShowError(fmt.Errorf("start RZX recording: %w", err), w)
+							return
+						}
+						dialog.ShowInformation("RZX Recording", fmt.Sprintf("Recording to:\n%s", filepath.Base(path)), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Stop RZX Recording", func() {
+					if err := emu.stopRZXRecording(); err != nil {
+						dialog.ShowError(fmt.Errorf("stop RZX recording: %w", err), w)
+						return
+					}
+					dialog.ShowInformation("RZX Recording", "Recording stopped and saved.", w)
+				}),
+				fyne.NewMenuItem("RZX Rollback (last snapshot)", func() {
+					if err := emu.rzxRollbackToLastSnapshot(); err != nil {
+						dialog.ShowError(fmt.Errorf("RZX rollback: %w", err), w)
+					}
+				}),
+			),
+			makeMicrodriveMenu(emu, w),
+			fileSubmenu("ZX Printer",
+				fyne.NewMenuItem("Save ZX Printer Output (PNG)...", func() {
+					if !emu.peripherals.IsZXPrinterEnabled() {
+						dialog.ShowInformation("ZX Printer", "ZX Printer is not enabled.\nEnable it from the Peripherals menu first.", w)
+						return
+					}
+					printer := emu.peripherals.ZXPrinter()
+					if printer.Rows() == 0 {
+						dialog.ShowInformation("ZX Printer", "Nothing has been printed yet.", w)
+						return
+					}
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						path := writer.URI().Path()
+						_ = writer.Close()
+						if !strings.HasSuffix(strings.ToLower(path), ".png") {
+							path += ".png"
+						}
+						if err := printer.Save(path); err != nil {
+							dialog.ShowError(fmt.Errorf("save printer output: %w", err), w)
+							return
+						}
+						dialog.ShowInformation("ZX Printer", fmt.Sprintf("Saved %d rows to:\n%s", printer.Rows(), filepath.Base(path)), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Clear ZX Printer Output", func() {
+					if !emu.peripherals.IsZXPrinterEnabled() {
+						return
+					}
+					emu.peripherals.ZXPrinter().Clear()
+				}),
+			),
+			fileSubmenu("Save Tape",
+				fyne.NewMenuItem("Save Tape (TAP)...", func() {
+					tp := emu.ula.GetTapePlayer()
+					if tp == nil || tp.BlockCount() == 0 {
+						dialog.ShowInformation("Save Tape", "No tape loaded.", w)
+						return
+					}
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						path := writer.URI().Path()
+						_ = writer.Close()
+						if err := tp.SaveTAP(path); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to save TAP: %w", err), w)
+							return
+						}
+						dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Save Tape (TZX)...", func() {
+					tp := emu.ula.GetTapePlayer()
+					if tp == nil || tp.BlockCount() == 0 {
+						dialog.ShowInformation("Save Tape", "No tape loaded.", w)
+						return
+					}
+					fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						if writer == nil {
+							return
+						}
+						path := writer.URI().Path()
+						_ = writer.Close()
+						if err := tp.SaveTZX(path); err != nil {
+							dialog.ShowError(fmt.Errorf("failed to save TZX: %w", err), w)
+							return
+						}
+						dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
+					}, w)
+					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
+					fd.Show()
+				}),
+				fyne.NewMenuItem("Stop Tape", func() {
+					if emu.ula != nil {
+						emu.ula.SetTapePlayer(nil)
+						emu.ula.TapeIn = false
+					}
+				}),
+				fyne.NewMenuItem("Tape Browser...", func() {
+					tp := emu.ula.GetTapePlayer()
+					if tp == nil {
+						dialog.ShowInformation("Tape Browser", "No tape loaded.", w)
+						return
+					}
+					blocks := tp.Blocks()
+					if len(blocks) == 0 {
+						dialog.ShowInformation("Tape Browser", "Tape contains no blocks.", w)
+						return
+					}
+					current := tp.CurrentBlock()
+					items := make([]string, len(blocks))
+					for i, b := range blocks {
+						marker := "  "
+						if i == current {
+							marker = "▶ "
+						}
+						if b.Title != "" {
+							items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  %q", marker, b.Index, b.Type, b.Length, b.Title)
+						} else {
+							items[i] = fmt.Sprintf("%s%3d  %-10s  %5d B  flag=0x%02X", marker, b.Index, b.Type, b.Length, b.FlagByte)
+						}
+					}
+					list := widget.NewList(
+						func() int { return len(items) },
+						func() fyne.CanvasObject { return widget.NewLabel("") },
+						func(id widget.ListItemID, obj fyne.CanvasObject) {
+							obj.(*widget.Label).SetText(items[id])
+						},
+					)
+					selected := current
+					list.OnSelected = func(id widget.ListItemID) { selected = id }
+					list.Select(current)
+
+					content := container.NewBorder(
+						widget.NewLabel(fmt.Sprintf("%d blocks  •  current: %d", len(blocks), current)),
+						nil, nil, nil,
+						list,
+					)
+					d := dialog.NewCustomConfirm(
+						"Tape Browser",
+						"Jump to selected",
+						"Close",
+						content,
+						func(ok bool) {
+							if !ok {
+								return
+							}
+							tp.SeekToBlock(selected)
+							tp.Play()
+						},
+						w,
+					)
+					d.Resize(fyne.NewSize(520, 400))
+					d.Show()
+				}),
+			),
 			fyne.NewMenuItemSeparator(),
 			func() *fyne.MenuItem {
 				item := fyne.NewMenuItem("Start Recording (WAV)...", nil)
@@ -1931,19 +2821,18 @@ func main() {
 					if writer == nil {
 						return
 					}
-					defer func() { _ = writer.Close() }()
-
-					// Render the current frame and copy the pixel data so the
-					// PNG encode can't race with the emulator goroutine.
-					src := emu.ula.Render()
-					imgCopy := image.NewRGBA(src.Bounds())
-					copy(imgCopy.Pix, src.Pix)
-
-					if err := png.Encode(writer, imgCopy); err != nil {
-						dialog.ShowError(fmt.Errorf("failed to write PNG: %w", err), w)
+					path := writer.URI().Path()
+					werr := writeScreenshotPNG(emu, writer)
+					_ = writer.Close()
+					if werr != nil {
+						dialog.ShowError(fmt.Errorf("failed to write PNG: %w", werr), w)
 						return
 					}
-					dialog.ShowInformation("Screenshot Saved", "Saved screenshot to:\n"+writer.URI().Name(), w)
+					// Auto-add the .png extension when the user didn't
+					// type one — fyne saves to the exact name given, so
+					// rename the just-written file.
+					path = ensureFileExt(path, ".png")
+					dialog.ShowInformation("Screenshot Saved", "Saved screenshot to:\n"+filepath.Base(path), w)
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
 				fd.Show()
@@ -1955,34 +2844,50 @@ func main() {
 			fyne.NewMenuItem("+2", func() { switchModel(roms.ModelPlus2) }),
 			fyne.NewMenuItem("+2A", func() { switchModel(roms.ModelPlus2A) }),
 			fyne.NewMenuItem("+3", func() { switchModel(roms.ModelPlus3) }),
+			fyne.NewMenuItemSeparator(),
+			nextMenuItem(switchModel),
 		),
 		fyne.NewMenu("View",
 			fyne.NewMenuItem("100% (320x240)", func() {
 				w.SetFullScreen(false)
 				w.Resize(fyne.NewSize(320, 240))
+				currentScale = 100
+				saveConfig()
 			}),
 			fyne.NewMenuItem("125% (400x300)", func() {
 				w.SetFullScreen(false)
 				w.Resize(fyne.NewSize(400, 300))
+				currentScale = 125
+				saveConfig()
 			}),
 			fyne.NewMenuItem("150% (480x360)", func() {
 				w.SetFullScreen(false)
 				w.Resize(fyne.NewSize(480, 360))
+				currentScale = 150
+				saveConfig()
 			}),
 			fyne.NewMenuItem("200% (640x480)", func() {
 				w.SetFullScreen(false)
 				w.Resize(fyne.NewSize(640, 480))
+				currentScale = 200
+				saveConfig()
 			}),
 			fyne.NewMenuItem("300% (960x720)", func() {
 				w.SetFullScreen(false)
 				w.Resize(fyne.NewSize(960, 720))
+				currentScale = 300
+				saveConfig()
 			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Full Screen", func() {
 				w.SetFullScreen(true)
 			}),
 			func() *fyne.MenuItem {
-				item := fyne.NewMenuItem("Enable CRT Filter", nil)
+				initialLabel := "Enable CRT Filter"
+				if emu.crtFilter.Load() {
+					initialLabel = "Disable CRT Filter"
+				}
+				item := fyne.NewMenuItem(initialLabel, nil)
 				item.Action = func() {
 					on := !emu.crtFilter.Load()
 					emu.crtFilter.Store(on)
@@ -1991,6 +2896,7 @@ func main() {
 					} else {
 						item.Label = "Enable CRT Filter"
 					}
+					saveConfig()
 					fyne.Do(func() { w.MainMenu().Refresh() })
 				}
 				return item
@@ -2074,6 +2980,7 @@ func main() {
 						emu.reboot() // cold boot GDOS
 					}
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2088,6 +2995,7 @@ func main() {
 						dialog.ShowError(fmt.Errorf("failed to enable %s: %w", multiface.GetVariantName(variant), err), w)
 					}
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2106,6 +3014,7 @@ func main() {
 						dialog.ShowError(fmt.Errorf("failed to enable Interface 1: %w", err), w)
 					}
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2126,6 +3035,7 @@ func main() {
 				if t == JoystickKempston {
 					emu.ula.KempstonEnabled = true
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2144,6 +3054,7 @@ func main() {
 				} else {
 					emu.peripherals.EnableKempstonMouse()
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2156,6 +3067,7 @@ func main() {
 				} else {
 					emu.peripherals.EnableZXPrinter()
 				}
+				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
 					w.MainMenu().Refresh()
@@ -2216,22 +3128,83 @@ func main() {
 				form.Show()
 			}),
 			fyne.NewMenuItem("Debugger", func() {
-				dbg := debugger.New(emu.cpu, emu.mem, a)
+				dbg := debugger.NewWithBreakpoints(emu.cpu, emu.mem, a, emu.sharedBreakpoints())
+				// Share the register-watchpoint set with the telnet
+				// debugger so a watch set on either surface fires and
+				// is listed on both (the GUI Watchpoints tab).
+				dbg.SetRegWatches(emu.sharedRegWatches())
+				// Share the time-travel ring (GUI Time-Travel tab and
+				// the telnet tt-* commands drive emu.timeTravel).
+				dbg.SetTimeTravel(ttController{emu: emu})
 				dbg.SetCallbacks(
 					func() { emu.paused.Store(true) },
 					func() { emu.cpu.StepInstruction() },
 					func() { emu.paused.Store(false) },
 					func() bool { return emu.paused.Load() },
 				)
-				// Wire breakpoints: when the debugger has a breakpoint set,
-				// the CPU checks it before each instruction and auto-pauses.
+				// Step Over: run past a CALL/RST/PUSH-NN to its return,
+				// else single-step. Runs synchronously while paused
+				// (bounded so a non-returning call can't hang the UI),
+				// reusing the same call-detection as telnet step-over.
+				dbg.SetStepOver(func() {
+					c := emu.cpu
+					read := func(a uint16) byte { return emu.mem.Read(a) }
+					lines := debugger.Disassemble(read, c.PC, 1)
+					if len(lines) == 0 || len(lines[0].Bytes) == 0 ||
+						!isCallLike(lines[0].Bytes[0], lines[0].Bytes) {
+						c.StepInstruction()
+						return
+					}
+					target := c.PC + uint16(len(lines[0].Bytes))
+					const stepCap = 20_000_000
+					for i := 0; i < stepCap; i++ {
+						c.StepInstructionWithIRQ()
+						if c.PC == target {
+							break
+						}
+					}
+				})
+				// Wire breakpoints + register watchpoints: the CPU checks
+				// both before each instruction and auto-pauses on a hit.
 				emu.cpu.BreakpointCheck = func(pc uint16) bool {
-					if dbg.CheckBreakpoint() {
+					if dbg.CheckBreakpoint() || dbg.CheckWatchpoints() {
 						emu.paused.Store(true)
 						return true
 					}
 					return false
 				}
+				// Surface Spectrum Next state in the debugger when this
+				// emulator instance was built as ModelNext.
+				if currentModel == roms.ModelNext {
+					dbg.SetNextProvider(newNextDebugProvider(emu))
+					dbg.SetNextRegAccessor(emu.nextRegs)
+				}
+				// Hand the visual debugger the same BankAccessor the
+				// telnet bank-peek / bank-poke commands use so the two
+				// surfaces share behaviour.
+				dbg.SetBankAccessor(&emuBanks{mem: emu.mem, emu: emu})
+				// Wire M1-fetch history. If the telnet debugger
+				// already started one, reuse it (single ring, two
+				// surfaces); otherwise allocate a default-sized wide
+				// ring for the visual debugger (interactive
+				// investigation always wants IX/IY/HL visible).
+				if emu.debugHistory == nil {
+					emu.debugHistory = debugger.NewHistoryWide(4096)
+					emu.cpu.AddPreFetchHook("visual-debugger-history", func(pc uint16) {
+						c := emu.cpu
+						emu.debugHistory.Push(debugger.HistoryEntry{
+							PC: pc, SP: c.SP, A: c.A, F: c.F,
+							IFFIM: debugger.PackIFFIM(c.IFF1, c.IFF2, c.Halted, int(c.IM)),
+							Insns: c.InstructionCount(),
+							BC:    c.BC(), DE: c.DE(), HL: c.HL(),
+							IX: c.IX, IY: c.IY,
+							Source: debugger.PCSource(c.BranchSource), SourceFrom: c.BranchFrom,
+						})
+						c.BranchSource = 0
+						c.BranchFrom = 0
+					})
+				}
+				dbg.SetHistory(emu.debugHistory)
 				dbg.Show()
 			}),
 			fyne.NewMenuItemSeparator(),
@@ -2343,6 +3316,21 @@ func main() {
 				emu.kbd.SimulateNMI()
 			}),
 		),
+		fyne.NewMenu("Help",
+			fyne.NewMenuItem("About zx_go", func() {
+				dialog.ShowInformation("About zx_go",
+					version.String()+"\n"+
+						"built "+version.Date()+"\n\n"+
+						"A hardware-faithful ZX Spectrum emulator\n"+
+						"(48K / 128K / +2 / +2A / +3 / Next).\n\n"+
+						"by "+version.Author+"\n"+
+						version.RepoURL+"\n\n"+
+						"The NextZXOS ROMs are licensed by their authors and\n"+
+						"are not bundled; the emulator can download them from\n"+
+						"the official Spectrum Next distribution on request.",
+					w)
+			}),
+		),
 	)
 	w.SetMainMenu(mainMenu)
 
@@ -2350,13 +3338,18 @@ func main() {
 	blackBG := canvas.NewRectangle(color.Black)
 	aspectScreen := container.New(&aspectRatioLayout{ratio: 4.0 / 3.0}, screen)
 	content := container.NewStack(blackBG, aspectScreen, keyboardWidget)
-	w.SetContent(content)
 
-	// Make sure the keyboard widget gets focus
-	w.Canvas().Focus(keyboardWidget)
-
+	// Show the splash artwork briefly, then swap to the real
+	// content and grab keyboard focus. The emulation goroutine
+	// starts running underneath the splash so by the time the
+	// user is looking at the emulator the first frames are warm.
 	emu.run(a, screen)
 	emu.togglePause() // Start in a running state
+
+	showSplash(w, func() {
+		w.SetContent(content)
+		w.Canvas().Focus(keyboardWidget)
+	})
 
 	// Set up cleanup on window close
 	w.SetOnClosed(func() {
@@ -2364,4 +3357,8 @@ func main() {
 	})
 
 	w.ShowAndRun()
+
+	// GUI shutdown: persist opted-in SD writes (no-op unless
+	// --sd-writeback and the guest actually wrote).
+	emu.flushSDWriteback()
 }

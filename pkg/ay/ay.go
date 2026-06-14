@@ -50,17 +50,18 @@ const (
 	RegIOB       = 15
 )
 
-// Logarithmic 4-bit volume table for the AY-3-8912 (output level for each
-// volume value 0..15). These values are linearised into 16-bit signed
-// amplitudes — they roughly follow a 3 dB-per-step curve which approximates
-// the real chip's output. Levels are scaled so that the loudest channel by
-// itself never quite reaches int16 saturation, leaving headroom for mixing
-// with the other two channels and the beeper.
+// 4-bit volume table for the AY-3-8912 (output level for each volume value
+// 0..15), the levels measured from a real AY-3-8912 (the de-facto FUSE
+// table, 0..0xFFFF) scaled so the loudest channel alone tops out at 11650
+// — well below int16 saturation, leaving headroom for mixing the other two
+// channels and the beeper. This is the real chip's slightly-irregular
+// curve, not a uniform 3 dB-per-step approximation. The 5-bit envelope
+// reuses these 16 levels via envelopeLevel() & 0x0F.
 var volumeTable = [16]int16{
-	0, 90, 130, 180,
-	260, 370, 520, 730,
-	1030, 1460, 2060, 2920,
-	4120, 5830, 8250, 11650,
+	0, 160, 238, 336,
+	466, 686, 959, 1570,
+	1849, 2972, 4147, 5204,
+	6570, 8251, 9813, 11650,
 }
 
 // AY represents an AY-3-8912 sound chip instance.
@@ -144,6 +145,16 @@ func (a *AY) SelectRegister(reg byte) {
 	a.selected = reg & 0x0F
 }
 
+// Selected returns the index of the currently-selected AY register
+// (0..15). Useful for snapshot save and for tests that need to
+// confirm a port-0xFFFD write reached the right chip in a
+// multi-AY configuration.
+func (a *AY) Selected() byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.selected
+}
+
 // WriteSelected writes a value into whichever register has been selected via
 // SelectRegister.
 func (a *AY) WriteSelected(val byte) {
@@ -203,6 +214,11 @@ func (a *AY) writeRegisterLocked(reg, val byte) {
 
 // startEnvelope (re)initialises the envelope generator from the shape
 // register. The envelope shape bits are CONTINUE, ATTACK, ALTERNATE, HOLD.
+//
+// Iter 207: rewritten to model the AY-3-8910 envelope as a 0..15
+// counter with direction tracking, replacing the previous 0..31
+// triangle-inversion formula that mis-computed decay-start and
+// hold-end levels for shapes 11 and 13.
 func (a *AY) startEnvelope(shape byte) {
 	a.envContinue = (shape & 0x08) != 0
 	a.envAttack = (shape & 0x04) != 0
@@ -210,23 +226,32 @@ func (a *AY) startEnvelope(shape byte) {
 	a.envHold = (shape & 0x01) != 0
 	a.envCounter = 0
 	a.envHolding = false
+	// Decay shapes (ATTACK=0) start at output 15; attack at 0.
 	if a.envAttack {
 		a.envStep = 0
 	} else {
-		a.envStep = 31
+		a.envStep = 15
 	}
 }
 
 // envelopeLevel returns the current 0..15 envelope output value.
+// envStep is bounded to [0, 15] by tickEnvelope — return it directly.
 func (a *AY) envelopeLevel() byte {
-	step := a.envStep
-	if step > 15 {
-		step = 31 - step
-	}
-	return byte(step) & 0x0F
+	return byte(a.envStep) & 0x0F
 }
 
 // tickEnvelope advances the envelope generator by one envelope clock tick.
+//
+// Each tick moves envStep by ±1; on reaching the edge (0 or 15) the
+// next-tick behaviour depends on the shape bits:
+//   - CONTINUE=0: stop at 0 and hold.
+//   - HOLD=1 (with CONTINUE=1):
+//   - ALTERNATE=0: lock at end opposite to start direction
+//     (decay → hold at 0; attack → hold at 15).
+//   - ALTERNATE=1: lock at end MATCHING start direction
+//     (decay → hold at 15; attack → hold at 0).
+//   - HOLD=0, ALTERNATE=1: reverse direction and continue.
+//   - HOLD=0, ALTERNATE=0: snap back to start and continue (saw).
 func (a *AY) tickEnvelope() {
 	if a.envHolding {
 		return
@@ -236,24 +261,30 @@ func (a *AY) tickEnvelope() {
 	} else {
 		a.envStep--
 	}
-	if a.envStep < 0 || a.envStep > 31 {
+	// Overflow check: we just stepped past [0, 15].
+	if a.envStep < 0 || a.envStep > 15 {
 		if !a.envContinue {
-			// CONTINUE=0: envelope drops to zero and holds.
+			// CONTINUE=0: all shapes 0-7 end at level 0 and hold.
 			a.envStep = 0
 			a.envHolding = true
 			return
 		}
 		if a.envHold {
-			// HOLD=1: lock at the appropriate end.
+			// HOLD=1 with CONTINUE=1. The hold level depends on
+			// ALTERNATE and ATTACK:
+			//   ALT=0, ATTACK=0 (shape 9):  decay → hold at 0
+			//   ALT=0, ATTACK=1 (shape 13): attack → hold at 15
+			//   ALT=1, ATTACK=0 (shape 11): decay-alt → hold at 15
+			//   ALT=1, ATTACK=1 (shape 15): attack-alt → hold at 0
 			if a.envAlt {
 				if a.envAttack {
 					a.envStep = 0
 				} else {
-					a.envStep = 31
+					a.envStep = 15
 				}
 			} else {
 				if a.envAttack {
-					a.envStep = 31
+					a.envStep = 15
 				} else {
 					a.envStep = 0
 				}
@@ -261,15 +292,22 @@ func (a *AY) tickEnvelope() {
 			a.envHolding = true
 			return
 		}
+		// CONTINUE=1, HOLD=0: continuing cycle.
 		if a.envAlt {
-			// Reverse direction.
+			// Reverse direction and step back into range.
 			a.envAttack = !a.envAttack
-		}
-		// Restart cycle.
-		if a.envAttack {
-			a.envStep = 0
+			if a.envAttack {
+				a.envStep = 0
+			} else {
+				a.envStep = 15
+			}
 		} else {
-			a.envStep = 31
+			// Same direction — sawtooth: snap back to start.
+			if a.envAttack {
+				a.envStep = 0
+			} else {
+				a.envStep = 15
+			}
 		}
 	}
 }

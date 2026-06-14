@@ -31,6 +31,14 @@ type CPUState struct {
 	// Interrupt state
 	IFF1, IFF2 bool
 	IM         byte
+	// Halted — true when the CPU is parked in HALT awaiting an
+	// interrupt. SNA/SZX/Z80 file formats don't carry this bit
+	// (loaders leave it false, matching their semantics: a
+	// file-loaded snapshot resumes running); the in-process
+	// time-travel ring needs it so a rewind restores the exact
+	// execution state (a stale Halted=true with IFF1=false left
+	// the rewound CPU unresumable).
+	Halted bool
 	// Border color
 	BorderColor byte
 }

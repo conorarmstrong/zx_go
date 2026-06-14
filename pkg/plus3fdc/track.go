@@ -393,6 +393,18 @@ func (t *Track) DataAt(start int) (dataStart int, deleted bool, ok bool) {
 	return t.dataAt(start)
 }
 
+// Bytes returns a copy of the track's raw byte stream — the MFM-decoded
+// track image (gaps, sync, address marks, sector ID + data fields, CRCs)
+// as the WD177x Read Track command streams it to the host.
+func (t *Track) Bytes() []byte {
+	if t == nil {
+		return nil
+	}
+	out := make([]byte, len(t.data))
+	copy(out, t.data)
+	return out
+}
+
 // WriteData overwrites the track byte stream starting at position pos
 // with the given bytes. Used by peripheral packages that implement
 // write-sector operations.

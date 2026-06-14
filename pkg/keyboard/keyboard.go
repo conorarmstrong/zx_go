@@ -44,9 +44,18 @@ func (k *Keyboard) HandleKeyEvent(ev *fyne.KeyEvent, isPressed bool) {
 
 // HandleKeyWithModifiers processes a key with explicit modifier information.
 func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift, ctrl, alt, cmd bool) {
-	if keyName == fyne.KeyF12 { // F12 = NMI (Multiface red button)
+	// F12 = Multiface red button NMI; F8 = ZX Spectrum Next NMI
+	// for the NextZXOS Browser. Both trigger the same Z80 NMI line —
+	// the running ROM (Multiface or NextZXOS) decides what to do
+	// with it. F8 is a no-op when neither a Multiface nor Next is
+	// active.
+	if keyName == fyne.KeyF12 || keyName == fyne.KeyF8 {
 		if isPressed && k.nmiCallback != nil {
-			log.Println("NMI triggered (Multiface red button)")
+			if keyName == fyne.KeyF8 {
+				log.Println("NMI triggered (F8 — Next NMI Browser)")
+			} else {
+				log.Println("NMI triggered (Multiface red button)")
+			}
 			k.nmiCallback()
 		}
 		return
@@ -243,15 +252,19 @@ func (k *Keyboard) initKeyMap() {
 		fyne.KeyUp:    {{4, 0x08}, {0, 0x01}}, // 7 + CAPS SHIFT
 		fyne.KeyRight: {{4, 0x04}, {0, 0x01}}, // 8 + CAPS SHIFT
 
-		// Mac-specific key mappings (using string keys for compatibility)
-		"LeftCommand":  {{7, 0x02}}, // Map Left Cmd to Symbol Shift
-		"RightCommand": {{7, 0x02}}, // Map Right Cmd to Symbol Shift
-		"LeftControl":  {{7, 0x02}}, // Map Left Ctrl to Symbol Shift
-		"RightControl": {{7, 0x02}}, // Map Right Ctrl to Symbol Shift
-		"LeftAlt":      {{7, 0x02}}, // Map Left Alt to Symbol Shift
-		"RightAlt":     {{7, 0x02}}, // Map Right Alt to Symbol Shift
-		"LeftSuper":    {},          // Left Cmd key on Mac - no mapping (ignore)
-		"RightSuper":   {},          // Right Cmd key on Mac - no mapping (ignore)
+		// All Ctrl / Alt / Cmd-Super variants map to SYMBOL SHIFT.
+		// Fyne's desktop driver emits the typed constants below as
+		// their underlying string values (see fyne.io/fyne/v2/driver/
+		// desktop/key.go): "LeftControl", "RightControl", "LeftAlt",
+		// "RightAlt", "LeftSuper", "RightSuper". macOS's Cmd key
+		// arrives as LeftSuper / RightSuper — these were previously
+		// mapped to {} (silently ignored), so Cmd did nothing on Mac.
+		desktop.KeyControlLeft:  {{7, 0x02}},
+		desktop.KeyControlRight: {{7, 0x02}},
+		desktop.KeyAltLeft:      {{7, 0x02}},
+		desktop.KeyAltRight:     {{7, 0x02}},
+		desktop.KeySuperLeft:    {{7, 0x02}}, // Cmd on macOS, Win key elsewhere
+		desktop.KeySuperRight:   {{7, 0x02}},
 
 		// Fyne key constants for punctuation (using Symbol Shift combinations)
 		fyne.KeyBackTick:     {{7, 0x02}, {4, 0x01}}, // Symbol Shift + 0 = Backtick

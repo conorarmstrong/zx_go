@@ -1,0 +1,25 @@
+# golangci-lint v2 configuration.
+#
+# We keep the default ("standard") linter set the CI uses — errcheck,
+# govet, ineffassign, staticcheck, unused — and add ONE narrow
+# exclusion. Everything else (real bugs: SA4011 ineffective break,
+# SA4016, SA9003 empty branches, S1009, QF1012, etc.) is fixed in the
+# code, not suppressed.
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # SA5011 ("possible nil pointer dereference") fires on the
+      # idiomatic test guard:
+      #
+      #     x := New()
+      #     if x == nil { t.Fatal("...") }
+      #     ... x.field ...        // staticcheck flags this
+      #
+      # staticcheck does not treat (*testing.T).Fatal as terminating
+      # here, so it reports the guarded use as a possible nil deref.
+      # The guards are correct (Fatal calls runtime.Goexit), so the
+      # dereference is unreachable when nil. Suppress only in tests.
+      - path: _test\.go
+        text: "SA5011"

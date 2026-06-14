@@ -27,6 +27,9 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/next/dac"
+	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
+	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
@@ -49,6 +52,23 @@ type Harness struct {
 	ula         *ula.ULA
 	kbd         *keyboard.Keyboard
 	peripherals *peripherals.PeripheralManager
+
+	// nextEsxdos is the Spectrum Next's esxDOS dispatcher when
+	// the harness was constructed with ModelNext, nil otherwise.
+	// MountSDCard / LoadNEX reach in here for SD-backed APIs.
+	nextEsxdos *esxdos.Dispatcher
+
+	// nextDivMMC is the Spectrum Next's divMMC pager when the
+	// harness was constructed with ModelNext, nil otherwise.
+	// MountSDCard reaches in here to enable automap so the
+	// esxDOS RST $08 hook will fire for tests that synthesise an
+	// API call without booting through the firmware first.
+	nextDivMMC *divmmc.Pager
+
+	// nextDAC is the Spectrum Next's four-channel DAC bank when
+	// ModelNext, nil otherwise. Tests reach in here to verify the
+	// mixer contribution after exercising the CPU/ULA port path.
+	nextDAC *dac.Bank
 }
 
 // New constructs a fresh Harness for the given Spectrum model. The
@@ -58,6 +78,9 @@ type Harness struct {
 // in practice this means the binary was built without one of the
 // required ROMs in pkg/roms/data, which is a build-time issue.
 func New(model roms.SpectrumModel) (*Harness, error) {
+	if model == roms.ModelNext {
+		return newNext()
+	}
 	mem, err := memory.New("", model)
 	if err != nil {
 		return nil, fmt.Errorf("testharness: memory init: %w", err)

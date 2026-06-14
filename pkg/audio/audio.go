@@ -17,6 +17,15 @@ type AYSource interface {
 	MixInto(buf []int16)
 }
 
+// DACSource is the minimal interface for the Spectrum Next's four
+// 8-bit DACs. Satisfied by *next/dac.Bank. v1.0 mixes at frame
+// granularity (current MixedLevel applied to every sample in the
+// buffer); v1.1 may upgrade to per-write event integration so
+// sample-playback chiptunes track DAC writes within a frame.
+type DACSource interface {
+	MixInto(buf []int16)
+}
+
 const (
 	// Audio parameters
 	SampleRate   = 44100
@@ -77,6 +86,10 @@ type AudioSystem struct {
 	ayMu sync.RWMutex
 	ay   AYSource
 
+	// Optional Spectrum Next DAC source.
+	dacMu sync.RWMutex
+	dac   DACSource
+
 	// WAV recording state. When recFile is non-nil the audio reader
 	// appends each generated sample to the file as 16-bit mono PCM.
 	recMu      sync.Mutex
@@ -92,13 +105,38 @@ type audioReader struct {
 	mixBuffer []int16
 }
 
+// oto permits exactly ONE audio context per process — a second
+// oto.NewContext call crashes the audio driver. The context is also
+// never torn down (Close only stops the player), so it is a natural
+// process-singleton: created once, reused by every AudioSystem.
+// This keeps GUI model switches (which build a fresh AudioSystem)
+// and multi-test runs (each constructing emulators) from creating a
+// second context and SIGSEGV-ing in the oto mux loop.
+var (
+	sharedCtxOnce sync.Once
+	sharedCtx     *oto.Context
+	sharedCtxErr  error
+)
+
+func sharedAudioContext() (*oto.Context, error) {
+	sharedCtxOnce.Do(func() {
+		ctx, ready, err := oto.NewContext(SampleRate, ChannelCount, oto.FormatSignedInt16LE)
+		if err != nil {
+			sharedCtxErr = err
+			return
+		}
+		<-ready
+		sharedCtx = ctx
+	})
+	return sharedCtx, sharedCtxErr
+}
+
 // New creates a new AudioSystem instance.
 func New() (*AudioSystem, error) {
-	ctx, ready, err := oto.NewContext(SampleRate, ChannelCount, oto.FormatSignedInt16LE)
+	ctx, err := sharedAudioContext()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audio context: %w", err)
 	}
-	<-ready
 
 	as := &AudioSystem{context: ctx}
 	as.reader = &audioReader{
@@ -199,6 +237,16 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 		ay.MixInto(mixBuf)
 	}
 
+	// Step 2.5: mix in the Next DAC bank if attached. v1.0 contributes
+	// at frame-snapshot granularity; v1.1 may upgrade to per-write
+	// event integration.
+	ar.audioSys.dacMu.RLock()
+	dac := ar.audioSys.dac
+	ar.audioSys.dacMu.RUnlock()
+	if dac != nil {
+		dac.MixInto(mixBuf)
+	}
+
 	// Step 3: WAV recording — append the mono mix before expansion.
 	ar.audioSys.writeRecording(mixBuf)
 
@@ -234,6 +282,14 @@ func (as *AudioSystem) SetAY(ay AYSource) {
 	as.ayMu.Lock()
 	defer as.ayMu.Unlock()
 	as.ay = ay
+}
+
+// SetDAC attaches a Spectrum Next DAC bank whose output will be
+// mixed into the beeper + AY stream. Pass nil to detach.
+func (as *AudioSystem) SetDAC(dac DACSource) {
+	as.dacMu.Lock()
+	defer as.dacMu.Unlock()
+	as.dac = dac
 }
 
 // Close closes the audio system and releases resources.

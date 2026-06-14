@@ -59,6 +59,57 @@ func buildSyntheticFile() *File {
 	}
 }
 
+// File IO wrapper coverage (iter 255). ReadFile + File.WriteFile
+// + Recording.WriteFile + Playback.Stop are 0%-cov public APIs.
+
+func TestReadFileWriteFile_Roundtrip(t *testing.T) {
+	src := buildSyntheticFile()
+	path := t.TempDir() + "/test.rzx"
+	if err := src.WriteFile(path, WriteOptions{Compress: false}); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	dst, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	assertFilesEqual(t, src, dst)
+}
+
+func TestReadFile_MissingFile(t *testing.T) {
+	_, err := ReadFile("/nonexistent/does-not-exist.rzx")
+	if err == nil {
+		t.Errorf("ReadFile missing file = nil err")
+	}
+}
+
+func TestWriteFile_ErrorPropagation(t *testing.T) {
+	src := buildSyntheticFile()
+	// Path inside a non-existent dir → os.WriteFile fails.
+	err := src.WriteFile("/nonexistent/dir/x.rzx", WriteOptions{})
+	if err == nil {
+		t.Errorf("WriteFile to bad dir = nil err")
+	}
+}
+
+func TestPlaybackStopIdempotent(t *testing.T) {
+	src := buildSyntheticFile()
+	data, _ := src.Write(WriteOptions{})
+	f, _ := Read(data)
+	p := NewPlayback(f)
+	if p.Finished() {
+		t.Errorf("Finished before Stop = true")
+	}
+	p.Stop()
+	if !p.Finished() {
+		t.Errorf("after Stop: Finished = false")
+	}
+	// Double-stop must be a no-op.
+	p.Stop()
+	if !p.Finished() {
+		t.Errorf("after second Stop: Finished = false")
+	}
+}
+
 func TestRoundTripUncompressed(t *testing.T) {
 	src := buildSyntheticFile()
 	data, err := src.Write(WriteOptions{Compress: false})

@@ -581,3 +581,105 @@ func TestLoadDiscipleDisk_NotEnabled(t *testing.T) {
 	}
 }
 
+// PeripheralManager IF1 + IF2 + Plus3 method coverage (iter 262).
+// Multiple 0%-cov funcs in manager.go.
+
+func TestEnableInterface1_Only48K(t *testing.T) {
+	dir := createTestROMDir(t)
+
+	// 48K mem → IF1 attach allowed.
+	mem48 := newTestMemory(t, dir)
+	pm := NewPeripheralManager(mem48, dir)
+	rom := make([]byte, 8192)
+	if err := pm.EnableInterface1(rom); err != nil {
+		t.Errorf("EnableInterface1 on 48K = %v, want nil", err)
+	}
+	// Re-enable is a no-op.
+	if err := pm.EnableInterface1(rom); err != nil {
+		t.Errorf("EnableInterface1 second call: %v", err)
+	}
+	pm.DisableInterface1()
+
+	// 128K mem → refused.
+	dir128 := t.TempDir()
+	createTestROMs128(t, dir128)
+	mem128, err := memory.New(dir128, roms.Model128K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm2 := NewPeripheralManager(mem128, dir128)
+	if err := pm2.EnableInterface1(rom); err == nil {
+		t.Errorf("EnableInterface1 on 128K = nil, want error")
+	}
+}
+
+func TestEnableInterface1_BadROMSize(t *testing.T) {
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir)
+	pm := NewPeripheralManager(mem, dir)
+	if err := pm.EnableInterface1([]byte{0x00}); err == nil {
+		t.Errorf("EnableInterface1 with 1-byte ROM = nil, want error")
+	}
+}
+
+func TestInsertInterface2Cartridge_Only48K(t *testing.T) {
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir) // 48K
+	pm := NewPeripheralManager(mem, dir)
+	// IF2 cart loading needs a real 16KB .rom file.
+	cartPath := filepath.Join(dir, "test.rom")
+	cartBytes := make([]byte, 16384)
+	if err := os.WriteFile(cartPath, cartBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pm.InsertInterface2Cartridge(cartPath); err != nil {
+		t.Errorf("InsertInterface2Cartridge on 48K = %v", err)
+	}
+	if !pm.IsInterface2CartridgeInserted() {
+		t.Errorf("after Insert: IsInterface2CartridgeInserted = false")
+	}
+	pm.RemoveInterface2Cartridge()
+	if pm.IsInterface2CartridgeInserted() {
+		t.Errorf("after Remove: IsInterface2CartridgeInserted = true")
+	}
+	// Double-remove is a no-op.
+	pm.RemoveInterface2Cartridge()
+}
+
+func TestInsertInterface2Cartridge_RefuseNon48K(t *testing.T) {
+	dir128 := t.TempDir()
+	createTestROMs128(t, dir128)
+	mem, err := memory.New(dir128, roms.Model128K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := NewPeripheralManager(mem, dir128)
+	cartPath := filepath.Join(dir128, "x.rom")
+	_ = os.WriteFile(cartPath, make([]byte, 16384), 0o644)
+	if err := pm.InsertInterface2Cartridge(cartPath); err == nil {
+		t.Errorf("Insert on 128K = nil err, want refusal")
+	}
+}
+
+func TestPlus3DiskEjectAndProtect_NoOpsOnEmpty(t *testing.T) {
+	dir := createTestROMDir(t)
+	mem := newTestMemory(t, dir)
+	pm := NewPeripheralManager(mem, dir)
+	// Eject on empty drive — must not panic.
+	pm.EjectPlus3Disk(0)
+	pm.SetPlus3WriteProtect(0, true)
+	pm.SetPlus3Speedlock(true)
+	pm.SetPlus3Speedlock(false)
+}
+
+// createTestROMs128 sets up 48.rom + 128-0/1.rom for 128K models.
+func createTestROMs128(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"48.rom", "128-0.rom", "128-1.rom"} {
+		data := make([]byte, 16384)
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+

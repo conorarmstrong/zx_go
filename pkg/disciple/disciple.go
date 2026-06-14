@@ -26,7 +26,6 @@ package disciple
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +78,7 @@ type Disciple struct {
 	xferPos      int
 	xferLen      int
 	xferWrite    bool
+	formatting   bool // true while a Write Track (format) transfer is collecting bytes
 	busy         bool
 	drq          bool
 	intrq        bool
@@ -129,10 +129,14 @@ func (d *Disciple) loadROM(romPath string) error {
 			return nil
 		}
 	}
-	d.rom = make([]byte, 0x2000)
-	copy(d.rom[0:], []byte{0xF3, 0xC3, 0x00, 0x20})
-	log.Println("Warning: Using placeholder GDOS ROM - disk functionality will be limited")
-	return nil
+	// No usable ROM anywhere (filesystem or embedded). Fail rather
+	// than install a placeholder: the old placeholder (`DI; JP
+	// $2000` + zeros) executed at the $0001 boot hook and looped
+	// forever in empty DISCiPLE RAM — a guaranteed black screen on
+	// every cold boot with the interface enabled. A missing ROM
+	// must leave the interface OFF (callers log and continue), not
+	// brick the machine.
+	return fmt.Errorf("no GDOS ROM found (looked for %v in %q and embedded assets)", romFiles, romPath)
 }
 
 func (d *Disciple) reset() {
@@ -287,7 +291,11 @@ func (d *Disciple) writeData(val byte) {
 		d.xferBuf[d.xferPos] = val
 		d.xferPos++
 		if d.xferPos >= d.xferLen {
-			d.commitWriteSector()
+			if d.formatting {
+				d.commitWriteTrack()
+			} else {
+				d.commitWriteSector()
+			}
 			d.drq = false
 			d.busy = false
 			d.intrq = true
@@ -346,15 +354,13 @@ func (d *Disciple) executeCommand(cmd byte) {
 		d.intrq = true
 		d.lastCmdType1 = true
 
-	case cmd&0xF0 == 0xE0: // Read Track (not implemented)
+	case cmd&0xF0 == 0xE0: // Read Track
 		d.lastCmdType1 = false
-		d.statusReg |= stRNF
-		d.intrq = true
+		d.cmdReadTrack()
 
-	case cmd&0xF0 == 0xF0: // Write Track (not implemented)
+	case cmd&0xF0 == 0xF0: // Write Track (format)
 		d.lastCmdType1 = false
-		d.statusReg |= stRNF
-		d.intrq = true
+		d.cmdWriteTrack()
 	}
 }
 
@@ -383,6 +389,104 @@ func (d *Disciple) cmdReadSector() {
 	d.xferWrite = false
 	d.busy = true
 	d.drq = true
+}
+
+// cmdReadTrack (WD177x $E0) streams the entire raw track byte image to the
+// host — gaps, sync, address marks, sector IDs + data, CRCs — used by
+// track-level disk copiers and verifiers.
+func (d *Disciple) cmdReadTrack() {
+	disk := d.disks[d.drive]
+	if disk == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	tr := disk.Track(d.head, int(d.trackReg))
+	if tr == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	d.xferBuf = tr.Bytes()
+	d.xferLen = len(d.xferBuf)
+	d.xferPos = 0
+	d.xferWrite = false
+	d.busy = true
+	d.drq = true
+}
+
+// writeTrackLen is the number of format bytes the host streams for one
+// double-density Write Track operation (matches plus3fdc's track size).
+const writeTrackLen = 6250
+
+// cmdWriteTrack (WD177x $F0) begins a format: the host streams a full
+// track of format bytes, which commitWriteTrack parses into sectors.
+func (d *Disciple) cmdWriteTrack() {
+	if d.disks[d.drive] == nil {
+		d.statusReg |= stRNF
+		d.intrq = true
+		return
+	}
+	d.xferBuf = make([]byte, writeTrackLen)
+	d.xferLen = writeTrackLen
+	d.xferPos = 0
+	d.xferWrite = true
+	d.formatting = true
+	d.busy = true
+	d.drq = true
+}
+
+// commitWriteTrack parses the collected format stream into sector IDs +
+// data and rebuilds the current track.
+func (d *Disciple) commitWriteTrack() {
+	d.formatting = false
+	disk := d.disks[d.drive]
+	if disk == nil {
+		d.statusReg |= stRNF
+		return
+	}
+	if err := disk.FormatTrack(d.head, int(d.trackReg), parseFormatStream(d.xferBuf)); err != nil {
+		d.statusReg |= stRNF
+	}
+}
+
+// parseFormatStream extracts sectors from a WD177x Write Track format byte
+// stream: an 0xFE ID address mark is followed by C,H,R,N; the next 0xFB
+// data address mark is followed by 128<<N formatted (filler) bytes.
+func parseFormatStream(stream []byte) []plus3fdc.Sector {
+	var sectors []plus3fdc.Sector
+	i := 0
+	for i < len(stream) {
+		if stream[i] != 0xFE {
+			i++
+			continue
+		}
+		if i+5 > len(stream) {
+			break
+		}
+		c, h, r, n := stream[i+1], stream[i+2], stream[i+3], stream[i+4]
+		i += 5
+		// Locate this sector's data address mark, stopping if a new IDAM
+		// arrives first (an ID-only sector).
+		for i < len(stream) && stream[i] != 0xFB && stream[i] != 0xFE {
+			i++
+		}
+		if i >= len(stream) || stream[i] != 0xFB {
+			sectors = append(sectors, plus3fdc.Sector{C: c, H: h, R: r, N: n})
+			continue
+		}
+		i++ // skip the data address mark
+		size := 128 << (n & 0x07)
+		end := i + size
+		if end > len(stream) {
+			end = len(stream)
+		}
+		data := make([]byte, size)
+		copy(data, stream[i:end])
+		i = end
+		sectors = append(sectors, plus3fdc.Sector{C: c, H: h, R: r, N: n, Data: data})
+	}
+	return sectors
 }
 
 func (d *Disciple) cmdWriteSector() {

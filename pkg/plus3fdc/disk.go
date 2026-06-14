@@ -75,6 +75,36 @@ func (d *Disk) Track(head, cylinder int) *Track {
 	return d.Tracks[head][cylinder]
 }
 
+// FormatTrack rebuilds the track at (head, cylinder) from the given
+// sectors, replacing whatever was there — the WD177x Write Track (format)
+// operation. Each sector's C/H/R/N becomes its ID field and Data its
+// formatted (filler) contents.
+func (d *Disk) FormatTrack(head, cylinder int, sectors []Sector) error {
+	if head < 0 || head >= len(d.Tracks) {
+		return fmt.Errorf("plus3fdc: FormatTrack: head %d out of range", head)
+	}
+	if cylinder < 0 || cylinder >= len(d.Tracks[head]) {
+		return fmt.Errorf("plus3fdc: FormatTrack: cylinder %d out of range", cylinder)
+	}
+	var c, h, n byte
+	if len(sectors) > 0 {
+		c, h, n = sectors[0].C, sectors[0].H, sectors[0].N
+	}
+	tr := newTrack(bytesPerTrackDD, gapByteMFM, c, h, n)
+	b := newTrackBuilder(tr, gapMFM)
+	b.preindexAdd()
+	b.postindexAdd()
+	for _, s := range sectors {
+		if !b.idAdd(s.C, s.H, s.R, s.N, false) {
+			return fmt.Errorf("plus3fdc: FormatTrack: track full at %d sectors", len(sectors))
+		}
+		b.dataAdd(s.Data, false, false)
+	}
+	b.gap4Add()
+	d.Tracks[head][cylinder] = tr
+	return nil
+}
+
 const (
 	dskHeaderSize    = 256
 	trackHeaderSize  = 256

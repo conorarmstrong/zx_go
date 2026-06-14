@@ -2,6 +2,8 @@ package if1
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -163,5 +165,79 @@ func TestResetPagesOut(t *testing.T) {
 	}
 	if !i.HasROM() {
 		t.Error("after Reset: ROM lost")
+	}
+}
+
+// File-IO + accessor coverage (iter 261). LoadROM (disk wrapper),
+// ROM accessor, Cartridge accessor were 0%-cov.
+
+func TestLoadROM_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "if1-2.rom")
+	rom := make([]byte, ROMSize)
+	for i := range rom {
+		rom[i] = byte(i)
+	}
+	if err := os.WriteFile(path, rom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	i := New()
+	if err := i.LoadROM(path); err != nil {
+		t.Fatalf("LoadROM: %v", err)
+	}
+	if !i.HasROM() {
+		t.Errorf("after LoadROM: HasROM = false")
+	}
+	got := i.ROM()
+	if len(got) != ROMSize {
+		t.Errorf("ROM length = %d, want %d", len(got), ROMSize)
+	}
+	// Verify content.
+	for off := 0; off < ROMSize; off += 1024 {
+		if got[off] != byte(off) {
+			t.Errorf("ROM[%d] = %02X, want %02X", off, got[off], byte(off))
+			break
+		}
+	}
+}
+
+func TestLoadROM_MissingFile(t *testing.T) {
+	i := New()
+	if err := i.LoadROM("/nonexistent/if1.rom"); err == nil {
+		t.Errorf("LoadROM missing file = nil err")
+	}
+}
+
+func TestLoadROM_BadSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "small.rom")
+	if err := os.WriteFile(path, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	i := New()
+	err := i.LoadROM(path)
+	if err == nil {
+		t.Errorf("LoadROM bad-size = nil err")
+	}
+}
+
+func TestROMReturnsNilWhenUnloaded(t *testing.T) {
+	i := New()
+	if got := i.ROM(); got != nil {
+		t.Errorf("ROM() on fresh IF1 = non-nil")
+	}
+}
+
+func TestCartridgeOOBReturnsNil(t *testing.T) {
+	i := New()
+	// No cartridge loaded → empty slot.
+	if got := i.Cartridge(0); got != nil {
+		t.Errorf("Cartridge(0) on empty IF1 = non-nil")
+	}
+	if got := i.Cartridge(-1); got != nil {
+		t.Errorf("Cartridge(-1) = non-nil (OOB guard)")
+	}
+	if got := i.Cartridge(99); got != nil {
+		t.Errorf("Cartridge(99) = non-nil (OOB guard)")
 	}
 }

@@ -155,6 +155,140 @@ func TestTapePlayerPulseGeneration(t *testing.T) {
 	}
 }
 
+// Tape accessor coverage (iter 252).
+// Covers SaveTAP round-trip, NextBlock advance + EOF, HasMoreBlocks
+// transitions, Blocks() metadata, SeekToBlock clamping.
+
+func TestSaveTAPRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	in := createTestTAP(t, dir)
+
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(in); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "out.tap")
+	if err := tp.SaveTAP(out); err != nil {
+		t.Fatalf("SaveTAP: %v", err)
+	}
+
+	// Reload and compare block count + bytes.
+	tp2 := NewTapePlayer()
+	if err := tp2.LoadTAP(out); err != nil {
+		t.Fatalf("reload SaveTAP output: %v", err)
+	}
+	if tp2.BlockCount() != tp.BlockCount() {
+		t.Errorf("roundtrip block count = %d, want %d", tp2.BlockCount(), tp.BlockCount())
+	}
+}
+
+func TestSaveTAPEmptyFails(t *testing.T) {
+	dir := t.TempDir()
+	tp := NewTapePlayer()
+	err := tp.SaveTAP(filepath.Join(dir, "empty.tap"))
+	if err == nil {
+		t.Error("SaveTAP with no blocks should error")
+	}
+}
+
+func TestNextBlockAdvancesAndReturnsNilAtEnd(t *testing.T) {
+	dir := t.TempDir()
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, dir)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two blocks in createTestTAP.
+	b1 := tp.NextBlock()
+	if b1 == nil {
+		t.Fatalf("NextBlock #1 = nil")
+	}
+	if tp.CurrentBlock() != 1 {
+		t.Errorf("after NextBlock: idx=%d, want 1", tp.CurrentBlock())
+	}
+	b2 := tp.NextBlock()
+	if b2 == nil {
+		t.Fatalf("NextBlock #2 = nil")
+	}
+	// Past EOF.
+	if got := tp.NextBlock(); got != nil {
+		t.Errorf("NextBlock past EOF = non-nil")
+	}
+}
+
+func TestHasMoreBlocks(t *testing.T) {
+	dir := t.TempDir()
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, dir)); err != nil {
+		t.Fatal(err)
+	}
+	if !tp.HasMoreBlocks() {
+		t.Error("HasMoreBlocks at idx=0 = false, want true")
+	}
+	tp.NextBlock()
+	if !tp.HasMoreBlocks() {
+		t.Error("HasMoreBlocks at idx=1 = false, want true (2 blocks)")
+	}
+	tp.NextBlock()
+	if tp.HasMoreBlocks() {
+		t.Error("HasMoreBlocks after consuming all = true, want false")
+	}
+}
+
+func TestBlocksSummary(t *testing.T) {
+	dir := t.TempDir()
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, dir)); err != nil {
+		t.Fatal(err)
+	}
+	bs := tp.Blocks()
+	if len(bs) != 2 {
+		t.Fatalf("Blocks count = %d, want 2", len(bs))
+	}
+	// Block 0 = header (flag $00 + Type byte $03).
+	if bs[0].FlagByte != 0x00 || bs[0].Type != "Header" {
+		t.Errorf("block 0: flag=$%02X type=%q, want $00 Header", bs[0].FlagByte, bs[0].Type)
+	}
+	// Block 1 = data (flag $FF).
+	if bs[1].FlagByte != 0xFF || bs[1].Type != "Data" {
+		t.Errorf("block 1: flag=$%02X type=%q, want $FF Data", bs[1].FlagByte, bs[1].Type)
+	}
+	// Indices populated.
+	if bs[0].Index != 0 || bs[1].Index != 1 {
+		t.Errorf("indices = %d %d, want 0 1", bs[0].Index, bs[1].Index)
+	}
+}
+
+func TestSeekToBlockClamps(t *testing.T) {
+	dir := t.TempDir()
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, dir)); err != nil {
+		t.Fatal(err)
+	}
+	// Out-of-range high → clamp to last (idx 1).
+	tp.SeekToBlock(99)
+	if tp.CurrentBlock() != 1 {
+		t.Errorf("Seek(99) clamp: idx=%d, want 1 (last)", tp.CurrentBlock())
+	}
+	// Negative → clamp to 0.
+	tp.SeekToBlock(-5)
+	if tp.CurrentBlock() != 0 {
+		t.Errorf("Seek(-5) clamp: idx=%d, want 0", tp.CurrentBlock())
+	}
+	// Valid in-range.
+	tp.SeekToBlock(1)
+	if tp.CurrentBlock() != 1 {
+		t.Errorf("Seek(1): idx=%d, want 1", tp.CurrentBlock())
+	}
+	// Seek stops playback.
+	tp.Play()
+	tp.SeekToBlock(0)
+	if tp.IsPlaying() {
+		t.Errorf("SeekToBlock did not stop playback")
+	}
+}
+
 func TestTapePlayerEmptyTAP(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.tap")

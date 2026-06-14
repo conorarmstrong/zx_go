@@ -1853,12 +1853,19 @@ func TestInterruptIM1(t *testing.T) {
 
 	cpu.interrupt()
 
-	// IFF1 and IFF2 should be disabled
+	// A maskable interrupt accept clears BOTH IFF1 and IFF2 — faithful
+	// Z80 behaviour (Zilog manual: an accepted interrupt clears both
+	// IFF1 and IFF2). The IM1 handler
+	// re-enables interrupts with an explicit EI before RET/RETI (NextZXOS
+	// and the 48K ROM both do), and RETI restores IFF1=IFF2, so clearing
+	// both here does not strand interrupts off — boot still reaches the
+	// NextZXOS menu. (An earlier variant preserved IFF2 as a boot
+	// work-around; that was non-faithful.)
 	if cpu.IFF1 {
 		t.Errorf("IM1 interrupt: IFF1 should be false")
 	}
 	if cpu.IFF2 {
-		t.Errorf("IM1 interrupt: IFF2 should be false")
+		t.Errorf("IM1 interrupt: IFF2 should be cleared (maskable INT clears both flip-flops)")
 	}
 	// Halted state should be cleared
 	if cpu.Halted {
@@ -3271,20 +3278,33 @@ func TestExecuteFrame(t *testing.T) {
 		t.Errorf("ExecuteFrame: PC should have advanced from 0x4000, got 0x%04X", cpu.PC)
 	}
 
-	// Now verify interrupt fires: enable IFF1 and run a frame
+	// Now verify the ULA INT pulse model: the pulse asserts at
+	// frame start and the CPU takes it at the first M1 boundary
+	// with IFF1=true within the ~32 T-state window. After
+	// acknowledge: IFF1 cleared, IntFireCount incremented, PC
+	// jumped into the handler ROM (we don't assert PC's final
+	// value because $0038 is in 48K ROM in this test fixture and
+	// reads as NOPs, so the CPU keeps drifting forward; what
+	// matters is that the interrupt WAS acknowledged).
 	cpu.PC = 0x4000
 	cpu.SP = 0xFFF0
 	cpu.IFF1 = true
 	cpu.IM = 1
 	cpu.tstates = 0
+	beforeTaken := IntFireCount
 	cpu.ExecuteFrame(100)
 
-	// After IM1 interrupt, PC should be 0x0038
-	if cpu.PC != 0x0038 {
-		t.Errorf("ExecuteFrame interrupt: expected PC=0x0038, got PC=0x%04X", cpu.PC)
+	if IntFireCount != beforeTaken+1 {
+		t.Errorf("ExecuteFrame interrupt: IntFireCount delta = %d, want 1", IntFireCount-beforeTaken)
 	}
 	if cpu.IFF1 {
-		t.Errorf("ExecuteFrame interrupt: IFF1 should be cleared after interrupt")
+		t.Errorf("ExecuteFrame interrupt: IFF1 should be cleared after acknowledge")
+	}
+	// PC must have left the user code area — it's either at the
+	// IM 1 vector ($0038) or drifted forward from there if the
+	// rest of the frame ran NOPs in ROM.
+	if cpu.PC == 0x4000 {
+		t.Errorf("ExecuteFrame interrupt: PC should have left user code, still $4000")
 	}
 }
 
@@ -3419,6 +3439,69 @@ func TestINI(t *testing.T) {
 	}
 	if cpu.hl() != 0x5001 {
 		t.Errorf("INI: expected HL=0x5001, got HL=0x%04X", cpu.hl())
+	}
+}
+
+// TestINI_UndocumentedFlags locks in the Sean Young "Undocumented Z80"
+// flag-computation contract for INI. Iter 134 lockstep against the
+// reference emulator caught a divergence at PC=$04F7 (the FPGA
+// bootrom's INIR setup loop): our F was $82, reference's was $A8.
+// The difference was three flag bits:
+//   - N (bit 1): per spec, N = bit 7 of the value read. We hardcoded
+//                N=1 always.
+//   - F5 (bit 5, undocumented YF): per spec, copied from B[5] after
+//                decrement. We left it 0.
+//   - F3 (bit 3, undocumented XF): per spec, copied from B[3] after
+//                decrement. We left it 0.
+// With B initial = $00, post-decrement B = $FF, so both F5 and F3
+// must come up set. With value read = $00, N must come up clear.
+func TestINI_UndocumentedFlags(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	// Mimic the iter-134 divergence point: B=0, C=$EB, val=0.
+	ula.ports[0x00EB] = 0x00
+	cpu.B = 0x00
+	cpu.C = 0xEB
+	cpu.setHL(0x5000)
+
+	cpu.executeEDInstruction(0xA2) // INI
+
+	if cpu.B != 0xFF {
+		t.Fatalf("INI: B = %02X, want $FF (underflow from $00)", cpu.B)
+	}
+	// F5 (bit 5) and F3 (bit 3) should be set (B post-decrement = $FF
+	// has both bits set).
+	if cpu.F&0x20 == 0 {
+		t.Errorf("INI: F5 bit not set; F = %02X, want bit 5 = 1 (B[5]=1)", cpu.F)
+	}
+	if cpu.F&0x08 == 0 {
+		t.Errorf("INI: F3 bit not set; F = %02X, want bit 3 = 1 (B[3]=1)", cpu.F)
+	}
+	// N (bit 1) should be CLEAR — value read was $00, bit 7 = 0.
+	if cpu.F&FLAG_N != 0 {
+		t.Errorf("INI: N set when value's bit 7 was clear; F = %02X", cpu.F)
+	}
+}
+
+// TestINI_NFromValueBit7 verifies that for INI, N follows bit 7 of
+// the value read. Companion to TestINI_UndocumentedFlags but with
+// a value that has bit 7 set, so N should come up set.
+func TestINI_NFromValueBit7(t *testing.T) {
+	cpu, _ := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	ula := cpu.ula.(*mockULA)
+
+	ula.ports[0x02FE] = 0x80 // bit 7 set → N should be set
+	cpu.B = 0x02
+	cpu.C = 0xFE
+	cpu.setHL(0x5000)
+
+	cpu.executeEDInstruction(0xA2)
+
+	if cpu.F&FLAG_N == 0 {
+		t.Errorf("INI: N clear when value bit 7 was set; F = %02X", cpu.F)
 	}
 }
 
@@ -3759,5 +3842,1580 @@ func TestFDIYhalfRegisters(t *testing.T) {
 	if cpu.IY != 0xCA99 || cpu.H != 0x11 || cpu.L != 0x22 {
 		t.Errorf("FD 6F (LD IYl,A): IY=%04X H=%02X L=%02X, want IY=0xCA99 H=0x11 L=0x22",
 			cpu.IY, cpu.H, cpu.L)
+	}
+}
+
+// =============================================================================
+// ULA INT pulse semantics — locks in the frame-start pulse model.
+// =============================================================================
+
+// TestINTPulseTakenAtFrameStart verifies that when IFF1 is true at
+// the start of a frame, the IRQ is acknowledged at the first M1
+// boundary inside the pulse window — not waited until frame end.
+func TestINTPulseTakenAtFrameStart(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	for i := uint16(0x4000); i < 0x4040; i++ {
+		mem.Write(i, 0x00) // NOPs
+	}
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = true
+	cpu.IM = 1
+	cpu.tstates = 0
+	before := IntFireCount
+	// Short budget: just enough to cover the INT acknowledge cycle
+	// (13 T-states) plus a few NOPs. The pulse is sampled on the
+	// very first M1; IFF1=true → take immediately.
+	cpu.ExecuteFrame(50)
+	if IntFireCount != before+1 {
+		t.Errorf("INT pulse: IntFireCount delta = %d, want 1", IntFireCount-before)
+	}
+	if cpu.IFF1 {
+		t.Errorf("INT pulse: IFF1 not cleared after acknowledge")
+	}
+}
+
+// TestINTPulseExpiresWithoutAcknowledge verifies the rejection
+// path: if IFF1 stays false through the ~32 T-state pulse window,
+// the IRQ is LOST (matching real-hardware INT-line decay).
+// IntRejectCount increments; no acknowledge happens.
+func TestINTPulseExpiresWithoutAcknowledge(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	for i := uint16(0x4000); i < 0x4040; i++ {
+		mem.Write(i, 0x00)
+	}
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = false
+	cpu.IM = 1
+	cpu.tstates = 0
+	beforeTaken := IntFireCount
+	beforeRejected := IntRejectCount
+	cpu.ExecuteFrame(200)
+	if IntFireCount != beforeTaken {
+		t.Errorf("INT pulse expiry: unexpected acknowledge, IntFireCount delta = %d",
+			IntFireCount-beforeTaken)
+	}
+	if IntRejectCount != beforeRejected+1 {
+		t.Errorf("INT pulse expiry: IntRejectCount delta = %d, want 1",
+			IntRejectCount-beforeRejected)
+	}
+}
+
+// TestINTPulseTakenByEIWithinWindow verifies the case that motivated
+// this whole feature: an EI executed inside the pulse window catches
+// the IRQ at the next M1 boundary, even when IFF1 was false at frame
+// start. NextZXOS's post-init code uses exactly this pattern.
+func TestINTPulseTakenByEIWithinWindow(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// Tiny program at $4000: EI; NOP; NOP. EI is 1 byte / 4 T-states.
+	// First M1 (at tstates=0, PC=$4000) samples the pulse — IFF1=false
+	// so no take; window still open. EI executes, IFF1 becomes true,
+	// tstates=4. Next M1 at tstates=4 (within the 32 T-state window):
+	// IFF1=true → acknowledge.
+	mem.Write(0x4000, 0xFB) // EI
+	mem.Write(0x4001, 0x00) // NOP
+	mem.Write(0x4002, 0x00) // NOP
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = false
+	cpu.IM = 1
+	cpu.tstates = 0
+	before := IntFireCount
+	cpu.ExecuteFrame(100)
+	if IntFireCount != before+1 {
+		t.Errorf("EI-within-window: IntFireCount delta = %d, want 1", IntFireCount-before)
+	}
+	if cpu.IFF1 {
+		t.Errorf("EI-within-window: IFF1 not cleared after acknowledge")
+	}
+}
+
+// TestEIInterruptDelay locks in the Z80 datasheet rule that IRQ
+// acknowledgement is deferred by one instruction after EI. The
+// canonical idiom is `EI; RET` in an IRQ handler — if IRQ acked
+// immediately on EI, the RET would re-enter the handler on the
+// same INT pulse and stack-leak into oblivion (real symptom
+// observed under NextZXOS's divMMC IRQ trampoline before the
+// delay was wired in).
+//
+// Test layout: program at $4000 = `EI; NOP; HALT`. ULA pulse
+// asserts at frame start with IFF1=false. First M1 ($4000, EI)
+// runs — IFF1=true, eiDelay=true. Second M1 ($4001, NOP) must
+// NOT acknowledge despite IFF1+IRQPending; eiDelay should clear.
+// Third M1 ($4002, HALT) acknowledges normally — PC -> $0038,
+// CPU exits halt. IntFireCount delta = 1.
+func TestEIInterruptDelay(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	mem.Write(0x4000, 0xFB) // EI
+	mem.Write(0x4001, 0x00) // NOP
+	mem.Write(0x4002, 0x76) // HALT
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = false
+	cpu.IM = 1
+	cpu.tstates = 0
+	beforeTaken := IntFireCount
+	cpu.ExecuteFrame(100)
+	if IntFireCount != beforeTaken+1 {
+		t.Errorf("EI delay: IntFireCount delta = %d, want 1", IntFireCount-beforeTaken)
+	}
+	if cpu.eiDelay {
+		t.Errorf("EI delay: eiDelay should have cleared by frame end")
+	}
+}
+
+// TestCALLThroughExecuteInstructionPushesReturnAddr drives a full
+// M1 fetch + CALL + RET cycle via executeInstruction (the real-
+// execution path) and verifies the pushed return is the
+// instruction-start + 3. Regression guard against any future
+// off-by-one in fetch/fetch16/push interaction that the existing
+// TestCALL_nn (which bypasses fetch via executeBaseInstruction)
+// wouldn't catch.
+func TestCALLThroughExecuteInstructionPushesReturnAddr(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// CALL $9000 at $4000: opcode CD, operand $00 $90. Return
+	// address pushed should be $4003.
+	mem.Write(0x4000, 0xCD)
+	mem.Write(0x4001, 0x00)
+	mem.Write(0x4002, 0x90)
+	// Make sure target has something benign so executeInstruction
+	// doesn't fault when called subsequently.
+	mem.Write(0x9000, 0x00)
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.executeInstruction()
+	if cpu.PC != 0x9000 {
+		t.Errorf("CALL via executeInstruction: PC = $%04X, want $9000", cpu.PC)
+	}
+	retLo := mem.Read(cpu.SP)
+	retHi := mem.Read(cpu.SP + 1)
+	retAddr := uint16(retHi)<<8 | uint16(retLo)
+	if retAddr != 0x4003 {
+		t.Errorf("CALL via executeInstruction: pushed return = $%04X, want $4003", retAddr)
+	}
+}
+
+// TestLineInterruptFiresInAdditionToFrame locks in the basic Next
+// line-interrupt behaviour: with LineIntOffsetTstates set midway
+// through a frame and IFF1=true, the CPU acknowledges BOTH the
+// frame INT (at frame start) AND the line INT (when tstates passes
+// the offset).
+//
+// The test uses IM 2 with vector in writable RAM so the IRQ handler
+// can actually run an EI+RET (re-enabling interrupts) — under IM 1
+// the handler at $0038 is in ROM and we can't make it EI.
+func TestLineInterruptFiresInAdditionToFrame(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	// Long sequence of NOPs in RAM so the loop runs past the offset.
+	for i := uint16(0x4000); i < 0x4100; i++ {
+		mem.Write(i, 0x00)
+	}
+	// IM 2 vector: I=$C0, IM2Vector=$FF → fetch from $C0FF/$C100
+	// (writable RAM). Vector points to $C200, where EI;RET runs to
+	// re-enable interrupts so the line-int pulse can fire too.
+	mem.Write(0xC0FF, 0x00)
+	mem.Write(0xC100, 0xC2)
+	mem.Write(0xC200, 0xFB) // EI
+	mem.Write(0xC201, 0xC9) // RET
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.I = 0xC0
+	cpu.IM2Vector = 0xFF
+	cpu.IFF1 = true
+	cpu.IM = 2
+	cpu.tstates = 0
+	cpu.LineIntOffsetTstates = 200
+	before := IntFireCount
+	cpu.ExecuteFrame(1000)
+	got := IntFireCount - before
+	if got != 2 {
+		t.Errorf("line+frame INT: IntFireCount delta = %d, want 2", got)
+	}
+}
+
+// TestLineInterruptDisabledByDefault asserts that without a non-zero
+// offset, no extra INT pulse fires — guards against an accidental
+// regression where the line-int path runs unconditionally.
+func TestLineInterruptDisabledByDefault(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	for i := uint16(0x4000); i < 0x4100; i++ {
+		mem.Write(i, 0x00)
+	}
+	mem.Write(0x0038, 0xC9) // RET
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = true
+	cpu.IM = 1
+	cpu.tstates = 0
+	cpu.LineIntOffsetTstates = 0 // disabled
+	before := IntFireCount
+	cpu.ExecuteFrame(1000)
+	got := IntFireCount - before
+	if got != 1 {
+		t.Errorf("frame-only INT: IntFireCount delta = %d, want 1", got)
+	}
+}
+
+// TestFrameIntDisabledSkipsFrameStartPulse covers NR$22 bit 6:
+// when FrameIntDisabled is true, the ULA frame interrupt is
+// suppressed and only line interrupts fire. With both
+// FrameIntDisabled AND a line offset configured, exactly ONE
+// acknowledge happens — the line pulse.
+func TestFrameIntDisabledSkipsFrameStartPulse(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	for i := uint16(0x4000); i < 0x4100; i++ {
+		mem.Write(i, 0x00)
+	}
+	mem.Write(0x0038, 0xC9) // RET
+	cpu.PC = 0x4000
+	cpu.SP = 0xFFF0
+	cpu.IFF1 = true
+	cpu.IM = 1
+	cpu.tstates = 0
+	cpu.FrameIntDisabled = true
+	cpu.LineIntOffsetTstates = 200
+	before := IntFireCount
+	cpu.ExecuteFrame(1000)
+	got := IntFireCount - before
+	if got != 1 {
+		t.Errorf("frame-disabled + line-only: IntFireCount delta = %d, want 1", got)
+	}
+}
+
+// ===========================================================================
+// Per-opcode T-state timing batch (iter 231).
+//
+// Pins documented Z80 timings for the most common base-opcode patterns.
+// These are the canonical reference figures from Sean Young's
+// "Undocumented Z80 Documented" and the Zilog manual. Each category
+// is a separate sub-test so a per-category failure is identifiable.
+// ===========================================================================
+
+// runOpcode loads bytes at PC, executes one instruction, returns
+// the t-state delta.
+func runOpcode(t *testing.T, bytes []byte) uint64 {
+	t.Helper()
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	for i, b := range bytes {
+		mem.Write(uint16(0x8000+i), b)
+	}
+	before := cpu.tstates
+	cpu.StepInstruction()
+	return cpu.tstates - before
+}
+
+// TestTiming_8BitALU_RegReg verifies ADD/SUB/AND/OR/XOR/CP A,r take
+// 4 t-states for register operands.
+func TestTiming_8BitALU_RegReg(t *testing.T) {
+	cases := []struct {
+		name   string
+		opcode byte
+		want   uint64
+	}{
+		{"ADD A,B", 0x80, 4},
+		{"SUB B", 0x90, 4},
+		{"AND B", 0xA0, 4},
+		{"XOR B", 0xA8, 4},
+		{"OR B", 0xB0, 4},
+		{"CP B", 0xB8, 4},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := runOpcode(t, []byte{c.opcode})
+			if got != c.want {
+				t.Errorf("%s: t-states = %d, want %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestTiming_8BitALU_Immediate verifies ADD A,n / SUB n / etc.
+// take 7 t-states (immediate operand).
+func TestTiming_8BitALU_Immediate(t *testing.T) {
+	cases := []struct {
+		name string
+		op   byte
+		want uint64
+	}{
+		{"ADD A,n", 0xC6, 7},
+		{"SUB n", 0xD6, 7},
+		{"AND n", 0xE6, 7},
+		{"XOR n", 0xEE, 7},
+		{"OR n", 0xF6, 7},
+		{"CP n", 0xFE, 7},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := runOpcode(t, []byte{c.op, 0x42})
+			if got != c.want {
+				t.Errorf("%s: t = %d, want %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestTiming_8BitALU_HLIndirect — ADD A,(HL) etc. take 7 t-states.
+func TestTiming_8BitALU_HLIndirect(t *testing.T) {
+	cases := []struct {
+		name   string
+		opcode byte
+		want   uint64
+	}{
+		{"ADD A,(HL)", 0x86, 7},
+		{"SUB (HL)", 0x96, 7},
+		{"AND (HL)", 0xA6, 7},
+		{"XOR (HL)", 0xAE, 7},
+		{"OR (HL)", 0xB6, 7},
+		{"CP (HL)", 0xBE, 7},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := runOpcode(t, []byte{c.opcode})
+			if got != c.want {
+				t.Errorf("%s: t = %d, want %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestTiming_LD_r_n verifies LD r,n = 7 t-states.
+func TestTiming_LD_r_n(t *testing.T) {
+	cases := []byte{0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x3E} // LD B/C/D/E/H/L/A,n
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op, 0x55})
+		if got != 7 {
+			t.Errorf("LD r,n opcode $%02X: t = %d, want 7", op, got)
+		}
+	}
+}
+
+// TestTiming_LD_rr_nn verifies LD BC/DE/HL/SP,nn = 10 t-states.
+func TestTiming_LD_rr_nn(t *testing.T) {
+	cases := []byte{0x01, 0x11, 0x21, 0x31} // LD BC/DE/HL/SP,nn
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op, 0x34, 0x12})
+		if got != 10 {
+			t.Errorf("LD rr,nn $%02X: t = %d, want 10", op, got)
+		}
+	}
+}
+
+// TestTiming_INC_DEC_r — 8-bit register inc/dec = 4 t-states.
+func TestTiming_INC_DEC_r(t *testing.T) {
+	cases := []byte{0x04, 0x05, 0x0C, 0x0D, 0x14, 0x15, 0x1C, 0x1D,
+		0x24, 0x25, 0x2C, 0x2D, 0x3C, 0x3D}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op})
+		if got != 4 {
+			t.Errorf("INC/DEC r $%02X: t = %d, want 4", op, got)
+		}
+	}
+}
+
+// TestTiming_INC_DEC_rr — 16-bit pair inc/dec = 6 t-states.
+func TestTiming_INC_DEC_rr(t *testing.T) {
+	cases := []byte{0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op})
+		if got != 6 {
+			t.Errorf("INC/DEC rr $%02X: t = %d, want 6", op, got)
+		}
+	}
+}
+
+// TestTiming_PushPop — PUSH = 11, POP = 10 t-states.
+func TestTiming_PushPop(t *testing.T) {
+	push := []byte{0xC5, 0xD5, 0xE5, 0xF5} // BC/DE/HL/AF
+	pop := []byte{0xC1, 0xD1, 0xE1, 0xF1}
+	for _, op := range push {
+		got := runOpcode(t, []byte{op})
+		if got != 11 {
+			t.Errorf("PUSH $%02X: t = %d, want 11", op, got)
+		}
+	}
+	for _, op := range pop {
+		got := runOpcode(t, []byte{op})
+		if got != 10 {
+			t.Errorf("POP $%02X: t = %d, want 10", op, got)
+		}
+	}
+}
+
+// TestTiming_JP_nn — unconditional jump = 10 t-states.
+func TestTiming_JP_nn(t *testing.T) {
+	got := runOpcode(t, []byte{0xC3, 0x00, 0x90})
+	if got != 10 {
+		t.Errorf("JP nn: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_CALL_RET — CALL = 17, RET = 10 t-states.
+func TestTiming_CALL_RET(t *testing.T) {
+	got := runOpcode(t, []byte{0xCD, 0x00, 0x90})
+	if got != 17 {
+		t.Errorf("CALL nn: t = %d, want 17", got)
+	}
+	// Set up SP so RET pops a known address.
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	mem.Write(0xFFF0, 0x00)
+	mem.Write(0xFFF1, 0x90)
+	mem.Write(0x8000, 0xC9) // RET
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 10 {
+		t.Errorf("RET: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_NOP_HALT — NOP = 4, HALT = 4 t-states.
+func TestTiming_NOP_HALT(t *testing.T) {
+	if got := runOpcode(t, []byte{0x00}); got != 4 {
+		t.Errorf("NOP: t = %d, want 4", got)
+	}
+	if got := runOpcode(t, []byte{0x76}); got != 4 {
+		t.Errorf("HALT: t = %d, want 4", got)
+	}
+}
+
+// TestTiming_ADD_HL_rr — 16-bit ADD HL,rr = 11 t-states.
+func TestTiming_ADD_HL_rr(t *testing.T) {
+	for _, op := range []byte{0x09, 0x19, 0x29, 0x39} { // ADD HL,BC/DE/HL/SP
+		got := runOpcode(t, []byte{op})
+		if got != 11 {
+			t.Errorf("ADD HL,rr $%02X: t = %d, want 11", op, got)
+		}
+	}
+}
+
+// TestTiming_LD_r_r — LD r,r' = 4 t-states.
+func TestTiming_LD_r_r(t *testing.T) {
+	// LD B,C = $41; LD C,B = $48; LD A,A = $7F. Test a sample.
+	cases := []byte{0x40, 0x41, 0x47, 0x48, 0x4F, 0x7F}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op})
+		if got != 4 {
+			t.Errorf("LD r,r $%02X: t = %d, want 4", op, got)
+		}
+	}
+}
+
+// TestTiming_LD_HL_r — LD (HL),r = 7 t-states.
+func TestTiming_LD_HL_r(t *testing.T) {
+	for _, op := range []byte{0x70, 0x71, 0x72, 0x73, 0x77} {
+		got := runOpcode(t, []byte{op})
+		if got != 7 {
+			t.Errorf("LD (HL),r $%02X: t = %d, want 7", op, got)
+		}
+	}
+}
+
+// TestTiming_EX_AF_DE — quick exchanges = 4 t-states.
+func TestTiming_EX_AF_DE(t *testing.T) {
+	if got := runOpcode(t, []byte{0x08}); got != 4 {
+		t.Errorf("EX AF,AF': t = %d, want 4", got)
+	}
+	if got := runOpcode(t, []byte{0xEB}); got != 4 {
+		t.Errorf("EX DE,HL: t = %d, want 4", got)
+	}
+	if got := runOpcode(t, []byte{0xD9}); got != 4 {
+		t.Errorf("EXX: t = %d, want 4", got)
+	}
+}
+
+// TestTiming_LD_A_BCDE — LD A,(BC) / LD A,(DE) = 7 t-states.
+func TestTiming_LD_A_BCDE(t *testing.T) {
+	if got := runOpcode(t, []byte{0x0A}); got != 7 {
+		t.Errorf("LD A,(BC): t = %d, want 7", got)
+	}
+	if got := runOpcode(t, []byte{0x1A}); got != 7 {
+		t.Errorf("LD A,(DE): t = %d, want 7", got)
+	}
+}
+
+// TestTiming_LD_A_nn — LD A,(nn) = 13 t-states.
+func TestTiming_LD_A_nn(t *testing.T) {
+	if got := runOpcode(t, []byte{0x3A, 0x00, 0x90}); got != 13 {
+		t.Errorf("LD A,(nn): t = %d, want 13", got)
+	}
+}
+
+// TestTiming_LD_HL_nn_indirect — LD HL,(nn) = 16 t-states.
+func TestTiming_LD_HL_nn_indirect(t *testing.T) {
+	if got := runOpcode(t, []byte{0x2A, 0x00, 0x90}); got != 16 {
+		t.Errorf("LD HL,(nn): t = %d, want 16", got)
+	}
+}
+
+// TestTiming_DJNZ_taken — DJNZ when B!=0 (jump taken) = 13 t-states.
+// DJNZ-not-taken (B==1 → 0) = 8.
+func TestTiming_DJNZ(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.B = 5 // not 1; will jump
+	mem.Write(0x8000, 0x10) // DJNZ
+	mem.Write(0x8001, 0x02) // offset
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 13 {
+		t.Errorf("DJNZ taken: t = %d, want 13", got)
+	}
+
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.B = 1 // will decrement to 0, not jump
+	mem.Write(0x8000, 0x10)
+	mem.Write(0x8001, 0x02)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 8 {
+		t.Errorf("DJNZ not taken: t = %d, want 8", got)
+	}
+}
+
+// TestTiming_JR_taken_not_taken — JR cc taken = 12, not-taken = 7.
+func TestTiming_JR_taken_not_taken(t *testing.T) {
+	// JR Z,e ($28): Z flag set → taken.
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.F = FLAG_Z
+	mem.Write(0x8000, 0x28)
+	mem.Write(0x8001, 0x05)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 12 {
+		t.Errorf("JR Z,e taken: t = %d, want 12", got)
+	}
+
+	// JR Z,e with Z clear → not taken.
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.F = 0
+	mem.Write(0x8000, 0x28)
+	mem.Write(0x8001, 0x05)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 7 {
+		t.Errorf("JR Z,e not taken: t = %d, want 7", got)
+	}
+}
+
+// TestTiming_JR_unconditional — JR e (unconditional) = 12 t-states.
+func TestTiming_JR_unconditional(t *testing.T) {
+	got := runOpcode(t, []byte{0x18, 0x05})
+	if got != 12 {
+		t.Errorf("JR e: t = %d, want 12", got)
+	}
+}
+
+// TestTiming_CB_shifts — CB-prefix shift/rotate on register = 8 t-states.
+func TestTiming_CB_shifts(t *testing.T) {
+	cases := []byte{
+		0x00, // RLC B
+		0x08, // RRC B
+		0x10, // RL B
+		0x18, // RR B
+		0x20, // SLA B
+		0x28, // SRA B
+		0x30, // SLL B
+		0x38, // SRL B
+	}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{0xCB, op})
+		if got != 8 {
+			t.Errorf("CB $%02X: t = %d, want 8", op, got)
+		}
+	}
+}
+
+// TestTiming_CB_BIT — BIT n,r = 8, BIT n,(HL) = 12 t-states.
+func TestTiming_CB_BIT(t *testing.T) {
+	// BIT 0,B = $40
+	if got := runOpcode(t, []byte{0xCB, 0x40}); got != 8 {
+		t.Errorf("BIT 0,B: t = %d, want 8", got)
+	}
+	// BIT 0,(HL) = $46
+	if got := runOpcode(t, []byte{0xCB, 0x46}); got != 12 {
+		t.Errorf("BIT 0,(HL): t = %d, want 12", got)
+	}
+}
+
+// TestTiming_CB_SET_RES — SET/RES register = 8, (HL) = 15 t-states.
+func TestTiming_CB_SET_RES(t *testing.T) {
+	if got := runOpcode(t, []byte{0xCB, 0xC0}); got != 8 {
+		t.Errorf("SET 0,B: t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xCB, 0xC6}); got != 15 {
+		t.Errorf("SET 0,(HL): t = %d, want 15", got)
+	}
+	if got := runOpcode(t, []byte{0xCB, 0x80}); got != 8 {
+		t.Errorf("RES 0,B: t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xCB, 0x86}); got != 15 {
+		t.Errorf("RES 0,(HL): t = %d, want 15", got)
+	}
+}
+
+// TestTiming_DD_FD_LD_IXY_nn — DD/FD LD IX/IY,nn = 14 t-states.
+func TestTiming_DD_FD_LD_IXY_nn(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x21, 0x34, 0x12}); got != 14 {
+		t.Errorf("LD IX,nn: t = %d, want 14", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x21, 0x34, 0x12}); got != 14 {
+		t.Errorf("LD IY,nn: t = %d, want 14", got)
+	}
+}
+
+// TestTiming_DD_INC_IX — DD INC IX = 10 t-states.
+func TestTiming_DD_INC_IX(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x23}); got != 10 {
+		t.Errorf("INC IX: t = %d, want 10", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x23}); got != 10 {
+		t.Errorf("INC IY: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_PUSH_IX — DD PUSH IX = 15 t-states.
+func TestTiming_PUSH_IX(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xE5}); got != 15 {
+		t.Errorf("PUSH IX: t = %d, want 15", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0xE5}); got != 15 {
+		t.Errorf("PUSH IY: t = %d, want 15", got)
+	}
+}
+
+// TestTiming_LD_A_IX_d — LD A,(IX+d) = 19 t-states.
+func TestTiming_LD_A_IX_d(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x7E, 0x05}); got != 19 {
+		t.Errorf("LD A,(IX+d): t = %d, want 19", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x7E, 0x05}); got != 19 {
+		t.Errorf("LD A,(IY+d): t = %d, want 19", got)
+	}
+}
+
+// TestTiming_LD_IX_d_r — LD (IX+d),r = 19 t-states.
+func TestTiming_LD_IX_d_r(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x77, 0x05}); got != 19 {
+		t.Errorf("LD (IX+d),A: t = %d, want 19", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x77, 0x05}); got != 19 {
+		t.Errorf("LD (IY+d),A: t = %d, want 19", got)
+	}
+}
+
+// TestTiming_ADD_IX_d — ADD A,(IX+d) = 19 t-states.
+func TestTiming_ADD_IX_d(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x86, 0x05}); got != 19 {
+		t.Errorf("ADD A,(IX+d): t = %d, want 19", got)
+	}
+}
+
+// TestTiming_CALL_cc_taken_not_taken — CALL cc,nn taken = 17,
+// not taken = 10 t-states.
+func TestTiming_CALL_cc_taken_not_taken(t *testing.T) {
+	// CALL Z,nn taken (Z=1).
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	cpu.F = FLAG_Z
+	mem.Write(0x8000, 0xCC) // CALL Z,nn
+	mem.Write(0x8001, 0x00)
+	mem.Write(0x8002, 0x90)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 17 {
+		t.Errorf("CALL Z,nn taken: t = %d, want 17", got)
+	}
+
+	// CALL Z,nn not taken (Z=0).
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	cpu.F = 0
+	mem.Write(0x8000, 0xCC)
+	mem.Write(0x8001, 0x00)
+	mem.Write(0x8002, 0x90)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 10 {
+		t.Errorf("CALL Z,nn not taken: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_RET_cc_taken_not_taken — RET cc taken = 11, not taken = 5.
+func TestTiming_RET_cc_taken_not_taken(t *testing.T) {
+	// RET Z taken (Z=1).
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	cpu.F = FLAG_Z
+	mem.Write(0x8000, 0xC8) // RET Z
+	mem.Write(0xFFF0, 0x00) // return addr lo
+	mem.Write(0xFFF1, 0x90) // return addr hi
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 11 {
+		t.Errorf("RET Z taken: t = %d, want 11", got)
+	}
+
+	// RET Z not taken (Z=0).
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	cpu.F = 0
+	mem.Write(0x8000, 0xC8)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 5 {
+		t.Errorf("RET Z not taken: t = %d, want 5", got)
+	}
+}
+
+// TestTiming_OUT_n_A_and_IN_A_n — base OUT (n),A = 11, IN A,(n) = 11.
+// Default test setup has ContentionEnabled=true and port 0xFE is a
+// ULA port; per the Spectrum I/O contention model the cycle adds
+// 4 extra t-states (N:1, C:3 for non-contended-PC + ULA port). Total
+// = 11 + 4 = 15 in our default model. Disable contention to verify
+// the bare Zilog spec value.
+func TestTiming_OUT_n_A_and_IN_A_n(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	mem.Write(0x8000, 0xD3) // OUT (n),A
+	mem.Write(0x8001, 0xFE)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 11 {
+		t.Errorf("OUT (n),A (no contention): t = %d, want 11", got)
+	}
+
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	mem.Write(0x8000, 0xDB) // IN A,(n)
+	mem.Write(0x8001, 0xFE)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 11 {
+		t.Errorf("IN A,(n) (no contention): t = %d, want 11", got)
+	}
+}
+
+// TestTiming_EX_SP_HL — 19 t-states.
+func TestTiming_EX_SP_HL(t *testing.T) {
+	if got := runOpcode(t, []byte{0xE3}); got != 19 {
+		t.Errorf("EX (SP),HL: t = %d, want 19", got)
+	}
+}
+
+// TestTiming_RST_n — RST n = 11 t-states.
+func TestTiming_RST_n(t *testing.T) {
+	for _, op := range []byte{0xC7, 0xCF, 0xD7, 0xDF, 0xE7, 0xEF, 0xF7, 0xFF} {
+		got := runOpcode(t, []byte{op})
+		if got != 11 {
+			t.Errorf("RST $%02X: t = %d, want 11", op, got)
+		}
+	}
+}
+
+// TestTiming_JP_cc_nn — JP cc,nn = 10 t-states (taken or not).
+func TestTiming_JP_cc_nn(t *testing.T) {
+	// JP cc takes 10 t-states regardless of branch taken.
+	cases := []byte{0xC2, 0xCA, 0xD2, 0xDA, 0xE2, 0xEA, 0xF2, 0xFA}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{op, 0x00, 0x90})
+		if got != 10 {
+			t.Errorf("JP cc,nn $%02X: t = %d, want 10", op, got)
+		}
+	}
+}
+
+// TestTiming_JP_HL — JP (HL) = 4 t-states.
+func TestTiming_JP_HL(t *testing.T) {
+	if got := runOpcode(t, []byte{0xE9}); got != 4 {
+		t.Errorf("JP (HL): t = %d, want 4", got)
+	}
+}
+
+// TestTiming_RETI_RETN — ED $4D RETI = 14, ED $45 RETN = 14.
+func TestTiming_RETI_RETN(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0x4D)
+	mem.Write(0xFFF0, 0x00)
+	mem.Write(0xFFF1, 0x90)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 14 {
+		t.Errorf("RETI: t = %d, want 14", got)
+	}
+
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0x45)
+	mem.Write(0xFFF0, 0x00)
+	mem.Write(0xFFF1, 0x90)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 14 {
+		t.Errorf("RETN: t = %d, want 14", got)
+	}
+}
+
+// TestTiming_LDIR_LDDR — repeat-until-BC=0; per-iteration = 21 t
+// while BC != 0, 16 t on the final iteration.
+func TestTiming_LDIR_LDDR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.setHL(0x9000)
+	cpu.setDE(0x9100)
+	cpu.setBC(0x0003)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB0) // LDIR
+
+	// First iteration: BC != 0 after dec → repeats. 21 t.
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 21 {
+		t.Errorf("LDIR first iter: t = %d, want 21", got)
+	}
+
+	// Drive BC to 1 to test final iteration (16 t).
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.setHL(0x9000)
+	cpu.setDE(0x9100)
+	cpu.setBC(0x0001)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB0)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("LDIR last iter: t = %d, want 16", got)
+	}
+}
+
+// TestTiming_CPI_CPD — 16 t-states for one block-search step.
+func TestTiming_CPI_CPD(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.A = 0xFF
+	cpu.setHL(0x9000)
+	cpu.setBC(0x0005)
+	mem.Write(0x9000, 0x42) // non-match
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xA1) // CPI
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("CPI: t = %d, want 16", got)
+	}
+}
+
+// TestTiming_LD_I_R — LD A,I / LD A,R / LD I,A / LD R,A = 9 t-states.
+func TestTiming_LD_I_R(t *testing.T) {
+	cases := []struct {
+		name string
+		ops  []byte
+	}{
+		{"LD A,I", []byte{0xED, 0x57}},
+		{"LD A,R", []byte{0xED, 0x5F}},
+		{"LD I,A", []byte{0xED, 0x47}},
+		{"LD R,A", []byte{0xED, 0x4F}},
+	}
+	for _, c := range cases {
+		got := runOpcode(t, c.ops)
+		if got != 9 {
+			t.Errorf("%s: t = %d, want 9", c.name, got)
+		}
+	}
+}
+
+// TestTiming_ED_SBC_ADC_HL — ADC HL,rr / SBC HL,rr = 15 t-states.
+func TestTiming_ED_SBC_ADC_HL(t *testing.T) {
+	cases := []byte{
+		0x42, // SBC HL,BC
+		0x4A, // ADC HL,BC
+		0x52, // SBC HL,DE
+		0x5A, // ADC HL,DE
+		0x62, // SBC HL,HL
+		0x6A, // ADC HL,HL
+		0x72, // SBC HL,SP
+		0x7A, // ADC HL,SP
+	}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{0xED, op})
+		if got != 15 {
+			t.Errorf("ED $%02X: t = %d, want 15", op, got)
+		}
+	}
+}
+
+// TestTiming_LD_nn_rr — ED $43/$53/$63/$73 (LD (nn),rr) = 20 t-states.
+func TestTiming_LD_nn_rr(t *testing.T) {
+	cases := []byte{
+		0x43, // LD (nn),BC
+		0x53, // LD (nn),DE
+		0x63, // LD (nn),HL (alternate encoding)
+		0x73, // LD (nn),SP
+	}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{0xED, op, 0x00, 0x90})
+		if got != 20 {
+			t.Errorf("ED $%02X LD (nn),rr: t = %d, want 20", op, got)
+		}
+	}
+}
+
+// TestTiming_LD_rr_nn_indirect_ED — ED $4B/$5B/$6B/$7B (LD rr,(nn)) = 20 t.
+func TestTiming_LD_rr_nn_indirect_ED(t *testing.T) {
+	cases := []byte{
+		0x4B, // LD BC,(nn)
+		0x5B, // LD DE,(nn)
+		0x6B, // LD HL,(nn) (alternate)
+		0x7B, // LD SP,(nn)
+	}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{0xED, op, 0x00, 0x90})
+		if got != 20 {
+			t.Errorf("ED $%02X LD rr,(nn): t = %d, want 20", op, got)
+		}
+	}
+}
+
+// TestTiming_RLA_RRA_RLCA_RRCA — single-cycle rotates = 4 t-states.
+func TestTiming_RLA_RRA_RLCA_RRCA(t *testing.T) {
+	for _, op := range []byte{0x07, 0x0F, 0x17, 0x1F} {
+		got := runOpcode(t, []byte{op})
+		if got != 4 {
+			t.Errorf("$%02X rotate: t = %d, want 4", op, got)
+		}
+	}
+}
+
+// TestTiming_DAA_CPL_SCF_CCF — 4 t-states each.
+func TestTiming_DAA_CPL_SCF_CCF(t *testing.T) {
+	for _, op := range []byte{0x27, 0x2F, 0x37, 0x3F} {
+		got := runOpcode(t, []byte{op})
+		if got != 4 {
+			t.Errorf("$%02X (DAA/CPL/SCF/CCF): t = %d, want 4", op, got)
+		}
+	}
+}
+
+// TestTiming_DI_EI — 4 t-states.
+func TestTiming_DI_EI(t *testing.T) {
+	if got := runOpcode(t, []byte{0xF3}); got != 4 {
+		t.Errorf("DI: t = %d, want 4", got)
+	}
+	if got := runOpcode(t, []byte{0xFB}); got != 4 {
+		t.Errorf("EI: t = %d, want 4", got)
+	}
+}
+
+// TestTiming_LD_SP_HL — LD SP,HL = 6 t-states.
+func TestTiming_LD_SP_HL(t *testing.T) {
+	if got := runOpcode(t, []byte{0xF9}); got != 6 {
+		t.Errorf("LD SP,HL: t = %d, want 6", got)
+	}
+}
+
+// TestTiming_LD_nn_HL_basic — LD (nn),HL via base $22 = 16 t-states.
+func TestTiming_LD_nn_HL_basic(t *testing.T) {
+	if got := runOpcode(t, []byte{0x22, 0x00, 0x90}); got != 16 {
+		t.Errorf("LD (nn),HL ($22): t = %d, want 16", got)
+	}
+}
+
+// TestTiming_LD_nn_A_LD_A_nn — LD (nn),A = 13 t-states.
+func TestTiming_LD_nn_A_LD_A_nn(t *testing.T) {
+	if got := runOpcode(t, []byte{0x32, 0x00, 0x90}); got != 13 {
+		t.Errorf("LD (nn),A: t = %d, want 13", got)
+	}
+}
+
+// TestTiming_LD_BC_DE_A — LD (BC),A = 7, LD (DE),A = 7.
+func TestTiming_LD_BC_DE_A(t *testing.T) {
+	if got := runOpcode(t, []byte{0x02}); got != 7 {
+		t.Errorf("LD (BC),A: t = %d, want 7", got)
+	}
+	if got := runOpcode(t, []byte{0x12}); got != 7 {
+		t.Errorf("LD (DE),A: t = %d, want 7", got)
+	}
+}
+
+// TestTiming_LD_A_BC_DE — LD A,(BC) = 7, LD A,(DE) = 7.
+// Same as TestTiming_LD_A_BCDE but spelled out.
+func TestTiming_LD_A_BC_DE(t *testing.T) {
+	if got := runOpcode(t, []byte{0x0A}); got != 7 {
+		t.Errorf("LD A,(BC): t = %d, want 7", got)
+	}
+	if got := runOpcode(t, []byte{0x1A}); got != 7 {
+		t.Errorf("LD A,(DE): t = %d, want 7", got)
+	}
+}
+
+// TestTiming_INC_DEC_HL_indirect — INC (HL), DEC (HL) = 11 t-states.
+func TestTiming_INC_DEC_HL_indirect(t *testing.T) {
+	if got := runOpcode(t, []byte{0x34}); got != 11 {
+		t.Errorf("INC (HL): t = %d, want 11", got)
+	}
+	if got := runOpcode(t, []byte{0x35}); got != 11 {
+		t.Errorf("DEC (HL): t = %d, want 11", got)
+	}
+}
+
+// TestTiming_LD_HL_n — LD (HL),n = 10 t-states.
+func TestTiming_LD_HL_n(t *testing.T) {
+	if got := runOpcode(t, []byte{0x36, 0x42}); got != 10 {
+		t.Errorf("LD (HL),n: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_LD_r_HL — LD r,(HL) = 7 t-states.
+func TestTiming_LD_r_HL(t *testing.T) {
+	for _, op := range []byte{0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E, 0x7E} {
+		got := runOpcode(t, []byte{op})
+		if got != 7 {
+			t.Errorf("LD r,(HL) $%02X: t = %d, want 7", op, got)
+		}
+	}
+}
+
+// TestTiming_RLD_RRD — ED $67 RRD, ED $6F RLD = 18 t-states.
+func TestTiming_RLD_RRD(t *testing.T) {
+	if got := runOpcode(t, []byte{0xED, 0x6F}); got != 18 {
+		t.Errorf("RLD: t = %d, want 18", got)
+	}
+	if got := runOpcode(t, []byte{0xED, 0x67}); got != 18 {
+		t.Errorf("RRD: t = %d, want 18", got)
+	}
+}
+
+// TestTiming_INI_IND_OUTI_OUTD_base — block I/O single iteration = 16 t.
+// Skip if contention adjusts — disable to test base.
+func TestTiming_INI_IND_OUTI_OUTD_base(t *testing.T) {
+	for _, op := range []byte{0xA2 /* INI */, 0xAA /* IND */, 0xA3 /* OUTI */, 0xAB /* OUTD */} {
+		cpu, mem := createTestCPU()
+		defer cleanupTestROMs("test_roms_z80")
+		mem.ContentionEnabled = false
+		cpu.PC = 0x8000
+		cpu.B = 1 // any value
+		mem.Write(0x8000, 0xED)
+		mem.Write(0x8001, op)
+		before := cpu.tstates
+		cpu.StepInstruction()
+		if got := cpu.tstates - before; got != 16 {
+			t.Errorf("ED $%02X block I/O: t = %d, want 16 (no contention)", op, got)
+		}
+	}
+}
+
+// TestTiming_INC_DEC_IXY_indirect — INC/DEC (IX+d) / (IY+d) = 23 t-states.
+func TestTiming_INC_DEC_IXY_indirect(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x34, 0x05}); got != 23 {
+		t.Errorf("INC (IX+d): t = %d, want 23", got)
+	}
+	if got := runOpcode(t, []byte{0xDD, 0x35, 0x05}); got != 23 {
+		t.Errorf("DEC (IX+d): t = %d, want 23", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x34, 0x05}); got != 23 {
+		t.Errorf("INC (IY+d): t = %d, want 23", got)
+	}
+}
+
+// TestTiming_LD_IXY_d_n — LD (IX+d),n = 19, LD (IY+d),n = 19.
+func TestTiming_LD_IXY_d_n(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x36, 0x05, 0x42}); got != 19 {
+		t.Errorf("LD (IX+d),n: t = %d, want 19", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x36, 0x05, 0x42}); got != 19 {
+		t.Errorf("LD (IY+d),n: t = %d, want 19", got)
+	}
+}
+
+// TestTiming_BIT_IXY_d — DD CB d $46 BIT n,(IX+d) = 20 t-states.
+func TestTiming_BIT_IXY_d(t *testing.T) {
+	// DD CB d $46 = BIT 0,(IX+d)
+	if got := runOpcode(t, []byte{0xDD, 0xCB, 0x05, 0x46}); got != 20 {
+		t.Errorf("BIT 0,(IX+d): t = %d, want 20", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0xCB, 0x05, 0x46}); got != 20 {
+		t.Errorf("BIT 0,(IY+d): t = %d, want 20", got)
+	}
+}
+
+// TestTiming_SET_RES_IXY_d — SET/RES n,(IX+d) = 23 t-states.
+func TestTiming_SET_RES_IXY_d(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xCB, 0x05, 0xC6}); got != 23 {
+		t.Errorf("SET 0,(IX+d): t = %d, want 23", got)
+	}
+	if got := runOpcode(t, []byte{0xDD, 0xCB, 0x05, 0x86}); got != 23 {
+		t.Errorf("RES 0,(IX+d): t = %d, want 23", got)
+	}
+}
+
+// TestTiming_RLC_IXY_d — DDCB shifts = 23 t-states.
+func TestTiming_RLC_IXY_d(t *testing.T) {
+	// DD CB d $06 = RLC (IX+d)
+	if got := runOpcode(t, []byte{0xDD, 0xCB, 0x05, 0x06}); got != 23 {
+		t.Errorf("RLC (IX+d): t = %d, want 23", got)
+	}
+}
+
+// TestTiming_LD_IXY_nn_indirect — LD IX,(nn) / LD (nn),IX = 20 t.
+func TestTiming_LD_IXY_nn_indirect(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x2A, 0x00, 0x90}); got != 20 {
+		t.Errorf("LD IX,(nn): t = %d, want 20", got)
+	}
+	if got := runOpcode(t, []byte{0xDD, 0x22, 0x00, 0x90}); got != 20 {
+		t.Errorf("LD (nn),IX: t = %d, want 20", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0x2A, 0x00, 0x90}); got != 20 {
+		t.Errorf("LD IY,(nn): t = %d, want 20", got)
+	}
+}
+
+// TestTiming_ADD_IXY_rr — ADD IX/IY,rr = 15 t-states.
+func TestTiming_ADD_IXY_rr(t *testing.T) {
+	for _, op := range []byte{0x09, 0x19, 0x29, 0x39} {
+		got := runOpcode(t, []byte{0xDD, op})
+		if got != 15 {
+			t.Errorf("ADD IX,rr $%02X: t = %d, want 15", op, got)
+		}
+		got = runOpcode(t, []byte{0xFD, op})
+		if got != 15 {
+			t.Errorf("ADD IY,rr $%02X: t = %d, want 15", op, got)
+		}
+	}
+}
+
+// TestTiming_PUSH_POP_IXY — DD $E5/$E1 PUSH/POP IX = 15/14 t-states.
+func TestTiming_PUSH_POP_IXY(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xE5}); got != 15 {
+		t.Errorf("PUSH IX: t = %d, want 15", got)
+	}
+	// POP needs a stack frame.
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.SP = 0xFFF0
+	mem.Write(0xFFF0, 0x34)
+	mem.Write(0xFFF1, 0x12)
+	mem.Write(0x8000, 0xDD)
+	mem.Write(0x8001, 0xE1)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 14 {
+		t.Errorf("POP IX: t = %d, want 14", got)
+	}
+}
+
+// TestTiming_IXH_IXL_ALU — DD-prefixed IXh/IXl arithmetic = 8 t-states.
+// E.g. INC IXh ($DD $24), ADD A,IXh ($DD $84).
+func TestTiming_IXH_IXL_ALU(t *testing.T) {
+	cases := []struct {
+		name string
+		ops  []byte
+	}{
+		{"INC IXh", []byte{0xDD, 0x24}},
+		{"DEC IXh", []byte{0xDD, 0x25}},
+		{"INC IXl", []byte{0xDD, 0x2C}},
+		{"DEC IXl", []byte{0xDD, 0x2D}},
+		{"ADD A,IXh", []byte{0xDD, 0x84}},
+		{"ADD A,IXl", []byte{0xDD, 0x85}},
+		{"AND IXh", []byte{0xDD, 0xA4}},
+	}
+	for _, c := range cases {
+		got := runOpcode(t, c.ops)
+		if got != 8 {
+			t.Errorf("%s: t = %d, want 8", c.name, got)
+		}
+	}
+}
+
+// TestTiming_LD_IXH_IXL_n — DD LD IXh,n = 11, DD LD IXl,n = 11.
+func TestTiming_LD_IXH_IXL_n(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0x26, 0x42}); got != 11 {
+		t.Errorf("LD IXh,n: t = %d, want 11", got)
+	}
+	if got := runOpcode(t, []byte{0xDD, 0x2E, 0x42}); got != 11 {
+		t.Errorf("LD IXl,n: t = %d, want 11", got)
+	}
+}
+
+// TestTiming_LD_r_IXH_IXL — DD LD B,IXh etc. = 8 t-states.
+func TestTiming_LD_r_IXH_IXL(t *testing.T) {
+	cases := []struct {
+		name string
+		ops  []byte
+	}{
+		{"LD B,IXh", []byte{0xDD, 0x44}},
+		{"LD B,IXl", []byte{0xDD, 0x45}},
+		{"LD C,IXh", []byte{0xDD, 0x4C}},
+		{"LD A,IXh", []byte{0xDD, 0x7C}},
+		{"LD A,IXl", []byte{0xDD, 0x7D}},
+	}
+	for _, c := range cases {
+		got := runOpcode(t, c.ops)
+		if got != 8 {
+			t.Errorf("%s: t = %d, want 8", c.name, got)
+		}
+	}
+}
+
+// TestTiming_EX_SP_IX — DD $E3 EX (SP),IX = 23 t-states.
+func TestTiming_EX_SP_IX(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xE3}); got != 23 {
+		t.Errorf("EX (SP),IX: t = %d, want 23", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0xE3}); got != 23 {
+		t.Errorf("EX (SP),IY: t = %d, want 23", got)
+	}
+}
+
+// TestTiming_JP_IX — DD $E9 JP (IX) = 8 t-states.
+func TestTiming_JP_IX(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xE9}); got != 8 {
+		t.Errorf("JP (IX): t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0xE9}); got != 8 {
+		t.Errorf("JP (IY): t = %d, want 8", got)
+	}
+}
+
+// TestTiming_LD_SP_IX — DD $F9 LD SP,IX = 10 t-states.
+func TestTiming_LD_SP_IX(t *testing.T) {
+	if got := runOpcode(t, []byte{0xDD, 0xF9}); got != 10 {
+		t.Errorf("LD SP,IX: t = %d, want 10", got)
+	}
+	if got := runOpcode(t, []byte{0xFD, 0xF9}); got != 10 {
+		t.Errorf("LD SP,IY: t = %d, want 10", got)
+	}
+}
+
+// TestTiming_OUT_C_r_IN_r_C_base — ED $79 OUT (C),A = 12, ED $78 IN A,(C) = 12.
+func TestTiming_OUT_C_r_IN_r_C_base(t *testing.T) {
+	// Use uncontended to test base timing.
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	cpu.B = 0xFE
+	cpu.C = 0xFE
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0x79) // OUT (C),A
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 12 {
+		t.Errorf("OUT (C),A: t = %d, want 12 (no contention)", got)
+	}
+
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	cpu.B = 0xFE
+	cpu.C = 0xFE
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0x78) // IN A,(C)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 12 {
+		t.Errorf("IN A,(C): t = %d, want 12 (no contention)", got)
+	}
+}
+
+// TestTiming_OUT_C_0 — ED $71 OUT (C),0 = 12 t-states. Undocumented
+// Z80 (not 80N) — outputs 0 on Z80, $FF on Z80N. Either way timing
+// should be 12 t.
+func TestTiming_OUT_C_0(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	cpu.B = 0xFE
+	cpu.C = 0xFE
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0x71)
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 12 {
+		t.Errorf("OUT (C),0: t = %d, want 12 (no contention)", got)
+	}
+}
+
+// TestTiming_LDDR — same shape as LDIR: 21 t per iter (BC > 0), 16 t
+// on the final iter.
+func TestTiming_LDDR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.setHL(0x9100)
+	cpu.setDE(0x9200)
+	cpu.setBC(0x0003)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB8) // LDDR
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 21 {
+		t.Errorf("LDDR first iter: t = %d, want 21", got)
+	}
+
+	// Last iter (BC = 1)
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.setHL(0x9100)
+	cpu.setDE(0x9200)
+	cpu.setBC(0x0001)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB8)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("LDDR last iter: t = %d, want 16", got)
+	}
+}
+
+// TestTiming_CPIR — CPIR per-iter = 21 t (BC > 0 and no match),
+// last-iter (match or BC == 0) = 16 t.
+func TestTiming_CPIR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.A = 0xFF
+	cpu.setHL(0x9000)
+	cpu.setBC(0x0003)
+	mem.Write(0x9000, 0x00) // no match
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB1) // CPIR
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 21 {
+		t.Errorf("CPIR first iter (no match, BC>0): t = %d, want 21", got)
+	}
+
+	// Last iter via BC=1 no match.
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.A = 0xFF
+	cpu.setHL(0x9000)
+	cpu.setBC(0x0001)
+	mem.Write(0x9000, 0x00)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB1)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("CPIR last iter (BC=0 after dec): t = %d, want 16", got)
+	}
+}
+
+// TestTiming_OTIR — block I/O OTIR/INIR loops 21 t per iter (B > 0),
+// 16 t on final.
+func TestTiming_OTIR(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	cpu.B = 3
+	cpu.setHL(0x9000)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB3) // OTIR
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 21 {
+		t.Errorf("OTIR first iter (no contention): t = %d, want 21", got)
+	}
+
+	// Last iter via B=1.
+	cpu, mem = createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	mem.ContentionEnabled = false
+	cpu.PC = 0x8000
+	cpu.B = 1
+	cpu.setHL(0x9000)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xB3)
+	before = cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("OTIR last iter: t = %d, want 16", got)
+	}
+}
+
+// TestTiming_NEG — ED $44 NEG = 8 t. Already covered by
+// TestTiming_ED_NEG_IM but also test all 8 NEG mirror opcodes.
+func TestTiming_NEG_All8(t *testing.T) {
+	// NEG has 8 valid encodings ($44, $4C, $54, $5C, $64, $6C, $74, $7C)
+	// per undoc Z80 docs.
+	for _, op := range []byte{0x44, 0x4C, 0x54, 0x5C, 0x64, 0x6C, 0x74, 0x7C} {
+		got := runOpcode(t, []byte{0xED, op})
+		if got != 8 {
+			t.Errorf("NEG ED $%02X: t = %d, want 8", op, got)
+		}
+	}
+}
+
+// TestTiming_RETN_All — RETN has 7 mirror encodings ($45, $55, $5D,
+// $65, $6D, $75, $7D). All = 14 t.
+func TestTiming_RETN_All(t *testing.T) {
+	for _, op := range []byte{0x45, 0x55, 0x5D, 0x65, 0x6D, 0x75, 0x7D} {
+		cpu, mem := createTestCPU()
+		defer cleanupTestROMs("test_roms_z80")
+		cpu.PC = 0x8000
+		cpu.SP = 0xFFF0
+		mem.Write(0xFFF0, 0x00)
+		mem.Write(0xFFF1, 0x90)
+		mem.Write(0x8000, 0xED)
+		mem.Write(0x8001, op)
+		before := cpu.tstates
+		cpu.StepInstruction()
+		if got := cpu.tstates - before; got != 14 {
+			t.Errorf("RETN mirror ED $%02X: t = %d, want 14", op, got)
+		}
+	}
+}
+
+// TestTiming_IM_x_All — ED IM 0/0*/1/2 mirror encodings = 8 t each.
+func TestTiming_IM_x_All(t *testing.T) {
+	cases := []byte{
+		0x46, // IM 0
+		0x4E, // IM 0* (mirror)
+		0x56, // IM 1
+		0x5E, // IM 2
+		0x66, // IM 0 (mirror)
+		0x6E, // IM 0 (mirror, also documented as IM 0/1)
+		0x76, // IM 1 (mirror)
+		0x7E, // IM 2 (mirror)
+	}
+	for _, op := range cases {
+		got := runOpcode(t, []byte{0xED, op})
+		if got != 8 {
+			t.Errorf("IM mirror ED $%02X: t = %d, want 8", op, got)
+		}
+	}
+}
+
+// TestTiming_OTDR_INIR_INDR — repeat block I/O variants = 21 / 16.
+func TestTiming_OTDR_INIR_INDR(t *testing.T) {
+	cases := []struct {
+		name string
+		op   byte
+	}{
+		{"OTDR", 0xBB},
+		{"INIR", 0xB2},
+		{"INDR", 0xBA},
+	}
+	for _, c := range cases {
+		// First iter (B = 3): 21 t.
+		cpu, mem := createTestCPU()
+		defer cleanupTestROMs("test_roms_z80")
+		mem.ContentionEnabled = false
+		cpu.PC = 0x8000
+		cpu.B = 3
+		cpu.setHL(0x9000)
+		mem.Write(0x8000, 0xED)
+		mem.Write(0x8001, c.op)
+		before := cpu.tstates
+		cpu.StepInstruction()
+		if got := cpu.tstates - before; got != 21 {
+			t.Errorf("%s first iter: t = %d, want 21", c.name, got)
+		}
+
+		// Last iter (B = 1): 16 t.
+		cpu, mem = createTestCPU()
+		defer cleanupTestROMs("test_roms_z80")
+		mem.ContentionEnabled = false
+		cpu.PC = 0x8000
+		cpu.B = 1
+		cpu.setHL(0x9000)
+		mem.Write(0x8000, 0xED)
+		mem.Write(0x8001, c.op)
+		before = cpu.tstates
+		cpu.StepInstruction()
+		if got := cpu.tstates - before; got != 16 {
+			t.Errorf("%s last iter: t = %d, want 16", c.name, got)
+		}
+	}
+}
+
+// TestTiming_ED_LDI — ED block instructions LDI = 16 t-states.
+func TestTiming_ED_LDI(t *testing.T) {
+	cpu, mem := createTestCPU()
+	defer cleanupTestROMs("test_roms_z80")
+	cpu.PC = 0x8000
+	cpu.setHL(0x9000)
+	cpu.setDE(0x9100)
+	cpu.setBC(0x0005)
+	mem.Write(0x8000, 0xED)
+	mem.Write(0x8001, 0xA0) // LDI
+	before := cpu.tstates
+	cpu.StepInstruction()
+	if got := cpu.tstates - before; got != 16 {
+		t.Errorf("LDI: t = %d, want 16", got)
+	}
+}
+
+// TestTiming_ED_NEG_IM — ED NEG = 8, ED IM 0/1/2 = 8.
+func TestTiming_ED_NEG_IM(t *testing.T) {
+	if got := runOpcode(t, []byte{0xED, 0x44}); got != 8 {
+		t.Errorf("NEG: t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xED, 0x46}); got != 8 {
+		t.Errorf("IM 0: t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xED, 0x56}); got != 8 {
+		t.Errorf("IM 1: t = %d, want 8", got)
+	}
+	if got := runOpcode(t, []byte{0xED, 0x5E}); got != 8 {
+		t.Errorf("IM 2: t = %d, want 8", got)
 	}
 }

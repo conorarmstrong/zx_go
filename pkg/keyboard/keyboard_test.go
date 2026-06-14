@@ -661,6 +661,28 @@ func TestF12_NMI_WithCallback(t *testing.T) {
 	}
 }
 
+// TestF8_NMI_TriggersBrowserCallback verifies F8 routes to the
+// same NMI hook as F12. On ModelNext this brings up the NextZXOS
+// Browser; on other models F8 still fires NMI for whatever ROM
+// has the NMI vector (typically Multiface). Both keys are handled
+// identically — the running OS decides what to do with the NMI.
+func TestF8_NMI_TriggersBrowserCallback(t *testing.T) {
+	kbd := New()
+	calls := 0
+	kbd.SetNMICallback(func() { calls++ })
+
+	kbd.HandleKeyWithModifiers(fyne.KeyF8, true, false, false, false, false)
+	if calls != 1 {
+		t.Errorf("F8 press: callback fired %d times, want 1", calls)
+	}
+	// F8 should NOT inject anything into the matrix.
+	for i, row := range kbd.matrix {
+		if row != 0xFF {
+			t.Errorf("F8 affected matrix row %d = %#02x", i, row)
+		}
+	}
+}
+
 func TestF12_NMI_WithoutCallback(t *testing.T) {
 	kbd := New()
 

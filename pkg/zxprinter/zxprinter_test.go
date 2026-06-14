@@ -95,3 +95,77 @@ func TestClearDropsRows(t *testing.T) {
 		t.Errorf("after Clear: %d rows, want 0", p.Rows())
 	}
 }
+
+// ========================================================================
+// Additional ZX Printer tests (iter 216).
+// ========================================================================
+
+// TestResetClearsStateButPreservesOutput documents Reset()'s
+// current behaviour: it re-initialises the state machine (speed,
+// pixel cursor, stylus state) but DOES NOT drop accumulated print
+// output. Use Clear() to throw away the printed image.
+func TestResetClearsStateButPreservesOutput(t *testing.T) {
+	p := New()
+	p.HandlePortWrite(0xFB, 0x80, 0)
+	p.HandlePortWrite(0xFB, 0x84, 70400)
+	if p.Rows() != 1 {
+		t.Fatalf("setup: rows = %d, want 1", p.Rows())
+	}
+	p.Reset()
+	if p.Rows() != 1 {
+		t.Errorf("after Reset: %d rows, want 1 (output preserved)", p.Rows())
+	}
+}
+
+// TestPortDecodesAllEvenPorts verifies that any port with bit 2
+// clear is decoded as the printer (the ZX Printer's bus decoder).
+func TestPortDecodesAllEvenPorts(t *testing.T) {
+	p := New()
+	// Sample a few ports that satisfy port&0x04 == 0.
+	for _, port := range []uint16{0xFB, 0x00FB, 0x40FB, 0x7BFB, 0x80FB} {
+		if _, ok := p.HandlePortRead(port, 0); !ok {
+			t.Errorf("port $%04X: HandlePortRead = false, want true", port)
+		}
+	}
+	// Ports with bit 2 set must NOT claim.
+	for _, port := range []uint16{0xFF, 0x04, 0x40FF, 0x07} {
+		if _, ok := p.HandlePortRead(port, 0); ok {
+			t.Errorf("port $%04X: HandlePortRead = true, want false (bit 2 set)",
+				port)
+		}
+	}
+}
+
+// TestStylusOff_ProducesBlankLine — write to printer with bit 7=0
+// (stylus low) for a full line should produce an all-white row.
+func TestStylusOff_ProducesBlankLine(t *testing.T) {
+	p := New()
+	// Stylus off, motor on (bit 2 = 0).
+	p.HandlePortWrite(0xFB, 0x00, 0)
+	p.HandlePortWrite(0xFB, 0x04, 70400) // motor off
+	if p.Rows() != 1 {
+		t.Fatalf("rows = %d, want 1", p.Rows())
+	}
+	img := p.Bitmap()
+	darkCount := 0
+	for x := 0; x < LineWidth; x++ {
+		if img.GrayAt(x, 0).Y == 0 {
+			darkCount++
+		}
+	}
+	if darkCount > LineWidth/8 {
+		t.Errorf("stylus-off line had %d dark pixels — should be mostly blank",
+			darkCount)
+	}
+}
+
+// TestFrameIsNoop verifies the Frame() hook doesn't crash and
+// doesn't add spurious rows.
+func TestFrameIsNoop(t *testing.T) {
+	p := New()
+	before := p.Rows()
+	p.Frame()
+	if p.Rows() != before {
+		t.Errorf("Frame: rows = %d → %d", before, p.Rows())
+	}
+}

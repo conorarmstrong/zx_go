@@ -55,7 +55,10 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.cc || '' }}
-        run: go build -o ${{ matrix.artifact }} ./cmd/zx_go
+        run: |
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -ldflags "-X github.com/conorarmstrong/zx_go/pkg/version.BuildDate=$BUILD_DATE" \
+            -o ${{ matrix.artifact }} ./cmd/zx_go
 
       - name: Package binary (Unix)
         if: matrix.goos != 'windows'

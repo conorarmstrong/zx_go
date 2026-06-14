@@ -340,6 +340,72 @@ func disasmED(read readFunc, start, addr uint16) DisassembledLine {
 		return mk(2, "INDR", "")
 	case 0xBB:
 		return mk(2, "OTDR", "")
+
+	// --- Z80N extensions (Spectrum Next CPU variant) ---
+	case 0x23:
+		return mk(2, "SWAPNIB", "")
+	case 0x24:
+		return mk(2, "MIRROR", "A")
+	case 0x27:
+		return mk(3, "TEST", fmt.Sprintf("$%02X", read(addr+1)))
+	case 0x28:
+		return mk(2, "BSLA", "DE,B")
+	case 0x29:
+		return mk(2, "BSRA", "DE,B")
+	case 0x2A:
+		return mk(2, "BSRL", "DE,B")
+	case 0x2B:
+		return mk(2, "BSRF", "DE,B")
+	case 0x2C:
+		return mk(2, "BRLC", "DE,B")
+	case 0x30:
+		return mk(2, "MUL", "D,E")
+	case 0x31:
+		return mk(2, "ADD", "HL,A")
+	case 0x32:
+		return mk(2, "ADD", "DE,A")
+	case 0x33:
+		return mk(2, "ADD", "BC,A")
+	case 0x34:
+		nn := uint16(read(addr+1)) | uint16(read(addr+2))<<8
+		return mk(4, "ADD", fmt.Sprintf("HL,$%04X", nn))
+	case 0x35:
+		nn := uint16(read(addr+1)) | uint16(read(addr+2))<<8
+		return mk(4, "ADD", fmt.Sprintf("DE,$%04X", nn))
+	case 0x36:
+		nn := uint16(read(addr+1)) | uint16(read(addr+2))<<8
+		return mk(4, "ADD", fmt.Sprintf("BC,$%04X", nn))
+	case 0x8A:
+		// PUSH nn — big-endian operand: hi byte first.
+		nn := uint16(read(addr+1))<<8 | uint16(read(addr+2))
+		return mk(4, "PUSH", fmt.Sprintf("$%04X", nn))
+	case 0x90:
+		return mk(2, "OUTINB", "")
+	case 0x91:
+		return mk(4, "NEXTREG",
+			fmt.Sprintf("$%02X,$%02X", read(addr+1), read(addr+2)))
+	case 0x92:
+		return mk(3, "NEXTREG", fmt.Sprintf("$%02X,A", read(addr+1)))
+	case 0x93:
+		return mk(2, "PIXELDN", "")
+	case 0x94:
+		return mk(2, "PIXELAD", "")
+	case 0x95:
+		return mk(2, "SETAE", "")
+	case 0x98:
+		return mk(2, "JP", "(C)")
+	case 0xA4:
+		return mk(2, "LDIX", "")
+	case 0xA5:
+		return mk(2, "LDWS", "")
+	case 0xAC:
+		return mk(2, "LDDX", "")
+	case 0xB4:
+		return mk(2, "LDIRX", "")
+	case 0xB7:
+		return mk(2, "LDPIRX", "")
+	case 0xBC:
+		return mk(2, "LDDRX", "")
 	}
 	return mk(2, fmt.Sprintf("DB $ED,$%02X", op), "")
 }

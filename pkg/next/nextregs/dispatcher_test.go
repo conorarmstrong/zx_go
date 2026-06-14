@@ -1,0 +1,342 @@
+package nextregs
+
+import "testing"
+
+func TestNewDispatcherDefaults(t *testing.T) {
+	d := New()
+	if d.Selected() != 0 {
+		t.Errorf("Selected() = %d, want 0", d.Selected())
+	}
+	// Hardware-identity and reset-default registers carry non-zero
+	// values that match the canonical `tbblue_reset_common`. NextZXOS
+	// reads several of these before initialising them itself.
+	expectDefault := map[byte]byte{
+		0x00: defaultMachineID,
+		0x01: defaultCoreVersion,
+		0x02: 0x01, // bit 0 = "last reset was soft reset" — matches
+		// the reference emulator at cold boot, verified by the iter
+		// 131 lockstep diff at PC=$0171 where the FPGA bootrom reads
+		// NR$02 and the reference returns A=$01. The reference's FPGA
+		// reset cascade makes the implicit power-on reset look like a
+		// soft reset to the bootrom. WireReset OnWrite must NOT use
+		// edge-detection for this to work — see wire.go for details.
+		0x05: 0x01,
+		0x08: 0x10,
+		0x0E: defaultBoardID,
+		0x0F: defaultCoreSubMinor,
+		// 0x10 default: 0 (Core ID — generic, matches our reference
+		// emulator). Don't list it (zero default is the implicit case).
+		0x12: 0x08,
+		0x13: 0x0B,
+		0x14: 0xE3,
+		0x42: 0x07, // zxnext.vhd:5002
+		0x4A: 0xE3, // zxnext.vhd:5014
+		0x4B: 0xE3,
+		0x4C: 0x0F,
+		// Tilemap base / tile-definitions base. zxnext.vhd:5041-5045 resets
+		// nr_6e_tilemap_base = "101100" ($2C) and nr_6f_tilemap_tiles =
+		// "001100" ($0C). NextZXOS relies on these defaults (it does not
+		// write NR$6E/$6F before reading them at boot), so a $00 default
+		// makes it compute the wrong tilemap address. Verified divergent vs
+		// the reference at $3F1B via --next-nrdiff; reference = VHDL = $2C/$0C.
+		0x6E: 0x2C,
+		0x6F: 0x0C,
+		0x50: 0xFF,
+		0x51: 0xFF,
+		0x52: 0x0A,
+		0x53: 0x0B,
+		0x54: 0x04,
+		0x55: 0x05,
+		0x56: 0x00,
+		0x57: 0x01,
+		0xB8: 0x83,
+		0xBB: 0xCD,
+	}
+	for reg := 0; reg < 256; reg++ {
+		want, hasOverride := expectDefault[byte(reg)]
+		if !hasOverride {
+			want = 0
+		}
+		if got := d.Raw(byte(reg)); got != want {
+			t.Errorf("Raw(%#x) = %d, want %d", reg, got, want)
+		}
+	}
+}
+
+func TestRoundTripEveryRegister(t *testing.T) {
+	d := New()
+	// Write a distinct value to every register, then read all back.
+	// `reg ^ 0xA5` produces 256 distinct bytes; any pattern that
+	// covers the full byte range would do.
+	for reg := 0; reg < 256; reg++ {
+		want := byte(reg) ^ 0xA5
+		d.Select(byte(reg))
+		d.WriteData(want)
+	}
+	for reg := 0; reg < 256; reg++ {
+		want := byte(reg) ^ 0xA5
+		d.Select(byte(reg))
+		if got := d.ReadData(); got != want {
+			t.Errorf("ReadData() for reg %#x = %#x, want %#x", reg, got, want)
+		}
+	}
+}
+
+func TestSelectPersistsAcrossMultipleData(t *testing.T) {
+	d := New()
+	d.Select(0x42)
+	d.WriteData(0x11)
+	d.WriteData(0x22)
+	d.WriteData(0x33)
+	// All three writes target 0x42; final value is 0x33.
+	if got := d.ReadReg(0x42); got != 0x33 {
+		t.Errorf("ReadReg(0x42) = %#x, want 0x33", got)
+	}
+	// And the selected register is still 0x42.
+	if d.Selected() != 0x42 {
+		t.Errorf("Selected() = %#x, want 0x42", d.Selected())
+	}
+}
+
+func TestWriteRegBypassesSelect(t *testing.T) {
+	d := New()
+	d.Select(0x10)
+	d.WriteReg(0x20, 0x55)
+	// Selected latch unchanged.
+	if d.Selected() != 0x10 {
+		t.Errorf("Selected() = %#x after WriteReg, want 0x10", d.Selected())
+	}
+	// Value stored at 0x20.
+	if got := d.ReadReg(0x20); got != 0x55 {
+		t.Errorf("ReadReg(0x20) = %#x, want 0x55", got)
+	}
+	// 0x10 untouched — still at its post-reset default.
+	if got := d.ReadReg(0x10); got != 0x00 {
+		t.Errorf("ReadReg(0x10) = %#x, want 0x00 (Core ID generic — matches reference)", got)
+	}
+}
+
+func TestOnWriteHandlerOverrides(t *testing.T) {
+	d := New()
+	var captured []byte
+	d.SetOnWrite(0x07, func(_ *Dispatcher, v byte) {
+		// Mimic a side effect: capture and also store.
+		captured = append(captured, v)
+		d.Store(0x07, v&0x03)
+	})
+
+	d.Select(0x07)
+	d.WriteData(0xFF)
+	d.WriteData(0x10)
+	// Both calls captured.
+	if len(captured) != 2 || captured[0] != 0xFF || captured[1] != 0x10 {
+		t.Errorf("captured = %v, want [0xFF, 0x10]", captured)
+	}
+	// Last write masked to low two bits.
+	if got := d.Raw(0x07); got != 0x00 {
+		t.Errorf("Raw(0x07) = %#x, want 0x00", got)
+	}
+
+	// Removing the handler restores default storage behaviour.
+	d.SetOnWrite(0x07, nil)
+	d.WriteData(0xAA)
+	if got := d.Raw(0x07); got != 0xAA {
+		t.Errorf("Raw(0x07) after handler removed = %#x, want 0xAA", got)
+	}
+}
+
+func TestOnReadHandlerOverrides(t *testing.T) {
+	d := New()
+	d.Store(0x1E, 0xAA)
+	d.SetOnRead(0x1E, func(_ *Dispatcher) byte { return 0x55 })
+
+	if got := d.ReadReg(0x1E); got != 0x55 {
+		t.Errorf("ReadReg(0x1E) = %#x, want 0x55 (handler should override storage)", got)
+	}
+	// Raw bypasses the handler.
+	if got := d.Raw(0x1E); got != 0xAA {
+		t.Errorf("Raw(0x1E) = %#x, want 0xAA (Raw should bypass OnRead)", got)
+	}
+}
+
+// OnWriteFn + GetTracer getter coverage (iter 259). Both are
+// chained-handler helpers; ensure they return whatever was last
+// installed (or nil).
+
+func TestOnWriteFnGetter(t *testing.T) {
+	d := New()
+	if got := d.OnWriteFn(0x42); got != nil {
+		t.Errorf("default OnWriteFn(0x42) = non-nil")
+	}
+	fn := func(_ *Dispatcher, _ byte) {}
+	d.SetOnWrite(0x42, fn)
+	if got := d.OnWriteFn(0x42); got == nil {
+		t.Errorf("after SetOnWrite: OnWriteFn = nil")
+	}
+	// Detach.
+	d.SetOnWrite(0x42, nil)
+	if got := d.OnWriteFn(0x42); got != nil {
+		t.Errorf("after nil-set: OnWriteFn = non-nil")
+	}
+}
+
+func TestGetTracerGetter(t *testing.T) {
+	d := New()
+	if got := d.GetTracer(); got != nil {
+		t.Errorf("default GetTracer = non-nil")
+	}
+	tr := func(_, _ byte, _ bool) {}
+	d.SetTracer(tr)
+	if got := d.GetTracer(); got == nil {
+		t.Errorf("after SetTracer: GetTracer = nil")
+	}
+	d.SetTracer(nil)
+	if got := d.GetTracer(); got != nil {
+		t.Errorf("after nil-set: GetTracer = non-nil")
+	}
+}
+
+func TestWriteRegImplementsNextRegSink(t *testing.T) {
+	// Compile-time-style check: the dispatcher has the WriteReg
+	// signature that z80.NextRegSink demands. We can't import
+	// pkg/z80 from here without a cycle, so the check is
+	// structural — assigning to an interface variable with the
+	// same method set.
+	var _ interface {
+		WriteReg(reg, val byte)
+	} = New()
+}
+
+func TestTracerFiresOnReadAndWrite(t *testing.T) {
+	d := New()
+	type event struct {
+		reg, val byte
+		write    bool
+	}
+	var events []event
+	d.SetTracer(func(reg, val byte, write bool) {
+		events = append(events, event{reg, val, write})
+	})
+	d.WriteReg(0x12, 0x34)
+	d.ReadReg(0x12)
+	if len(events) != 2 {
+		t.Fatalf("got %d trace events, want 2", len(events))
+	}
+	if events[0] != (event{0x12, 0x34, true}) {
+		t.Errorf("write event = %+v, want reg=0x12 val=0x34 write=true", events[0])
+	}
+	if events[1] != (event{0x12, 0x34, false}) {
+		t.Errorf("read event = %+v, want reg=0x12 val=0x34 write=false", events[1])
+	}
+}
+
+func TestTracerNilIsZeroCost(t *testing.T) {
+	d := New()
+	// Tracer not set — nil dispatch must not crash on accesses.
+	d.WriteReg(0x05, 0xAA)
+	if d.ReadReg(0x05) != 0xAA {
+		t.Errorf("read-after-write broken; tracer-nil path should be transparent")
+	}
+}
+
+// TestResetRestoresDefaults verifies that after a guest has trampled
+// every register, Reset re-establishes the tbblue_reset_common
+// power-on values used at cold boot. The GUI's Reboot path leans on
+// this so a fresh boot does not inherit the previous session's
+// tilemap / Layer 2 / MMU8 configuration.
+func TestResetRestoresDefaults(t *testing.T) {
+	d := New()
+	// Stomp every register with non-default values.
+	for reg := 0; reg < 256; reg++ {
+		d.WriteReg(byte(reg), byte(reg)^0xA5)
+	}
+	d.Select(0x99)
+
+	d.Reset()
+
+	if d.Selected() != 0 {
+		t.Errorf("after Reset, Selected() = %#x, want 0", d.Selected())
+	}
+	expect := map[byte]byte{
+		0x00: defaultMachineID,
+		0x01: defaultCoreVersion,
+		0x02: 0x01, // bit 0 = "last reset was soft reset" — matches
+		// the reference emulator at cold boot, verified by the iter
+		// 131 lockstep diff at PC=$0171 where the FPGA bootrom reads
+		// NR$02 and the reference returns A=$01. The reference's FPGA
+		// reset cascade makes the implicit power-on reset look like a
+		// soft reset to the bootrom. WireReset OnWrite must NOT use
+		// edge-detection for this to work — see wire.go for details.
+		0x05: 0x01,
+		0x08: 0x10,
+		0x0E: defaultBoardID,
+		0x0F: defaultCoreSubMinor,
+		// 0x10 default: 0 (Core ID — generic, matches our reference
+		// emulator). Don't list it (zero default is the implicit case).
+		0x12: 0x08,
+		0x13: 0x0B,
+		0x14: 0xE3,
+		0x42: 0x07, // zxnext.vhd:5002
+		0x4A: 0xE3, // zxnext.vhd:5014
+		0x4B: 0xE3,
+		0x4C: 0x0F,
+		// Tilemap base / tile-definitions base. zxnext.vhd:5041-5045 resets
+		// nr_6e_tilemap_base = "101100" ($2C) and nr_6f_tilemap_tiles =
+		// "001100" ($0C). NextZXOS relies on these defaults (it does not
+		// write NR$6E/$6F before reading them at boot), so a $00 default
+		// makes it compute the wrong tilemap address. Verified divergent vs
+		// the reference at $3F1B via --next-nrdiff; reference = VHDL = $2C/$0C.
+		0x6E: 0x2C,
+		0x6F: 0x0C,
+		0x50: 0xFF,
+		0x51: 0xFF,
+		0x52: 0x0A,
+		0x53: 0x0B,
+		0x54: 0x04,
+		0x55: 0x05,
+		0x57: 0x01,
+		0xB8: 0x83,
+		0xBB: 0xCD,
+	}
+	for reg := 0; reg < 256; reg++ {
+		want, has := expect[byte(reg)]
+		if !has {
+			want = 0
+		}
+		if got := d.Raw(byte(reg)); got != want {
+			t.Errorf("Raw(%#x) after Reset = %#x, want %#x", reg, got, want)
+		}
+	}
+}
+
+// TestResetFiresOnWriteHandlers proves that subsystems wired via
+// SetOnWrite see the reset traffic. The GUI's Reboot path relies on
+// this to roll the tilemap / Layer 2 / divMMC layers back to their
+// power-on state — Raw() alone would leave them stuck with stale
+// values from the previous session.
+func TestResetFiresOnWriteHandlers(t *testing.T) {
+	d := New()
+	var got []byte // values seen by the 0x6B (tilemap control) handler
+	d.SetOnWrite(0x6B, func(disp *Dispatcher, val byte) {
+		got = append(got, val)
+		disp.Store(0x6B, val)
+	})
+	// Simulate a guest enabling the tilemap, then a reset.
+	d.WriteReg(0x6B, 0xA1) // enable + strip_flags + on_top
+	d.Reset()
+
+	if len(got) < 2 {
+		t.Fatalf("OnWrite(0x6B) saw %d events, want at least 2 (guest write + reset clear)",
+			len(got))
+	}
+	if got[0] != 0xA1 {
+		t.Errorf("first OnWrite value = %#x, want 0xA1", got[0])
+	}
+	// The reset's Phase 1 zero-pass must drive a 0 through 0x6B so
+	// the tilemap layer can disable itself. 0x6B has no non-zero
+	// default so the last observed value is 0.
+	if got[len(got)-1] != 0 {
+		t.Errorf("final OnWrite value = %#x, want 0 (tilemap disable on reset)",
+			got[len(got)-1])
+	}
+}

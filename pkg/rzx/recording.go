@@ -79,8 +79,9 @@ type Recording struct {
 	// In competition mode autosaves and rollback are disabled
 	// (FUSE rzx.c:430-444), the emulator must run within
 	// CompetitionSpeedTolerance percent of real time, and the file
-	// header is marked Signed. DSA signing itself is a TODO — FUSE
-	// also runs unsigned when libgcrypt is missing (rzx.c:432).
+	// header is marked Signed. DSA signing/verification is implemented
+	// in sign.go (Sign/Verify); the caller supplies the DSA key. As in
+	// FUSE, a recording may still be written unsigned (rzx.c:432).
 	CompetitionMode bool
 }
 

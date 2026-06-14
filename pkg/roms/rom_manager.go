@@ -2,7 +2,7 @@ package roms
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -42,6 +42,12 @@ const (
 	ModelPlus2
 	ModelPlus2A
 	ModelPlus3
+	// ModelNext is the ZX Spectrum Next. Sprint 1 wires the enum
+	// only — there are no ROMs attached, no memory init path, and
+	// the menu entry is greyed out. Sprint 2 attaches Z80N opcodes,
+	// the NextReg dispatcher and the 8K MMU; Sprint 3 brings the
+	// distro ROM in via the user-installed first-run flow.
+	ModelNext
 )
 
 // ROMMappingEntry defines how ROMs are mapped in memory
@@ -95,6 +101,12 @@ func (rm *ROMManager) initMappings() {
 			{ROMPLUS3_2, "plus3-2.rom", true, 2},
 			{ROMPLUS3_3, "plus3-3.rom", true, 3},
 		},
+		// ModelNext intentionally has no embedded ROM mappings:
+		// the NextZXOS distro ROM, divMMC ROM and Alt-ROM are
+		// user-installed at runtime for licensing reasons. An empty slice
+		// here makes LoadROMsForModel(ModelNext) a no-op success
+		// instead of returning "unsupported model".
+		ModelNext: {},
 	}
 }
 
@@ -127,7 +139,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 	if len(data) != expectedSize {
 		return fmt.Errorf("rom %s has invalid size: %d bytes (expected %d)", filename, len(data), expectedSize)
 	}
-	
+
 	rm.roms[romType] = data
 	return nil
 }
@@ -145,7 +157,7 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 				return err
 			}
 			// Optional ROM, just log and continue
-			log.Printf("Warning: Optional ROM %s not found: %v\n", mapping.Filename, err)
+			slog.Warn("optional ROM not loaded", "filename", mapping.Filename, "err", err)
 		}
 	}
 	
@@ -177,7 +189,7 @@ func (rm *ROMManager) LoadPeripheralROMs() error {
 
 	for romType, filename := range peripheralROMs {
 		if err := rm.LoadROM(romType, filename); err != nil {
-			log.Printf("Warning: Peripheral ROM %s not found: %v\n", filename, err)
+			slog.Warn("peripheral ROM not loaded", "filename", filename, "err", err)
 		}
 	}
 
@@ -218,6 +230,8 @@ func GetModelName(model SpectrumModel) string {
 		return "ZX Spectrum +2A"
 	case ModelPlus3:
 		return "ZX Spectrum +3"
+	case ModelNext:
+		return "ZX Spectrum Next"
 	default:
 		return "Unknown Model"
 	}

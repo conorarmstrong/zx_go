@@ -6,6 +6,132 @@ import (
 	"os"
 )
 
+// TZX version emitted by SaveTZX. 1.20 is the version most modern
+// TZX readers (including this package's loader and FUSE) support
+// without quirks. Bump only when adopting a block type that requires
+// a newer minor.
+const (
+	tzxVersionMajor = 1
+	tzxVersionMinor = 20
+)
+
+// SaveTZX writes the currently loaded blocks back to a TZX file.
+// Each block is emitted using the same TZX block-ID it parsed as on
+// load: standard-speed (0x10), turbo (0x11), or pure-data (0x14).
+// TZX-only metadata that LoadTZX skipped (pure tone, pulse sequence,
+// group / archive info, text, etc.) is not preserved — a save-after-
+// load roundtrip keeps only the playable blocks.
+func (tp *TapePlayer) SaveTZX(path string) error {
+	tp.mu.Lock()
+	blocks := make([]tapeBlock, len(tp.blocks))
+	for i, b := range tp.blocks {
+		cp := make([]byte, len(b.data))
+		copy(cp, b.data)
+		blocks[i] = b
+		blocks[i].data = cp
+	}
+	tp.mu.Unlock()
+
+	if len(blocks) == 0 {
+		return fmt.Errorf("no blocks to save")
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create TZX: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	// TZX header: "ZXTape!" + 0x1A + major + minor.
+	header := []byte{'Z', 'X', 'T', 'a', 'p', 'e', '!', 0x1A, tzxVersionMajor, tzxVersionMinor}
+	if _, err := f.Write(header); err != nil {
+		return fmt.Errorf("write TZX header: %w", err)
+	}
+
+	for i, b := range blocks {
+		if err := writeTZXBlock(f, b); err != nil {
+			return fmt.Errorf("write block %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// writeTZXBlock emits a single tapeBlock as the appropriate TZX
+// block type. The heuristic picks 0x10 (standard speed) for any
+// block parsed as non-turbo, 0x14 (pure data) for turbo blocks
+// with no pilot, and 0x11 (turbo) otherwise.
+func writeTZXBlock(f *os.File, b tapeBlock) error {
+	if !b.turbo {
+		// 0x10 standard-speed data block: pause(2) + length(2) + data.
+		if len(b.data) > 0xFFFF {
+			return fmt.Errorf("block too large for TZX 0x10: %d bytes", len(b.data))
+		}
+		var hdr [5]byte
+		hdr[0] = 0x10
+		binary.LittleEndian.PutUint16(hdr[1:3], b.pause)
+		binary.LittleEndian.PutUint16(hdr[3:5], uint16(len(b.data)))
+		if _, err := f.Write(hdr[:]); err != nil {
+			return err
+		}
+		_, err := f.Write(b.data)
+		return err
+	}
+
+	usedBits := b.usedBits
+	if usedBits == 0 {
+		usedBits = 8
+	}
+
+	if b.pilotLen == 0 {
+		// 0x14 pure-data block (no pilot): zeroPulse(2) + onePulse(2)
+		// + usedBits(1) + pause(2) + length(3) + data.
+		if len(b.data) >= 1<<24 {
+			return fmt.Errorf("block too large for TZX 0x14: %d bytes", len(b.data))
+		}
+		var hdr [11]byte
+		hdr[0] = 0x14
+		binary.LittleEndian.PutUint16(hdr[1:3], b.zeroPulse)
+		binary.LittleEndian.PutUint16(hdr[3:5], b.onePulse)
+		hdr[5] = usedBits
+		binary.LittleEndian.PutUint16(hdr[6:8], b.pause)
+		l := uint32(len(b.data))
+		hdr[8] = byte(l)
+		hdr[9] = byte(l >> 8)
+		hdr[10] = byte(l >> 16)
+		if _, err := f.Write(hdr[:]); err != nil {
+			return err
+		}
+		_, err := f.Write(b.data)
+		return err
+	}
+
+	// 0x11 turbo-speed data block: pilotPulse(2) + syncFirst(2) +
+	// syncSecond(2) + zeroPulse(2) + onePulse(2) + pilotLen(2) +
+	// usedBits(1) + pause(2) + length(3) + data.
+	if len(b.data) >= 1<<24 {
+		return fmt.Errorf("block too large for TZX 0x11: %d bytes", len(b.data))
+	}
+	var hdr [19]byte
+	hdr[0] = 0x11
+	binary.LittleEndian.PutUint16(hdr[1:3], b.pilotPulse)
+	binary.LittleEndian.PutUint16(hdr[3:5], b.syncFirst)
+	binary.LittleEndian.PutUint16(hdr[5:7], b.syncSecond)
+	binary.LittleEndian.PutUint16(hdr[7:9], b.zeroPulse)
+	binary.LittleEndian.PutUint16(hdr[9:11], b.onePulse)
+	binary.LittleEndian.PutUint16(hdr[11:13], b.pilotLen)
+	hdr[13] = usedBits
+	binary.LittleEndian.PutUint16(hdr[14:16], b.pause)
+	l := uint32(len(b.data))
+	hdr[16] = byte(l)
+	hdr[17] = byte(l >> 8)
+	hdr[18] = byte(l >> 16)
+	if _, err := f.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := f.Write(b.data)
+	return err
+}
+
 // LoadTZX loads a TZX file into the tape player.
 // TZX is a more comprehensive tape format than TAP, supporting:
 // - Standard speed data blocks (ID 0x10)

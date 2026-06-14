@@ -196,6 +196,100 @@ func TestSNARoundTrip(t *testing.T) {
 	}
 }
 
+// LoadBytes / SaveBytes coverage (iter 253). RZX embedding goes
+// through the byte-slice variants; format-dispatch needs same care
+// as file-path variants. Verifies symmetric round-trip via memory
+// for each supported format + unsupported-format error.
+
+func TestLoadBytesSaveBytes_SNA_Roundtrip(t *testing.T) {
+	orig := New()
+	orig.CPU.A = 0x11
+	orig.CPU.PC = 0x4000
+	orig.CPU.SP = 0xFFFE
+	orig.CPU.IM = 1
+	orig.CPU.BorderColor = 4
+	// 128K SNA stores PC in the explicit extraHeader field; 48K
+	// SNA stores PC on the stack and our save path doesn't push.
+	// Use 128K mode so PC round-trips through the byte path.
+	orig.Memory.Is128K = true
+
+	data, err := orig.SaveBytes(FormatSNA)
+	if err != nil {
+		t.Fatalf("SaveBytes(SNA): %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("SaveBytes(SNA) returned empty bytes")
+	}
+
+	loaded := New()
+	if err := loaded.LoadBytes(data, FormatSNA); err != nil {
+		t.Fatalf("LoadBytes(SNA): %v", err)
+	}
+	if loaded.CPU.A != 0x11 || loaded.CPU.PC != 0x4000 {
+		t.Errorf("LoadBytes/SaveBytes SNA round-trip: A=$%02X PC=$%04X, want 11 4000",
+			loaded.CPU.A, loaded.CPU.PC)
+	}
+	if loaded.Format != FormatSNA {
+		t.Errorf("loaded Format = %d, want FormatSNA", loaded.Format)
+	}
+}
+
+func TestLoadBytesSaveBytes_Z80_Roundtrip(t *testing.T) {
+	orig := New()
+	orig.CPU.A = 0x22
+	orig.CPU.PC = 0x5000
+	orig.CPU.SP = 0xFFFE
+	orig.CPU.IM = 1
+	orig.CPU.BorderColor = 2
+
+	data, err := orig.SaveBytes(FormatZ80)
+	if err != nil {
+		t.Fatalf("SaveBytes(Z80): %v", err)
+	}
+	loaded := New()
+	if err := loaded.LoadBytes(data, FormatZ80); err != nil {
+		t.Fatalf("LoadBytes(Z80): %v", err)
+	}
+	if loaded.CPU.A != 0x22 || loaded.CPU.PC != 0x5000 {
+		t.Errorf("Z80 round-trip: A=$%02X PC=$%04X", loaded.CPU.A, loaded.CPU.PC)
+	}
+}
+
+func TestLoadBytesSaveBytes_SZX_Roundtrip(t *testing.T) {
+	orig := New()
+	orig.CPU.A = 0x33
+	orig.CPU.PC = 0x6000
+	orig.CPU.SP = 0xFFFE
+	orig.CPU.IM = 2
+	orig.CPU.BorderColor = 3
+
+	data, err := orig.SaveBytes(FormatSZX)
+	if err != nil {
+		t.Fatalf("SaveBytes(SZX): %v", err)
+	}
+	loaded := New()
+	if err := loaded.LoadBytes(data, FormatSZX); err != nil {
+		t.Fatalf("LoadBytes(SZX): %v", err)
+	}
+	if loaded.CPU.A != 0x33 || loaded.CPU.PC != 0x6000 {
+		t.Errorf("SZX round-trip: A=$%02X PC=$%04X", loaded.CPU.A, loaded.CPU.PC)
+	}
+}
+
+func TestLoadBytesUnknownFormatErrors(t *testing.T) {
+	s := New()
+	if err := s.LoadBytes([]byte{0x00}, FormatUnknown); err == nil {
+		t.Errorf("LoadBytes(FormatUnknown) = nil error, want error")
+	}
+}
+
+func TestSaveBytesUnknownFormatErrors(t *testing.T) {
+	s := New()
+	if _, err := s.SaveBytes(FormatUnknown); err == nil {
+		t.Errorf("SaveBytes(FormatUnknown) = nil error, want error")
+	}
+}
+
 func TestSZXPageMapping(t *testing.T) {
 	// Create a snapshot with distinct data in each bank
 	orig := New()

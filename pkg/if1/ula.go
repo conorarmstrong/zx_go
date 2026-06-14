@@ -57,9 +57,15 @@ func decodePort(port uint16) portClass {
 
 // ULA is the Interface 1 ULA's I/O port handler. It owns the
 // MicrodriveBus and the small set of bus-wide control bits the IF1
-// ROM polls (DTR, busy). RS-232 and SinclairNET are stubbed — the
-// bits the IF1 ROM expects are returned as "no peripheral connected"
-// so the ROM proceeds without hanging on a serial poll.
+// ROM polls (DTR, busy).
+//
+// The microdrive — the IF1's primary function — is fully modelled. RS-232
+// and SinclairNET are stubbed as "no peripheral connected": they bit-bang
+// an external serial device, which (like the ESP UART, task #33) is out of
+// scope for a reference emulator; the ROM sees no signal and proceeds. The
+// CTR WAT bit (assert CPU WAIT to pace microdrive/serial byte I/O) is
+// deliberately not modelled — our microdrive timing is emulator-driven, so
+// no software needs the CPU stall for correctness.
 type ULA struct {
 	Bus *MicrodriveBus
 

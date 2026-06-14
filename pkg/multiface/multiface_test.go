@@ -347,6 +347,60 @@ func TestHandleOpcodeRead_Invisible(t *testing.T) {
 
 // ---------- HandlePortRead ----------
 
+// MF variant port-decode coverage (iter 282).
+// Each variant decodes a different port pattern. Pin the
+// isMultifacePort lookup against the documented patterns.
+
+func TestIsMultifacePort_MF1Pattern(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface1, dir, mem)
+
+	// MF1: port & $0072 == $0012. Matching: $0012, $0092, $001F, $009F, etc.
+	matching := []uint16{0x001F, 0x0092, 0x0012, 0x009F, 0x0093}
+	for _, p := range matching {
+		if !mf.isMultifacePort(p) {
+			t.Errorf("MF1: port $%04X should match", p)
+		}
+	}
+	// Not matching.
+	nonMatching := []uint16{0x0000, 0x0030, 0x0070, 0x0032}
+	for _, p := range nonMatching {
+		if mf.isMultifacePort(p) {
+			t.Errorf("MF1: port $%04X should NOT match", p)
+		}
+	}
+}
+
+func TestIsMultifacePort_MF128Pattern(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface128, dir, mem)
+
+	// MF128: port & $0072 == $0032 OR port & $0072 == $0012 (back-compat).
+	matching := []uint16{0x0032, 0x0012, 0x00BF, 0x009F} // both MF128 + MF1 patterns
+	for _, p := range matching {
+		if !mf.isMultifacePort(p) {
+			t.Errorf("MF128: port $%04X should match", p)
+		}
+	}
+}
+
+func TestIsMultifacePort_MF3Pattern(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	mf, _ := NewMultiface(Multiface3, dir, mem)
+
+	// MF3: ONLY port & $0072 == $0032 (no MF1 backwards-compat).
+	if !mf.isMultifacePort(0x0032) {
+		t.Errorf("MF3: $0032 should match")
+	}
+	// MF3 does NOT accept the MF1 port pattern.
+	if mf.isMultifacePort(0x0012) {
+		t.Errorf("MF3: $0012 (MF1 pattern) should NOT match")
+	}
+}
+
 func TestHandlePortRead_MultifacePort(t *testing.T) {
 	mem, _ := newTestMemory(t)
 	dir := t.TempDir()
@@ -652,7 +706,8 @@ func TestControlWrite_CombinedBits(t *testing.T) {
 	mf.HandleNMI() // romPaged=true, redButton=true
 
 	// Write 0x03 = page out ROM + clear red button
-	mf.HandlePortRead(0x001F); mf.redButton = false // page out + clear
+	mf.HandlePortRead(0x001F)
+	mf.redButton = false // page out + clear
 	if mf.IsROMPaged() {
 		t.Error("ROM should be paged out")
 	}
@@ -765,12 +820,6 @@ func TestGetCompatibleModel(t *testing.T) {
 
 // ---------- Paging state save/restore ----------
 
-
-
-
-
-
-
 // ---------- Integration: full NMI cycle ----------
 
 func TestNMICycle_Full(t *testing.T) {
@@ -835,8 +884,8 @@ func TestStealthModeCycle(t *testing.T) {
 
 	// Make visible again via OUT with A7=1
 	// Need to page in first for the lockout write to take effect
-	mf.invisible = false // reset for testing
-	mf.HandleNMI()       // page in ROM again
+	mf.invisible = false             // reset for testing
+	mf.HandleNMI()                   // page in ROM again
 	mf.HandlePortWrite(0x00BF, 0x00) // A7=1 → clear invisible
 	if mf.IsInvisible() {
 		t.Error("should be visible after OUT with A7=1")
@@ -849,5 +898,41 @@ func TestStealthModeCycle(t *testing.T) {
 	// NMI should work now
 	if !mf.HandleNMI() {
 		t.Error("NMI should succeed after becoming visible")
+	}
+}
+
+// iter 345: cover loadROM filesystem-load branch (valid 0x2000 file
+// at romPath wins over embedded) + wrong-size-file fall-through.
+
+func TestLoadROM_FilesystemWins(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	// Plant a recognisable 0x2000 MF1 ROM; loadROM tries fs first.
+	writeDummyMFROM(t, dir, "mf1_official.rom", 0x5A)
+	mf, err := NewMultiface(Multiface1, dir, mem)
+	if err != nil {
+		t.Fatalf("NewMultiface: %v", err)
+	}
+	rom := mf.GetROM()
+	if len(rom) != 0x2000 || rom[0] != 0x5A || rom[0x1FFF] != 0x5A {
+		t.Errorf("fs ROM not loaded: len=%d first=$%02X", len(rom), rom[0])
+	}
+}
+
+func TestLoadROM_WrongSizeFallsThrough(t *testing.T) {
+	mem, _ := newTestMemory(t)
+	dir := t.TempDir()
+	// A wrong-size file at the primary name must be ignored; loadROM
+	// then falls back to the embedded ROM (or placeholder), yielding a
+	// valid 0x2000 ROM either way.
+	if err := os.WriteFile(filepath.Join(dir, "mf128_official.rom"), make([]byte, 100), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mf, err := NewMultiface(Multiface128, dir, mem)
+	if err != nil {
+		t.Fatalf("NewMultiface: %v", err)
+	}
+	if got := len(mf.GetROM()); got != 0x2000 {
+		t.Errorf("ROM len = %d, want 0x2000 after wrong-size fall-through", got)
 	}
 }

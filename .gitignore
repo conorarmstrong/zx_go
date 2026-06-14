@@ -29,3 +29,89 @@ fuse/
 
 # Test artifacts
 pkg/testharness/*.png
+pkg/z80/test_roms_z80/
+
+# Spectrum Next install directory — entirely user-local, never
+# version-controlled. Holds the user's own copies of the licensed
+# NextZXOS ROMs (enNextZX.rom, enNxtmmc.rom — Amstrad/Sky, not
+# redistributable), the SD-card content, and any sd.img. The
+# emulator downloads/installs these here at runtime (Machine → Next,
+# or File → Install Next ROMs…).
+#
+# NOTE: the GPLv3 FPGA loader (tbblue_loader.rom) IS shipped with the
+# emulator, but as an EMBEDDED asset at pkg/roms/data/tbblue_loader.rom
+# (committed, attribution in LICENSES/tbblue_loader-NOTICE.md) — NOT
+# from this user-local directory. So everything under roms/next/ is
+# correctly ignored.
+/roms/next/
+
+# Developer tooling & references — LOCAL-ONLY, not part of the public
+# repository. _tools/ holds the development oracle/comparison harnesses,
+# build helpers, one-off investigation scripts, and the vendored hardware
+# references (FPGA VHDL, the NextZXOS distribution — not redistributable).
+# Everything here is kept on the maintainer's disk and reconstructed
+# locally as needed; none of it is shipped. (Go already excludes
+# underscore-prefixed directories from ./... so this never affects builds.)
+/_tools/
+
+# Agent / skills metadata (not project sources)
+/.agents/
+/.claude/
+/skills-lock.json
+
+# Stray screenshots user dropped in repo root (debugging captures)
+/dubug.png
+/fail.png
+A.png
+B.png
+C.png
+
+# Local-only investigation lab; not part of the shipping codebase.
+/docs/internal/hardware-audit/
+roms/next/sd.img
+
+# accidental-artifact guards (D31en cleanup)
+/zxnext
+/snap/
+
+# Developer-tooling documentation (catalogues the local-only _tools/;
+# names reference emulators). Local-only, not part of the public repo.
+/TOOLS.md
+/INDEX.md
+
+# Internal development narratives (lab notebooks; reference emulators by
+# name as the comparison oracles). Local-only, not part of the public repo.
+/BOOT_LOG.md
+/docs/internal/
+
+# MAME runtime config written to the working dir when the oracle runs.
+/cfg/
+
+# Development-only reference-emulator comparison tooling (build-tagged
+# `//go:build oracle`; named after the comparison emulators). Local-only:
+# the shipped binary never compiles them (oracle_stubs.go covers the default
+# build), and the public repo carries no competitor-emulator names.
+/cmd/zx_go/bisect_cspect.go
+cmd/zx_go/bisect_cspect_test.go
+cmd/zx_go/bisect_prober.go
+cmd/zx_go/bisect_prober_test.go
+cmd/zx_go/bisectdrv.go
+cmd/zx_go/bisectdrv_test.go
+cmd/zx_go/capture_snapshot.go
+cmd/zx_go/diag_3e00_test.go
+cmd/zx_go/diag_browser_enter_test.go
+cmd/zx_go/foreign.go
+cmd/zx_go/foreign_cmd.go
+cmd/zx_go/foreign_cspect.go
+cmd/zx_go/foreign_cspect_test.go
+cmd/zx_go/foreign_mame.go
+cmd/zx_go/foreign_mame_test.go
+cmd/zx_go/foreign_zesarux.go
+cmd/zx_go/foreigneq.go
+cmd/zx_go/foreigneq_test.go
+cmd/zx_go/lockstep_cspect.go
+cmd/zx_go/lockstep_cspect_test.go
+cmd/zx_go/memdiff_cspect.go
+cmd/zx_go/memdiff_test.go
+cmd/zx_go/nrdiff_cspect.go
+cmd/zx_go/oracle_test.go

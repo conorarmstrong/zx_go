@@ -12,7 +12,11 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v5
@@ -21,7 +25,8 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
 
       - name: Build
@@ -47,7 +52,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
 
       - name: Test
-        run: go test -cover ./...
+        run: go test -short -cover ./...
+
+  conformance:
+    name: Z80 conformance (zexdoc + zexall)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
+
+      - name: Run Cringle Z80 exerciser
+        # Suites finish in ~90s locally on Apple Silicon. The 5m
+        # wall-clock cap plus the 60-billion-instruction ceiling
+        # in the harness itself together bound a stuck run.
+        timeout-minutes: 5
+        run: go test -timeout 5m -run TestZex ./pkg/z80
 
   lint:
     name: Lint
@@ -71,7 +97,11 @@ jobs:
 
   vet:
     name: Vet
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v5
@@ -80,7 +110,8 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
 
       - name: Vet

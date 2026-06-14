@@ -2,6 +2,7 @@ package debugger
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"strconv"
 	"strings"
@@ -41,6 +42,73 @@ const (
 	fontSize = 13
 )
 
+// NextProvider exposes Spectrum Next state the debugger should
+// show alongside CPU registers. The cmd/zx_go GUI wires this in
+// when ModelNext is active; classic emulators leave it nil and
+// the Next panel stays hidden.
+type NextProvider interface {
+	// MMUSlots returns the bank index visible in each of the 8K
+	// MMU slots. The Z80 has 8 slots of 8 KB; -1 marks "ROM" or
+	// "unmapped".
+	MMUSlots() [8]int
+	// DivMMCState returns a one-line summary of the divMMC pager
+	// state: paged-in, MAPRAM, selected bank, automap on/off.
+	DivMMCState() string
+	// NextRegs returns a snapshot of NextReg values for the
+	// registers listed in NextRegsOfInterest(). The map is keyed
+	// by NextReg number.
+	NextRegs() map[uint8]byte
+}
+
+// PaletteRGBAProvider is an OPTIONAL companion to NextProvider: a
+// provider that also implements it feeds the graphical Palette tab.
+// SetNextProvider type-asserts for it, so providers that don't supply
+// palette colours simply leave the swatch all-black (non-breaking).
+type PaletteRGBAProvider interface {
+	// PaletteRGBA returns the 256 active palette entries as
+	// fully-expanded 8-bit-per-channel RGBA.
+	PaletteRGBA() [256]color.RGBA
+}
+
+// Layer2FrameProvider is an OPTIONAL companion that feeds the Layer-2
+// framebuffer viewer: the live Layer-2 image plus a status string
+// (e.g. "256x192" or "disabled"). img may be nil when unavailable.
+type Layer2FrameProvider interface {
+	Layer2Frame() (img image.Image, status string)
+}
+
+// TilemapFrameProvider is an OPTIONAL companion that feeds the tilemap
+// viewer: the rendered tilemap image plus a status string.
+type TilemapFrameProvider interface {
+	TilemapFrame() (img image.Image, status string)
+}
+
+// NextRegsOfInterest is the fixed set of NextReg numbers the
+// debugger panel displays. Picked for boot-debugging value:
+//
+//	0x00 machine ID
+//	0x01 version
+//	0x02 reset reason / state
+//	0x07 turbo control
+//	0x08 peripheral 1
+//	0x09 peripheral 4
+//	0x0A peripheral 5
+//	0x14 transparency colour
+//	0x15 sprite & Layers system
+//	0x18 Layer 2 control
+//	0x19 sprite control
+//	0x43 palette control
+//	0x50..0x57 MMU slots
+//	0x69 Layer 2 + ULA enables
+//	0x6B tilemap control
+//	0x80..0x87 internal port decode flags
+//	0xB8 divMMC enable / automap mask
+var NextRegsOfInterest = []uint8{
+	0x00, 0x01, 0x02, 0x07, 0x08, 0x09, 0x0A, 0x14, 0x15, 0x18, 0x19,
+	0x43, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+	0x69, 0x6B, 0x80, 0x82, 0x83, 0x84, 0x85, 0xB8,
+}
+
 type Debugger struct {
 	cpu *z80.CPU
 	mem *memory.Memory
@@ -48,45 +116,136 @@ type Debugger struct {
 	window fyne.Window
 	mu     sync.Mutex
 
-	onPause  func()
-	onStep   func()
-	onRun    func()
-	isPaused func() bool
+	onPause    func()
+	onStep     func()
+	onStepOver func() // optional; falls back to onStep when nil
+	onRun      func()
+	isPaused   func() bool
 
-	hexAddr      uint16
-	hexAddrBase  int // 16, 10, or 8
-	breakpoints  map[uint16]bool
+	hexAddr     uint16
+	hexAddrBase int // 16, 10, or 8
+	// bps is the SHARED breakpoint store. The emulator hands the
+	// same *BreakpointSet to both this visual debugger and the
+	// telnet debugger, so a breakpoint set on one surface shows up
+	// (and fires) on the other. When the GUI is used standalone
+	// (no emulator-provided set), New() allocates a private one.
+	bps *BreakpointSet
+
+	// regWatches is the SHARED register-watchpoint set (same
+	// instance the telnet debugger uses). CheckBreakpoint consults
+	// it so a register watch added from either surface halts the
+	// CPU; the Watchpoints tab lists/edits it. Nil until
+	// SetRegWatches wires the shared set.
+	regWatches *RegWatchSet
 
 	// Register display
 	regLines [20]*canvas.Text
 	flagLine *canvas.Text
 	iffLine  *canvas.Text
+	irqLine  *canvas.Text
 	haltLine *canvas.Text
 
 	// Lists for scrollable, tappable content
-	dasmList      *widget.List
-	dasmCache     []DisassembledLine
-	dasmLastPC    uint16
-	hexList       *widget.List
+	dasmList   *widget.List
+	dasmCache  []DisassembledLine
+	dasmLastPC uint16
+	hexList    *widget.List
 
 	statusTxt    *canvas.Text
 	hexAddrEntry *widget.Entry
 
 	refreshTicker *time.Ticker
 	stopChan      chan struct{}
+
+	// Spectrum Next state (optional). When non-nil, the
+	// debugger renders the Next panel and refreshes it each tick.
+	nextProvider NextProvider
+	nextPanelBox *fyne.Container
+	nextLines    map[string]*canvas.Text
+
+	// paletteView is the graphical 16×16 active-palette swatch tab.
+	// Fed from a NextProvider that also implements PaletteRGBAProvider.
+	paletteView *PaletteView
+
+	// spriteView is the graphical sprite-pattern viewer tab. Fed from
+	// a NextProvider that also implements SpriteVizProvider.
+	spriteView *SpriteView
+
+	// layer2View / tilemapView are the graphical framebuffer viewers,
+	// fed from Layer2FrameProvider / TilemapFrameProvider.
+	layer2View  *ImageView
+	tilemapView *ImageView
+
+	// pageMap is the graphical 4-cell (classic) / 8-cell (Next)
+	// memory-paging diagram. Constructed at debugger build time;
+	// SetNextProvider toggles it between classic and Next layout.
+	pageMap *PageMapWidget
+
+	// bankInspect is the physical-bank inspector. Hits the same
+	// BankAccessor backend as the telnet bank-peek / bank-poke
+	// commands. Always present in the UI; controls report "no
+	// accessor" until SetBankAccessor is called.
+	bankInspect *BankInspectWidget
+
+	// backtrace is the stack-walk widget — same backend as the
+	// telnet `backtrace` command. Refresh either on demand or
+	// from the periodic debugger refresh tick.
+	backtrace *BacktraceWidget
+
+	// history is the M1-fetch ring viewer. Same backend as the
+	// telnet `history` / `prev` commands; backed by a *History
+	// that is wired separately via SetHistory.
+	history *HistoryWidget
+
+	// nextRegW is the arbitrary NextReg read/write panel. Same
+	// backend as the telnet `nextreg-read` / `nextreg-function
+	// commands; wired via SetNextRegAccessor.
+	nextRegW *NextRegWidget
+
+	// bpW is the conditional/bank-filtered breakpoints panel. It
+	// reads/writes the same shared d.bps store that CheckBreakpoint
+	// and the telnet debugger consult, so disassembly-tap, panel-add
+	// and telnet `set-breakpoint` all round-trip.
+	bpW *BreakpointsWidget
+
+	// watchW is the register-watchpoints panel, backed by the shared
+	// regWatches set (telnet `watch-reg` parity).
+	watchW *WatchpointsWidget
+
+	// heatmapW renders hot-PC / call / ret / rst analyses over the
+	// shared M1-history ring (telnet `hot`/`callgraph`/… parity).
+	heatmapW *HeatmapWidget
+
+	// ttW drives the shared time-travel snapshot ring (telnet
+	// `tt-*` parity), wired via SetTimeTravel.
+	ttW *TimeTravelWidget
 }
 
 func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
+	return NewWithBreakpoints(cpu, mem, app, nil)
+}
+
+// NewWithBreakpoints is New with an externally-supplied shared
+// breakpoint set (pass the emulator's so the telnet and visual
+// debuggers share one store). A nil bps allocates a private set.
+func NewWithBreakpoints(cpu *z80.CPU, mem *memory.Memory, app fyne.App, bps *BreakpointSet) *Debugger {
+	if bps == nil {
+		bps = NewBreakpointSet()
+	}
 	d := &Debugger{
 		cpu:         cpu,
 		mem:         mem,
 		hexAddr:     0x0000,
 		hexAddrBase: 16,
-		breakpoints: make(map[uint16]bool),
+		bps:         bps,
 		stopChan:    make(chan struct{}),
 	}
 	d.window = app.NewWindow("ZX Spectrum Debugger")
-	d.window.Resize(fyne.NewSize(1400, 800))
+	// Default size fits a standard laptop display (1366×768) with
+	// room for window chrome; the panel min-sizes below are kept
+	// small enough that the user can shrink it further and drag the
+	// split dividers freely.
+	d.window.Resize(fyne.NewSize(1180, 760))
 	d.window.SetContent(d.buildUI())
 	d.window.SetOnClosed(func() { d.stopRefresh() })
 	return d
@@ -97,6 +256,108 @@ func (d *Debugger) SetCallbacks(onPause func(), onStep func(), onRun func(), isP
 	d.onStep = onStep
 	d.onRun = onRun
 	d.isPaused = isPaused
+}
+
+// SetStepOver wires the "Step Over" toolbar button: run past a
+// CALL/RST/PUSH-NN to its return, or single-step otherwise. Pass
+// nil to hide nothing — the button falls back to onStep.
+func (d *Debugger) SetStepOver(fn func()) { d.onStepOver = fn }
+
+// SetTimeTravel wires the Time-Travel tab to the shared snapshot
+// ring controller (cmd/zx_go provides one over the emulator-owned
+// buffer, so the GUI and telnet tt-* commands share it).
+func (d *Debugger) SetTimeTravel(c TimeTravelController) {
+	if d.ttW != nil {
+		d.ttW.SetController(c)
+	}
+}
+
+// SetNextRegAccessor wires the NextReg read/write panel to a
+// backend (typically the nextregs dispatcher). Pass nil on
+// classic-model emulators so the panel reports "no accessor".
+func (d *Debugger) SetNextRegAccessor(a NextRegAccessor) {
+	if d.nextRegW == nil {
+		return
+	}
+	d.nextRegW.SetAccessor(a)
+}
+
+// SetHistory wires the M1-fetch ring buffer to the History tab.
+// Pass nil to disconnect (the tab then reports "history disabled").
+// Typically called from cmd/zx_go with the same *History that
+// backs the telnet `history` / `prev` commands.
+func (d *Debugger) SetHistory(h *History) {
+	if d.history != nil {
+		d.history.SetHistory(h)
+	}
+	if d.heatmapW != nil {
+		d.heatmapW.SetHistory(h)
+	}
+}
+
+// SetBankAccessor wires the visual bank-inspector widget to a
+// physical-bank backend. Same interface the telnet bank-peek /
+// bank-poke commands hit, so visual + telnet share semantics. Pass
+// nil to clear (the widget then reports "no accessor" on actions).
+// Optionally pass extraKinds to extend the kind drop-down beyond
+// the canonical ram/rom/altrom/divmmc-ram set.
+func (d *Debugger) SetBankAccessor(a BankAccessor, extraKinds ...string) {
+	if d.bankInspect == nil {
+		return
+	}
+	d.bankInspect.SetAccessor(a)
+	if len(extraKinds) > 0 {
+		merged := append([]string{}, d.bankInspect.kinds...)
+		merged = append(merged, extraKinds...)
+		d.bankInspect.SetKinds(merged)
+	}
+}
+
+// SetNextProvider attaches a Spectrum Next state source. When set,
+// the debugger renders an extra panel showing MMU slot map,
+// divMMC state, and selected NextReg values, and switches the
+// memory-paging diagram to 8-slot Next mode. Pass nil to detach
+// (e.g. when switching back to a classic model).
+func (d *Debugger) SetNextProvider(p NextProvider) {
+	d.nextProvider = p
+	if d.nextPanelBox != nil {
+		d.refreshNextPanel()
+	}
+	if d.pageMap != nil {
+		d.pageMap.SetNextProvider(p)
+	}
+	// Feed the graphical palette tab if the provider supplies colours.
+	if d.paletteView != nil {
+		if pp, ok := p.(PaletteRGBAProvider); ok && pp != nil {
+			d.paletteView.SetProvider(pp.PaletteRGBA)
+		} else {
+			d.paletteView.SetProvider(nil)
+		}
+	}
+	// Feed the graphical sprite tab if the provider supplies sprites.
+	if d.spriteView != nil {
+		if sp, ok := p.(SpriteVizProvider); ok && sp != nil {
+			d.spriteView.SetProvider(sp.VisibleSprites)
+		} else {
+			d.spriteView.SetProvider(nil)
+		}
+	}
+	// Feed the Layer-2 framebuffer viewer.
+	if d.layer2View != nil {
+		if lp, ok := p.(Layer2FrameProvider); ok && lp != nil {
+			d.layer2View.SetRender(lp.Layer2Frame)
+		} else {
+			d.layer2View.SetRender(nil)
+		}
+	}
+	// Feed the tilemap viewer.
+	if d.tilemapView != nil {
+		if tp, ok := p.(TilemapFrameProvider); ok && tp != nil {
+			d.tilemapView.SetRender(tp.TilemapFrame)
+		} else {
+			d.tilemapView.SetRender(nil)
+		}
+	}
 }
 
 func (d *Debugger) Show() {
@@ -115,11 +376,145 @@ func (d *Debugger) Refresh() {
 	d.refreshDisassembly()
 	d.refreshHex()
 	d.refreshStatus()
+	d.refreshNextPanel()
+	if d.pageMap != nil {
+		d.pageMap.Refresh()
+	}
+	if d.paletteView != nil {
+		d.paletteView.Refresh()
+	}
+	if d.spriteView != nil {
+		d.spriteView.Refresh()
+	}
+	if d.layer2View != nil {
+		d.layer2View.Refresh()
+	}
+	if d.tilemapView != nil {
+		d.tilemapView.Refresh()
+	}
+	if d.bpW != nil {
+		d.bpW.Refresh()
+	}
+	if d.watchW != nil {
+		d.watchW.Refresh()
+	}
+	if d.ttW != nil {
+		d.ttW.Refresh()
+	}
 }
 
+// CheckBreakpoint fires for the visual debugger's bp set. Matches
+// the telnet evaluator: optional ROM-bank filter + optional guard
+// condition. Returns true to halt; false to keep running.
 func (d *Debugger) CheckBreakpoint() bool {
-	return d.breakpoints[d.cpu.PC]
+	entry, ok := d.bps.Lookup(d.cpu.PC)
+	if !ok {
+		return false
+	}
+	if entry.Bank >= 0 {
+		bank := d.cpuBank()
+		if entry.Bank != bank {
+			return false
+		}
+	}
+	if entry.HasCond {
+		if !entry.Cond.Eval(visualCPUState{cpu: d.cpu, mem: d.mem, bank: byte(d.cpuBank())}) {
+			return false
+		}
+	}
+	return true
 }
+
+// CheckWatchpoints reports whether any shared register watch fired
+// at the current CPU state. Called from the GUI run loop alongside
+// CheckBreakpoint so register watches added from either surface
+// halt the CPU even when only the GUI is driving. No-op (false)
+// when no watch set is wired or it's empty.
+func (d *Debugger) CheckWatchpoints() bool {
+	if d.regWatches == nil || d.regWatches.Empty() {
+		return false
+	}
+	return d.regWatches.Check(visualCPUState{cpu: d.cpu, mem: d.mem, bank: byte(d.cpuBank())})
+}
+
+// SetRegWatches wires the shared register-watchpoint set (call with
+// the emulator's so telnet and GUI share one). Safe to call once
+// after construction, before the window is shown.
+func (d *Debugger) SetRegWatches(s *RegWatchSet) {
+	d.regWatches = s
+	if d.watchW != nil {
+		d.watchW.SetStore(s)
+	}
+}
+
+// cpuBank returns the 16K ROM bank currently mapped at $0000 on
+// 128K-class machines. Mirrors cmd/zx_go/debugger.go's lookup so
+// the cond.bank reference resolves the same way in both surfaces.
+func (d *Debugger) cpuBank() int {
+	port7FFD, port1FFD, _ := d.mem.GetPortState()
+	return int((port7FFD>>4)&1) | int((port1FFD>>1)&2)
+}
+
+// visualCPUState satisfies the condition.State interface inside
+// pkg/debugger so condition-evaluation paths can be exercised
+// without the cmd/zx_go cpuState wrapper.
+type visualCPUState struct {
+	cpu  *z80.CPU
+	mem  *memory.Memory
+	bank byte
+}
+
+func (s visualCPUState) Reg(name string) (int64, bool) {
+	c := s.cpu
+	switch name {
+	case "pc":
+		return int64(c.PC), true
+	case "sp":
+		return int64(c.SP), true
+	case "a":
+		return int64(c.A), true
+	case "f":
+		return int64(c.F), true
+	case "b":
+		return int64(c.B), true
+	case "c":
+		return int64(c.C), true
+	case "d":
+		return int64(c.D), true
+	case "e":
+		return int64(c.E), true
+	case "h":
+		return int64(c.H), true
+	case "l":
+		return int64(c.L), true
+	case "ix":
+		return int64(c.IX), true
+	case "iy":
+		return int64(c.IY), true
+	case "iff1":
+		if c.IFF1 {
+			return 1, true
+		}
+		return 0, true
+	case "iff2":
+		if c.IFF2 {
+			return 1, true
+		}
+		return 0, true
+	case "im":
+		return int64(c.IM), true
+	case "halted":
+		if c.Halted {
+			return 1, true
+		}
+		return 0, true
+	case "bank":
+		return int64(s.bank), true
+	}
+	return 0, false
+}
+
+func (s visualCPUState) ReadMem(addr uint16) byte { return s.mem.Read(addr) }
 
 func (d *Debugger) startRefresh() {
 	d.refreshTicker = time.NewTicker(50 * time.Millisecond)
@@ -144,6 +539,17 @@ func (d *Debugger) stopRefresh() {
 	default:
 	}
 }
+
+// cpuStackSource adapts a *z80.CPU to the StackSource interface
+// consumed by BacktraceWidget. Kept local because both this file
+// and BacktraceWidget live in the debugger package; pulls a single
+// pkg/z80 import in for the type.
+type cpuStackSource struct{ cpu *z80.CPU }
+
+func (s cpuStackSource) SP() uint16   { return s.cpu.SP }
+func (s cpuStackSource) IFF1() bool   { return s.cpu.IFF1 }
+func (s cpuStackSource) IM() int      { return int(s.cpu.IM) }
+func (s cpuStackSource) Halted() bool { return s.cpu.Halted }
 
 // --- helpers ---
 
@@ -186,6 +592,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	}
 	d.flagLine = mkText(colFlagOn)
 	d.iffLine = mkText(colRegVal)
+	d.irqLine = mkText(colRegVal)
 	d.haltLine = mkText(colHalted)
 	d.statusTxt = mkText(colPaused)
 
@@ -197,9 +604,10 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	regBox.Add(widget.NewSeparator())
 	regBox.Add(d.flagLine)
 	regBox.Add(d.iffLine)
+	regBox.Add(d.irqLine)
 	regBox.Add(d.haltLine)
 	regScroll := container.NewVScroll(regBox)
-	regScroll.SetMinSize(fyne.NewSize(230, 0))
+	regScroll.SetMinSize(fyne.NewSize(150, 0))
 	regPanel := panelBG(container.NewBorder(
 		container.NewVBox(headerText("  REGISTERS", colRegName), widget.NewSeparator()),
 		nil, nil, nil, regScroll,
@@ -210,7 +618,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.dasmList = widget.NewList(
 		func() int { return dasmRows },
 		func() fyne.CanvasObject {
-			t := canvas.NewText(strings.Repeat(" ", 60), colMnem)
+			t := canvas.NewText(strings.Repeat(" ", 44), colMnem)
 			t.TextStyle = fyne.TextStyle{Monospace: true}
 			t.TextSize = fontSize
 			return t
@@ -224,7 +632,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 			}
 			line := d.dasmCache[id]
 			isPC := line.Addr == d.cpu.PC
-			isBP := d.breakpoints[line.Addr]
+			_, isBP := d.bps.Lookup(line.Addr)
 
 			prefix := "  "
 			if isPC && isBP {
@@ -261,16 +669,21 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		},
 	)
 	d.dasmList.OnSelected = func(id widget.ListItemID) {
-		// Toggle breakpoint on tap
+		// Toggle a plain (no-cond, any-bank) breakpoint on tap.
+		// Conditional / bank-filtered breakpoints are added from the
+		// Breakpoints tab.
 		if id < len(d.dasmCache) {
 			addr := d.dasmCache[id].Addr
-			if d.breakpoints[addr] {
-				delete(d.breakpoints, addr)
+			if _, ok := d.bps.Lookup(addr); ok {
+				d.bps.Remove(addr)
 			} else {
-				d.breakpoints[addr] = true
+				d.bps.Add(addr, BPEntry{Bank: -1})
 			}
 			d.dasmList.UnselectAll()
 			d.dasmList.Refresh()
+			if d.bpW != nil {
+				d.bpW.Refresh()
+			}
 		}
 	}
 
@@ -283,7 +696,10 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.hexList = widget.NewList(
 		func() int { return hexRows },
 		func() fyne.CanvasObject {
-			t := canvas.NewText(strings.Repeat(" ", 70), colHex)
+			// 74 = full hex row width: "AAAA  " + 16×"BB " + gap +
+			// " |" + 16 ascii + "|". Sized to content so the ASCII
+			// column isn't clipped.
+			t := canvas.NewText(strings.Repeat(" ", 74), colHex)
 			t.TextStyle = fyne.TextStyle{Monospace: true}
 			t.TextSize = fontSize
 			return t
@@ -359,17 +775,192 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		), nil, nil, nil, d.hexList,
 	))
 
-	// Layout: registers | disassembly | hex
-	innerSplit := container.NewHSplit(regPanel, dasmPanel)
-	innerSplit.SetOffset(0.22)
-	split := container.NewHSplit(innerSplit, hexPanel)
-	split.SetOffset(0.58)
+	// Spectrum Next state panel — empty until SetNextProvider
+	// installs a provider. Stays in the layout permanently to
+	// avoid recomputing the split offsets when a Next provider
+	// arrives mid-session.
+	d.nextPanelBox = container.NewVBox()
+	d.nextLines = map[string]*canvas.Text{}
+	nextScroll := container.NewVScroll(d.nextPanelBox)
+	nextScroll.SetMinSize(fyne.NewSize(150, 0))
+
+	// Memory-paging diagram lives ABOVE the NEXT STATE text. 4
+	// cells for classic (16K each), 8 cells for Next (8K each).
+	// The widget swaps between them automatically when
+	// SetNextProvider is called.
+	d.pageMap = NewPageMapWidget(d.mem)
+	pageMapPanel := container.NewBorder(
+		container.NewVBox(headerText("  PAGING", colRegName), widget.NewSeparator()),
+		nil, nil, nil, d.pageMap.Root(),
+	)
+
+	// Build the bank-inspect widget; SetBankAccessor wires it later.
+	d.bankInspect = NewBankInspectWidget(nil)
+
+	// Backtrace widget — pulls live state from the CPU each render.
+	// The closure adapter keeps us out of any z80 import here.
+	d.backtrace = NewBacktraceWidget(
+		cpuStackSource{cpu: d.cpu},
+		func(a uint16) byte { return d.mem.Read(a) },
+	)
+
+	// History widget — SetHistory wires the ring later.
+	d.history = NewHistoryWidget(nil)
+
+	// Heatmap widget — same shared ring, wired by SetHistory.
+	d.heatmapW = NewHeatmapWidget(nil)
+
+	// Time-travel widget — wired by SetTimeTravel.
+	d.ttW = NewTimeTravelWidget(nil)
+
+	// NextReg arbitrary read/write — SetNextRegAccessor later.
+	d.nextRegW = NewNextRegWidget(nil)
+
+	// Breakpoints panel — talks to the SAME shared store that
+	// CheckBreakpoint and the telnet debugger use, so the list is
+	// unified across both surfaces.
+	d.bpW = NewBreakpointsWidget(d.bps)
+
+	// Watchpoints panel — register watches via the shared set
+	// (wired by SetRegWatches; nil-safe until then).
+	d.watchW = NewWatchpointsWidget(d.regWatches)
+
+	// Graphical palette swatch — fed by SetNextProvider when the
+	// provider implements PaletteRGBAProvider.
+	d.paletteView = NewPaletteView(nil)
+
+	// Graphical sprite viewer — fed by SetNextProvider when the
+	// provider implements SpriteVizProvider.
+	d.spriteView = NewSpriteView(nil)
+
+	// Graphical framebuffer viewers — fed by SetNextProvider when the
+	// provider implements Layer2FrameProvider / TilemapFrameProvider.
+	d.layer2View = NewImageView("Layer 2 framebuffer", 256, 192, nil)
+	d.tilemapView = NewImageView("Tilemap", 320, 240, nil)
+
+	// Tabbed tools area replaces the single NEXT STATE panel so we
+	// can host parity surfaces (bank inspector, NextReg explorer,
+	// backtrace, history) without crowding the four-pane layout.
+	toolsTabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("Next State", theme.ComputerIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  NEXT STATE", colRegName), widget.NewSeparator()),
+			nil, nil, nil, nextScroll,
+		))),
+		container.NewTabItemWithIcon("Bank Inspect", theme.StorageIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  BANK INSPECT", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.bankInspect.Root(),
+		))),
+		container.NewTabItemWithIcon("Backtrace", theme.NavigateBackIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  BACKTRACE", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.backtrace.Root(),
+		))),
+		container.NewTabItemWithIcon("History", theme.HistoryIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  M1 HISTORY", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.history.Root(),
+		))),
+		container.NewTabItemWithIcon("NextReg", theme.SettingsIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  NEXTREG R/W", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.nextRegW.Root(),
+		))),
+		container.NewTabItemWithIcon("Breakpoints", theme.MediaRecordIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  BREAKPOINTS", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.bpW.Root(),
+		))),
+		container.NewTabItemWithIcon("Watchpoints", theme.VisibilityIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  REGISTER WATCHPOINTS", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.watchW.Root(),
+		))),
+		container.NewTabItemWithIcon("Heatmap", theme.GridIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  M1 HEATMAP", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.heatmapW.Root(),
+		))),
+		container.NewTabItemWithIcon("Time Travel", theme.HistoryIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  TIME TRAVEL", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.ttW.Root(),
+		))),
+		container.NewTabItemWithIcon("Palette", theme.ColorPaletteIcon(),
+			panelBG(d.paletteView.Root())),
+		container.NewTabItemWithIcon("Sprites", theme.GridIcon(),
+			panelBG(d.spriteView.Root())),
+		container.NewTabItemWithIcon("Layer 2", theme.MediaPhotoIcon(),
+			panelBG(d.layer2View.Root())),
+		container.NewTabItemWithIcon("Tilemap", theme.ViewFullScreenIcon(),
+			panelBG(d.tilemapView.Root())),
+	)
+	toolsTabs.SetTabLocation(container.TabLocationTop)
+
+	// Two-row layout so the window fits a standard display and every
+	// divider is draggable. Previously all four panes sat side-by-side
+	// (registers | disasm | hex | tools), which forced a >1400px
+	// minimum width — wider than many laptop screens — and pinned the
+	// split dividers. Now:
+	//   TOP row : registers | disassembly | hex   (the live CPU view)
+	//   BOTTOM  : paging diagram | tools tabs       (full width)
+	// The tools tabs (with their wide poke/condition forms) no longer
+	// compete for horizontal space, so the top row's minimum width is
+	// just reg + disasm + hex.
+	dasmHex := container.NewHSplit(dasmPanel, hexPanel)
+	dasmHex.SetOffset(0.40) // give hex the wider share (its row is 74 cols)
+	topRow := container.NewHSplit(regPanel, dasmHex)
+	topRow.SetOffset(0.16)
+
+	bottomRow := container.NewHSplit(pageMapPanel, toolsTabs)
+	bottomRow.SetOffset(0.22)
+
+	mainSplit := container.NewVSplit(topRow, bottomRow)
+	mainSplit.SetOffset(0.52)
 
 	return container.NewBorder(
 		container.NewVBox(d.buildControls(), widget.NewSeparator()),
 		container.NewVBox(widget.NewSeparator(), panelBG(d.statusTxt)),
-		nil, nil, split,
+		nil, nil, mainSplit,
 	)
+}
+
+// refreshNextPanel updates the Next state panel from the current
+// provider. No-op when no provider is set.
+func (d *Debugger) refreshNextPanel() {
+	if d.nextPanelBox == nil {
+		return
+	}
+	d.nextPanelBox.RemoveAll()
+	if d.nextProvider == nil {
+		t := canvas.NewText("  (no Next state — classic model)", colRegName)
+		t.TextStyle = fyne.TextStyle{Monospace: true}
+		t.TextSize = fontSize
+		d.nextPanelBox.Add(t)
+		d.nextPanelBox.Refresh()
+		return
+	}
+	addLine := func(s string, c color.Color) {
+		t := canvas.NewText(s, c)
+		t.TextStyle = fyne.TextStyle{Monospace: true}
+		t.TextSize = fontSize
+		d.nextPanelBox.Add(t)
+	}
+	addLine("MMU slots (8K windows)", colRegName)
+	slots := d.nextProvider.MMUSlots()
+	for i, b := range slots {
+		base := uint16(i) * 0x2000
+		val := fmt.Sprintf("$%04X-$%04X ", base, base+0x1FFF)
+		if b < 0 {
+			val += "  --"
+		} else {
+			val += fmt.Sprintf("bank %3d", b)
+		}
+		addLine("  "+val, colRegVal)
+	}
+	addLine("", colRegVal)
+	addLine("divMMC", colRegName)
+	addLine("  "+d.nextProvider.DivMMCState(), colRegVal)
+	addLine("", colRegVal)
+	addLine("NextRegs", colRegName)
+	regs := d.nextProvider.NextRegs()
+	for _, r := range NextRegsOfInterest {
+		v := regs[r]
+		addLine(fmt.Sprintf("  $%02X = $%02X", r, v), colRegVal)
+	}
+	d.nextPanelBox.Refresh()
 }
 
 func (d *Debugger) buildControls() fyne.CanvasObject {
@@ -381,6 +972,15 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	})
 	stepBtn := widget.NewButtonWithIcon("Step", theme.MediaSkipNextIcon(), func() {
 		if d.onStep != nil {
+			d.onStep()
+		}
+		d.Refresh()
+	})
+	stepOverBtn := widget.NewButtonWithIcon("Step Over", theme.MediaFastForwardIcon(), func() {
+		switch {
+		case d.onStepOver != nil:
+			d.onStepOver()
+		case d.onStep != nil:
 			d.onStep()
 		}
 		d.Refresh()
@@ -406,12 +1006,12 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
 	writeBtn := widget.NewButton("Write Mem...", func() { d.showWriteDialog() })
 	clearBPBtn := widget.NewButton("Clear BPs", func() {
-		d.breakpoints = make(map[uint16]bool)
+		d.bps.Clear()
 		d.Refresh()
 	})
 
 	return container.NewHBox(
-		pauseBtn, stepBtn, frameBtn, runBtn,
+		pauseBtn, stepBtn, stepOverBtn, frameBtn, runBtn,
 		widget.NewSeparator(),
 		pcBtn, editBtn, writeBtn,
 		widget.NewSeparator(),
@@ -456,7 +1056,10 @@ func (d *Debugger) refreshRegisters() {
 
 	f := d.cpu.F
 	flagStr := " "
-	for _, fl := range []struct{ n string; b byte }{{"S", 0x80}, {"Z", 0x40}, {"H", 0x10}, {"PV", 0x04}, {"N", 0x02}, {"C", 0x01}} {
+	for _, fl := range []struct {
+		n string
+		b byte
+	}{{"S", 0x80}, {"Z", 0x40}, {"H", 0x10}, {"PV", 0x04}, {"N", 0x02}, {"C", 0x01}} {
 		if f&fl.b != 0 {
 			flagStr += fl.n + ":1 "
 		} else {
@@ -469,6 +1072,9 @@ func (d *Debugger) refreshRegisters() {
 
 	d.iffLine.Text = fmt.Sprintf(" IFF %v/%v  IM %d", d.cpu.IFF1, d.cpu.IFF2, d.cpu.IM)
 	d.iffLine.Refresh()
+
+	d.irqLine.Text = fmt.Sprintf(" IRQ %d/%d (taken/rej)", z80.IntFireCount, z80.IntRejectCount)
+	d.irqLine.Refresh()
 
 	if d.cpu.Halted {
 		d.haltLine.Text = " ** HALTED **"
@@ -509,9 +1115,9 @@ func (d *Debugger) refreshStatus() {
 	}
 
 	bps := ""
-	if len(d.breakpoints) > 0 {
+	if active := d.bps.Snapshot(); len(active) > 0 {
 		addrs := []string{}
-		for a := range d.breakpoints {
+		for a := range active {
 			addrs = append(addrs, fmt.Sprintf("%04X", a))
 		}
 		bps = "  BPs:" + strings.Join(addrs, ",")
@@ -557,11 +1163,22 @@ func (d *Debugger) showEditDialog() {
 	content.Add(container.NewHBox(layout.NewSpacer(),
 		widget.NewButton("Cancel", func() { dlg.Hide() }),
 		widget.NewButton("Apply", func() {
-			d.cpu.PC = p16("PC"); d.cpu.SP = p16("SP"); d.cpu.IX = p16("IX"); d.cpu.IY = p16("IY")
-			d.cpu.A = p8("A"); d.cpu.F = p8("F"); d.cpu.B = p8("B"); d.cpu.C = p8("C")
-			d.cpu.D = p8("D"); d.cpu.E = p8("E"); d.cpu.H = p8("H"); d.cpu.L = p8("L")
-			d.cpu.I = p8("I"); d.cpu.R = p8("R")
-			dlg.Hide(); d.Refresh()
+			d.cpu.PC = p16("PC")
+			d.cpu.SP = p16("SP")
+			d.cpu.IX = p16("IX")
+			d.cpu.IY = p16("IY")
+			d.cpu.A = p8("A")
+			d.cpu.F = p8("F")
+			d.cpu.B = p8("B")
+			d.cpu.C = p8("C")
+			d.cpu.D = p8("D")
+			d.cpu.E = p8("E")
+			d.cpu.H = p8("H")
+			d.cpu.L = p8("L")
+			d.cpu.I = p8("I")
+			d.cpu.R = p8("R")
+			dlg.Hide()
+			d.Refresh()
 		}),
 	))
 	dlg.Resize(fyne.NewSize(300, 500))
@@ -591,7 +1208,8 @@ func (d *Debugger) showWriteDialog() {
 					}
 				}
 			}
-			dlg.Hide(); d.Refresh()
+			dlg.Hide()
+			d.Refresh()
 		}),
 	))
 	dlg.Resize(fyne.NewSize(400, 200))

@@ -109,6 +109,21 @@ func TestULANetReadStubbed(t *testing.T) {
 	}
 }
 
+// TestULA_writeNET — write path to NET port is a no-op stub
+// (RS-232 / SinclairNET have no peripherals connected). Iter 281.
+func TestULA_writeNET(t *testing.T) {
+	u := NewULA(nil)
+	// Write a few patterns — must not panic and must not affect state.
+	for _, v := range []byte{0x00, 0xFF, 0x55, 0xAA, 0x03} {
+		u.HandlePortWrite(PortNET, v)
+	}
+	// Read back — still no peripheral.
+	val, _ := u.HandlePortRead(PortNET)
+	if val != 0xFF {
+		t.Errorf("after writeNET sweep: read = %02X, want 0xFF", val)
+	}
+}
+
 // TestULAResetClearsState confirms Reset clears the captured comms
 // signals and the bus state.
 func TestULAResetClearsState(t *testing.T) {
