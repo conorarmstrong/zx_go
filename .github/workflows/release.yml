@@ -14,16 +14,30 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             artifact: zx_go-linux-amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            artifact: zx_go-linux-arm64
           - os: windows-latest
             goos: windows
             goarch: amd64
             artifact: zx_go-windows-amd64.exe
+          # Experimental: native Windows-on-ARM. OpenGL/CGO support there is
+          # immature, so this target is non-blocking (continue-on-error) and
+          # must never fail the release or cancel the other targets.
+          - os: windows-11-arm
+            goos: windows
+            goarch: arm64
+            cc: clang
+            experimental: true
+            artifact: zx_go-windows-arm64.exe
           - os: macos-latest
             goos: darwin
             goarch: arm64
@@ -35,6 +49,7 @@ jobs:
             artifact: zx_go-macos-amd64
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental || false }}
 
     steps:
       - uses: actions/checkout@v5
