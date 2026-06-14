@@ -17,6 +17,7 @@ The 48K was the author's first computer; this project was written as a Go learni
  - [Pre-built binaries](#pre-built-binaries)
  - [Building from source](#building-from-source)
 - [What works](#what-works) — supported models and file formats
+- [How it compares](#how-it-compares) — vs. other Spectrum Next emulators
 - [Running classic Spectrum modes](#running-classic-spectrum-modes)
 - [Running the Spectrum Next](#running-the-spectrum-next-modelnext)
  - [What you need (and the easy way to get it)](#what-you-need-and-the-easy-way-to-get-it)
@@ -135,6 +136,17 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 - **Beeper** — ULA speaker bit through the host audio system
 - **AY-3-8912** — on 128K and later; correct port decoding (`$BFFD` / `$FFFD`)
 - **Spectrum Next DAC** — 4-channel DAC bank
+
+---
+
+## How it compares
+
+Wondering how zx_go stacks up against the other ZX Spectrum Next emulators —
+**CSpect**, **ZEsarUX**, and **MAME** (`tbblue`)? See **[COMPARISON.md](COMPARISON.md)**
+for a detailed, criterion-by-criterion table covering licensing, platforms,
+Next hardware coverage, CPU/timing accuracy, media support, peripherals, audio,
+and debugging tools — written to be fair, with sources and honest caveats about
+where zx_go is young and where the others lead.
 
 ---
 
