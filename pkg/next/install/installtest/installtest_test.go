@@ -2,7 +2,7 @@ package installtest
 
 import (
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
@@ -52,8 +52,8 @@ func TestRedirectConfig_DistinctTempDirsPerInvocation(t *testing.T) {
 	if d1 == d2 {
 		t.Errorf("RedirectConfig returned same dir twice: %q", d1)
 	}
-	if !strings.HasSuffix(d1, "/next") {
-		t.Errorf("RedirectConfig path %q should end in /next", d1)
+	if filepath.Base(d1) != "next" {
+		t.Errorf("RedirectConfig path %q should end in the \"next\" segment", d1)
 	}
 }
 

@@ -108,6 +108,16 @@ func New(model roms.SpectrumModel) (*Harness, error) {
 // the higher-level Memory / ScreenText helpers.
 func (h *Harness) CPU() *z80.CPU { return h.cpu }
 
+// CloseFiles closes any open esxDOS host-file handles. Tests should call
+// it (via t.Cleanup) before their t.TempDir is removed — on Windows an
+// unclosed handle blocks deletion of the backing file. No-op when the
+// Next esxDOS dispatcher isn't wired (non-Next models).
+func (h *Harness) CloseFiles() {
+	if h.nextEsxdos != nil {
+		h.nextEsxdos.CloseAll()
+	}
+}
+
 // Memory returns the underlying memory.Memory.
 func (h *Harness) MemoryBus() *memory.Memory { return h.mem }
 

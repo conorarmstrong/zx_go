@@ -189,16 +189,22 @@ type rtcSnap struct {
 	year, month, day, hour, minute, second int
 }
 
+// CloseAll closes every open file handle and clears the handle table.
+// Call it on teardown/reset so the host OS releases the underlying
+// file descriptors — on Windows an unclosed handle blocks deletion of
+// the backing file (POSIX unlinks an open file fine; Windows does not).
+func (d *Dispatcher) CloseAll() {
+	for h, fh := range d.files {
+		_ = fh.Close()
+		delete(d.files, h)
+	}
+}
+
 // SetMount installs an SD-card backend and registers the esxDOS
 // file-API handlers that need it (F_OPEN through F_READDIR).
 // Passing nil unregisters those handlers and closes any open files.
 func (d *Dispatcher) SetMount(m sdcard.Mount) {
-	if d.mount != nil {
-		for h, fh := range d.files {
-			_ = fh.Close()
-			delete(d.files, h)
-		}
-	}
+	d.CloseAll()
 	d.mount = m
 	if m == nil {
 		d.Register(F_OPEN, nil)

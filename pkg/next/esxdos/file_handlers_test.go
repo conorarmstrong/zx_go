@@ -38,7 +38,10 @@ func setupFileAPI(t *testing.T, files map[string][]byte) (*Dispatcher, *z80.CPU,
 	d := New()
 	d.SetMount(mount)
 	mountRoots[d] = root
-	t.Cleanup(func() { delete(mountRoots, d) })
+	// Close any handles the test leaves open BEFORE t.TempDir's RemoveAll
+	// runs (LIFO cleanup order) — Windows can't delete a file with an open
+	// handle, so a leaked F_OPEN handle would fail the temp-dir cleanup.
+	t.Cleanup(func() { d.CloseAll(); delete(mountRoots, d) })
 
 	mem := memMap{}
 	cpu := z80.New(memBus{mem}, stubULA{})

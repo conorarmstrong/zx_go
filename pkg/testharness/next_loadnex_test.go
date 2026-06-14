@@ -298,6 +298,9 @@ func TestMountSDCardWiresFOpen(t *testing.T) {
 	if err := h.MountSDCard(root); err != nil {
 		t.Fatalf("MountSDCard: %v", err)
 	}
+	// Close the esxDOS handle the F_OPEN below leaves open before root's
+	// t.TempDir RemoveAll runs (LIFO) — Windows can't delete an open file.
+	t.Cleanup(h.CloseFiles)
 
 	mem := h.MemoryBus()
 	cpu := h.CPU()
