@@ -1,8 +1,13 @@
 # VHDL → emulator conformance matrix
 
+**Scope:** this matrix covers the Spectrum **Next** FPGA core
+(`zxnext.vhd` + `video/zxula_timing.vhd`) only. The other machines zx_go
+emulates (48K…+3, ZX80/ZX81, Pentagon 128) have no FPGA reference and are
+tracked via their own tests, README and CHANGELOG, not here.
+
 **Premise (the reason this file exists):** a truly hardware-accurate Spectrum
-Next emulator MUST boot the firmware that runs on the real hardware. zx_go now
-cold-boots NextZXOS end-to-end (welcome → menu → Browser/NextBASIC, v1.0 RC1) —
+Next emulator MUST boot the firmware that runs on the real hardware. zx_go
+cold-boots NextZXOS end-to-end (welcome → menu → Browser/NextBASIC; v1.1.0) —
 which it reached by closing exactly the kind of inaccuracies this file
 enumerates. Per-feature "validated against the VHDL" claims are **spot
 checks**; they do not prove conformance of the whole surface. This matrix
@@ -62,7 +67,7 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $C0 im2/nmi | $00 | $00 | ✅ | |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0 |
 
-**Axis 1 remaining gaps to close:** NR$68 (bit7), NR$B9 ($01), NR$C4 (expbus
+**Axis 1 remaining gaps to close:** NR$68 (bit7), NR$C4 (expbus
 bit), NR$98/$99 (Pi), NR$0B/$A9 (composed). None of these were boot-blocking
 (the cold boot now completes), but each is a residual faithfulness defect.
 **Action:** extend the reset test to assert the FULL vhd reset vector incl.
@@ -109,11 +114,12 @@ MMU8 ($50-$57) defaults ✅ (this-session $DE/$DF fix), divMMC overlay, config-m
 RAMPAGE (NR$04), alt-ROM (NR$8C), 7FFD/1FFD. ⚠️ no end-to-end paging conformance
 matrix vs the VHDL mux priority.
 
-## Axis 8 — divMMC / SD  ← **leading boot-blocker axis**
-automap triggers (rom3/delayed variants, $3DXX gate), SPI, CSD v1/v2. **The boot
-stalls in a divMMC-RAM NOP-slide at $2401** ($2000-$3FFF under-populated). This
-axis is where the next inaccuracy most likely lives (NextRegs/INT/Z80 ruled out
-by cross-checks). **Action: dump divMMC-RAM at $2401 vs what should be loaded.**
+## Axis 8 — divMMC / SD
+automap triggers (rom3/delayed variants, $3DXX gate), SPI, CSD v1/v2. The
+`$2401` divMMC-RAM NOP-slide that once blocked the cold boot is **closed** — the
+Next now boots NextZXOS end-to-end from the SD image (`TestNextRealROMBoot`).
+⚠️ Remaining: no port-by-port conformance test pins the automap trigger variants
+or the SPI / CSD command set to the VHDL.
 
 ## Axis 9 — Video (ULA/L2/tilemap/sprite/lores/palette/copper)
 Broad render edge tests (iters 204-217). Not boot-critical (boot stalls pre-render).
