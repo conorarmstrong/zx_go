@@ -28,10 +28,65 @@ const (
 // Bank is the four-channel DAC bank.
 type Bank struct {
 	levels [4]byte
+	// Event-timed reconstruction: each port write records the resulting mixed
+	// level with its T-state offset within the frame, so the audio frame can be
+	// reconstructed sample-accurately (box-filter) instead of snapshotting one
+	// level per audio pull. Carries the last level across frames.
+	events     []dacEvent
+	startLevel byte
+}
+
+type dacEvent struct {
+	tstateOffset int
+	level        byte
 }
 
 // New returns a Bank with all channels at level 0 (silent).
 func New() *Bank { return &Bank{} }
+
+// Record appends a timed event capturing the current mixed level at the given
+// T-state offset within the frame. The ULA calls this after each DAC port write
+// so GenerateFrame can reconstruct the waveform sample-accurately.
+func (b *Bank) Record(tstateOffset int) {
+	b.events = append(b.events, dacEvent{tstateOffset: tstateOffset, level: b.MixedLevel()})
+}
+
+// GenerateFrame reconstructs one frame of mixed-range DAC samples from the
+// recorded writes (box-filter integration, like the beeper), then clears the
+// events and carries the final level into the next frame. The level→amplitude
+// mapping matches MixInto so the timed path is the same loudness as the legacy
+// per-pull snapshot, only sample-accurate.
+func (b *Bank) GenerateFrame(samplesPerFrame, tstatesPerFrame int) []int16 {
+	out := make([]int16, samplesPerFrame)
+	level := b.startLevel
+	idx := 0
+	for i := 0; i < samplesPerFrame; i++ {
+		sampleStart := i * tstatesPerFrame / samplesPerFrame
+		sampleEnd := (i + 1) * tstatesPerFrame / samplesPerFrame
+		sampleLen := sampleEnd - sampleStart
+		var acc int64
+		cur := sampleStart
+		for idx < len(b.events) && b.events[idx].tstateOffset < sampleEnd {
+			next := b.events[idx].tstateOffset
+			if next < cur {
+				next = cur
+			}
+			acc += int64(level) * int64(next-cur)
+			level = b.events[idx].level
+			cur = next
+			idx++
+		}
+		acc += int64(level) * int64(sampleEnd-cur)
+		avg := level
+		if sampleLen > 0 {
+			avg = byte(acc / int64(sampleLen))
+		}
+		out[i] = (int16(avg) - 128) * dacMixAmplitude
+	}
+	b.startLevel = level
+	b.events = b.events[:0]
+	return out
+}
 
 // Level returns the current 8-bit level for the given channel.
 // Channels outside ChannelA..ChannelD return 0.
@@ -63,11 +118,13 @@ func (b *Bank) WritePort(port uint16, val byte) bool {
 	return true
 }
 
-// Reset clears all four DAC levels to 0.
+// Reset clears all four DAC levels to 0 and the event-timing state.
 func (b *Bank) Reset() {
 	for i := range b.levels {
 		b.levels[i] = 0
 	}
+	b.events = b.events[:0]
+	b.startLevel = 0
 }
 
 // MixedLevel returns the mean of the four channel levels as an
@@ -87,13 +144,10 @@ func (b *Bank) MixedLevel() byte {
 // magnitude) without saturating their combined sum at int16 limits.
 const dacMixAmplitude int16 = 64
 
-// MixInto adds the current DAC output to every sample in buf. v1.0
-// uses the level snapshot at the moment Read() runs — chiptune
-// sample-playback that writes the DAC at audio-rate within a frame
-// will be heard but with reduced fidelity (the rapid writes flatten
-// to the average over the read window). A v1.1 upgrade can record
-// per-write events with T-state timestamps and integrate as the
-// beeper does.
+// MixInto adds the current DAC output to every sample in buf as a flat per-call
+// snapshot. The ULA no longer uses this for the Next DAC — it now drives the
+// event-timed GenerateFrame (sample-accurate, like the beeper). MixInto is
+// retained for the generic audio.DACSource interface / tests.
 //
 // The contribution is centred: a DAC value of 0x80 produces zero
 // offset; 0x00 and 0xFF produce maximal negative and positive

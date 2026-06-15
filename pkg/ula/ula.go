@@ -337,13 +337,8 @@ func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
 // up the DAC immediately without having to restart audio.
 func (u *ULA) SetNextDAC(d NextDAC) {
 	u.nextDAC = d
-	if u.audio != nil {
-		if src, ok := d.(audio.DACSource); ok && d != nil {
-			u.audio.SetDAC(src)
-		} else {
-			u.audio.SetDAC(nil)
-		}
-	}
+	// The Next DAC is mixed event-timed in flushAudioFrame (see its
+	// GenerateFrame), not via the audio system's per-pull DACSource path.
 }
 
 // SetSpeccyDAC attaches the classic-Spectrum SpecDrum/Covox DAC. Unlike the
@@ -1086,6 +1081,13 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	// classic ULA ports). When the port wasn't a DAC port the bank
 	// returns false and we continue with the normal dispatch.
 	if u.nextDAC != nil && u.nextDAC.WritePort(addr, val) {
+		// Record the timed write so flushAudioFrame can reconstruct the DAC
+		// waveform sample-accurately (event-timed, like the beeper).
+		if u.audio != nil && u.mem.TStates != nil {
+			if rec, ok := u.nextDAC.(interface{ Record(int) }); ok {
+				rec.Record(int(*u.mem.TStates - u.frameStartTstate))
+			}
+		}
 		return
 	}
 
@@ -1300,13 +1302,9 @@ func (u *ULA) EnableAudio() {
 	if u.ay != nil {
 		u.audio.SetAY(u.ay)
 	}
-	// If a Spectrum Next DAC bank is attached (ModelNext), mix
-	// its output alongside the beeper and AY. The interface here
-	// lets pkg/audio stay decoupled from pkg/next/dac — Bank
-	// satisfies it via MixInto.
-	if d, ok := u.nextDAC.(audio.DACSource); ok && d != nil {
-		u.audio.SetDAC(d)
-	}
+	// The Spectrum Next DAC (ModelNext) is mixed event-timed in flushAudioFrame
+	// (see its GenerateFrame), so it is NOT wired into the audio system's
+	// per-pull DACSource path here.
 	if err := u.audio.Start(); err != nil {
 		log.Printf("Warning: Failed to start audio system: %v", err)
 	}
@@ -1391,6 +1389,14 @@ func (u *ULA) flushAudioFrame() {
 	if u.speccyDAC != nil && u.speccyDAC.Enabled() {
 		const tstatesPerFrame = 69888
 		mixInt16(samples, u.speccyDAC.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
+	}
+	// Spectrum Next 4-channel DAC: event-timed, mixed the same way (replaces the
+	// old per-pull MixInto snapshot).
+	if gen, ok := u.nextDAC.(interface {
+		GenerateFrame(int, int) []int16
+	}); ok && gen != nil {
+		const tstatesPerFrame = 69888
+		mixInt16(samples, gen.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
 	}
 	u.audio.PushBeeperSamples(samples)
 	u.frameStartSpeakerState = finalState
