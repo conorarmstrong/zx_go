@@ -14,7 +14,18 @@ Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
   (`setupModel` disables it; `SetTStatePtr`/`SwitchModel` honour the flag) and
   the Pentagon **71680-T-state frame**. Bank 0 is the Pentagon editor ROM,
   bank 1 the standard 48 BASIC. Boots to the 128 menu and runs 128/48 BASIC.
-  `Machine → Pentagon 128` / `--pentagon`. (TR-DOS / Beta-disk not yet wired.)
+  `Machine → Pentagon 128` / `--pentagon`.
+- **TR-DOS / Beta Disk interface** (`pkg/betadisk`) — the disk standard for the
+  Pentagon and other 128K clones. A WD1793 floppy controller (Restore/Seek/
+  Step/Read-Sector/Write-Sector/Read-Address/Force-Interrupt with DRQ/INTRQ),
+  raw `.TRD` sector images with 80/40-track single/double-sided geometry
+  inference, and the Beta port decode ($1F/$3F/$5F/$7F/$FF — exact low byte, so
+  no clash with SpecDrum/Covox/Kempston-mouse) and $FF system register (drive,
+  side-inverted bit 4, active-low reset bit 2), cross-checked against Fuse's
+  `beta.c`. The TR-DOS ROM auto-pages over $0000-$3FFF on a $3Dxx instruction
+  fetch (gated to the 48 BASIC ROM) and pages out at $4000+, driven by a CPU
+  pre-fetch hook. Mount with `File → Load TR-DOS Disk A/B (.TRD)` or `--trd`
+  (48K/128K/+2/Pentagon).
 - **SpecDrum & Covox** (`pkg/audiodac`) — classic-Spectrum 8-bit DAC sound
   add-ons: Cheetah SpecDrum (OUT $DF) and a mono Covox (OUT $FB), opt-in from
   the Peripherals menu and persisted in config. Event-timed like the beeper —

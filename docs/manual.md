@@ -69,7 +69,8 @@ window** — zx_go picks the right loader from the extension.
 | `.z80` / `.szx` / `.sna` snapshot | File → Load Snapshot | Restores a frozen machine instantly. |
 | `.rom` | File → Load ROM | Replace the system ROM (advanced). |
 | `.dck` / Interface 2 cartridge | File → Insert Interface 2 Cartridge | 16K ROM cartridges. |
-| `.trd`/disk, `.mgt` | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). |
+| `.trd` TR-DOS disk | File → Load TR-DOS Disk A/B | Pentagon / 48K / 128K. Enter TR-DOS, then `CAT`/`LOAD`. See below. |
+| `.dsk` / `.mgt` disk | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). |
 | `.p` / `.o` (ZX81/ZX80) | File → Open File | Loads and runs the program. |
 
 **Recent files** (File → Recent) keeps your last-opened items one click away.
@@ -85,6 +86,15 @@ not faked), so loaders with custom timing work. You can:
 
 Some protected games need the **Speedlock Workaround** (File → disk submenu)
 toggled on.
+
+### TR-DOS disks (.TRD)
+
+TR-DOS is the disk system used on the Pentagon and other 128K clones. Pick a
+**Pentagon 128** (or 48K/128K) machine, then **File → Load TR-DOS Disk A**
+(or B) and choose a `.trd` image — the Beta Disk interface and its TR-DOS ROM
+are enabled automatically. To use the disk, enter TR-DOS from BASIC with
+`RANDOMIZE USR 15616` (or via the 128 menu), then the usual `CAT`, `LOAD "name"`,
+`RUN`, etc. You can also mount a disk at launch with `--trd path.trd`.
 
 ---
 

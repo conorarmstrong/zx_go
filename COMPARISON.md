@@ -81,8 +81,8 @@ ZEsarUX covers a very wide range of 8-bit/16-bit home computers. zx_go and
 CSpect are focused on the Spectrum family / Next.
 ⁹ Pentagon 128: 128K paging + AY with no memory contention and the 71680-T
 Pentagon frame; boots its editor ROM to the 128 menu and runs 128/48 BASIC. The
-TR-DOS / Beta-disk interface (for `.trd`/`.scl`) is not yet implemented, so disk
-images can't be loaded on the Pentagon yet.
+TR-DOS / Beta-disk interface (WD1793 + auto-paging TR-DOS ROM) loads `.trd`
+images on the Pentagon (and the 48K/128K); `.scl` is not yet supported.
 ⁷ zx_go runs the genuine ZX80 (4K) and ZX81 (8K) ROMs with a faithful
 CPU-generated display, so each machine uses its own native keyword layout
 (e.g. PRINT is on O for the ZX80, P for the ZX81). `.P` / `.O` programs load.
@@ -156,6 +156,7 @@ which is why the community treats it as the accuracy reference.
 | `.nex` (Next snapshot) | ✅ (load) | ✅ | ✅ | ❌ |
 | Tape (TAP / TZX) | ✅ | ⚠️ ²⁰ | ✅ | ⚠️ ²¹ |
 | Disk (DSK / +3) | ✅ | ❔ | ⚠️ | ✅ ²¹ |
+| TR-DOS / Beta disk (.TRD) | ✅ | ❌ | ✅ | ❌ |
 | RZX recordings | ✅ ²² | ❔ | ⚠️ (playback only) | ❌ |
 
 ¹⁶ MAME boots NextZXOS to navigable menus; full Browser use is highly likely but

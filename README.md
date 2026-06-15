@@ -124,7 +124,7 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 ### Models
 - **Sinclair ZX80 & ZX81** — the original 1980/1981 machines, fully working and interactive. Faithful **CPU-generated display** (the Z80 itself produces the picture: NOP-on-the-bus video fetches, R-register interrupt, and the ZX81 SLOW-mode NMI border generator), the full ZX8x keyboard (each machine's native keyword layout — e.g. PRINT is on O for the ZX80, P for the ZX81), and `.P`/`.O` program loading. Boots to the inverse-K cursor and runs BASIC. Select from `Machine → Sinclair ZX81 / ZX80`, or launch with `--zx81` / `--zx80`. See **[docs/zx80-zx81.md](docs/zx80-zx81.md)**.
 - **ZX Spectrum 48K, 128K, +2, +2A, +3** — fully working and interactive. Cycle-accurate timing, memory contention, port contention, +3 / +2A 4-ROM paging, all five tape formats, all six disk formats.
-- **Pentagon 128** — the Soviet 128K clone: 128K paging and AY, but with **no memory contention** and the Pentagon **71680-T frame**. Boots its editor ROM to the 128 menu and runs 128/48 BASIC. Select from `Machine → Pentagon 128`, or launch with `--pentagon`. (TR-DOS / Beta-disk support is not yet implemented.)
+- **Pentagon 128** — the Soviet 128K clone: 128K paging and AY, but with **no memory contention** and the Pentagon **71680-T frame**. Boots its editor ROM to the 128 menu and runs 128/48 BASIC, and loads **TR-DOS `.trd` disks** via the emulated Beta Disk interface (a WD1793 controller with auto-paging TR-DOS ROM). Select from `Machine → Pentagon 128`, or launch with `--pentagon` (optionally `--trd disk.trd`).
 - **ZX Spectrum Next** — **boots real NextZXOS end-to-end through the authentic chain**: FPGA bootrom → TBBLUE firmware splash → NextZXOS welcome → main menu — and the menu items work: the **Browser** opens the SD card's `C:/` listing, **NextBASIC** runs interactive programs (type, `RUN`, `BREAK`), the firmware configuration menu (SPACE at the splash) boots whichever machine personality you pick. Every Next hardware extension is wired: Z80N CPU extensions, NextRegs, 8K MMU, divMMC (128 KB), esxDOS, Layer 2, palette, sprites, Copper, zxnDMA, DAC, i2c RTC, 28 MHz CPU mode. **`.NEX` games load and run** via `File → Open File…`. See [Current status of NextZXOS boot](#current-status-of-nextzxos-boot).
 
 ### File formats supported
@@ -134,7 +134,8 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 | Snapshots | `.sna` / `.z80` / `.szx` | ✓ | ✓ | Full 48K + 128K support |
 | Tape | `.tap` / `.tzx` | ✓ | ✓ | TZX save covers block types 0x10 / 0x11 / 0x14 |
 | Disk (+3) | `.dsk` / `.edsk` | ✓ | ✓ (as `.dsk`) | EDSK (CPCEMU) handles weak sectors |
-| Disk (other) | `.udi` / `.mgt` / `.img` / `.trd` / `.sad` / `.d40` / `.d80` | ✓ | — | Full format coverage |
+| Disk (other) | `.udi` / `.mgt` / `.img` / `.sad` / `.d40` / `.d80` | ✓ | — | Full format coverage |
+| TR-DOS / Beta disk | `.trd` | ✓ | — | Pentagon / 48K / 128K via the emulated WD1793 |
 | Microdrive | `.mdr` | ✓ | ✓ | Standard Sinclair microdrive cartridge format |
 | Interface 2 cartridge | `.rom` | ✓ | — | 16 KB, 48K-only |
 | RZX recordings | `.rzx` | ✓ | ✓ | Per-frame instruction count + IN-byte stream |
@@ -146,6 +147,7 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 
 ### Peripherals
 - **+3 FDC** — NEC μPD765A; two drives, READ/WRITE/FORMAT/READ ID/READ DIAGNOSTIC/SCAN/SEEK
+- **Beta Disk / TR-DOS** — WD1793 controller with `.trd` images and the auto-paging TR-DOS ROM (Pentagon / 48K / 128K)
 - **Interface 1 + Microdrive** — 8 daisy-chained slots, GAP/SYNC formatting, embedded v2 ROM
 - **Interface 2** — cartridge slot, BASIC ROM override
 - **DISCiPLE** — MGT disk interface with GDOS ROM and full port-level emulation
@@ -364,7 +366,7 @@ The File menu groups related actions into submenus (▸) to stay manageable:
 | Recent | Most-recently-loaded files, click to reopen. "Clear Recent Files" at the bottom. |
 | **Snapshots & ROM** ▸ | Load ROM… (replace the active model's BASIC ROM), Load Snapshot…, Save Snapshot… (`.sna` / `.z80` / `.szx`). |
 | **Spectrum Next** ▸ | Install Next ROMs…, Set Next SD Card Directory… (builds a bootable FAT32 image from a host dir), Set Next SD Card Image (.img/.mmc)…, Clear Next SD Card Setting. |
-| **Tapes, Disks & Cartridges** ▸ | Load Tape (TAP/TZX)…; Insert/Eject Interface 2 cartridge (48K); DISCiPLE disks; +3/+2A floppy load/save/eject/write-protect (`.dsk` / `.edsk` / `.udi` / `.mgt` / `.img` / `.trd` / `.sad` / `.d40` / `.d80`); Speedlock workaround. |
+| **Tapes, Disks & Cartridges** ▸ | Load Tape (TAP/TZX)…; Insert/Eject Interface 2 cartridge (48K); DISCiPLE disks; +3/+2A floppy load/save/eject/write-protect (`.dsk` / `.edsk` / `.udi` / `.mgt` / `.img` / `.sad` / `.d40` / `.d80`); TR-DOS `.trd` disk load/eject (Pentagon / 48K / 128K); Speedlock workaround. |
 | **Recording (RZX)** ▸ | Open / play back, start / stop recording, rollback to last snapshot. |
 | **Microdrives** ▸ | 48K-only. 8-slot submenu; per-slot Insert / Save / Eject / Write-Protect. |
 | **ZX Printer** ▸ | Save the accumulated printout as a PNG, or clear it. |
