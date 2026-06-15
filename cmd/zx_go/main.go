@@ -675,6 +675,24 @@ func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
 		return
 	}
 
+	// Quick save (F2) / quick load (F4) state slot.
+	switch ev.Name {
+	case fyne.KeyF2:
+		if err := e.quickSaveState(); err != nil {
+			slog.Warn("quick-save failed", "err", err)
+		} else {
+			slog.Info("quick-saved state", "path", quickSavePath())
+		}
+		return
+	case fyne.KeyF4:
+		if err := e.quickLoadState(); err != nil {
+			slog.Warn("quick-load failed", "err", err)
+		} else {
+			slog.Info("quick-loaded state")
+		}
+		return
+	}
+
 	e.keyMutex.Lock()
 
 	// Check if this is a repeat event from the OS
@@ -2361,6 +2379,19 @@ func main() {
 
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
+			fyne.NewMenuItem("Quick Save State (F2)", func() {
+				if err := emu.quickSaveState(); err != nil {
+					dialog.ShowError(err, w)
+				} else {
+					dialog.ShowInformation("Quick Save", "State saved.\nPress F4 (or Quick Load State) to restore.", w)
+				}
+			}),
+			fyne.NewMenuItem("Quick Load State (F4)", func() {
+				if err := emu.quickLoadState(); err != nil {
+					dialog.ShowError(err, w)
+				}
+			}),
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Open File...", func() {
 				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 					if err != nil {
