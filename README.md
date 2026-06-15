@@ -1,6 +1,6 @@
-# zx_go — a ZX Spectrum emulator written in Go
+# zx_go — a ZX Spectrum & Spectrum Next emulator written in Go
 
-zx_go is a faithful emulator for every classic Sinclair ZX Spectrum (48K, 128K, +2, +2A, +3) **and the Spectrum Next** — which boots real NextZXOS end-to-end through the authentic hardware chain. It supports every common file format (snapshots, tapes, disks, microdrive cartridges, `.NEX`, RZX recordings), three different debuggers (a visual GUI, a scriptable telnet server, and headless trace instrumentation — the visual and telnet debuggers share one live backend), and a wide range of period-accurate peripherals.
+zx_go is a faithful emulator for every classic Sinclair ZX Spectrum (48K, 128K, +2, +2A, +3) **and a complete, from-the-silicon-up Sinclair ZX Spectrum Next** — it cold-boots real NextZXOS through the authentic FPGA boot chain to a fully interactive desktop, and implements the Next's *entire* custom hardware stack (Layer 2 with hi-res modes, 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, three AY chips, DACs, RTC, and all four turbo speeds up to 28 MHz). It also supports every common file format (snapshots, tapes, disks, microdrive cartridges, `.NEX`, RZX recordings), three different debuggers (a visual GUI, a scriptable telnet server, and headless trace instrumentation — the visual and telnet debuggers share one live backend), and a wide range of period-accurate peripherals.
 
 The 48K was the author's first computer; this project was written as a Go learning exercise that turned into a serious emulator.
 
@@ -10,8 +10,26 @@ The 48K was the author's first computer; this project was written as a Go learni
 
 ---
 
+## Spectrum Next — a first-class machine, not an afterthought
+
+Most emulators treat the Spectrum Next as a fast 128K with a few extra registers. **zx_go emulates the real thing.** It boots **NextZXOS from the genuine FPGA boot chain — no snapshots, no shortcuts** — and runs the Next's complete custom hardware:
+
+- **Authentic cold boot to an interactive desktop.** FPGA bootrom → TBBLUE firmware splash → NextZXOS welcome → menu. The **Browser** lists your SD card's `C:/`, **NextBASIC** runs interactively, **128K BASIC** opens the real Sinclair "128" menu pixel-for-pixel, and the firmware **config menu boots any machine personality**.
+- **Layer 2 graphics** — 256×192 *plus* the **320×256 and 640×256 hi-res modes**, per-pixel priority, hardware scrolling, 256-colour and 9-bit (4096-colour) palettes.
+- **128 hardware sprites** — 4bpp & 8bpp, scaling, mirror/rotate, relative/anchor groups, and **`$303B` collision detection**.
+- **Tilemap + Copper** — 40×32 / 80×32 tilemap with text mode and per-tile scroll/clip/mirror/rotate; a **raster-precise Copper co-processor**.
+- **The full NextReg register file** — audited against the FPGA core — plus the **8K MMU** and **all four turbo clocks (3.5 / 7 / 14 / 28 MHz)** with memory-contention scaling.
+- **Sound** — three AY-3-8912 chips / **Turbosound**, **4-channel DACs**, measured AY volume curve.
+- **Storage & peripherals** — **DivMMC + esxDOS**, SD-card / FAT image *or* a host-folder mount, **Multiface 3**, battery-backed **i2c RTC**, zxnDMA, UART.
+- **`.NEX` games load and run** straight from `File → Open File…`.
+
+> The Next's NextZXOS system ROMs are copyrighted, so they're **downloaded on first run** rather than bundled — everything else is in the box. Full setup is in [Running the Spectrum Next](#running-the-spectrum-next-modelnext); current boot status is [here](#current-status-of-nextzxos-boot).
+
+---
+
 ## Contents
 
+- [Spectrum Next — a first-class machine](#spectrum-next--a-first-class-machine-not-an-afterthought) — what the Next emulation does
 - [Quick start](#quick-start) — five minutes from clone to playing a game
 - [Installation](#installation)
  - [Pre-built binaries](#pre-built-binaries)
