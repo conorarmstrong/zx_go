@@ -182,6 +182,11 @@ func applyResetDefaults(regs *[256]byte) {
 	regs[0x57] = 0x01 // MMU slot 7 = RAM 0 low
 	regs[0xB8] = 0x83 // divMMC stack-trap enables: RST 0/8/38
 	regs[0xBB] = 0xCD // divMMC stack-trap enables: NMI + 04C6/0562
+	// Raspberry Pi GPIO output registers. zxnext.vhd:5070-5071 reset
+	// nr_98_pi_gpio_o = X"FF", nr_99_pi_gpio_o = X"01". Not boot-relevant
+	// (the Pi accelerator port), but a read-back faithfulness fix.
+	regs[0x98] = 0xFF
+	regs[0x99] = 0x01
 }
 
 // Select latches the register number for subsequent reads and writes

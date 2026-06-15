@@ -52,9 +52,9 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $4C tm transp | $0F | $0F | ✅ | |
 | $6E tilemap base | **$2C** | **$2C** | ✅ | FIXED this session (was $00) — zxnext.vhd:5042 |
 | $6F tilemap tiles | **$0C** | **$0C** | ✅ | FIXED this session (was $00) — zxnext.vhd:5045 |
-| $68 ula control | bit7 ula_en=1 → $80 | $00 | ❌ | **GAP**: read-back should have bit7=1 at reset. verify NR$68 read handler |
-| $98 pi gpio o | $FF | $00 | ⚠️ | Pi GPIO; not boot-relevant but a gap |
-| $99 pi gpio o | $01 | $00 | ⚠️ | |
+| $68 ula control | reset ula_en=1; read bit7 = ¬ula_en = 0 | $00 | ✅ | NOT a gap (earlier misread): zxnext.vhd:5026/5445 invert bit7 on write (nr_68_ula_en ⇐ ¬wr(7)), so the reset read-back is $00 |
+| $98 pi gpio o | $FF | $FF | ✅ | zxnext.vhd:5070 — FIXED (reset default) |
+| $99 pi gpio o | $01 | $01 | ✅ | zxnext.vhd:5071 — FIXED |
 | $A9 esp gpio0 | 1 | $00 | ⚠️ | composed; nrdiff showed ours $02 — verify read |
 | i2c $103B/$113B | SCL/SDA latches, open-drain | rtc.Bus + ULA dispatch | ✅ | zxnext.vhd:2630/3234 — TestI2C_* + TestI2CPortRouting (D31ai) |
 | $8C alt-rom | reset: 7:4←3:0 | promote in WireReset | ✅ | zxnext.vhd:2255 staged-nibble promote (both reset types) — TestWireResetPromotesAltROMStagedNibble (D31g) |
@@ -67,9 +67,10 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $C0 im2/nmi | $00 | $00 | ✅ | |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0 |
 
-**Axis 1 remaining gaps to close:** NR$68 (bit7), NR$C4 (expbus
-bit), NR$98/$99 (Pi), NR$0B/$A9 (composed). None of these were boot-blocking
-(the cold boot now completes), but each is a residual faithfulness defect.
+**Axis 1 remaining gaps to close:** NR$C4 (expbus bit 7 resets to 1, but its
+read-back is composed with the ULA/line int-enable bits — needs the composed
+mux, not a bare default), NR$0B/$A9 (composed). None are boot-blocking. (NR$98/
+$99 fixed this pass; NR$68 was a misread — already conformant.)
 **Action:** extend the reset test to assert the FULL vhd reset vector incl.
 composed read-backs.
 
