@@ -27,6 +27,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/conorarmstrong/zx_go/pkg/audiodac"
+	"github.com/conorarmstrong/zx_go/pkg/betadisk"
 	"github.com/conorarmstrong/zx_go/pkg/config"
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
@@ -109,6 +110,10 @@ type emulator struct {
 	// speccyDAC is the classic-Spectrum SpecDrum/Covox 8-bit DAC (non-nil on
 	// 48K/128K/+2/+2A/+3; nil on Next/ZX8x). Toggled from the Peripherals menu.
 	speccyDAC *audiodac.DAC
+
+	// betaDisk is the Beta Disk / TR-DOS interface, created lazily the first
+	// time a .TRD is mounted (classic models only). nil until then.
+	betaDisk *betadisk.Interface
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -565,6 +570,46 @@ func loadPlus3Disk(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{
 		".dsk", ".udi", ".mgt", ".img", ".trd", ".sad", ".d40", ".d80",
 	}))
+	fd.Show()
+}
+
+// loadTRDDisk shows a .TRD file picker and mounts the chosen image in the given
+// Beta drive (0 = A, 1 = B), enabling TR-DOS on first use.
+func loadTRDDisk(emu *emulator, w fyne.Window, drive int) {
+	if !emu.betaSupported() {
+		dialog.ShowInformation("Load TR-DOS Disk",
+			"TR-DOS disks run on the Pentagon 128 (and the 48K/128K).\n"+
+				"Switch the machine model from the Machine menu first.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		_ = reader.Close()
+		var mountErr error
+		_ = emu.withEmulationPaused(func() error {
+			mountErr = emu.mountTRD(drive, path)
+			return nil
+		})
+		if mountErr != nil {
+			dialog.ShowError(fmt.Errorf("failed to load TRD: %w", mountErr), w)
+			return
+		}
+		driveName := "A"
+		if drive == 1 {
+			driveName = "B"
+		}
+		dialog.ShowInformation("TR-DOS Disk Loaded",
+			"Inserted "+filepath.Base(path)+" into TR-DOS drive "+driveName+".\n"+
+				"From BASIC, enter TR-DOS with: RANDOMIZE USR 15616  (or the 128 menu).", w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".trd"}))
 	fd.Show()
 }
 
@@ -1874,6 +1919,13 @@ func main() {
 		os.Exit(1)
 	}
 	emu.window = w
+	if flags.trdPath != "" {
+		if err := emu.mountTRD(0, flags.trdPath); err != nil {
+			slog.Error("failed to mount --trd image", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("mounted TR-DOS disk in drive A", "path", flags.trdPath)
+	}
 	// Wire trace hooks for the GUI emulator if any channels were
 	// requested on the command line. closeFn flushes any open
 	// trace-output file at process exit.
@@ -2669,6 +2721,18 @@ func main() {
 				}),
 				fyne.NewMenuItem("Load Disk B...", func() {
 					loadPlus3Disk(emu, w, currentModel, 1)
+				}),
+				fyne.NewMenuItem("Load TR-DOS Disk A (.TRD)...", func() {
+					loadTRDDisk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Load TR-DOS Disk B (.TRD)...", func() {
+					loadTRDDisk(emu, w, 1)
+				}),
+				fyne.NewMenuItem("Eject TR-DOS Disk A", func() {
+					emu.ejectTRD(0)
+				}),
+				fyne.NewMenuItem("Eject TR-DOS Disk B", func() {
+					emu.ejectTRD(1)
 				}),
 				fyne.NewMenuItem("Save Disk A (DSK)...", func() {
 					savePlus3Disk(emu, w, 0)

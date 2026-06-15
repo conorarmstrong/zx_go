@@ -42,6 +42,10 @@ type cliFlags struct {
 	startInZX80     bool
 	startInPentagon bool
 
+	// trdPath, when set, mounts a TR-DOS .TRD image in Beta drive A at
+	// startup (classic models only).
+	trdPath string
+
 	// Periodic state-snapshot interval. When non-zero, the
 	// headless loop dumps registers, sysvars, paging state, and
 	// optionally a screenshot every snapshotEvery frames.
@@ -257,6 +261,7 @@ func parseCLI() *cliFlags {
 		startInZX81     = flag.Bool("zx81", false, "Boot directly into Sinclair ZX81 mode")
 		startInZX80     = flag.Bool("zx80", false, "Boot directly into Sinclair ZX80 mode")
 		startInPentagon = flag.Bool("pentagon", false, "Boot directly into Pentagon 128 mode")
+		trdPath         = flag.String("trd", "", "Mount a TR-DOS .TRD disk image in Beta drive A at startup (classic models, e.g. with --pentagon)")
 
 		snapshotEvery   = flag.Int("snapshot-every", 0, "Print a state snapshot (CPU, sysvars, paging, watched memory) every N frames in headless mode")
 		snapshotPrefix  = flag.String("snapshot-prefix", "", "When set, write per-snapshot screenshots to <prefix><frame-number>.png")
@@ -378,6 +383,7 @@ func parseCLI() *cliFlags {
 	f.startInZX81 = *startInZX81
 	f.startInZX80 = *startInZX80
 	f.startInPentagon = *startInPentagon
+	f.trdPath = *trdPath
 	f.snapshotEvery = *snapshotEvery
 	f.snapshotPrefix = *snapshotPrefix
 	f.snapshotScreens = *snapshotScreens

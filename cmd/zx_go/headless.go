@@ -42,6 +42,13 @@ func runHeadless(f *cliFlags) {
 		slog.Error("headless: emulator construction failed", "err", err)
 		os.Exit(1)
 	}
+	if f.trdPath != "" {
+		if err := emu.mountTRD(0, f.trdPath); err != nil {
+			slog.Error("headless: failed to mount --trd image", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("headless: mounted TR-DOS disk in drive A", "path", f.trdPath)
+	}
 
 	_, closeFn := installTraceHooks(emu, f)
 	defer closeFn()
