@@ -162,6 +162,15 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 
 ---
 
+## User manual
+
+New to zx_go? The **[user manual](docs/manual.md)** walks through every
+day-to-day task — choosing a machine, loading tapes/snapshots/disks, quick
+save/load (F2/F4), wiring up joysticks and other peripherals, sound, and the
+keyboard. Deeper topics link out from there.
+
+---
+
 ## How it compares
 
 Wondering how zx_go stacks up against the other ZX Spectrum Next emulators —

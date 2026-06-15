@@ -43,6 +43,22 @@ Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
   hardware does) and an `M1FetchHook` for opcode substitution — both
   used by the ZX8x video / interrupt path; classic Spectrum behaviour
   is unchanged (both off by default).
+- **Quick save / quick load state slots** — `F2` snapshots the running
+  machine to a single SZX slot under the user config dir; `F4` restores
+  it. Also in the **File** menu, and run under `withEmulationPaused` so
+  it can't race the emulation goroutine. Gated to the machines with an
+  SZX representation (48K…+3 and Pentagon); the ZX80/ZX81 and the Next
+  are excluded.
+- **Floating bus** — `IN` from an unattached even port returns the byte
+  the ULA is fetching for the current display position (Ramsoft/FUSE
+  model), so floating-bus timing tricks read correctly.
+- **Event-timed Spectrum Next DAC** — the four-channel Next DAC bank is
+  now reconstructed sample-accurately (per-write T-state offsets,
+  box-filter) and mixed alongside the beeper/AY, matching the SpecDrum/
+  Covox path, instead of a per-audio-pull snapshot.
+- **User manual** ([`docs/manual.md`](docs/manual.md)) — an everyday
+  user guide: machines, loading software, save states, peripherals,
+  sound, the keyboard, and troubleshooting. Linked from the README.
 
 ### Fixed
 - Spectrum Next NextReg reset-default conformance (vs the FPGA `zxnext.vhd`):
