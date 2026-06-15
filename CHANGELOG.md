@@ -44,6 +44,14 @@ Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
   used by the ZX8x video / interrupt path; classic Spectrum behaviour
   is unchanged (both off by default).
 
+### Fixed
+- Spectrum Next NextReg reset-default conformance (vs the FPGA `zxnext.vhd`):
+  NR$06 = `$A0` (CPU-speed + 50/60 Hz hotkey enables) and NR$98/$99 = `$FF`/`$01`
+  (Pi GPIO) now match the VHDL reset vector (were `$00`). Documented in
+  `VHDL_CONFORMANCE.md`; the NR$68 "gap" was a misread (our `$00` is already
+  correct — the VHDL inverts bit 7 on write) and the NR$18–$1B clip-window
+  resets were verified conformant.
+
 ## [v1.0 RC1]
 
 First release candidate. The Spectrum Next boots NextZXOS end-to-end
