@@ -31,6 +31,9 @@ fuse/
 pkg/testharness/*.png
 pkg/z80/test_roms_z80/
 
+# Games
+games/
+
 # Spectrum Next install directory — entirely user-local, never
 # version-controlled. Holds the user's own copies of the licensed
 # NextZXOS ROMs (enNextZX.rom, enNxtmmc.rom — Amstrad/Sky, not

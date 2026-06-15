@@ -13,8 +13,10 @@ import (
 // multiface.vhd:43-44 "Port read 7F3F: return 7ffd / 1F3F: return 1ffd"):
 // while the Multiface is active (invisible off) in MF+3 mode, an IN whose
 // LOW byte is $3F returns a paging register selected by A15:12 —
-//   $7F3F -> port $7FFD (full byte)
-//   $1F3F -> port $1FFD (low nibble: bits 7-4 = 0)
+//
+//	$7F3F -> port $7FFD (full byte)
+//	$1F3F -> port $1FFD (low nibble: bits 7-4 = 0)
+//
 // NextZXOS's 128K-BASIC launch fires the MF NMI; its handler reads $7F3F and
 // $1F3F to snapshot paging into MF RAM ($3FCC/$3FFF). Ours returned open bus
 // ($FF), so $3FCC bit4 was 1 instead of 0, flipping a `cp $04; jr nz` test in

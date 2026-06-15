@@ -25,16 +25,16 @@ func TestParseAddr(t *testing.T) {
 
 func TestParsePCRange(t *testing.T) {
 	cases := []struct {
-		in              string
-		wantS, wantE    uint16
-		hasErr          bool
+		in           string
+		wantS, wantE uint16
+		hasErr       bool
 	}{
 		{"$0D6B-$0D80", 0x0D6B, 0x0D80, false},
 		{"0x1000-0x1100", 0x1000, 0x1100, false},
 		{"$0D6B-$0D6B", 0x0D6B, 0x0D6B, false},
 		{"0-65535", 0, 65535, false},
 		{"$0D80-$0D6B", 0, 0, true}, // end < start
-		{"$0D6B", 0, 0, true},        // no dash
+		{"$0D6B", 0, 0, true},       // no dash
 		{"bogus-$0D6B", 0, 0, true},
 	}
 	for _, c := range cases {

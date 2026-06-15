@@ -643,10 +643,10 @@ func TestFmtBank(t *testing.T) {
 
 func TestParseOffsetRange(t *testing.T) {
 	cases := []struct {
-		in       string
-		wantLo   uint16
-		wantHi   uint16
-		wantErr  bool
+		in      string
+		wantLo  uint16
+		wantHi  uint16
+		wantErr bool
 	}{
 		{"$1000", 0x1000, 0x1000, false},
 		{"1000", 0x1000, 0x1000, false},

@@ -15,7 +15,7 @@ func TestESXDOSHostHookGate(t *testing.T) {
 		img, root string
 		want      bool
 	}{
-		{"", "/some/sd/dir", true},        // host-dir mode: shim on
+		{"", "/some/sd/dir", true},           // host-dir mode: shim on
 		{"/card.img", "/some/sd/dir", false}, // image mode: guest-only
 		{"/card.img", "", false},
 		{"", "", false}, // nothing to serve

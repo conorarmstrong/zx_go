@@ -300,16 +300,16 @@ func TestULAScreenLayout(t *testing.T) {
 
 	// Set up test pattern in screen memory
 	screenPage := mem.GetPage(mem.ScreenPage)
-	
+
 	// Create a test pattern - horizontal line at top of screen
-	screenPage[0] = 0xFF // First character position - all pixels on
+	screenPage[0] = 0xFF      // First character position - all pixels on
 	screenPage[0x1800] = 0x47 // Attribute: white on red
 
 	img := ula.Render()
 
 	// Check that the first 8 pixels of the first screen line are white
 	whiteColor := ula.palette[15] // Bright white
-	
+
 	for x := 0; x < 8; x++ {
 		actualColor := img.RGBAAt(32+x, 24)
 		if actualColor != whiteColor {
@@ -319,11 +319,11 @@ func TestULAScreenLayout(t *testing.T) {
 
 	// Test attribute decoding
 	// Set up a character with different ink/paper colors
-	screenPage[1] = 0xF0 // Half pixels on
+	screenPage[1] = 0xF0      // Half pixels on
 	screenPage[0x1801] = 0x38 // Attribute: white on black (normal intensity)
-	
+
 	ula.Render() // Re-render with new data
-	
+
 	// The test verifies the rendering pipeline works
 	// More detailed pixel testing would require specific patterns
 }
@@ -339,14 +339,14 @@ func TestULAFlashAttribute(t *testing.T) {
 
 	// Set up flashing attribute
 	screenPage := mem.GetPage(mem.ScreenPage)
-	screenPage[0] = 0xFF     // All pixels on
+	screenPage[0] = 0xFF      // All pixels on
 	screenPage[0x1800] = 0xC7 // Flash bit set, white on red
 
 	// Render with flash off
 	ula.flash = false
 	img1 := ula.Render()
 	pixel1 := img1.RGBAAt(32, 24)
-	
+
 	// Render with flash on
 	ula.flash = true
 	img2 := ula.Render()
@@ -377,7 +377,7 @@ func TestULAMemoryPageAccess(t *testing.T) {
 	// Set up different patterns in page 5 and page 7
 	page5 := mem.GetPage(5)
 	page7 := mem.GetPage(7)
-	
+
 	page5[0] = 0xAA
 	page7[0] = 0x55
 
@@ -430,12 +430,12 @@ func TestULAAddressCalculation(t *testing.T) {
 		x, y     int
 		expected uint16
 	}{
-		{0, 0, 0x0000},     // Top-left
-		{1, 0, 0x0001},     // Second byte, first line
-		{0, 1, 0x0100},     // First byte, second line
-		{0, 8, 0x0020},     // First byte, ninth line (third char line)
-		{0, 64, 0x0800},    // First byte, line 64 (second third)
-		{31, 191, 0x17FF},  // Last pixel byte (corrected)
+		{0, 0, 0x0000},    // Top-left
+		{1, 0, 0x0001},    // Second byte, first line
+		{0, 1, 0x0100},    // First byte, second line
+		{0, 8, 0x0020},    // First byte, ninth line (third char line)
+		{0, 64, 0x0800},   // First byte, line 64 (second third)
+		{31, 191, 0x17FF}, // Last pixel byte (corrected)
 	}
 
 	for _, tc := range testCases {

@@ -20,8 +20,8 @@ func (m *hiResL2Mock) HasActiveTilemap() bool                               { re
 func (m *hiResL2Mock) ComposeBorderRow(y int, dst []byte, f func(int) bool) {}
 func (m *hiResL2Mock) TilemapIs80Col() bool                                 { return false }
 func (m *hiResL2Mock) ComposeWideTilemapRow(y int, dst []byte)              {}
-func (m *hiResL2Mock) HiResLayer2Active() bool { return true }
-func (m *hiResL2Mock) Layer2Width() int        { return m.width }
+func (m *hiResL2Mock) HiResLayer2Active() bool                              { return true }
+func (m *hiResL2Mock) Layer2Width() int                                     { return m.width }
 func (m *hiResL2Mock) ComposeWideLayer2Row(y int, dst []byte) {
 	m.wideL2Calls++
 	if y == 0 { // marker at row 0, x 0 — must survive into the frame
