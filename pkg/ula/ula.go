@@ -62,7 +62,14 @@ type ULA struct {
 	// frame Update froze the level for a whole 69888-T frame, so custom loaders
 	// saw no pulses and never loaded.)
 	lastTapeTstate uint64
-	Speaker        bool
+	// Tape-loading sound: EAR-level transitions recorded during the frame so
+	// flushAudioFrame can reconstruct the audible loading tone (the pilot
+	// whistle + data screech) and mix it into the output — as a real 48K does
+	// through the beeper and a 128K through the TV. Only recorded while the
+	// tape is playing.
+	tapeAudioEvents     []audioEvent
+	frameStartTapeState bool
+	Speaker             bool
 
 	// Kempston joystick state (port 0x1F).
 	// Bit 0: Right, Bit 1: Left, Bit 2: Down, Bit 3: Up, Bit 4: Fire.
@@ -1390,10 +1397,18 @@ func (u *ULA) tapeLevel() bool {
 		return u.TapeIn
 	}
 	now := *u.mem.TStates
-	if now > u.lastTapeTstate && u.tape.IsPlaying() {
+	prev := u.TapeIn
+	playing := u.tape.IsPlaying()
+	if now > u.lastTapeTstate && playing {
 		u.TapeIn = u.tape.Update(now - u.lastTapeTstate)
 	}
 	u.lastTapeTstate = now
+	// Record EAR transitions so flushAudioFrame can reproduce the loading sound.
+	if u.audio != nil && playing && u.TapeIn != prev {
+		if off := int(now - u.frameStartTstate); off >= 0 && off < 69888 {
+			u.tapeAudioEvents = append(u.tapeAudioEvents, audioEvent{tstateOffset: off, state: u.TapeIn})
+		}
+	}
 	return u.TapeIn
 }
 
@@ -1407,6 +1422,8 @@ func (u *ULA) Reset() {
 	u.BorderColour = 0
 	u.Mic = false
 	u.TapeIn = false
+	u.tapeAudioEvents = u.tapeAudioEvents[:0]
+	u.frameStartTapeState = false
 	u.Speaker = false
 	u.flash = false
 	u.flashCount = 0
@@ -1475,6 +1492,19 @@ func (u *ULA) flushAudioFrame() {
 		const tstatesPerFrame = 69888
 		mixInt16(samples, gen.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
 	}
+	// Tape-loading sound: reconstruct the EAR waveform and mix it in (the
+	// audible pilot whistle + data screech). Only while a tape is playing, so
+	// there's no DC bias once loading finishes.
+	if u.tape != nil && u.tape.IsPlaying() {
+		tapeSamples, finalTape := generateSquareWaveFrame(
+			u.tapeAudioEvents, u.frameStartTapeState, -tapeAudioAmplitude, tapeAudioAmplitude)
+		mixInt16(samples, tapeSamples)
+		u.frameStartTapeState = finalTape
+	} else {
+		u.frameStartTapeState = false
+	}
+	u.tapeAudioEvents = u.tapeAudioEvents[:0]
+
 	u.audio.PushBeeperSamples(samples)
 	u.frameStartSpeakerState = finalState
 	u.audioEvents = u.audioEvents[:0]
@@ -1520,13 +1550,22 @@ func mixInt16(dst, src []int16) {
 // the jitter into amplitude variation, which is much less perceptible
 // and naturally low-pass-filters the output.
 func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int16, finalState bool) {
+	return generateSquareWaveFrame(events, initialState, beeperLow, beeperHigh)
+}
+
+// generateSquareWaveFrame is the box-filter square-wave reconstruction shared by
+// the beeper and the tape-loading sound: it integrates a 1-bit signal (toggled
+// by `events`) into one frame of samples between `low` (state false) and `high`
+// (state true). See generateBeeperFrame for why integration (not point-sampling)
+// is used.
+func generateSquareWaveFrame(events []audioEvent, initialState bool, low, high int16) (samples []int16, finalState bool) {
 	const tstatesPerFrame = 69888
 	samples = make([]int16, audio.SamplesPerFrame)
 	state := initialState
 	eventIdx := 0
 
-	delta := int32(beeperHigh) - int32(beeperLow)
-	low := int32(beeperLow)
+	delta := int32(high) - int32(low)
+	lowV := int32(low)
 
 	for i := 0; i < audio.SamplesPerFrame; i++ {
 		sampleStart := i * tstatesPerFrame / audio.SamplesPerFrame
@@ -1555,9 +1594,9 @@ func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int1
 		}
 
 		if sampleLen > 0 {
-			samples[i] = int16(low + delta*int32(highTstates)/int32(sampleLen))
+			samples[i] = int16(lowV + delta*int32(highTstates)/int32(sampleLen))
 		} else {
-			samples[i] = beeperLow
+			samples[i] = low
 		}
 	}
 	return samples, state
@@ -1575,4 +1614,9 @@ func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int1
 const (
 	beeperHigh int16 = 20000
 	beeperLow  int16 = -20000
+
+	// tapeAudioAmplitude is the peak level of the mixed-in tape-loading sound.
+	// Below the beeper so it's clearly the loading tone, not deafening, and
+	// leaves headroom for the beeper/AY in the saturating mix.
+	tapeAudioAmplitude int16 = 9000
 )

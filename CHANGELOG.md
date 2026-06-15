@@ -12,6 +12,12 @@ slots, a **user manual**, and completes the **zxnDMA** (IO endpoints + prescaler
 timing + read-back).
 
 ### Added
+- **Tape-loading sound** — the EAR signal is now mixed into the audio output
+  while a tape plays, so you hear the authentic pilot whistle + data screech (a
+  real 48K plays it through the beeper, a 128K through the TV; either way the
+  tape signal reaches the speaker). Reconstructed with the same box-filter as
+  the beeper at a lower amplitude. With *Fast Tape Loading* on it's a brief
+  accelerated chirp; turn that off for the full real-time loading sound.
 - **Fast tape loading** (Tape menu → *Fast Tape Loading*, on by default) — while
   a tape is actively loading, the emulation runs a burst of frames per tick, so
   a game whose code loads through the real-time / edge-timed loader (custom
