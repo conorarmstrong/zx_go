@@ -12,6 +12,12 @@ slots, a **user manual**, and completes the **zxnDMA** (IO endpoints + prescaler
 timing + read-back).
 
 ### Added
+- **Fast tape loading** (Tape menu → *Fast Tape Loading*, on by default) — while
+  a tape is actively loading, the emulation runs a burst of frames per tick, so
+  a game whose code loads through the real-time / edge-timed loader (custom
+  turbo loaders can't be trap-accelerated) finishes in seconds rather than the
+  several real-time minutes a full tape takes. Toggle off for authentic
+  real-time loading.
 - **Pentagon 128** (`roms.ModelPentagon`) — the Soviet ZX Spectrum 128 clone:
   128K paging and AY like the 128K, but with **no memory contention**
   (`setupModel` disables it; `SetTStatePtr`/`SwitchModel` honour the flag) and
@@ -98,6 +104,13 @@ timing + read-back).
   port-`$FE` read against the live CPU T-state, so both the ROM loader and
   games' custom (turbo) loaders sample real pulses. Renegade now loads all nine
   blocks end-to-end on the 128K (regression-tested).
+- **Tape fast-load trap / real-time player desync.** The trap's block
+  consumption (`NextBlock`) and the real-time pulse player (`Update`) shared no
+  pulse state, so after the trap loaded a block, the first real-time `Update`
+  replayed the previous block's pulses (or skipped a block) — feeding garbage to
+  any custom turbo loader that took over and producing "R Tape loading error".
+  `Update` now tracks which block its pulses belong to and regenerates from the
+  current block's pilot when the trap moved the index.
 - Spectrum Next NextReg reset-default conformance (vs the FPGA `zxnext.vhd`):
   NR$06 = `$A0` (CPU-speed + 50/60 Hz hotkey enables) and NR$98/$99 = `$FF`/`$01`
   (Pi GPIO) now match the VHDL reset vector (were `$00`). Documented in

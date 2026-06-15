@@ -153,3 +153,31 @@ func TestRenegade128KLoadsEndToEnd(t *testing.T) {
 			tp.CurrentBlock(), tp.BlockCount())
 	}
 }
+
+// tapeLoadingActive gates fast-tape turbo: true only while a tape is playing
+// with blocks still to load.
+func TestTapeLoadingActive(t *testing.T) {
+	emu, err := newEmulator(roms.Model48K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emu.tapeLoadingActive() {
+		t.Error("no tape: should not be loading-active")
+	}
+	tp := ula.NewTapePlayer()
+	if err := tp.LoadTAP(writeTempTAP(t, 0xFF, []byte{0x01, 0x02})); err != nil {
+		t.Fatal(err)
+	}
+	emu.ula.SetTapePlayer(tp)
+	if emu.tapeLoadingActive() {
+		t.Error("tape loaded but not playing: should not be loading-active")
+	}
+	tp.Play()
+	if !emu.tapeLoadingActive() {
+		t.Error("tape playing with a block to load: should be loading-active")
+	}
+	tp.NextBlock() // consume the only block
+	if emu.tapeLoadingActive() {
+		t.Error("all blocks consumed: should not be loading-active")
+	}
+}

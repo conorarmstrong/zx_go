@@ -62,6 +62,12 @@ const (
 	// ExecuteFrame loops use so the maskable INT cadence is model-correct
 	// (timing.md §1a; the Next previously ran the 48K 69888 by mistake).
 	tstatesPerFrame = 69888
+
+	// tapeTurboFramesPerTick is how many emulated frames run per 50 Hz tick
+	// while fast tape loading is active. ~64× turns a multi-minute real-time
+	// tape load into ~10 s of wall-clock without starving the UI thread
+	// (the emulation core sustains well over 64 frames per 20 ms tick).
+	tapeTurboFramesPerTick = 64
 )
 
 // frameTStatesForModel returns the ULA frame length in 3.5 MHz T-states
@@ -114,6 +120,12 @@ type emulator struct {
 	// betaDisk is the Beta Disk / TR-DOS interface, created lazily the first
 	// time a .TRD is mounted (classic models only). nil until then.
 	betaDisk *betadisk.Interface
+
+	// fastTape, when set, runs the emulation at many frames per tick while a
+	// tape is actively loading, so a multi-minute real-time tape load (custom
+	// turbo loaders go through the edge-timed ROM/loader loop, which can't be
+	// trap-accelerated) finishes in seconds. Toggled from the Tape menu.
+	fastTape atomic.Bool
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -694,7 +706,18 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 		stopChan:     make(chan struct{}),
 	}
 	e.paused.Store(true)
+	e.fastTape.Store(true) // accelerate tape loading by default
 	return e, nil
+}
+
+// tapeLoadingActive reports whether a tape is mid-load (playing with blocks
+// still to load) — the window in which fast-tape turbo applies.
+func (e *emulator) tapeLoadingActive() bool {
+	if e.ula == nil {
+		return false
+	}
+	tp := e.ula.GetTapePlayer()
+	return tp != nil && tp.IsPlaying() && tp.HasMoreBlocks()
 }
 
 func (e *emulator) startKeyProcessor() {
@@ -897,7 +920,21 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							}
 						}
 					default:
-						e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
+						// Fast tape loading: while a tape is actively loading,
+						// run a burst of frames per tick so a real-time load
+						// (custom turbo loaders go through the edge-timed loop
+						// and can't be trap-accelerated) finishes in seconds
+						// instead of minutes. Rendering still happens at 50 Hz.
+						n := 1
+						if e.fastTape.Load() && e.tapeLoadingActive() {
+							n = tapeTurboFramesPerTick
+						}
+						for k := 0; k < n; k++ {
+							e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
+							if k+1 < n && e.peripherals != nil {
+								e.peripherals.Frame()
+							}
+						}
 					}
 
 					frameCount++
@@ -2975,6 +3012,16 @@ func main() {
 						emu.ula.TapeIn = false
 					}
 				}),
+				func() *fyne.MenuItem {
+					item := fyne.NewMenuItem("Fast Tape Loading", nil)
+					item.Checked = emu.fastTape.Load()
+					item.Action = func() {
+						emu.fastTape.Store(!emu.fastTape.Load())
+						item.Checked = emu.fastTape.Load()
+						fyne.Do(func() { w.MainMenu().Refresh() })
+					}
+					return item
+				}(),
 				fyne.NewMenuItem("Tape Browser...", func() {
 					tp := emu.ula.GetTapePlayer()
 					if tp == nil {
