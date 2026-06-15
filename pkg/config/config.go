@@ -31,6 +31,8 @@ type Config struct {
 	Interface1    bool   `json:"interface1,omitempty"`
 	KempstonMouse bool   `json:"kempston_mouse,omitempty"`
 	ZXPrinter     bool   `json:"zx_printer,omitempty"`
+	SpecDrum      bool   `json:"specdrum,omitempty"` // Cheetah SpecDrum DAC ($DF)
+	Covox         bool   `json:"covox,omitempty"`    // Covox DAC ($FB)
 
 	// Spectrum Next SD card. Exactly one of these is honoured at
 	// boot; NextSDImage takes precedence if both are set. Empty

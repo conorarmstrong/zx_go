@@ -156,6 +156,7 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 ### Sound
 - **Beeper** — ULA speaker bit through the host audio system
 - **AY-3-8912** — on 128K and later; correct port decoding (`$BFFD` / `$FFFD`)
+- **SpecDrum & Covox** — classic-Spectrum 8-bit DACs (ports `$DF` / `$FB`), opt-in from the Peripherals menu; event-timed and mixed sample-accurately with the beeper
 - **Spectrum Next DAC** — 4-channel DAC bank
 
 ---

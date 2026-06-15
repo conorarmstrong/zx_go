@@ -26,6 +26,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/conorarmstrong/zx_go/pkg/audiodac"
 	"github.com/conorarmstrong/zx_go/pkg/config"
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
@@ -100,6 +101,10 @@ type emulator struct {
 	// display has no ULA. When set, the render loop reads zx8x.Image() and the
 	// ula/peripherals fields are nil.
 	zx8x *zx8x.Machine
+
+	// speccyDAC is the classic-Spectrum SpecDrum/Covox 8-bit DAC (non-nil on
+	// 48K/128K/+2/+2A/+3; nil on Next/ZX8x). Toggled from the Peripherals menu.
+	speccyDAC *audiodac.DAC
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -595,6 +600,11 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	ula := ula.New(mem, kbd)
 	cpu := z80.New(mem, ula)
 
+	// Classic-Spectrum SpecDrum/Covox DAC (both off until enabled from the
+	// Peripherals menu). Event-timed and mixed into the beeper by the ULA.
+	speccyDAC := audiodac.New()
+	ula.SetSpeccyDAC(speccyDAC)
+
 	// Initialize audio unless --no-sound was passed
 	if cliFlagsActive == nil || !cliFlagsActive.noSound {
 		ula.EnableAudio()
@@ -628,6 +638,7 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 		ula:          ula,
 		kbd:          kbd,
 		peripherals:  pm,
+		speccyDAC:    speccyDAC,
 		model:        model,
 		physicalKeys: make(map[fyne.KeyName]bool),
 		keyQueue:     make(chan keyState, 10),
@@ -1918,6 +1929,8 @@ func main() {
 		cfg.Interface1 = emu.peripherals.IsInterface1Enabled()
 		cfg.KempstonMouse = emu.peripherals.IsKempstonMouseEnabled()
 		cfg.ZXPrinter = emu.peripherals.IsZXPrinterEnabled()
+		cfg.SpecDrum = emu.speccyDAC != nil && emu.speccyDAC.SpecDrumEnabled()
+		cfg.Covox = emu.speccyDAC != nil && emu.speccyDAC.CovoxEnabled()
 		if emu.peripherals.IsMultifaceEnabled() {
 			if mf := emu.peripherals.GetMultiface(); mf != nil {
 				cfg.Multiface = multifaceVariantToConfigString(mf.GetVariant())
@@ -1974,6 +1987,10 @@ func main() {
 	}
 	if cfg.ZXPrinter {
 		emu.peripherals.EnableZXPrinter()
+	}
+	if emu.speccyDAC != nil && classicPeripheralsOK {
+		emu.speccyDAC.SetSpecDrum(cfg.SpecDrum)
+		emu.speccyDAC.SetCovox(cfg.Covox)
 	}
 	if peripheralNeedsReboot {
 		emu.reboot()
@@ -3033,6 +3050,8 @@ func main() {
 			joyCursorItem := fyne.NewMenuItem("Joystick: Cursor / Protek", nil)
 			kempMouseItem := fyne.NewMenuItem("Enable Kempston Mouse", nil)
 			zxPrinterItem := fyne.NewMenuItem("Enable ZX Printer", nil)
+			specDrumItem := fyne.NewMenuItem("Enable SpecDrum", nil)
+			covoxItem := fyne.NewMenuItem("Enable Covox", nil)
 
 			updateLabels := func() {
 				if emu.peripherals.IsDiscipleEnabled() {
@@ -3079,6 +3098,19 @@ func main() {
 					zxPrinterItem.Label = "Disable ZX Printer"
 				} else {
 					zxPrinterItem.Label = "Enable ZX Printer"
+				}
+				// SpecDrum / Covox are classic-Spectrum DACs (nil on Next/ZX8x).
+				specDrumItem.Disabled = emu.speccyDAC == nil
+				covoxItem.Disabled = emu.speccyDAC == nil
+				if emu.speccyDAC != nil && emu.speccyDAC.SpecDrumEnabled() {
+					specDrumItem.Label = "Disable SpecDrum"
+				} else {
+					specDrumItem.Label = "Enable SpecDrum"
+				}
+				if emu.speccyDAC != nil && emu.speccyDAC.CovoxEnabled() {
+					covoxItem.Label = "Disable Covox"
+				} else {
+					covoxItem.Label = "Enable Covox"
 				}
 			}
 
@@ -3192,6 +3224,30 @@ func main() {
 				})
 			}
 
+			specDrumItem.Action = func() {
+				if emu.speccyDAC == nil {
+					return
+				}
+				emu.speccyDAC.SetSpecDrum(!emu.speccyDAC.SpecDrumEnabled())
+				saveConfig()
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
+			covoxItem.Action = func() {
+				if emu.speccyDAC == nil {
+					return
+				}
+				emu.speccyDAC.SetCovox(!emu.speccyDAC.CovoxEnabled())
+				saveConfig()
+				fyne.Do(func() {
+					updateLabels()
+					w.MainMenu().Refresh()
+				})
+			}
+
 			updateLabels()
 			return fyne.NewMenu("Peripherals",
 				discipleItem,
@@ -3208,6 +3264,9 @@ func main() {
 				fyne.NewMenuItemSeparator(),
 				kempMouseItem,
 				zxPrinterItem,
+				fyne.NewMenuItemSeparator(),
+				specDrumItem,
+				covoxItem,
 			)
 		}(),
 		fyne.NewMenu("Emulator",

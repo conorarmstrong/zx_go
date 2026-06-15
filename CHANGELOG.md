@@ -9,6 +9,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
 
 ### Added
+- **SpecDrum & Covox** (`pkg/audiodac`) — classic-Spectrum 8-bit DAC sound
+  add-ons: Cheetah SpecDrum (OUT $DF) and a mono Covox (OUT $FB), opt-in from
+  the Peripherals menu and persisted in config. Event-timed like the beeper —
+  each write is recorded with its T-state offset and reconstructed per
+  audio-sample (box-filter), then mixed into the beeper output — so PCM drum
+  playback is sample-accurate rather than a per-frame snapshot. Enabling Covox
+  claims port $FB (so it and the ZX Printer are mutually exclusive, as on real
+  hardware).
 - **ZX80 and ZX81 emulation** (`pkg/zx8x`). Faithful CPU-generated
   display: the Z80 itself produces the picture via A15 video fetches
   that are forced to NOP while the latched byte indexes a character

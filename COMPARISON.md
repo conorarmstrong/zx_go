@@ -201,8 +201,13 @@ UART and optionally bridge to host serial / a real device.
 | AY-3-8912 | ✅ | ✅ | ✅ | ✅ |
 | Turbosound (multi-AY) | ✅ | ✅ | ✅ | ✅ |
 | Next DAC channels | ✅ | ✅ | ✅ | ✅ |
-| Covox / SpecDrum | ❌ | ✅ | ✅ | ✅ |
+| Covox / SpecDrum | ✅ ⁸ | ✅ | ✅ | ✅ |
 | Measured AY volume curve | ✅ | ❔ | ❔ | ✅ |
+
+⁸ Classic-Spectrum SpecDrum (port $DF) and Covox (port $FB), opt-in from the
+Peripherals menu. Event-timed: each DAC write is recorded with its T-state
+offset and reconstructed per audio-sample (like the beeper), so PCM playback is
+sample-accurate rather than a per-frame snapshot.
 
 ---
 

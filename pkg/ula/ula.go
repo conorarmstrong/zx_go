@@ -134,6 +134,12 @@ type ULA struct {
 	// CONMEM / MAPRAM / bank-select). Wired only for ModelNext.
 	nextDivMMC NextDivMMC
 
+	// speccyDAC is the classic-Spectrum 8-bit DAC pair (SpecDrum on $DF,
+	// Covox on $FB). Wired on classic models when the user enables either
+	// peripheral; nil otherwise. Its writes are recorded with T-state offsets
+	// and mixed into the beeper output at end-of-frame.
+	speccyDAC SpeccyDAC
+
 	// port123BVal shadows the last byte written to the Layer 2 port
 	// $123B (FPGA signal port_123b_dat, reset 0). IN $123B returns it
 	// (zxnext.vhd:2822); the 128K launch's MF NMI handler reads it to
@@ -237,6 +243,17 @@ type NextDAC interface {
 	WritePort(port uint16, val byte) bool
 }
 
+// SpeccyDAC is the contract for the classic-Spectrum SpecDrum/Covox 8-bit DAC.
+// pkg/audiodac.DAC satisfies it. The ULA claims the device's ports, records
+// each write with its T-state offset, and mixes a reconstructed frame into the
+// beeper output.
+type SpeccyDAC interface {
+	Handles(low byte) bool
+	Record(tstateOffset int, val byte)
+	Enabled() bool
+	GenerateFrame(samplesPerFrame, tstatesPerFrame int) []int16
+}
+
 // NextDivMMC is the contract for the divMMC control port (0xE3 on
 // the low byte). pkg/next/divmmc.Pager satisfies it. NextZXOS's
 // boot trampoline writes to 0xE3 to drop the divMMC overlay; its
@@ -328,6 +345,12 @@ func (u *ULA) SetNextDAC(d NextDAC) {
 		}
 	}
 }
+
+// SetSpeccyDAC attaches the classic-Spectrum SpecDrum/Covox DAC. Unlike the
+// Next DAC it is event-timed: the ULA records its writes with T-state offsets
+// and mixes a reconstructed frame into the beeper at end-of-frame (see
+// flushAudioFrame), so PCM playback is sample-accurate. Pass nil to detach.
+func (u *ULA) SetSpeccyDAC(d SpeccyDAC) { u.speccyDAC = d }
 
 // SetNextDivMMC installs the divMMC pager's port-write hook so
 // OUT (0xE3) reaches it. The pager itself is also wired via the
@@ -1066,6 +1089,17 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		return
 	}
 
+	// Classic-Spectrum SpecDrum ($DF) / Covox ($FB) DAC. When an enabled
+	// device claims the port, latch the 8-bit sample with its T-state offset so
+	// flushAudioFrame can reconstruct the waveform, and consume the write
+	// (claiming $FB is why Covox and the ZX Printer can't both be on at once).
+	if u.speccyDAC != nil && u.speccyDAC.Handles(byte(addr&0xFF)) {
+		if u.audio != nil && u.mem.TStates != nil {
+			u.speccyDAC.Record(int(*u.mem.TStates-u.frameStartTstate), val)
+		}
+		return
+	}
+
 	// divMMC control port 0xE3 (low-byte decode). The pager
 	// claims the port if matched. NextZXOS's boot trampoline
 	// writes 0 to 0xE3 to drop the divMMC overlay after it
@@ -1352,11 +1386,37 @@ func (u *ULA) flushAudioFrame() {
 		return
 	}
 	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	// Mix the SpecDrum/Covox DAC frame (event-timed, sample-accurate) into the
+	// beeper waveform before pushing it.
+	if u.speccyDAC != nil && u.speccyDAC.Enabled() {
+		const tstatesPerFrame = 69888
+		mixInt16(samples, u.speccyDAC.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
+	}
 	u.audio.PushBeeperSamples(samples)
 	u.frameStartSpeakerState = finalState
 	u.audioEvents = u.audioEvents[:0]
 	if u.mem.TStates != nil {
 		u.frameStartTstate = *u.mem.TStates
+	}
+}
+
+// mixInt16 adds src into dst element-wise with int16 saturation. Used to fold
+// the DAC frame into the beeper frame without wrap-around pops.
+func mixInt16(dst, src []int16) {
+	n := len(dst)
+	if len(src) < n {
+		n = len(src)
+	}
+	for i := 0; i < n; i++ {
+		sum := int32(dst[i]) + int32(src[i])
+		switch {
+		case sum > 32767:
+			dst[i] = 32767
+		case sum < -32768:
+			dst[i] = -32768
+		default:
+			dst[i] = int16(sum)
+		}
 	}
 }
 
