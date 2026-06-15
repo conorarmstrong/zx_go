@@ -183,15 +183,19 @@ signing/verification.
 | Multiface (1 / 128 / 3) | ✅ | ❔ | ✅ | ✅ |
 | Kempston joystick + mouse | ✅ | ✅ | ✅ | ✅ |
 | RTC (DS1307) | ✅ ²³ | ✅ | ✅ | ✅ |
-| Next DMA (zxnDMA) | ⚠️ ²⁴ | ✅ | ⚠️ | ✅ |
+| Next DMA (zxnDMA) | ✅ ²⁴ | ✅ | ⚠️ | ✅ |
 | UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
 | DISCiPLE / +D | ✅ | ❌ | ✅ | ❌ |
 | Interface 1 + Microdrive | ✅ | ❌ | ✅ | ⚠️ |
 | ZX Printer | ✅ | ❌ | ✅ | ⚠️ |
 
 ²³ zx_go persists battery-backed RTC NVRAM to disk.
-²⁴ zx_go implements memory-to-memory zxnDMA; descriptor mode and per-byte
-prescaler timing are deferred.
+²⁴ zx_go implements the zxnDMA's memory↔memory and memory↔IO transfers
+(sprite/Layer 2/DAC port endpoints), per-byte prescaler + cycle-length timing
+(continuous-mode duration charged to the CPU clock), Continue / auto-restart, and
+read-mask register read-back. The one simplification: burst-mode transfers
+complete without interleaving the CPU between bytes (so DMA-streamed audio is not
+yet paced across the CPU timeline).
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.

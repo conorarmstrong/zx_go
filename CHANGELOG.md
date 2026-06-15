@@ -4,9 +4,12 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.1.0]
+## [v1.2.0]
 
-Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
+Adds the **Sinclair ZX80 and ZX81** and the **Pentagon 128** as supported
+machines, the **TR-DOS / Beta Disk** interface, **quick save/load** state
+slots, a **user manual**, and completes the **zxnDMA** (IO endpoints + prescaler
+timing + read-back).
 
 ### Added
 - **Pentagon 128** (`roms.ModelPentagon`) — the Soviet ZX Spectrum 128 clone:
@@ -26,6 +29,16 @@ Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
   fetch (gated to the 48 BASIC ROM) and pages out at $4000+, driven by a CPU
   pre-fetch hook. Mount with `File → Load TR-DOS Disk A/B (.TRD)` or `--trd`
   (48K/128K/+2/Pentagon).
+- **zxnDMA completion** (`pkg/next/dma`) — the Spectrum Next DMA now handles
+  IO-port endpoints (WR1/WR2 D3 — DMA uploads to the sprite-image, Layer 2 and
+  DAC ports, routed through the ULA port dispatch, instead of corrupting
+  memory), the per-byte prescaler + cycle-length + burst/continuous mode (a
+  continuous-mode transfer's T-state duration is charged to the CPU clock),
+  Continue (`$D3`) and WR5 auto-restart, and read-mask register read-back
+  (`$BB`/`$A7` + port-0x6B reads return the status / byte-counter / port-address
+  registers). Cross-checked against the official `zxndma.txt`. The one
+  simplification: burst-mode transfers don't interleave the CPU between bytes,
+  so DMA-streamed audio isn't paced across the CPU timeline yet.
 - **SpecDrum & Covox** (`pkg/audiodac`) — classic-Spectrum 8-bit DAC sound
   add-ons: Cheetah SpecDrum (OUT $DF) and a mono Covox (OUT $FB), opt-in from
   the Peripherals menu and persisted in config. Event-timed like the beeper —

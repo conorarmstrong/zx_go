@@ -7,7 +7,7 @@ tracked via their own tests, README and CHANGELOG, not here.
 
 **Premise (the reason this file exists):** a truly hardware-accurate Spectrum
 Next emulator MUST boot the firmware that runs on the real hardware. zx_go
-cold-boots NextZXOS end-to-end (welcome → menu → Browser/NextBASIC; v1.1.0) —
+cold-boots NextZXOS end-to-end (welcome → menu → Browser/NextBASIC; v1.2.0) —
 which it reached by closing exactly the kind of inaccuracies this file
 enumerates. Per-feature "validated against the VHDL" claims are **spot
 checks**; they do not prove conformance of the whole surface. This matrix
