@@ -22,6 +22,13 @@ type TapePlayer struct {
 	// Current pulse sequence being played
 	pulses   []uint16
 	pulseIdx int
+	// pulseBlock is the block index the current `pulses` were generated from,
+	// or -1 if none. The fast-load trap (NextBlock) advances blockIdx without
+	// touching the pulse state, so Update must detect blockIdx != pulseBlock
+	// and regenerate — otherwise it replays the previous block's pulses (or
+	// skips a block), which desyncs any real-time / custom (turbo) loader that
+	// takes over after a trapped block and causes "R Tape loading error".
+	pulseBlock int
 }
 
 type tapeBlock struct {
@@ -44,7 +51,7 @@ type tapeBlock struct {
 
 // NewTapePlayer creates an empty tape player.
 func NewTapePlayer() *TapePlayer {
-	return &TapePlayer{}
+	return &TapePlayer{pulseBlock: -1}
 }
 
 // LoadTAP loads a TAP file into the tape player.
@@ -58,6 +65,8 @@ func (tp *TapePlayer) LoadTAP(path string) error {
 	defer tp.mu.Unlock()
 
 	tp.blocks = nil
+	tp.blockIdx = 0
+	tp.pulseBlock = -1
 	offset := 0
 	for offset+2 <= len(data) {
 		blockLen := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
@@ -129,6 +138,7 @@ func (tp *TapePlayer) Play() {
 	}
 	tp.playing = true
 	tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+	tp.pulseBlock = tp.blockIdx
 	tp.pulseIdx = 0
 	tp.earBit = false
 }
@@ -167,6 +177,7 @@ func (tp *TapePlayer) Rewind() {
 	defer tp.mu.Unlock()
 	tp.blockIdx = 0
 	tp.playing = false
+	tp.pulseBlock = -1
 }
 
 // NextBlock returns the bytes of the next tape block (without the leading
@@ -260,6 +271,7 @@ func (tp *TapePlayer) SeekToBlock(idx int) {
 	tp.blockIdx = idx
 	tp.playing = false
 	tp.pulses = nil
+	tp.pulseBlock = -1
 	tp.pulseIdx = 0
 }
 
@@ -271,6 +283,22 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 
 	if !tp.playing {
 		return false
+	}
+
+	// Resync if blockIdx was moved out from under us (the fast-load trap's
+	// NextBlock advances it without touching the pulse state) or pulses were
+	// never generated. Generate this block's pulses from its pilot so a
+	// real-time/custom loader taking over after a trapped block reads the
+	// correct block rather than replaying the previous one or skipping ahead.
+	if tp.pulseBlock != tp.blockIdx {
+		if tp.blockIdx >= len(tp.blocks) {
+			tp.playing = false
+			return false
+		}
+		tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+		tp.pulseBlock = tp.blockIdx
+		tp.pulseIdx = 0
+		tp.lastToggle = tp.tstate
 	}
 
 	tp.tstate += tstates
@@ -287,7 +315,7 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 		}
 	}
 
-	// If we've exhausted all pulses, move to the next block
+	// If we've exhausted all pulses, move to the next block.
 	if tp.pulseIdx >= len(tp.pulses) {
 		tp.blockIdx++
 		if tp.blockIdx >= len(tp.blocks) {
@@ -295,6 +323,7 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 			return false
 		}
 		tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+		tp.pulseBlock = tp.blockIdx
 		tp.pulseIdx = 0
 		tp.lastToggle = tp.tstate
 	}

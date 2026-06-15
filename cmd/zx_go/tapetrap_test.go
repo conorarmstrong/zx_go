@@ -130,12 +130,13 @@ func TestRenegade128KLoadsEndToEnd(t *testing.T) {
 	installTapeTrap(emu)
 
 	// Boot to the 128 menu, then ENTER (row 6 bit 0) to pick "Tape Loader"
-	// (the default-highlighted top item), then let the loader run. Renegade's
-	// blocks 2-8 use a custom (non-ROM) loader that reads the tape by edge
-	// timing, so they load at real-tape speed — the whole ~70 KB game finishes
-	// around frame ~17300. The budget below leaves headroom; the load is fast
-	// in wall-clock because headless runs many thousands of frames/second.
-	for i := 0; i < 22000; i++ {
+	// (the default-highlighted top item), then let the loader run. Blocks 0-1
+	// load instantly via the trap; blocks 2-8 load through the ROM/edge-timed
+	// loader at real-tape speed, so the whole ~70 KB game finishes around frame
+	// ~37000 (ERR_NR stays $FF — no "R Tape loading error"). The budget leaves
+	// headroom; it's fast in wall-clock because headless runs many thousands of
+	// frames/second.
+	for i := 0; i < 45000; i++ {
 		runOneFrameHeadless(emu, roms.Model128K)
 		switch i {
 		case 200:
