@@ -39,13 +39,14 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $01 core ver | (ver) | defaultCoreVersion | ✅ | |
 | $02 reset | $01* | $01 | ✅ | *bit0 "last=soft"; matches the reference emulator |
 | $05 periph1 | $01 | $01 | ✅ | 50 Hz |
+| $06 periph2 | $A0 (hotkey en 7,5) | $A0 | ✅ | zxnext.vhd:5161-5165 — FIXED (was $00, untracked by the matrix) |
 | $08 periph3 | $10 | $10 | ✅ | AY enable |
 | $0B joy iomode | bit0=1 | ⚠️ | ⚠️ | read-back composition unverified |
 | $10 core id | $01 (vhd) | $00 | ⚠️ | $00 matches the reference emulator (boots); vhd=$01. AND $03 @ $017E |
 | $12 L2 bank | $08 | $08 | ✅ | |
 | $13 L2 shadow | $0B | $0B | ✅ | |
 | $14 transp rgb | $E3 | $E3 | ✅ | |
-| $18-$1B clip | x1/x2/y1/y2 idx | WireClipWindows | ⚠️ | stateful read; idx=0 → x1. **verify reset coords** ($18 y2=$BF, $1B x2=$9F,y2=$FF) |
+| $18-$1B clip | L2/spr/ULA {00,FF,00,BF}; tm {00,9F,00,FF} | WireClipWindows | ✅ | verified: reset coords + index match zxnext.vhd:4959-4982 (clipWindow.def, OnRead/OnWrite, onReset) |
 | $42 ulanext fmt | **$07** | **$07** | ✅ | FIXED this session (was $0F) — zxnext.vhd:5002 |
 | $4A fallback | **$E3** | **$E3** | ✅ | FIXED this session (was $00) — zxnext.vhd:5014 |
 | $4B sprite transp | $E3 | $E3 | ✅ | |

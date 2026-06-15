@@ -146,6 +146,10 @@ func applyResetDefaults(regs *[256]byte) {
 	regs[0x0E] = defaultBoardID
 	regs[0x0F] = defaultCoreSubMinor
 	regs[0x05] = 0x01 // Peripheral 1: bit 0 = 50 Hz
+	// Peripheral 2: bit 7 = CPU-speed hotkey enable, bit 5 = 50/60 Hz hotkey
+	// enable. zxnext.vhd:5161-5165 resets both to 1 → read-back $A0 (the rest
+	// of NR$06's read mux composes from bits that reset to 0).
+	regs[0x06] = 0xA0
 	regs[0x08] = 0x10 // Peripheral 3: bit 4 = AY3-8910 enabled
 	regs[0x12] = 0x08 // Layer 2 RAM base bank
 	regs[0x13] = 0x0B // Layer 2 shadow RAM base bank

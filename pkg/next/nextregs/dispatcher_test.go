@@ -21,6 +21,7 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		// soft reset to the bootrom. WireReset OnWrite must NOT use
 		// edge-detection for this to work — see wire.go for details.
 		0x05: 0x01,
+		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
 		0x0E: defaultBoardID,
 		0x0F: defaultCoreSubMinor,
@@ -270,6 +271,7 @@ func TestResetRestoresDefaults(t *testing.T) {
 		// soft reset to the bootrom. WireReset OnWrite must NOT use
 		// edge-detection for this to work — see wire.go for details.
 		0x05: 0x01,
+		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
 		0x0E: defaultBoardID,
 		0x0F: defaultCoreSubMinor,
