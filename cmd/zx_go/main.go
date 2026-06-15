@@ -1546,15 +1546,35 @@ func (e *emulator) rzxRollbackToLastSnapshot() error {
 // The routine returns with carry set on success, carry clear on failure.
 // We replicate this contract by reading bytes directly from the current
 // tape block (which is stored as: flag byte, data bytes..., checksum byte).
+// tapeTrapROMActive reports whether the 48 BASIC ROM (the one containing the
+// LD-BYTES loader at $0556) is currently paged at $0000 for the active model.
+// The fast-load trap may only fire then.
+func tapeTrapROMActive(mem *memory.Memory) bool {
+	switch mem.GetCurrentModel() {
+	case roms.Model48K:
+		return true // single ROM, always 48 BASIC
+	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
+		return mem.GetROMBank() == 1
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		return mem.GetROMBank() == 3
+	default:
+		return false // Next / ZX8x have no classic LD-BYTES tape loader
+	}
+}
+
 func installTapeTrap(emu *emulator) {
 	emu.cpu.TrapCheck = func(pc uint16) bool {
 		if pc != 0x0556 {
 			return false
 		}
-		// Only on 48K (the entry point differs on later models, and the ROM
-		// is paged differently). Other models still get correct behaviour
-		// via the slow tape player.
-		if emu.mem.GetCurrentModel() != roms.Model48K {
+		// Fire only when the 48 BASIC ROM — which holds LD-BYTES at $0556 — is
+		// the ROM currently paged at $0000. That's always true on the 48K; on
+		// the 128/+2/Pentagon it's ROM bank 1 (the 128 menu's "Tape Loader"
+		// pages it in), and on the +2A/+3 it's ROM bank 3. On any other paged
+		// ROM, $0556 is unrelated code and must not be trapped. (Previously the
+		// trap was 48K-only, so 128K tape loading silently did nothing — the
+		// per-frame tape player can't drive the edge-timed ROM loader.)
+		if !tapeTrapROMActive(emu.mem) {
 			return false
 		}
 		tp := emu.ula.GetTapePlayer()

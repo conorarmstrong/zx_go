@@ -55,7 +55,14 @@ type ULA struct {
 	BorderColour byte
 	Mic          bool
 	TapeIn       bool
-	Speaker      bool
+	// lastTapeTstate is the monotonic CPU T-state at which the tape was last
+	// advanced. The tape is driven from each port-$FE read (tapeLevel), so the
+	// EAR bit reflects the live tape level at microsecond resolution — which is
+	// what edge-timed ROM and custom (turbo) loaders sample. (The old once-per-
+	// frame Update froze the level for a whole 69888-T frame, so custom loaders
+	// saw no pulses and never loaded.)
+	lastTapeTstate uint64
+	Speaker        bool
 
 	// Kempston joystick state (port 0x1F).
 	// Bit 0: Right, Bit 1: Left, Bit 2: Down, Bit 3: Up, Bit 4: Fire.
@@ -489,10 +496,9 @@ func (u *ULA) SetBorderTracer(fn func(port uint16, val byte, newBorder byte, sca
 }
 
 func (u *ULA) Render() *image.RGBA {
-	// Update tape player (one frame = 69888 T-states)
-	if u.tape != nil && u.tape.IsPlaying() {
-		u.TapeIn = u.tape.Update(69888)
-	}
+	// The tape EAR level is advanced per port-$FE read (tapeLevel), not here —
+	// a once-per-frame Update would freeze the level for the whole frame and
+	// starve edge-timed loaders.
 
 	// Synthesise audio for the frame from recorded speaker events
 	// and push to the audio system, then reset the per-frame state.
@@ -850,7 +856,7 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		// the keyboard scan ORs in 0xE0 so the kbd matrix only
 		// affects bits 0-4.
 		val := byte(0xBF)
-		if u.TapeIn {
+		if u.tapeLevel() {
 			val |= 0x40
 		}
 		val &= u.kbd.Scan(addr) | 0xE0
@@ -1364,9 +1370,31 @@ func (u *ULA) SetPeripherals(pm *peripherals.PeripheralManager) {
 	u.peripherals = pm
 }
 
-// SetTapePlayer sets the tape player for tape loading
+// SetTapePlayer sets the tape player for tape loading. The tape clock is
+// re-synced to the current CPU T-state so playback starts "now" rather than
+// jumping forward by the whole elapsed run.
 func (u *ULA) SetTapePlayer(tp *TapePlayer) {
 	u.tape = tp
+	if u.mem != nil && u.mem.TStates != nil {
+		u.lastTapeTstate = *u.mem.TStates
+	}
+}
+
+// tapeLevel advances the tape player to the current CPU T-state and returns the
+// live EAR level. Called from every port-$FE read so edge-timed loaders (the
+// ROM's LD-BYTES and games' custom turbo loaders alike) sample real pulses
+// instead of a per-frame-frozen level. When no tape is loaded it's a cheap
+// no-op returning the last level.
+func (u *ULA) tapeLevel() bool {
+	if u.tape == nil || u.mem == nil || u.mem.TStates == nil {
+		return u.TapeIn
+	}
+	now := *u.mem.TStates
+	if now > u.lastTapeTstate && u.tape.IsPlaying() {
+		u.TapeIn = u.tape.Update(now - u.lastTapeTstate)
+	}
+	u.lastTapeTstate = now
+	return u.TapeIn
 }
 
 // GetTapePlayer returns the currently loaded tape player (or nil).

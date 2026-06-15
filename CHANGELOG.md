@@ -86,6 +86,18 @@ timing + read-back).
   sound, the keyboard, and troubleshooting. Linked from the README.
 
 ### Fixed
+- **Tape loading on the 128K / +2 / Pentagon (and custom-loader games on every
+  model).** Two bugs combined to stop a game like Renegade loading from the 128
+  menu's Tape Loader: (1) the fast-load `LD-BYTES` trap was gated to the 48K, so
+  on the 128-family it never fired (and the comment's claim that other models
+  "fall back to the slow loader" was false); it now fires whenever the 48 BASIC
+  ROM — which holds `LD-BYTES` at `$0556` — is the ROM paged at `$0000` (bank 1
+  on the 128/+2/Pentagon, bank 3 on the +2A/+3). (2) The tape EAR bit was
+  advanced only **once per frame**, freezing the level for a whole 69888-T
+  frame, so edge-timed loaders saw no pulses; the tape is now advanced on every
+  port-`$FE` read against the live CPU T-state, so both the ROM loader and
+  games' custom (turbo) loaders sample real pulses. Renegade now loads all nine
+  blocks end-to-end on the 128K (regression-tested).
 - Spectrum Next NextReg reset-default conformance (vs the FPGA `zxnext.vhd`):
   NR$06 = `$A0` (CPU-speed + 50/60 Hz hotkey enables) and NR$98/$99 = `$FF`/`$01`
   (Pi GPIO) now match the VHDL reset vector (were `$00`). Documented in
