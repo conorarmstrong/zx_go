@@ -140,6 +140,11 @@ type ULA struct {
 	// and mixed into the beeper output at end-of-frame.
 	speccyDAC SpeccyDAC
 
+	// beta is the Beta Disk / TR-DOS interface, wired on classic models when a
+	// disk is mounted; nil otherwise. Its ports are decoded only while the
+	// TR-DOS ROM is paged in (mem.IsBetaActive).
+	beta BetaDisk
+
 	// port123BVal shadows the last byte written to the Layer 2 port
 	// $123B (FPGA signal port_123b_dat, reset 0). IN $123B returns it
 	// (zxnext.vhd:2822); the 128K launch's MF NMI handler reads it to
@@ -254,6 +259,16 @@ type SpeccyDAC interface {
 	GenerateFrame(samplesPerFrame, tstatesPerFrame int) []int16
 }
 
+// BetaDisk is the contract for the Beta Disk / TR-DOS interface.
+// pkg/betadisk.Interface satisfies it. The ULA only routes I/O to it while the
+// TR-DOS ROM is paged in (Memory.IsBetaActive) — so the Beta's $1F/$FF decode
+// doesn't shadow the Kempston joystick / floating bus during ordinary games.
+type BetaDisk interface {
+	Handles(port uint16) bool
+	ReadPort(port uint16) byte
+	WritePort(port uint16, val byte)
+}
+
 // NextDivMMC is the contract for the divMMC control port (0xE3 on
 // the low byte). pkg/next/divmmc.Pager satisfies it. NextZXOS's
 // boot trampoline writes to 0xE3 to drop the divMMC overlay; its
@@ -346,6 +361,17 @@ func (u *ULA) SetNextDAC(d NextDAC) {
 // and mixes a reconstructed frame into the beeper at end-of-frame (see
 // flushAudioFrame), so PCM playback is sample-accurate. Pass nil to detach.
 func (u *ULA) SetSpeccyDAC(d SpeccyDAC) { u.speccyDAC = d }
+
+// SetBetaDisk attaches (or, with nil, detaches) the Beta Disk / TR-DOS
+// interface. Port I/O is gated on Memory.IsBetaActive so it only intercepts the
+// $1F/$3F/$5F/$7F/$FF ports while the TR-DOS ROM is paged in.
+func (u *ULA) SetBetaDisk(d BetaDisk) { u.beta = d }
+
+// betaClaims reports whether the Beta interface should handle this port now:
+// it must be wired, the TR-DOS ROM paged in, and the port one of its registers.
+func (u *ULA) betaClaims(addr uint16) bool {
+	return u.beta != nil && u.mem != nil && u.mem.IsBetaActive() && u.beta.Handles(addr)
+}
 
 // SetNextDivMMC installs the divMMC pager's port-write hook so
 // OUT (0xE3) reaches it. The pager itself is also wired via the
@@ -731,6 +757,13 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		}
 	}
 
+	// Beta Disk / TR-DOS registers, while the TR-DOS ROM is paged in. Checked
+	// ahead of the Kempston joystick ($1F) and floating bus ($FF) so the FDC
+	// wins those ports during a disk operation.
+	if u.betaClaims(addr) {
+		return u.beta.ReadPort(addr), true
+	}
+
 	// Multiface 3 paging-register readback. Per the FPGA source
 	// (zxnext.vhd:2612-2616 port_mf_enable decode + the mf_port_dat mux,
 	// and multiface.vhd:43-44): while the Multiface is active (paged in /
@@ -1020,6 +1053,13 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 			u.nextRegs.WriteData(val)
 			return
 		}
+	}
+
+	// Beta Disk / TR-DOS registers, while the TR-DOS ROM is paged in (see the
+	// read side). Intercepts the FDC ports before the ULA/SpecDrum dispatch.
+	if u.betaClaims(addr) {
+		u.beta.WritePort(addr, val)
+		return
 	}
 
 	// Ports $103B / $113B: Spectrum Next i2c SCL / SDA write latches

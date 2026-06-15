@@ -96,6 +96,19 @@ type Memory struct {
 	// derive ContentionEnabled from it.
 	contentionDisabled bool
 
+	// Beta Disk / TR-DOS ROM auto-paging. When betaEnabled, the Beta hardware
+	// swaps its TR-DOS ROM over $0000-$3FFF when the CPU fetches an instruction
+	// from the $3Dxx entry vector (while the 48 BASIC ROM is mapped) and swaps
+	// it back out when execution leaves the ROM window ($4000+). betaBasicPage
+	// is the read-map page value (16+romIndex) that denotes the 48 BASIC ROM on
+	// the current model, so the auto-page-in is gated to it (not the 128
+	// editor ROM). The state machine lives in BetaPreFetch; the read override
+	// is in readValue.
+	betaEnabled   bool
+	betaActive    bool
+	betaBasicPage int
+	betaROM       [PageSize]byte
+
 	// RAMContentionDisabled, when set, overrides ContentionEnabled
 	// and suppresses the per-T-state contention pattern on RAM
 	// accesses. ModelNext writes this via NextReg 0x08 bit 1; on
@@ -908,6 +921,67 @@ func (m *Memory) setupPlus3() error {
 	return nil
 }
 
+// EnableBeta installs the Beta Disk TR-DOS ROM and arms the $3Dxx auto-paging.
+// rom is the 16 KB TR-DOS ROM; shorter blobs are zero-padded, longer ones
+// truncated. betaBasicPage is set from the model so auto-page-in is gated to
+// the 48 BASIC ROM (the editor ROM on 128-class machines must not trigger it).
+func (m *Memory) EnableBeta(rom []byte) {
+	for i := range m.betaROM {
+		if i < len(rom) {
+			m.betaROM[i] = rom[i]
+		} else {
+			m.betaROM[i] = 0
+		}
+	}
+	m.betaEnabled = true
+	m.betaActive = false
+	// The 48 BASIC ROM is ROM 0 on the 48K and the second editor/BASIC ROM
+	// (ROM 1 → read-map page 17) on the 128/+2/Pentagon.
+	switch m.currentModel {
+	case roms.Model48K:
+		m.betaBasicPage = 16
+	default:
+		m.betaBasicPage = 17
+	}
+}
+
+// DisableBeta removes the Beta ROM override.
+func (m *Memory) DisableBeta() {
+	m.betaEnabled = false
+	m.betaActive = false
+}
+
+// IsBetaActive reports whether the TR-DOS ROM is currently paged over the
+// system ROM.
+func (m *Memory) IsBetaActive() bool { return m.betaActive }
+
+// SetBetaActive forces the Beta ROM paging state (used by save-state restore).
+// It is a no-op unless the Beta ROM has been enabled.
+func (m *Memory) SetBetaActive(active bool) {
+	if m.betaEnabled {
+		m.betaActive = active
+	}
+}
+
+// BetaPreFetch advances the Beta Disk auto-paging state machine for an
+// instruction fetch at pc. Call it from the CPU's pre-fetch hook so the byte
+// fetched at $3Dxx already comes from the TR-DOS ROM. It pages the TR-DOS ROM
+// in on a fetch in the $3D00-$3DFF entry vector (while the 48 BASIC ROM is
+// selected) and pages it out on a fetch at $4000+.
+func (m *Memory) BetaPreFetch(pc uint16) {
+	if !m.betaEnabled {
+		return
+	}
+	switch {
+	case pc >= 0x3D00 && pc <= 0x3DFF:
+		if m.betaActive || m.memoryPageReadMap[0] == m.betaBasicPage {
+			m.betaActive = true
+		}
+	case pc >= 0x4000:
+		m.betaActive = false
+	}
+}
+
 // GetCurrentModel returns the current Spectrum model
 func (m *Memory) GetCurrentModel() roms.SpectrumModel {
 	return m.currentModel
@@ -1120,6 +1194,13 @@ func (m *Memory) readValue(addr uint16) byte {
 			}
 			return v
 		}
+	}
+
+	// Beta Disk TR-DOS ROM override: while the Beta ROM is paged in it replaces
+	// the system ROM across $0000-$3FFF (classic models only — the Next never
+	// enables Beta and returns above).
+	if m.betaActive && addr < 0x4000 {
+		return m.betaROM[addr]
 	}
 
 	pageIndex := m.memoryPageReadMap[addr>>14]
