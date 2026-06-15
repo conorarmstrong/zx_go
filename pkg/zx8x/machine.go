@@ -9,7 +9,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// Timing constants (derived from MAME/ZEsarUX): the ZX80/ZX81 CPU runs at
+// Timing constants (derived from the documented ZX80/ZX81 hardware): the CPU runs at
 // 3.25 MHz, each TV scanline is 207 T-states, and a 50 Hz frame is ~312 lines.
 const (
 	lineTStates  = 207

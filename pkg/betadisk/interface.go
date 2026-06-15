@@ -2,9 +2,10 @@ package betadisk
 
 // Interface is the Beta Disk hardware: it decodes the I/O ports that front the
 // WD1793 and translates the $FF "system register" into drive/side selection and
-// controller reset. Port decode matches the real interface (and Fuse): the five
-// registers respond on the exact low byte, so they never collide with the
-// SpecDrum/Covox/Kempston-mouse ports ($DF/$FB).
+// controller reset. Port decode matches the real interface (cross-checked
+// against a reference emulator): the five registers respond on the exact low
+// byte, so they never collide with the SpecDrum/Covox/Kempston-mouse ports
+// ($DF/$FB).
 //
 //	$1F  command (write) / status (read)
 //	$3F  track register
@@ -71,7 +72,7 @@ func (it *Interface) WritePort(port uint16, val byte) {
 	}
 }
 
-// writeSystemRegister decodes the $FF system register (Beta 128 / Fuse):
+// writeSystemRegister decodes the $FF system register (Beta 128):
 //   - bits 0-1: drive select
 //   - bit 2:    reset (active low — clear bit resets the controller)
 //   - bit 4:    side select, inverted (set → side 0, clear → side 1)
