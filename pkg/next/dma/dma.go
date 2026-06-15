@@ -117,6 +117,17 @@ type DMA struct {
 	// running while the DMA waits between bytes.
 	cycleSink func(uint64)
 
+	// clock returns the current CPU T-state count. When set, a burst-mode
+	// transfer with a non-zero prescaler is interleaved with the CPU: it pumps
+	// one byte every prescaler T-states from Step(), letting the CPU run in the
+	// gaps (so DMA-streamed audio is paced across the CPU timeline).
+	clock func() uint64
+
+	// Active interleaved-burst state.
+	activeBurst bool
+	remaining   int
+	nextDue     uint64
+
 	// pending holds the setters for the follow bytes the most recent
 	// base byte announced; each subsequent WriteCommand consumes one.
 	pending []func(byte)
@@ -139,6 +150,11 @@ func (d *DMA) SetIOBus(io IOBus) { d.io = io }
 // SetCycleSink attaches the callback used to charge a continuous-mode
 // transfer's T-state duration to the CPU clock. Optional.
 func (d *DMA) SetCycleSink(sink func(uint64)) { d.cycleSink = sink }
+
+// SetClock attaches a CPU-T-state source. With it, burst-mode + prescaler
+// transfers interleave with the CPU via Step(). Optional — without it, burst
+// transfers run to completion at ENABLE.
+func (d *DMA) SetClock(clock func() uint64) { d.clock = clock }
 
 // WriteCommand accepts one byte of the port-0x6B command stream. Wired
 // via ULA.SetNextDMA / the routing in ULA.WritePort.
@@ -290,7 +306,7 @@ func (d *DMA) interruptControl() func(byte) {
 func (d *DMA) command(val byte) {
 	switch val {
 	case 0xC3: // RESET — clear configuration + state machine (keep the buses)
-		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink,
+		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink, clock: d.clock,
 			aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
 		d.loaded = true
@@ -329,30 +345,72 @@ func (d *DMA) Trigger() {
 	if length == 0 {
 		length = 65536
 	}
-	srcIsA := d.aToB // port A is the source when transferring A -> B
 	if dmaTrace {
 		fmt.Fprintf(os.Stderr, "DMA xfer A=%04X B=%04X len=%d aIO=%v bIO=%v mode=%d presc=%d\n",
 			d.curA, d.curB, length, d.aIsIO, d.bIsIO, d.mode, d.prescaler)
 	}
 	moved := length - int(d.counter)
+	d.lastDuration = uint64(moved) * d.perByteCycles()
+
+	// Burst mode with a fixed-time prescaler interleaves with the CPU: defer
+	// the bytes to Step(), which pumps one every prescaler T-states while the
+	// CPU runs in the gaps (the spec's only case where burst yields the bus).
+	// Without a clock or prescaler it runs to completion like continuous.
+	if d.mode == modeBurst && d.prescaler != 0 && d.clock != nil {
+		d.activeBurst = true
+		d.remaining = moved
+		d.nextDue = d.clock()
+		return
+	}
+
+	srcIsA := d.aToB // port A is the source when transferring A -> B
 	for remaining := moved; remaining > 0; remaining-- {
 		b := d.portRead(srcIsA)
 		d.portWrite(!srcIsA, b)
 		d.counter++
 	}
-	d.lastDuration = uint64(moved) * d.perByteCycles()
 	// Continuous mode stalls the CPU for the whole transfer; charge the time
-	// to the CPU clock. Burst mode lets the CPU run during the inter-byte
-	// waits, so it is not charged.
+	// to the CPU clock. Burst mode lets the CPU run, so it is not charged.
 	if d.mode == modeContinuous && d.cycleSink != nil {
 		d.cycleSink(d.lastDuration)
 	}
+	d.endOfBlock()
+}
+
+// endOfBlock applies the auto-restart-or-stop policy after a transfer's last
+// byte: auto-restart reloads the start addresses and stays armed; otherwise the
+// loaded flag clears.
+func (d *DMA) endOfBlock() {
 	if d.autoRestart {
 		d.curA = d.portAStart
 		d.curB = d.portBStart
 		d.counter = 0
 	} else {
 		d.loaded = false
+	}
+}
+
+// Step advances an interleaved burst transfer: it transfers every byte whose
+// due time has arrived by `now` (the current CPU T-state), spacing them by the
+// prescaler. No-op unless a burst+prescaler transfer is in flight. Call it from
+// the CPU's per-instruction hook so DMA-streamed audio is paced correctly and
+// the CPU runs between bytes.
+func (d *DMA) Step(now uint64) {
+	if !d.activeBurst {
+		return
+	}
+	per := d.perByteCycles()
+	srcIsA := d.aToB
+	for d.remaining > 0 && now >= d.nextDue {
+		b := d.portRead(srcIsA)
+		d.portWrite(!srcIsA, b)
+		d.counter++
+		d.remaining--
+		d.nextDue += per
+	}
+	if d.remaining == 0 {
+		d.activeBurst = false
+		d.endOfBlock()
 	}
 }
 

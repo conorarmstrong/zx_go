@@ -36,9 +36,10 @@ timing + read-back).
   continuous-mode transfer's T-state duration is charged to the CPU clock),
   Continue (`$D3`) and WR5 auto-restart, and read-mask register read-back
   (`$BB`/`$A7` + port-0x6B reads return the status / byte-counter / port-address
-  registers). Cross-checked against the official `zxndma.txt`. The one
-  simplification: burst-mode transfers don't interleave the CPU between bytes,
-  so DMA-streamed audio isn't paced across the CPU timeline yet.
+  registers). Burst-mode + prescaler transfers interleave with the CPU (one byte
+  per prescaler T-states, pumped from a per-instruction Step), so DMA-streamed
+  sampled audio is paced across the CPU timeline while the CPU runs in the gaps.
+  Cross-checked against the official `zxndma.txt`.
 - **SpecDrum & Covox** (`pkg/audiodac`) — classic-Spectrum 8-bit DAC sound
   add-ons: Cheetah SpecDrum (OUT $DF) and a mono Covox (OUT $FB), opt-in from
   the Peripherals menu and persisted in config. Event-timed like the beeper —

@@ -1356,6 +1356,12 @@ func wireNextSubsystems(e *emulator) error {
 	// the DMA stalls the CPU for the right time (per-byte prescaler + cycle
 	// lengths). Burst mode is not charged (the CPU runs during the waits).
 	dmaEngine.SetCycleSink(func(n uint64) { cpu.SetTstates(cpu.Tstates() + n) })
+	// Burst-mode + prescaler transfers interleave with the CPU: the DMA pumps
+	// one byte every prescaler T-states from this per-instruction Step, so
+	// DMA-streamed audio is paced across the CPU timeline (and the CPU runs in
+	// the gaps). No-op unless such a transfer is in flight.
+	dmaEngine.SetClock(func() uint64 { return cpu.Tstates() })
+	cpu.AddPreFetchHook("zxndma-step", func(uint16) { dmaEngine.Step(cpu.Tstates()) })
 	// i2c DS1307 RTC on ports $103B/$113B (zxnext.vhd:2630/3234) —
 	// NextZXOS bit-bangs this bus for the menu's date/time line; with
 	// no slave the clock fetch fails every frame and the menu engine
