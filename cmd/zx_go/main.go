@@ -1599,10 +1599,25 @@ func tapeTrapROMActive(mem *memory.Memory) bool {
 	}
 }
 
+// tapeTrace, when ZX_GO_TAPE_TRACE is set, logs every LD-BYTES trap hit and
+// decision to stderr — the diagnostic for tape loads that fail only in a real
+// session (which the headless harness can't reproduce).
+var tapeTrace = os.Getenv("ZX_GO_TAPE_TRACE") != ""
+
 func installTapeTrap(emu *emulator) {
 	emu.cpu.TrapCheck = func(pc uint16) bool {
 		if pc != 0x0556 {
 			return false
+		}
+		if tapeTrace {
+			tp := emu.ula.GetTapePlayer()
+			blk, more := -1, false
+			if tp != nil {
+				blk, more = tp.CurrentBlock(), tp.HasMoreBlocks()
+			}
+			fmt.Fprintf(os.Stderr, "[tapetrap] @0556 model=%s bank=%d active=%v tp=%v block=%d more=%v A=%02X carry=%v\n",
+				roms.GetModelName(emu.mem.GetCurrentModel()), emu.mem.GetROMBank(),
+				tapeTrapROMActive(emu.mem), tp != nil, blk, more, emu.cpu.A, emu.cpu.F&z80.FLAG_C != 0)
 		}
 		// Fire only when the 48 BASIC ROM — which holds LD-BYTES at $0556 — is
 		// the ROM currently paged at $0000. That's always true on the 48K; on
@@ -1635,6 +1650,10 @@ func installTapeTrap(emu *emulator) {
 			success = false
 		} else if block[0] != expectedFlag {
 			// Flag mismatch — emulate failure.
+			if tapeTrace {
+				fmt.Fprintf(os.Stderr, "[tapetrap] FLAG MISMATCH block %d flag=%02X expected=%02X -> FAIL (R Tape loading error)\n",
+					emu.ula.GetTapePlayer().CurrentBlock()-1, block[0], expectedFlag)
+			}
 			success = false
 		} else {
 			// Block contains: flag, data..., checksum.
@@ -1645,6 +1664,10 @@ func installTapeTrap(emu *emulator) {
 			}
 			n := int(count)
 			if n > len(data) {
+				if tapeTrace {
+					fmt.Fprintf(os.Stderr, "[tapetrap] LENGTH MISMATCH want %d bytes but block %d has %d -> FAIL (R Tape loading error)\n",
+						n, emu.ula.GetTapePlayer().CurrentBlock()-1, len(data))
+				}
 				n = len(data)
 				success = false
 			}
