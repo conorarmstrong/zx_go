@@ -56,6 +56,9 @@ const (
 	// ModelNext so the existing models keep their iota values.
 	ModelZX81
 	ModelZX80
+	// ModelPentagon is the Soviet ZX Spectrum 128 clone: 128K paging and AY
+	// like the 128K, but with no memory contention and a longer 71680-T frame.
+	ModelPentagon
 )
 
 // ROMMappingEntry defines how ROMs are mapped in memory
@@ -121,6 +124,12 @@ func (rm *ROMManager) initMappings() {
 		ModelZX80: {
 			{ROMZX80, "zx80.rom", true, 0},
 		},
+		// Pentagon 128: bank 0 is the Pentagon 128 editor ROM; bank 1 is the
+		// standard 48 BASIC (shared with the 128K — Pentagon doesn't modify it).
+		ModelPentagon: {
+			{ROMPENTAGON, "pentagon.rom", true, 0},
+			{ROM128K_1, "128-1.rom", true, 1},
+		},
 	}
 }
 
@@ -140,7 +149,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 			return fmt.Errorf("rom file %s not found", filename)
 		}
 	}
-	
+
 	// Determine expected size based on ROM type
 	var expectedSize int
 	switch romType {
@@ -151,7 +160,7 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 	default:
 		expectedSize = 16384 // 16KB for system ROMs
 	}
-	
+
 	if len(data) != expectedSize {
 		return fmt.Errorf("rom %s has invalid size: %d bytes (expected %d)", filename, len(data), expectedSize)
 	}
@@ -166,7 +175,7 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 	if !exists {
 		return fmt.Errorf("unsupported Spectrum model: %d", model)
 	}
-	
+
 	for _, mapping := range mappings {
 		if err := rm.LoadROM(mapping.ROMType, mapping.Filename); err != nil {
 			if mapping.Required {
@@ -176,7 +185,7 @@ func (rm *ROMManager) LoadROMsForModel(model SpectrumModel) error {
 			slog.Warn("optional ROM not loaded", "filename", mapping.Filename, "err", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -252,6 +261,8 @@ func GetModelName(model SpectrumModel) string {
 		return "Sinclair ZX81"
 	case ModelZX80:
 		return "Sinclair ZX80"
+	case ModelPentagon:
+		return "Pentagon 128"
 	default:
 		return "Unknown Model"
 	}

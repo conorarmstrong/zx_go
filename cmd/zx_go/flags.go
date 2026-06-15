@@ -27,19 +27,20 @@ var cliFlagsActive *cliFlags
 // Parsed early in main(), before any of the GUI or emulator
 // machinery comes up.
 type cliFlags struct {
-	logLevel      slog.Level
-	traceChannels trace.Channels
-	tracePCStart  uint16
-	tracePCEnd    uint16
-	tracePCRange  bool
-	traceOutput   string
-	headless      bool
-	frames        int
-	dumpState     int
-	saveScreen    string
-	startInNext   bool
-	startInZX81   bool
-	startInZX80   bool
+	logLevel        slog.Level
+	traceChannels   trace.Channels
+	tracePCStart    uint16
+	tracePCEnd      uint16
+	tracePCRange    bool
+	traceOutput     string
+	headless        bool
+	frames          int
+	dumpState       int
+	saveScreen      string
+	startInNext     bool
+	startInZX81     bool
+	startInZX80     bool
+	startInPentagon bool
 
 	// Periodic state-snapshot interval. When non-zero, the
 	// headless loop dumps registers, sysvars, paging state, and
@@ -244,17 +245,18 @@ type cliFlags struct {
 // convention.
 func parseCLI() *cliFlags {
 	var (
-		logLevelStr  = flag.String("log-level", "info", "Log level: debug, info, warn, error")
-		traceStr     = flag.String("trace", "", "Comma-separated trace channels: pc, nextreg, ports, bankswitch, screen")
-		tracePCRange = flag.String("trace-pc-range", "", "PC range filter for pc channel, e.g. $0D6B-$0D80 or 0x1F00-0x1F50")
-		traceOutput  = flag.String("trace-output", "", "Path to write JSON-lines trace events; empty = stderr")
-		headless     = flag.Bool("headless", false, "Run without GUI; combine with --frames to exit after N simulated frames")
-		frames       = flag.Int("frames", 0, "When --headless, exit after this many simulated frames; 0 = run forever")
-		dumpState    = flag.Int("dump-state", 0, "When non-zero, run headless for N frames then print CPU/sysvar/NextReg snapshot and exit")
-		saveScreen   = flag.String("save-screen", "", "When set with --headless, write the final rendered screen to this PNG path before exiting")
-		startInNext  = flag.Bool("next", false, "Boot directly into ZX Spectrum Next mode (skips the 48K default)")
-		startInZX81  = flag.Bool("zx81", false, "Boot directly into Sinclair ZX81 mode")
-		startInZX80  = flag.Bool("zx80", false, "Boot directly into Sinclair ZX80 mode")
+		logLevelStr     = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+		traceStr        = flag.String("trace", "", "Comma-separated trace channels: pc, nextreg, ports, bankswitch, screen")
+		tracePCRange    = flag.String("trace-pc-range", "", "PC range filter for pc channel, e.g. $0D6B-$0D80 or 0x1F00-0x1F50")
+		traceOutput     = flag.String("trace-output", "", "Path to write JSON-lines trace events; empty = stderr")
+		headless        = flag.Bool("headless", false, "Run without GUI; combine with --frames to exit after N simulated frames")
+		frames          = flag.Int("frames", 0, "When --headless, exit after this many simulated frames; 0 = run forever")
+		dumpState       = flag.Int("dump-state", 0, "When non-zero, run headless for N frames then print CPU/sysvar/NextReg snapshot and exit")
+		saveScreen      = flag.String("save-screen", "", "When set with --headless, write the final rendered screen to this PNG path before exiting")
+		startInNext     = flag.Bool("next", false, "Boot directly into ZX Spectrum Next mode (skips the 48K default)")
+		startInZX81     = flag.Bool("zx81", false, "Boot directly into Sinclair ZX81 mode")
+		startInZX80     = flag.Bool("zx80", false, "Boot directly into Sinclair ZX80 mode")
+		startInPentagon = flag.Bool("pentagon", false, "Boot directly into Pentagon 128 mode")
 
 		snapshotEvery   = flag.Int("snapshot-every", 0, "Print a state snapshot (CPU, sysvars, paging, watched memory) every N frames in headless mode")
 		snapshotPrefix  = flag.String("snapshot-prefix", "", "When set, write per-snapshot screenshots to <prefix><frame-number>.png")
@@ -375,6 +377,7 @@ func parseCLI() *cliFlags {
 	f.startInNext = *startInNext
 	f.startInZX81 = *startInZX81
 	f.startInZX80 = *startInZX80
+	f.startInPentagon = *startInPentagon
 	f.snapshotEvery = *snapshotEvery
 	f.snapshotPrefix = *snapshotPrefix
 	f.snapshotScreens = *snapshotScreens

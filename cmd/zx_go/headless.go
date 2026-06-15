@@ -33,6 +33,8 @@ func runHeadless(f *cliFlags) {
 		model = roms.ModelZX81
 	case f.startInZX80:
 		model = roms.ModelZX80
+	case f.startInPentagon:
+		model = roms.ModelPentagon
 	}
 
 	emu, err := newEmulator(model)

@@ -70,10 +70,14 @@ const (
 // used by StepInstructionWithIRQ, and the FPGA frame geometry
 // (zxula_timing.vhd c_max_hc/c_max_vc → (456·311)/2 = 70908).
 func frameTStatesForModel(model roms.SpectrumModel) int {
-	if model == roms.Model48K {
+	switch model {
+	case roms.Model48K:
 		return tstatesPerFrame // 69888
+	case roms.ModelPentagon:
+		return 71680 // Pentagon 128: 320 lines × 224 T-states, no contention
+	default:
+		return 70908
 	}
-	return 70908
 }
 
 type keyState struct {
@@ -1651,6 +1655,12 @@ func modelToConfigString(m roms.SpectrumModel) string {
 		return "+3"
 	case roms.ModelNext:
 		return "Next"
+	case roms.ModelPentagon:
+		return "Pentagon"
+	case roms.ModelZX81:
+		return "ZX81"
+	case roms.ModelZX80:
+		return "ZX80"
 	}
 	return "48K"
 }
@@ -1826,6 +1836,8 @@ func main() {
 		currentModel = roms.ModelZX81
 	case flags.startInZX80:
 		currentModel = roms.ModelZX80
+	case flags.startInPentagon:
+		currentModel = roms.ModelPentagon
 	}
 	_ = cfg.Model
 	currentScale := 200
@@ -2976,6 +2988,7 @@ func main() {
 			fyne.NewMenuItem("+2", func() { switchModel(roms.ModelPlus2) }),
 			fyne.NewMenuItem("+2A", func() { switchModel(roms.ModelPlus2A) }),
 			fyne.NewMenuItem("+3", func() { switchModel(roms.ModelPlus3) }),
+			fyne.NewMenuItem("Pentagon 128", func() { switchModel(roms.ModelPentagon) }),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Sinclair ZX81", func() { switchModel(roms.ModelZX81) }),
 			fyne.NewMenuItem("Sinclair ZX80", func() { switchModel(roms.ModelZX80) }),

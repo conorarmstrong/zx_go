@@ -91,6 +91,11 @@ type Memory struct {
 	ContentionEnabled bool
 	TStates           *uint64 // Pointer to CPU's T-state counter
 
+	// contentionDisabled is set by setupModel for machines with no contended
+	// memory (the Pentagon runs at a flat speed). SetTStatePtr and SwitchModel
+	// derive ContentionEnabled from it.
+	contentionDisabled bool
+
 	// RAMContentionDisabled, when set, overrides ContentionEnabled
 	// and suppresses the per-T-state contention pattern on RAM
 	// accesses. ModelNext writes this via NextReg 0x08 bit 1; on
@@ -522,7 +527,7 @@ func (m *Memory) syncAllMMU() {
 // invoke this themselves.
 func (m *Memory) SetTStatePtr(p *uint64) {
 	m.TStates = p
-	m.ContentionEnabled = true
+	m.ContentionEnabled = !m.contentionDisabled
 }
 
 // Contention delay pattern (repeats every 8 T-states in contended region)
@@ -709,26 +714,43 @@ func NewLegacy(romPath string, is128k bool) (*Memory, error) {
 
 // setupModel configures memory layout and loads ROMs for the specified model
 func (m *Memory) setupModel(model roms.SpectrumModel) error {
+	// The Pentagon has no contended memory; every other model contends per the
+	// ULA pattern. Centralised here so SwitchModel re-applies it correctly.
+	m.contentionDisabled = model == roms.ModelPentagon
+
+	var err error
 	switch model {
 	case roms.Model48K:
-		return m.setup48K()
+		err = m.setup48K()
 	case roms.Model128K:
-		return m.setup128K()
+		err = m.setup128K()
 	case roms.ModelPlus2:
-		return m.setupPlus2()
+		err = m.setupPlus2()
 	case roms.ModelPlus2A:
-		return m.setupPlus2A()
+		err = m.setupPlus2A()
 	case roms.ModelPlus3:
-		return m.setupPlus3()
+		err = m.setupPlus3()
 	case roms.ModelNext:
-		return m.setupNext()
+		err = m.setupNext()
 	case roms.ModelZX81:
-		return m.setupZX81()
+		err = m.setupZX81()
 	case roms.ModelZX80:
-		return m.setupZX80()
+		err = m.setupZX80()
+	case roms.ModelPentagon:
+		err = m.setupPentagon()
 	default:
 		return fmt.Errorf("unsupported model: %d", model)
 	}
+	if err != nil {
+		return err
+	}
+	// Re-apply contention for a runtime SwitchModel (T-states already wired).
+	// At initial New() the T-state pointer is nil here and SetTStatePtr applies
+	// it instead.
+	if m.TStates != nil {
+		m.ContentionEnabled = !m.contentionDisabled
+	}
+	return nil
 }
 
 // setupZX8x is the shared memory layout for the ZX80/ZX81: the small ROM is
@@ -801,6 +823,27 @@ func (m *Memory) setup128K() error {
 	m.memoryPageReadMap = [4]int{16, 5, 2, 0}  // ROM 0, RAM 5, RAM 2, RAM 0
 	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0} // ROM not writable
 	m.PagingEnabled = true                     // 128K models have paging available
+	m.ScreenPage = 5
+	return nil
+}
+
+// setupPentagon configures memory for the Pentagon 128 — a 128K clone. Bank 0
+// is the Pentagon editor ROM; bank 1 is the standard 48 BASIC. Paging works
+// exactly like the 128K (port 7FFD); contention is disabled by setupModel.
+func (m *Memory) setupPentagon() error {
+	if rom, exists := m.romManager.GetROM(roms.ROMPENTAGON); exists {
+		copy(m.rom[0], rom)
+	} else {
+		return fmt.Errorf("missing Pentagon ROM (pentagon.rom)")
+	}
+	if rom, exists := m.romManager.GetROM(roms.ROM128K_1); exists {
+		copy(m.rom[1], rom)
+	} else {
+		return fmt.Errorf("missing Pentagon 48 BASIC ROM (128-1.rom)")
+	}
+	m.memoryPageReadMap = [4]int{16, 5, 2, 0}
+	m.memoryPageWriteMap = [4]int{-1, 5, 2, 0}
+	m.PagingEnabled = true
 	m.ScreenPage = 5
 	return nil
 }

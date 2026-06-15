@@ -9,6 +9,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
 
 ### Added
+- **Pentagon 128** (`roms.ModelPentagon`) — the Soviet ZX Spectrum 128 clone:
+  128K paging and AY like the 128K, but with **no memory contention**
+  (`setupModel` disables it; `SetTStatePtr`/`SwitchModel` honour the flag) and
+  the Pentagon **71680-T-state frame**. Bank 0 is the Pentagon editor ROM,
+  bank 1 the standard 48 BASIC. Boots to the 128 menu and runs 128/48 BASIC.
+  `Machine → Pentagon 128` / `--pentagon`. (TR-DOS / Beta-disk not yet wired.)
 - **SpecDrum & Covox** (`pkg/audiodac`) — classic-Spectrum 8-bit DAC sound
   add-ons: Cheetah SpecDrum (OUT $DF) and a mono Covox (OUT $FB), opt-in from
   the Peripherals menu and persisted in config. Event-timed like the beeper —
