@@ -22,6 +22,18 @@ type TapePlayer struct {
 	// Current pulse sequence being played
 	pulses   []uint16
 	pulseIdx int
+	// dataPulses is the number of pulses in `pulses` that make up the block's
+	// pilot/sync/data (i.e. everything before the trailing inter-block pause).
+	// dataConsumed becomes true once the real-time player has played past them
+	// — the block's bytes are "off the tape" and only the silent gap remains.
+	// The fast-load trap uses this: if the current block's data is already
+	// consumed (we're mid-pause), NextBlock skips it and returns the next
+	// block, so a trap firing during a real-time-loaded block's trailing pause
+	// doesn't hand back the just-finished block (the cause of a spurious
+	// "R Tape loading error" when the header loads real-time and the program
+	// then traps).
+	dataPulses   int
+	dataConsumed bool
 	// pulseBlock is the block index the current `pulses` were generated from,
 	// or -1 if none. The fast-load trap (NextBlock) advances blockIdx without
 	// touching the pulse state, so Update must detect blockIdx != pulseBlock
@@ -67,6 +79,7 @@ func (tp *TapePlayer) LoadTAP(path string) error {
 	tp.blocks = nil
 	tp.blockIdx = 0
 	tp.pulseBlock = -1
+	tp.dataConsumed = false
 	offset := 0
 	for offset+2 <= len(data) {
 		blockLen := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
@@ -137,7 +150,8 @@ func (tp *TapePlayer) Play() {
 		return
 	}
 	tp.playing = true
-	tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+	tp.pulses, tp.dataPulses = tp.generatePulsesData(tp.blocks[tp.blockIdx])
+	tp.dataConsumed = false
 	tp.pulseBlock = tp.blockIdx
 	tp.pulseIdx = 0
 	tp.earBit = false
@@ -178,6 +192,7 @@ func (tp *TapePlayer) Rewind() {
 	tp.blockIdx = 0
 	tp.playing = false
 	tp.pulseBlock = -1
+	tp.dataConsumed = false
 }
 
 // NextBlock returns the bytes of the next tape block (without the leading
@@ -186,6 +201,14 @@ func (tp *TapePlayer) Rewind() {
 func (tp *TapePlayer) NextBlock() []byte {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
+	// If the real-time player already played this block's data (we're in its
+	// trailing pause), the block is spent — skip it so the trap returns the
+	// next, unread block rather than the one just loaded in real time.
+	if tp.dataConsumed && tp.blockIdx < len(tp.blocks) {
+		tp.blockIdx++
+		tp.dataConsumed = false
+		tp.pulseBlock = -1 // force the real-time player to resync
+	}
 	if tp.blockIdx >= len(tp.blocks) {
 		return nil
 	}
@@ -272,6 +295,7 @@ func (tp *TapePlayer) SeekToBlock(idx int) {
 	tp.playing = false
 	tp.pulses = nil
 	tp.pulseBlock = -1
+	tp.dataConsumed = false
 	tp.pulseIdx = 0
 }
 
@@ -295,7 +319,8 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 			tp.playing = false
 			return false
 		}
-		tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+		tp.pulses, tp.dataPulses = tp.generatePulsesData(tp.blocks[tp.blockIdx])
+		tp.dataConsumed = false
 		tp.pulseBlock = tp.blockIdx
 		tp.pulseIdx = 0
 		tp.lastToggle = tp.tstate
@@ -315,6 +340,13 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 		}
 	}
 
+	// Once the pilot/sync/data pulses are played, the block's bytes are off the
+	// tape — only the trailing pause remains. Mark it so the trap skips this
+	// block if it fires during the pause (see NextBlock).
+	if tp.pulseIdx >= tp.dataPulses {
+		tp.dataConsumed = true
+	}
+
 	// If we've exhausted all pulses, move to the next block.
 	if tp.pulseIdx >= len(tp.pulses) {
 		tp.blockIdx++
@@ -322,7 +354,8 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 			tp.playing = false
 			return false
 		}
-		tp.pulses = tp.generatePulses(tp.blocks[tp.blockIdx])
+		tp.pulses, tp.dataPulses = tp.generatePulsesData(tp.blocks[tp.blockIdx])
+		tp.dataConsumed = false
 		tp.pulseBlock = tp.blockIdx
 		tp.pulseIdx = 0
 		tp.lastToggle = tp.tstate
@@ -342,9 +375,16 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 // fields on tapeBlock; pure data blocks have pilotLen == 0 and so emit no
 // pilot or sync.
 func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
+	pulses, _ := tp.generatePulsesData(blk)
+	return pulses
+}
+
+// generatePulsesData is generatePulses plus the count of pulses that precede the
+// trailing inter-block pause (the pilot/sync/data pulses).
+func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPulses int) {
 	data := blk.data
 	if len(data) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	// Resolve timings (turbo blocks override the defaults).
@@ -374,7 +414,7 @@ func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
 	}
 
 	// Pre-allocate: pilot + 2 sync + 16 pulses per byte + pause padding.
-	pulses := make([]uint16, 0, pilotPulses+2+len(data)*16+50)
+	pulses = make([]uint16, 0, pilotPulses+2+len(data)*16+50)
 
 	// Pilot tone
 	for i := 0; i < pilotPulses; i++ {
@@ -401,6 +441,9 @@ func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
 		}
 	}
 
+	// Everything up to here is pilot/sync/data; the pause follows.
+	dataPulses = len(pulses)
+
 	// Trailing pause. TZX specifies a value in milliseconds; if zero we fall
 	// back to the legacy ~1 second silence used for TAP playback. We split
 	// the silence into uint16-sized chunks because pulse durations are
@@ -419,5 +462,5 @@ func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
 		pauseTStates -= uint64(chunk)
 	}
 
-	return pulses
+	return pulses, dataPulses
 }

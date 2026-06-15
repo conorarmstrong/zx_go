@@ -71,3 +71,41 @@ func TestTrapRealtimeResyncPlaysCorrectBlock(t *testing.T) {
 		t.Errorf("block advanced after only %d T-states — desync replayed the short block 0 instead of block 1", elapsed)
 	}
 }
+
+// Reproduces the GUI failure: when a block's data has been read in real time
+// and the tape is in that block's trailing pause (blockIdx not yet advanced),
+// the fast-load trap must hand back the NEXT block — not the just-finished one.
+// Before the fix, NextBlock returned the spent block, so loading the program
+// after a real-time header read got the 17-byte header and failed with
+// "R Tape loading error".
+func TestTrapSkipsBlockConsumedInRealtime(t *testing.T) {
+	path := writeMultiTAP(t, [][]byte{
+		{0x00, 0x03, 'H'},  // block 0: header-like (flag 0x00)
+		{0xFF, 0xAA, 0xBB}, // block 1: data (flag 0xFF) — the program
+	})
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(path); err != nil {
+		t.Fatal(err)
+	}
+	tp.Play()
+
+	// Play block 0 in real time until its data is consumed but its trailing
+	// pause is still running (blockIdx still 0) — the exact moment the GUI's
+	// program load fires the trap.
+	for i := 0; i < 200000; i++ {
+		tp.Update(2000)
+		if tp.dataConsumed && tp.blockIdx == 0 {
+			break
+		}
+	}
+	if !tp.dataConsumed || tp.blockIdx != 0 {
+		t.Fatalf("setup: expected to be mid-pause of block 0 (dataConsumed=%v blockIdx=%d)", tp.dataConsumed, tp.blockIdx)
+	}
+
+	// The trap fires for the program: it must return block 1 (flag 0xFF), not
+	// the spent header (block 0, flag 0x00).
+	block := tp.NextBlock()
+	if len(block) == 0 || block[0] != 0xFF {
+		t.Fatalf("trap returned block flag %#v, want the program (flag 0xFF) — not the spent header", block)
+	}
+}
