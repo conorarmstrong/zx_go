@@ -71,7 +71,7 @@ support and that redistribution is not permitted.
 | 128K / +2 | ✅ | ✅ | ✅ | ✅ |
 | +2A / +3 (with disk) | ✅ | ❔ | ⚠️ ⁵ | ✅ |
 | ZX Spectrum Next | ✅ | ✅ | ✅ | ✅ |
-| ZX80 / ZX81 | ❌ | ❌ | ✅ | ✅ |
+| ZX80 / ZX81 | ✅ ⁷ | ❌ | ✅ | ✅ |
 | Pentagon / clones | ❌ | ❌ | ✅ | ✅ |
 | Other systems (CPC, MSX, Sam, QL, …) | ❌ | ❌ | ✅ | ✅ ⁶ |
 
@@ -79,6 +79,9 @@ support and that redistribution is not permitted.
 ⁶ MAME is a multi-system emulator covering tens of thousands of machines;
 ZEsarUX covers a very wide range of 8-bit/16-bit home computers. zx_go and
 CSpect are focused on the Spectrum family / Next.
+⁷ zx_go runs the genuine ZX80 (4K) and ZX81 (8K) ROMs with a faithful
+CPU-generated display, so each machine uses its own native keyword layout
+(e.g. PRINT is on O for the ZX80, P for the ZX81). `.P` / `.O` programs load.
 
 ---
 

@@ -1,6 +1,6 @@
 # zx_go — a ZX Spectrum & Spectrum Next emulator written in Go
 
-zx_go is a faithful emulator for every classic Sinclair ZX Spectrum (48K, 128K, +2, +2A, +3) **and a complete, from-the-silicon-up Sinclair ZX Spectrum Next** — it cold-boots real NextZXOS through the authentic FPGA boot chain to a fully interactive desktop, and implements the Next's *entire* custom hardware stack (Layer 2 with hi-res modes, 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, three AY chips, DACs, RTC, and all four turbo speeds up to 28 MHz). It also supports every common file format (snapshots, tapes, disks, microdrive cartridges, `.NEX`, RZX recordings), three different debuggers (a visual GUI, a scriptable telnet server, and headless trace instrumentation — the visual and telnet debuggers share one live backend), and a wide range of period-accurate peripherals.
+zx_go is a faithful emulator for the whole Sinclair 8-bit line — the **ZX80** and **ZX81**, every classic ZX Spectrum (48K, 128K, +2, +2A, +3), **and a complete, from-the-silicon-up Sinclair ZX Spectrum Next** — it cold-boots real NextZXOS through the authentic FPGA boot chain to a fully interactive desktop, and implements the Next's *entire* custom hardware stack (Layer 2 with hi-res modes, 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, three AY chips, DACs, RTC, and all four turbo speeds up to 28 MHz). It also supports every common file format (snapshots, tapes, disks, microdrive cartridges, `.NEX`, RZX recordings), three different debuggers (a visual GUI, a scriptable telnet server, and headless trace instrumentation — the visual and telnet debuggers share one live backend), and a wide range of period-accurate peripherals.
 
 The 48K was the author's first computer; this project was written as a Go learning exercise that turned into a serious emulator.
 
@@ -122,6 +122,7 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 ## What works
 
 ### Models
+- **Sinclair ZX80 & ZX81** — the original 1980/1981 machines, fully working and interactive. Faithful **CPU-generated display** (the Z80 itself produces the picture: NOP-on-the-bus video fetches, R-register interrupt, and the ZX81 SLOW-mode NMI border generator), the full ZX8x keyboard (each machine's native keyword layout — e.g. PRINT is on O for the ZX80, P for the ZX81), and `.P`/`.O` program loading. Boots to the inverse-K cursor and runs BASIC. Select from `Machine → Sinclair ZX81 / ZX80`, or launch with `--zx81` / `--zx80`. See **[docs/zx80-zx81.md](docs/zx80-zx81.md)**.
 - **ZX Spectrum 48K, 128K, +2, +2A, +3** — fully working and interactive. Cycle-accurate timing, memory contention, port contention, +3 / +2A 4-ROM paging, all five tape formats, all six disk formats.
 - **ZX Spectrum Next** — **boots real NextZXOS end-to-end through the authentic chain**: FPGA bootrom → TBBLUE firmware splash → NextZXOS welcome → main menu — and the menu items work: the **Browser** opens the SD card's `C:/` listing, **NextBASIC** runs interactive programs (type, `RUN`, `BREAK`), the firmware configuration menu (SPACE at the splash) boots whichever machine personality you pick. Every Next hardware extension is wired: Z80N CPU extensions, NextRegs, 8K MMU, divMMC (128 KB), esxDOS, Layer 2, palette, sprites, Copper, zxnDMA, DAC, i2c RTC, 28 MHz CPU mode. **`.NEX` games load and run** via `File → Open File…`. See [Current status of NextZXOS boot](#current-status-of-nextzxos-boot).
 
@@ -139,6 +140,8 @@ There are forty-plus test packages; the full suite takes roughly 90 seconds on a
 | Audio capture | `.wav` | — | ✓ | Record emulator output |
 | Screenshot | `.png` | — | ✓ | Save current frame |
 | Spectrum Next | `.nex` | ✓ | — | v1.2 loader: banks, palette, Copper, entry delay |
+| ZX81 program | `.p` / `.81` | ✓ | — | Raw dump from $4009; loaded into ZX81 mode |
+| ZX80 program | `.o` / `.80` | ✓ | — | Raw dump from $4000; loaded into ZX80 mode |
 
 ### Peripherals
 - **+3 FDC** — NEC μPD765A; two drives, READ/WRITE/FORMAT/READ ID/READ DIAGNOSTIC/SCAN/SEEK

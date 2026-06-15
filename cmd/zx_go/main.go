@@ -50,6 +50,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 	"github.com/conorarmstrong/zx_go/pkg/version"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
+	"github.com/conorarmstrong/zx_go/pkg/zx8x"
 	"github.com/conorarmstrong/zx_go/pkg/zxlog"
 )
 
@@ -94,6 +95,11 @@ const (
 type emulator struct {
 	cpu *z80.CPU
 	mem *memory.Memory
+
+	// zx8x is non-nil only for the Sinclair ZX80/ZX81, whose CPU-generated
+	// display has no ULA. When set, the render loop reads zx8x.Image() and the
+	// ula/peripherals fields are nil.
+	zx8x *zx8x.Machine
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -573,6 +579,9 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	if model == roms.ModelNext {
 		return newNextEmulator()
 	}
+	if isZX8x(model) {
+		return newZX8xEmulator(model)
+	}
 	kbd := keyboard.New()
 	if path := userKeymapPath(); path != "" {
 		if err := kbd.LoadOverrides(path); err != nil {
@@ -762,9 +771,11 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					// not paused, so the GUI hot path is unaffected
 					// when --debugger-port wasn't supplied.
 					e.rdbg.WaitIfPaused()
-					// Three execution paths: RZX playback,
-					// RZX recording, or normal frame.
+					// Execution paths: ZX80/ZX81 (CPU-generated video),
+					// RZX playback, RZX recording, or normal frame.
 					switch {
+					case e.zx8x != nil:
+						e.zx8x.RunFrame()
 					case e.rzxPlayback.Load() != nil:
 						playback := e.rzxPlayback.Load()
 						e.cpu.ExecuteRZXFrame(uint64(playback.Instructions()))
@@ -813,12 +824,14 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 					frameCount++
 					atomic.AddInt32(&e.frameCounter, 1)
-					e.peripherals.Frame()
+					if e.peripherals != nil {
+						e.peripherals.Frame()
+					}
 
 					// Render at 50Hz
 					now := time.Now()
 					if now.Sub(lastRender) >= 20*time.Millisecond {
-						newImage := e.ula.Render()
+						newImage := e.renderFrame()
 
 						// In plain mode, screen.Image already points at the
 						// ULA's frame buffer (set at startup) and Render
@@ -857,6 +870,10 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 func (e *emulator) reboot() {
 	slog.Info("rebooting emulator")
+	if e.zx8x != nil {
+		e.zx8x.Reset()
+		return
+	}
 	e.cpu.Reset()
 	e.ula.Reset()
 
@@ -1020,7 +1037,7 @@ func ensureFileExt(path, ext string) string {
 // produces. The pixel data is copied before encode so the PNG write
 // can't race the emulator goroutine mutating the framebuffer.
 func writeScreenshotPNG(emu *emulator, w io.Writer) error {
-	src := emu.ula.Render()
+	src := emu.renderFrame()
 	imgCopy := image.NewRGBA(src.Bounds())
 	copy(imgCopy.Pix, src.Pix)
 	return png.Encode(w, imgCopy)
@@ -1791,8 +1808,13 @@ func main() {
 	// at startup. --next on the command line overrides this so
 	// trace / debug runs can jump straight into Next mode.
 	currentModel := roms.Model48K
-	if flags.startInNext {
+	switch {
+	case flags.startInNext:
 		currentModel = roms.ModelNext
+	case flags.startInZX81:
+		currentModel = roms.ModelZX81
+	case flags.startInZX80:
+		currentModel = roms.ModelZX80
 	}
 	_ = cfg.Model
 	currentScale := 200
@@ -1921,7 +1943,7 @@ func main() {
 	// boot, feeding it garbage and crashing the boot into a DI/HALT
 	// (the development log; the user-reported GUI black screen). Skip
 	// restoring them when the current model is the Next.
-	classicPeripheralsOK := currentModel != roms.ModelNext
+	classicPeripheralsOK := currentModel != roms.ModelNext && !isZX8x(currentModel)
 	if cfg.Disciple && classicPeripheralsOK {
 		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
 			slog.Warn("config: enable Disciple failed", "err", err)
@@ -1961,7 +1983,7 @@ func main() {
 	installTapeTrap(emu)
 
 	// Use static image approach
-	initialImage := emu.ula.Render()
+	initialImage := emu.renderFrame()
 	screen := canvas.NewImageFromImage(initialImage)
 	screen.ScaleMode = canvas.ImageScalePixels
 
@@ -1983,6 +2005,47 @@ func main() {
 	// Create model selection callback
 	// var-declared (not :=) so the body can reference switchModel
 	// itself — the ROM-download retry path re-invokes it on success.
+	// rebuildEmulatorCore swaps the running emulator's machine core in place
+	// (keeping the goroutines, channels and window). It is used when a model
+	// switch crosses the ZX80/ZX81 boundary, because those machines have no ULA
+	// or peripheral manager and so cannot use the in-place mem.SwitchModel path
+	// that switches between Spectrum models.
+	rebuildEmulatorCore := func(newModel roms.SpectrumModel) {
+		wasPaused := emu.paused.Load()
+		if !emu.paused.Load() {
+			emu.togglePause()
+		}
+		if currentModel == roms.ModelNext {
+			unwireNextSubsystems(emu)
+		}
+		fresh, err := newEmulator(newModel)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to switch to %s: %w", roms.GetModelName(newModel), err), w)
+			if !wasPaused {
+				emu.togglePause()
+			}
+			return
+		}
+		emu.cpu = fresh.cpu
+		emu.mem = fresh.mem
+		emu.ula = fresh.ula
+		emu.kbd = fresh.kbd
+		emu.peripherals = fresh.peripherals
+		emu.zx8x = fresh.zx8x
+		emu.model = newModel
+		emu.nextEsxdos, emu.nextDAC, emu.nextRegs = fresh.nextEsxdos, fresh.nextDAC, fresh.nextRegs
+		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
+		emu.nextSprites, emu.nextLayer2 = fresh.nextSprites, fresh.nextLayer2
+		currentModel = newModel
+		saveConfig()
+		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(newModel)))
+		if !wasPaused {
+			emu.togglePause()
+		}
+		slog.Info("model switched (core rebuilt)", "model", roms.GetModelName(newModel))
+		dialog.ShowInformation("Model Changed", fmt.Sprintf("Successfully switched to %s.", roms.GetModelName(newModel)), w)
+	}
+
 	var switchModel func(newModel roms.SpectrumModel)
 	switchModel = func(newModel roms.SpectrumModel) {
 		slog.Info("switching model", "to", roms.GetModelName(newModel))
@@ -2002,6 +2065,14 @@ func main() {
 				offerNextROMDownload(w, func() { switchModel(newModel) })
 				return
 			}
+		}
+
+		// Crossing the ZX80/ZX81 boundary changes the machine type entirely
+		// (no ULA / peripherals), so rebuild the core instead of the in-place
+		// Spectrum↔Spectrum paging swap below.
+		if isZX8x(newModel) || emu.zx8x != nil {
+			rebuildEmulatorCore(newModel)
+			return
 		}
 
 		// Pause emulation during switch
@@ -2090,6 +2161,16 @@ func main() {
 	// refresh the recent submenu UI.
 	loadFileByPath := func(path string) (string, error) {
 		ext := strings.ToLower(filepath.Ext(path))
+		// On the ZX80/ZX81 (no ULA) only the native program formats are
+		// loadable; Spectrum tape/disk/snapshot formats would dereference the
+		// nil ula, so reject them with a clear message.
+		if emu.zx8x != nil {
+			switch ext {
+			case ".p", ".81", ".o", ".80":
+			default:
+				return "", fmt.Errorf("%s files are Spectrum-only — switch to a Spectrum model first (the ZX80/ZX81 load .p/.o programs)", ext)
+			}
+		}
 		switch ext {
 		case ".tap":
 			tp := ula.NewTapePlayer()
@@ -2116,6 +2197,40 @@ func main() {
 				return "", fmt.Errorf("apply snapshot: %w", err)
 			}
 			return "snapshot", nil
+		case ".p", ".81":
+			if emu.zx8x == nil || emu.model != roms.ModelZX81 {
+				return "", fmt.Errorf("switch to the ZX81 first (Machine → Sinclair ZX81) before loading a .P program")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read .P: %w", err)
+			}
+			wasPaused := emu.paused.Load()
+			if !wasPaused {
+				emu.togglePause()
+			}
+			emu.zx8x.InjectP(data)
+			if !wasPaused {
+				emu.togglePause()
+			}
+			return "ZX81 program", nil
+		case ".o", ".80":
+			if emu.zx8x == nil || emu.model != roms.ModelZX80 {
+				return "", fmt.Errorf("switch to the ZX80 first (Machine → Sinclair ZX80) before loading a .O program")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read .O: %w", err)
+			}
+			wasPaused := emu.paused.Load()
+			if !wasPaused {
+				emu.togglePause()
+			}
+			emu.zx8x.InjectO(data)
+			if !wasPaused {
+				emu.togglePause()
+			}
+			return "ZX80 program", nil
 		case ".rzx":
 			file, err := rzx.ReadFile(path)
 			if err != nil {
@@ -2239,7 +2354,7 @@ func main() {
 					fyne.Do(func() { w.MainMenu().Refresh() })
 					dialog.ShowInformation("Opened", fmt.Sprintf("Loaded %s from:\n%s", kind, filepath.Base(path)), w)
 				}, w)
-				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap", ".tzx", ".z80", ".sna", ".szx", ".rzx"}))
+				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap", ".tzx", ".z80", ".sna", ".szx", ".rzx", ".nex", ".p", ".81", ".o", ".80"}))
 				fd.Show()
 			}),
 			recentSubmenu,
@@ -2844,6 +2959,9 @@ func main() {
 			fyne.NewMenuItem("+2", func() { switchModel(roms.ModelPlus2) }),
 			fyne.NewMenuItem("+2A", func() { switchModel(roms.ModelPlus2A) }),
 			fyne.NewMenuItem("+3", func() { switchModel(roms.ModelPlus3) }),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Sinclair ZX81", func() { switchModel(roms.ModelZX81) }),
+			fyne.NewMenuItem("Sinclair ZX80", func() { switchModel(roms.ModelZX80) }),
 			fyne.NewMenuItemSeparator(),
 			nextMenuItem(switchModel),
 		),

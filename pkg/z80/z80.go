@@ -74,6 +74,11 @@ type CPU struct {
 	// true because NextZXOS uses DI; HALT as an idle pattern.
 	HaltWakeOnInt bool
 
+	// RefreshDuringHalt, when true, advances the R register on each HALT cycle
+	// (faithful Z80 refresh behaviour). Off by default; the ZX80/ZX81 enable it
+	// so /INT — derived from R bit 6 — fires while the display loop is halted.
+	RefreshDuringHalt bool
+
 	// BranchSource records the cause of the most-recent non-
 	// sequential PC change for the debugger's history annotation.
 	// Set by JP/JR/CALL/RET/RST/INT/NMI/RESET paths; sampled and
@@ -248,6 +253,14 @@ type CPU struct {
 	// Same migration note as PreFetchHook: new consumers should
 	// use AddPostFetchHook.
 	PostFetchHook func(pc uint16)
+
+	// M1FetchHook, if non-nil, fires after each M1 opcode fetch with the
+	// fetch address and the byte read; the byte it returns is the opcode the
+	// CPU actually executes. The ZX80/ZX81 use this to implement the
+	// CPU-generated display: a fetch from $8000+ whose byte has bit 6 clear is
+	// latched as a display character and replaced with NOP ($00), exactly as
+	// the real ULA forces a NOP onto the bus during video generation.
+	M1FetchHook func(pc uint16, opcode byte) byte
 
 	// Named fetch-hook registries. Hooks fire in registration order
 	// AFTER the legacy single-hook slots above. BreakpointCheck
@@ -885,6 +898,9 @@ func (c *CPU) executeInstruction() {
 	pc := c.PC
 	c.currentInstrPC = pc
 	opcode := c.fetch()
+	if c.M1FetchHook != nil {
+		opcode = c.M1FetchHook(pc, opcode)
+	}
 	if c.PostFetchHook != nil {
 		c.PostFetchHook(pc)
 	}
@@ -1143,6 +1159,14 @@ func (c *CPU) StepInstructionWithIRQ() {
 			c.Halted = false
 			c.IRQPending.Store(false)
 			return
+		}
+		if c.RefreshDuringHalt {
+			// A real Z80 keeps executing internal NOPs while halted, so the
+			// refresh register R keeps counting. The ZX80/ZX81 derive /INT from
+			// R bit 6, so this must advance during HALT for the display loop's
+			// HALT-waits-for-INT to wake. Opt-in (default off) to leave classic
+			// Spectrum behaviour unchanged.
+			c.R = (c.R & 0x80) | ((c.R + 1) & 0x7f)
 		}
 		c.tstates += 4
 		return

@@ -31,6 +31,8 @@ const (
 	ROMTRDOS
 	ROMPENTAGON
 	ROMINTERFACE1 // 8 KB Sinclair Interface 1 shadow ROM (if1-2.rom)
+	ROMZX81       // 8 KB Sinclair ZX81 ROM
+	ROMZX80       // 4 KB Sinclair ZX80 ROM
 )
 
 // SpectrumModel represents different ZX Spectrum models
@@ -48,6 +50,12 @@ const (
 	// the NextReg dispatcher and the 8K MMU; Sprint 3 brings the
 	// distro ROM in via the user-installed first-run flow.
 	ModelNext
+	// ModelZX81 is the Sinclair ZX81 (8 KB ROM, 1–16 KB RAM, CPU-generated
+	// display). ModelZX80 is the earlier ZX80 (4 KB ROM, no SLOW mode).
+	// Both share the Z80 and the pkg/zx8x video mechanism. Appended after
+	// ModelNext so the existing models keep their iota values.
+	ModelZX81
+	ModelZX80
 )
 
 // ROMMappingEntry defines how ROMs are mapped in memory
@@ -107,6 +115,12 @@ func (rm *ROMManager) initMappings() {
 		// here makes LoadROMsForModel(ModelNext) a no-op success
 		// instead of returning "unsupported model".
 		ModelNext: {},
+		ModelZX81: {
+			{ROMZX81, "zx81.rom", true, 0},
+		},
+		ModelZX80: {
+			{ROMZX80, "zx80.rom", true, 0},
+		},
 	}
 }
 
@@ -130,8 +144,10 @@ func (rm *ROMManager) LoadROM(romType ROMType, filename string) error {
 	// Determine expected size based on ROM type
 	var expectedSize int
 	switch romType {
-	case ROMMULTIFACE1, ROMMULTIFACE128, ROMMULTIFACE3, ROMDISCIPLE, ROMINTERFACE1:
-		expectedSize = 8192 // 8KB for peripherals
+	case ROMMULTIFACE1, ROMMULTIFACE128, ROMMULTIFACE3, ROMDISCIPLE, ROMINTERFACE1, ROMZX81:
+		expectedSize = 8192 // 8KB (peripherals + ZX81)
+	case ROMZX80:
+		expectedSize = 4096 // 4KB ZX80 ROM
 	default:
 		expectedSize = 16384 // 16KB for system ROMs
 	}
@@ -232,6 +248,10 @@ func GetModelName(model SpectrumModel) string {
 		return "ZX Spectrum +3"
 	case ModelNext:
 		return "ZX Spectrum Next"
+	case ModelZX81:
+		return "Sinclair ZX81"
+	case ModelZX80:
+		return "Sinclair ZX80"
 	default:
 		return "Unknown Model"
 	}

@@ -2,9 +2,14 @@
 
 ## What this is
 
-zx_go is a hardware-faithful ZX Spectrum emulator written in Go that
-supports the classic 48K / 128K / +2 / +2A / +3 / Next models. The
-current focus is **Spectrum Next v1.0**.
+zx_go is a hardware-faithful Sinclair emulator written in Go that
+supports the **ZX80**, **ZX81**, the classic 48K / 128K / +2 / +2A / +3
+Spectrums, and the **Spectrum Next**.
+
+**v1.1.0** added the ZX80 and ZX81 (`pkg/zx8x`): faithful CPU-generated
+video (A15 NOP-substitution video fetches, R-bit-6 interrupt with
+refresh-during-HALT, the ZX81 SLOW-mode NMI border generator), the ZX8x
+keyboard, and `.P` / `.O` program loading.
 
 This is the project roadmap: the **current state**, the ordered
 **open-work** backlog, the hardware-feature **catalogue**, and the

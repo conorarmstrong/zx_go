@@ -26,8 +26,13 @@ import (
 // --trace-output flag.
 func runHeadless(f *cliFlags) {
 	model := roms.Model48K
-	if f.startInNext {
+	switch {
+	case f.startInNext:
 		model = roms.ModelNext
+	case f.startInZX81:
+		model = roms.ModelZX81
+	case f.startInZX80:
+		model = roms.ModelZX80
 	}
 
 	emu, err := newEmulator(model)
@@ -587,7 +592,7 @@ func runHeadless(f *cliFlags) {
 					if err != nil {
 						return
 					}
-					_ = png.Encode(fp, emu.ula.Render())
+					_ = png.Encode(fp, emu.renderFrame())
 					_ = fp.Close()
 					slog.Info("nav shot", "path", p, "cursor", cur)
 				}
@@ -801,7 +806,7 @@ func runHeadless(f *cliFlags) {
 							if dir := os.Getenv("ZX_GO_NAV_SHOTS"); dir != "" {
 								p := fmt.Sprintf("%s/postlaunch-%05d.png", dir, i)
 								if fp, err := os.Create(p); err == nil {
-									_ = png.Encode(fp, emu.ula.Render())
+									_ = png.Encode(fp, emu.renderFrame())
 									_ = fp.Close()
 									slog.Info("POSTLAUNCH shot", "path", p)
 								}
@@ -946,7 +951,7 @@ func runHeadless(f *cliFlags) {
 			rdbg.WaitIfPaused()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
-				emu.ula.Render() // GUI-parity probe (the development log)
+				emu.renderFrame() // GUI-parity probe (the development log)
 			}
 			if snap != nil {
 				snap.Tick()
@@ -975,7 +980,7 @@ func runHeadless(f *cliFlags) {
 			rdbg.WaitIfPaused()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
-				emu.ula.Render() // GUI-parity probe (the development log)
+				emu.renderFrame() // GUI-parity probe (the development log)
 			}
 			if snap != nil {
 				snap.Tick()
@@ -989,7 +994,7 @@ func runHeadless(f *cliFlags) {
 	}
 
 	if f.saveScreen != "" {
-		img := emu.ula.Render()
+		img := emu.renderFrame()
 		fp, err := os.Create(f.saveScreen)
 		if err != nil {
 			slog.Error("save-screen: create", "path", f.saveScreen, "err", err)
@@ -1012,6 +1017,10 @@ func runHeadless(f *cliFlags) {
 // to test whether ExecuteFrame's batch body diverges from the step path
 // (which reaches NextZXOS while ExecuteFrame drops to 48K BASIC).
 func runOneFrameHeadless(emu *emulator, model roms.SpectrumModel) {
+	if emu.zx8x != nil {
+		emu.zx8x.RunFrame()
+		return
+	}
 	if os.Getenv("ZX_GO_STEP_FRAME") == "" {
 		emu.cpu.ExecuteFrame(frameTStatesForModel(model))
 		return

@@ -722,9 +722,49 @@ func (m *Memory) setupModel(model roms.SpectrumModel) error {
 		return m.setupPlus3()
 	case roms.ModelNext:
 		return m.setupNext()
+	case roms.ModelZX81:
+		return m.setupZX81()
+	case roms.ModelZX80:
+		return m.setupZX80()
 	default:
 		return fmt.Errorf("unsupported model: %d", model)
 	}
+}
+
+// setupZX8x is the shared memory layout for the ZX80/ZX81: the small ROM is
+// mirrored to fill the 16K rom[0] page (the high ROM-address lines aren't
+// decoded), and the read/write maps mirror RAM/ROM into the upper 32K because
+// A15 is consumed by the ULA for video timing rather than memory decode.
+func (m *Memory) setupZX8x(rom []byte) {
+	for off := 0; off < PageSize; off++ {
+		m.rom[0][off] = rom[off%len(rom)]
+	}
+	// $0000-$3FFF = ROM (slot 0, mirrored into slot 2 by A15);
+	// $4000-$7FFF = RAM bank 0 (mirrored into slot 3 by A15).
+	m.memoryPageReadMap = [4]int{16, 0, 16, 0}
+	m.memoryPageWriteMap = [4]int{-1, 0, -1, 0}
+	m.PagingEnabled = false
+	m.ScreenPage = 0
+}
+
+// setupZX81 configures memory for the Sinclair ZX81 (8 KB ROM).
+func (m *Memory) setupZX81() error {
+	rom, ok := m.romManager.GetROM(roms.ROMZX81)
+	if !ok {
+		return fmt.Errorf("ZX81 ROM not found")
+	}
+	m.setupZX8x(rom)
+	return nil
+}
+
+// setupZX80 configures memory for the Sinclair ZX80 (4 KB ROM).
+func (m *Memory) setupZX80() error {
+	rom, ok := m.romManager.GetROM(roms.ROMZX80)
+	if !ok {
+		return fmt.Errorf("ZX80 ROM not found")
+	}
+	m.setupZX8x(rom)
+	return nil
 }
 
 // setup48K configures memory for 48K model

@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0]
+
+Adds the **Sinclair ZX80 and ZX81** as fully supported machines.
+
+### Added
+- **ZX80 and ZX81 emulation** (`pkg/zx8x`). Faithful CPU-generated
+  display: the Z80 itself produces the picture via A15 video fetches
+  that are forced to NOP while the latched byte indexes a character
+  bitmap through the I register and a scanline counter (matching the
+  MAME/ZEsarUX references and the hardware write-ups). The maskable
+  interrupt is driven off R-register bit 6 (with refresh continuing
+  during HALT), and the ZX81 SLOW-mode NMI generator (ports $FE/$FD)
+  paces the top/bottom borders. ZX80 uses the 4 KB ROM with the
+  character set at $0E00; ZX81 the 8 KB ROM at $1E00.
+- New `roms.ModelZX80` / `roms.ModelZX81`, their 4 KB / 8 KB ROMs
+  (embedded), and mirrored memory maps (ROM mirrored to fill the 16 KB
+  page; RAM mirrored into the upper 32 KB).
+- ZX8x keyboard matrix; `.P` / `.81` (ZX81) and `.O` / `.80` (ZX80)
+  program loading via `File → Open File…`.
+- `Machine → Sinclair ZX81 / ZX80` menu entries and `--zx81` / `--zx80`
+  command-line flags.
+- Z80 core: opt-in `RefreshDuringHalt` (advances R during HALT, as real
+  hardware does) and an `M1FetchHook` for opcode substitution — both
+  used by the ZX8x video / interrupt path; classic Spectrum behaviour
+  is unchanged (both off by default).
+
 ## [v1.0 RC1]
 
 First release candidate. The Spectrum Next boots NextZXOS end-to-end

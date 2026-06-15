@@ -38,6 +38,8 @@ type cliFlags struct {
 	dumpState     int
 	saveScreen    string
 	startInNext   bool
+	startInZX81   bool
+	startInZX80   bool
 
 	// Periodic state-snapshot interval. When non-zero, the
 	// headless loop dumps registers, sysvars, paging state, and
@@ -251,6 +253,8 @@ func parseCLI() *cliFlags {
 		dumpState    = flag.Int("dump-state", 0, "When non-zero, run headless for N frames then print CPU/sysvar/NextReg snapshot and exit")
 		saveScreen   = flag.String("save-screen", "", "When set with --headless, write the final rendered screen to this PNG path before exiting")
 		startInNext  = flag.Bool("next", false, "Boot directly into ZX Spectrum Next mode (skips the 48K default)")
+		startInZX81  = flag.Bool("zx81", false, "Boot directly into Sinclair ZX81 mode")
+		startInZX80  = flag.Bool("zx80", false, "Boot directly into Sinclair ZX80 mode")
 
 		snapshotEvery   = flag.Int("snapshot-every", 0, "Print a state snapshot (CPU, sysvars, paging, watched memory) every N frames in headless mode")
 		snapshotPrefix  = flag.String("snapshot-prefix", "", "When set, write per-snapshot screenshots to <prefix><frame-number>.png")
@@ -369,6 +373,8 @@ func parseCLI() *cliFlags {
 	f.dumpState = *dumpState
 	f.saveScreen = *saveScreen
 	f.startInNext = *startInNext
+	f.startInZX81 = *startInZX81
+	f.startInZX80 = *startInZX80
 	f.snapshotEvery = *snapshotEvery
 	f.snapshotPrefix = *snapshotPrefix
 	f.snapshotScreens = *snapshotScreens

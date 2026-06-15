@@ -287,6 +287,98 @@ func (k *Keyboard) initKeyMap() {
 	}
 }
 
+// UseZX8xLayout switches the keyboard to the Sinclair ZX80/ZX81 matrix. Letter,
+// digit, SPACE and SHIFT positions match the Spectrum, but the ZX8x has no
+// SYMBOL SHIFT: ENTER is NEWLINE (row 6, bit 0) and "." is row 7, bit 1.
+func (k *Keyboard) UseZX8xLayout() {
+	k.matrixMu.Lock()
+	defer k.matrixMu.Unlock()
+	k.keyMap = zx8xKeyMap()
+}
+
+// zx8xKeyMap builds the ZX80/ZX81 host-key-to-matrix table.
+func zx8xKeyMap() map[fyne.KeyName][]keyMapping {
+	m := map[fyne.KeyName][]keyMapping{
+		// Row 0: SHIFT, Z, X, C, V
+		desktop.KeyShiftLeft:  {{0, 0x01}},
+		desktop.KeyShiftRight: {{0, 0x01}},
+		fyne.KeyZ:             {{0, 0x02}}, "z": {{0, 0x02}},
+		fyne.KeyX: {{0, 0x04}}, "x": {{0, 0x04}},
+		fyne.KeyC: {{0, 0x08}}, "c": {{0, 0x08}},
+		fyne.KeyV: {{0, 0x10}}, "v": {{0, 0x10}},
+		// Row 1: A, S, D, F, G
+		fyne.KeyA: {{1, 0x01}}, "a": {{1, 0x01}},
+		fyne.KeyS: {{1, 0x02}}, "s": {{1, 0x02}},
+		fyne.KeyD: {{1, 0x04}}, "d": {{1, 0x04}},
+		fyne.KeyF: {{1, 0x08}}, "f": {{1, 0x08}},
+		fyne.KeyG: {{1, 0x10}}, "g": {{1, 0x10}},
+		// Row 2: Q, W, E, R, T
+		fyne.KeyQ: {{2, 0x01}}, "q": {{2, 0x01}},
+		fyne.KeyW: {{2, 0x02}}, "w": {{2, 0x02}},
+		fyne.KeyE: {{2, 0x04}}, "e": {{2, 0x04}},
+		fyne.KeyR: {{2, 0x08}}, "r": {{2, 0x08}},
+		fyne.KeyT: {{2, 0x10}}, "t": {{2, 0x10}},
+		// Row 3: 1, 2, 3, 4, 5
+		fyne.Key1: {{3, 0x01}}, fyne.Key2: {{3, 0x02}}, fyne.Key3: {{3, 0x04}},
+		fyne.Key4: {{3, 0x08}}, fyne.Key5: {{3, 0x10}},
+		// Row 4: 0, 9, 8, 7, 6
+		fyne.Key0: {{4, 0x01}}, fyne.Key9: {{4, 0x02}}, fyne.Key8: {{4, 0x04}},
+		fyne.Key7: {{4, 0x08}}, fyne.Key6: {{4, 0x10}},
+		// Row 5: P, O, I, U, Y
+		fyne.KeyP: {{5, 0x01}}, "p": {{5, 0x01}},
+		fyne.KeyO: {{5, 0x02}}, "o": {{5, 0x02}},
+		fyne.KeyI: {{5, 0x04}}, "i": {{5, 0x04}},
+		fyne.KeyU: {{5, 0x08}}, "u": {{5, 0x08}},
+		fyne.KeyY: {{5, 0x10}}, "y": {{5, 0x10}},
+		// Row 6: NEWLINE, L, K, J, H
+		fyne.KeyReturn: {{6, 0x01}},
+		fyne.KeyL:      {{6, 0x02}}, "l": {{6, 0x02}},
+		fyne.KeyK: {{6, 0x04}}, "k": {{6, 0x04}},
+		fyne.KeyJ: {{6, 0x08}}, "j": {{6, 0x08}},
+		fyne.KeyH: {{6, 0x10}}, "h": {{6, 0x10}},
+		// Row 7: SPACE, ., M, N, B
+		fyne.KeySpace:  {{7, 0x01}},
+		fyne.KeyPeriod: {{7, 0x02}},
+		fyne.KeyM: {{7, 0x04}}, "m": {{7, 0x04}},
+		fyne.KeyN: {{7, 0x08}}, "n": {{7, 0x08}},
+		fyne.KeyB: {{7, 0x10}}, "b": {{7, 0x10}},
+		// Cursor keys: SHIFT + 5/6/7/8 (same arrow scheme as the Spectrum)
+		fyne.KeyLeft:  {{3, 0x10}, {0, 0x01}},
+		fyne.KeyDown:  {{4, 0x10}, {0, 0x01}},
+		fyne.KeyUp:    {{4, 0x08}, {0, 0x01}},
+		fyne.KeyRight: {{4, 0x04}, {0, 0x01}},
+
+		// RUBOUT (delete) and EDIT: SHIFT + 0 / SHIFT + 1.
+		fyne.KeyBackspace: {{4, 0x01}, {0, 0x01}}, // SHIFT + 0
+		fyne.KeyDelete:    {{4, 0x01}, {0, 0x01}}, // SHIFT + 0
+
+		// Symbols/operators. The ZX80/ZX81 have no dedicated symbol keys — each
+		// is SHIFT + a letter — so the host symbol keys map to those combos.
+		// Physical-key (fyne) constants for the unshifted symbols:
+		fyne.KeyEqual:        {{6, 0x02}, {0, 0x01}}, // = : SHIFT + L
+		fyne.KeyMinus:        {{6, 0x08}, {0, 0x01}}, // - : SHIFT + J
+		fyne.KeyComma:        {{7, 0x08}, {0, 0x01}}, // , : SHIFT + N
+		fyne.KeySemicolon:    {{0, 0x04}, {0, 0x01}}, // ; : SHIFT + X
+		fyne.KeySlash:        {{0, 0x10}, {0, 0x01}}, // / : SHIFT + V
+		fyne.KeyLeftBracket:  {{5, 0x04}, {0, 0x01}}, // ( : SHIFT + I
+		fyne.KeyRightBracket: {{5, 0x02}, {0, 0x01}}, // ) : SHIFT + O
+		fyne.KeyApostrophe:   {{5, 0x01}, {0, 0x01}}, // " : SHIFT + P
+		// Typed-rune variants for shifted characters that have no distinct fyne
+		// key constant (the constants above already cover = - , ; /).
+		"+":  {{6, 0x04}, {0, 0x01}}, // SHIFT + K
+		"*":  {{7, 0x10}, {0, 0x01}}, // SHIFT + B
+		":":  {{0, 0x02}, {0, 0x01}}, // SHIFT + Z
+		"?":  {{0, 0x08}, {0, 0x01}}, // SHIFT + C
+		"(":  {{5, 0x04}, {0, 0x01}}, // SHIFT + I
+		")":  {{5, 0x02}, {0, 0x01}}, // SHIFT + O
+		"$":  {{5, 0x08}, {0, 0x01}}, // SHIFT + U
+		"\"": {{5, 0x01}, {0, 0x01}}, // SHIFT + P
+		"<":  {{2, 0x02}, {0, 0x01}}, // SHIFT + W
+		">":  {{2, 0x04}, {0, 0x01}}, // SHIFT + E
+	}
+	return m
+}
+
 // SetNMICallback sets the callback function for NMI (Non-Maskable Interrupt)
 // This is used for Multiface red button simulation
 func (k *Keyboard) SetNMICallback(callback func()) {
