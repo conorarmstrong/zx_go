@@ -73,3 +73,30 @@ func TestModeDecoded(t *testing.T) {
 		t.Errorf("mode = %d, want continuous", d2.Mode())
 	}
 }
+
+// In continuous mode the transfer duration is charged to the CPU clock via the
+// cycle sink; in burst mode it is not (the CPU keeps running).
+func TestCycleSinkContinuousCharges(t *testing.T) {
+	var charged uint64
+	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
+	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 0)) // WR4 in withTiming = continuous
+	if charged != 8*(2+2) {
+		t.Errorf("continuous charged = %d, want %d", charged, 8*(2+2))
+	}
+}
+
+func TestCycleSinkBurstDoesNotCharge(t *testing.T) {
+	var charged uint64
+	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
+	// Burst-mode stream (WR4 0xCD = burst).
+	feed(d, []byte{0xC3, 0x7D, 0x00, 0x40, 0x08, 0x00, 0x14, 0x10,
+		0xCD, 0x00, 0x60, 0xCF, 0x87})
+	if charged != 0 {
+		t.Errorf("burst charged = %d, want 0 (CPU keeps running)", charged)
+	}
+	if d.Duration() == 0 {
+		t.Error("Duration should still be computed in burst mode")
+	}
+}

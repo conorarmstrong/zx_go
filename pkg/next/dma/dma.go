@@ -111,6 +111,12 @@ type DMA struct {
 	readMask byte
 	readIdx  int
 
+	// cycleSink, when set, is called with a continuous-mode transfer's T-state
+	// duration so the emulator can charge it to the CPU clock (the DMA stalls
+	// the CPU for that long). Burst mode does not charge — the CPU keeps
+	// running while the DMA waits between bytes.
+	cycleSink func(uint64)
+
 	// pending holds the setters for the follow bytes the most recent
 	// base byte announced; each subsequent WriteCommand consumes one.
 	pending []func(byte)
@@ -129,6 +135,10 @@ func New(mem MemoryBus) *DMA {
 
 // SetIOBus attaches the port bus used for IO endpoints. Optional.
 func (d *DMA) SetIOBus(io IOBus) { d.io = io }
+
+// SetCycleSink attaches the callback used to charge a continuous-mode
+// transfer's T-state duration to the CPU clock. Optional.
+func (d *DMA) SetCycleSink(sink func(uint64)) { d.cycleSink = sink }
 
 // WriteCommand accepts one byte of the port-0x6B command stream. Wired
 // via ULA.SetNextDMA / the routing in ULA.WritePort.
@@ -280,7 +290,8 @@ func (d *DMA) interruptControl() func(byte) {
 func (d *DMA) command(val byte) {
 	switch val {
 	case 0xC3: // RESET — clear configuration + state machine (keep the buses)
-		*d = DMA{mem: d.mem, io: d.io, aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
+		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink,
+			aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
 		d.loaded = true
 		d.curA = d.portAStart
@@ -330,6 +341,12 @@ func (d *DMA) Trigger() {
 		d.counter++
 	}
 	d.lastDuration = uint64(moved) * d.perByteCycles()
+	// Continuous mode stalls the CPU for the whole transfer; charge the time
+	// to the CPU clock. Burst mode lets the CPU run during the inter-byte
+	// waits, so it is not charged.
+	if d.mode == modeContinuous && d.cycleSink != nil {
+		d.cycleSink(d.lastDuration)
+	}
 	if d.autoRestart {
 		d.curA = d.portAStart
 		d.curB = d.portBStart

@@ -44,6 +44,16 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
+// dmaPortBus adapts the ULA's port dispatch to the zxnDMA's IOBus contract
+// (ReadPort returns a bare byte). Used for DMA IO endpoints.
+type dmaPortBus struct{ u *ula.ULA }
+
+func (b dmaPortBus) WritePort(port uint16, val byte) { b.u.WritePort(port, val) }
+func (b dmaPortBus) ReadPort(port uint16) byte {
+	v, _ := b.u.ReadPort(port)
+	return v
+}
+
 // nextMenuItem returns the Machine → "ZX Spectrum Next" entry.
 // Clicking it triggers an in-place model switch — the emulator
 // pauses, wires the Next bus on top of the existing CPU/memory/ULA
@@ -1338,6 +1348,14 @@ func wireNextSubsystems(e *emulator) error {
 	})
 	comp.SetFallbackColour(expandRGB332(0xE3)) // power-on default
 	u.SetNextDMA(dmaEngine)
+	// zxnDMA IO endpoints: a port configured as an IO endpoint (WR1/WR2 D3)
+	// transfers to/from a real port — sprite-image ($5B), Layer 2 ($253B),
+	// DAC, etc. Route those through the ULA's port dispatch.
+	dmaEngine.SetIOBus(dmaPortBus{u})
+	// Charge a continuous-mode transfer's T-state duration to the CPU clock so
+	// the DMA stalls the CPU for the right time (per-byte prescaler + cycle
+	// lengths). Burst mode is not charged (the CPU runs during the waits).
+	dmaEngine.SetCycleSink(func(n uint64) { cpu.SetTstates(cpu.Tstates() + n) })
 	// i2c DS1307 RTC on ports $103B/$113B (zxnext.vhd:2630/3234) —
 	// NextZXOS bit-bangs this bus for the menu's date/time line; with
 	// no slave the clock fetch fails every frame and the menu engine

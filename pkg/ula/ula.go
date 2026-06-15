@@ -214,9 +214,12 @@ type NextSpritePort interface {
 }
 
 // NextDMA is the contract for port 0x6B (zxnDMA command stream).
-// pkg/next/dma.DMA satisfies it via its WriteCommand method.
+// pkg/next/dma.DMA satisfies it: WriteCommand consumes the WR-register byte
+// stream; ReadCommand returns the next register in the read-mask sequence (an
+// IO read of port 0x6B).
 type NextDMA interface {
 	WriteCommand(val byte)
+	ReadCommand() byte
 }
 
 // NextI2C is the contract for the Spectrum Next's bit-banged i2c bus
@@ -762,6 +765,12 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	// wins those ports during a disk operation.
 	if u.betaClaims(addr) {
 		return u.beta.ReadPort(addr), true
+	}
+
+	// Port 0x6B: zxnDMA register read-back (status / byte counter / port
+	// addresses, selected by the read mask). Decoded on the low 8 bits.
+	if u.nextDMA != nil && (addr&0xFF) == 0x6B {
+		return u.nextDMA.ReadCommand(), true
 	}
 
 	// Multiface 3 paging-register readback. Per the FPGA source
