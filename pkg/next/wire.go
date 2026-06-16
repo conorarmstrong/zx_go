@@ -51,7 +51,8 @@ type EntryPointsSetter interface {
 }
 
 // WirePeripheral2 installs the NextReg 0x06 OnWrite handler.
-// NextReg 0x06 ("Peripheral 2 Setting") gates the AY chip selection,
+// NextReg 0x06 ("Peripheral 2 Setting") gates the AY audio-chip mode (bits
+// 1:0; 11 = hold all AY in reset — NOT a chip index, and bit 2 is PS/2 mode),
 // the DRIVE-button divMMC NMI, the M1-button Multiface NMI, the
 // F3 / F5-F8 hotkey enables, and the BEEP-to-internal-speaker
 // routing. It does NOT gate divMMC automap — that's NR$0A bit 4,

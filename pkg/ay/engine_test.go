@@ -17,6 +17,8 @@ func TestEngineDefaults(t *testing.T) {
 	}
 }
 
+// SelectChip (the TurboSound $FFFD protocol) picks the active chip; higher
+// values clamp to chip 2.
 func TestEngineSelectChip(t *testing.T) {
 	cases := []struct {
 		write byte
@@ -26,35 +28,52 @@ func TestEngineSelectChip(t *testing.T) {
 		{1, 1},
 		{2, 2},
 		{3, 2}, // clamp
+		{9, 2},
 	}
 	for _, c := range cases {
 		e := NewEngine()
-		e.Select(c.write)
+		e.SelectChip(c.write)
 		if e.Selected() != c.want {
-			t.Errorf("Select(%d): Selected = %d, want %d", c.write, e.Selected(), c.want)
+			t.Errorf("SelectChip(%d): Selected = %d, want %d", c.write, e.Selected(), c.want)
 		}
 	}
 }
 
-func TestEngineDisableBit(t *testing.T) {
-	e := NewEngine()
-	e.Select(0x04) // bit 2 set
-	if !e.Disabled() {
-		t.Errorf("Select(0x04): Disabled should be true")
-	}
-	if e.Selected() != 0 {
-		t.Errorf("Select(0x04): Selected = %d, want 0", e.Selected())
+// NextReg 0x06 audio-chip mode (bits 1-0): only 11 ("hold all AY in reset")
+// silences the engine. Crucially, bit 2 is PS/2 mode and must NOT disable AY —
+// NextZXOS sets it during boot, and reading it as "AY disable" muted 128K music
+// on the Next.
+func TestEngineAudioChipMode(t *testing.T) {
+	for _, c := range []struct {
+		val      byte
+		disabled bool
+		note     string
+	}{
+		{0x00, false, "YM mode active"},
+		{0x01, false, "AY mode active"},
+		{0x02, false, "ZXN-8950 active"},
+		{0x03, true, "hold all AY in reset"},
+		{0x04, false, "bit 2 = PS/2 mode, NOT AY-disable (the bug)"},
+		{0xA0, false, "reset default (bits 1-0 = 00)"},
+		{0xF8, false, "high bits set but bits 1-0 = 00 → active"},
+		{0xFF, true, "bits 1-0 = 11 → hold in reset, even with high bits set"},
+	} {
+		e := NewEngine()
+		e.Select(c.val)
+		if e.Disabled() != c.disabled {
+			t.Errorf("Select($%02X): Disabled = %v, want %v (%s)", c.val, e.Disabled(), c.disabled, c.note)
+		}
 	}
 }
 
 func TestEngineActiveTracksSelection(t *testing.T) {
 	e := NewEngine()
 	// Each chip is a distinct instance — Active() must return
-	// the right one as selection changes.
+	// the right one as the TurboSound selection changes.
 	a0 := e.Active()
-	e.Select(1)
+	e.SelectChip(1)
 	a1 := e.Active()
-	e.Select(2)
+	e.SelectChip(2)
 	a2 := e.Active()
 	if a0 == a1 || a1 == a2 || a0 == a2 {
 		t.Errorf("Active() returned the same chip across selections")
@@ -69,42 +88,31 @@ func TestEngineChipOutOfRange(t *testing.T) {
 }
 
 func TestEngineSelectRoundTrip(t *testing.T) {
-	// Walk through a NextZXOS-style sequence of NextReg 0x06
-	// writes and confirm each step lands in a sane state.
+	// The chip select (SelectChip / $FFFD) and the audio mode (Select / NR$06)
+	// are independent axes — a NR$06 write must never change the active chip.
 	e := NewEngine()
-
-	// Initially silent on chip 0, not disabled.
 	if e.Selected() != 0 || e.Disabled() {
 		t.Fatalf("initial state: selected=%d disabled=%v", e.Selected(), e.Disabled())
 	}
 
-	// Select chip 2 with disable bit set (val 0x06).
-	e.Select(0x06)
+	e.SelectChip(2)
+	e.Select(0x03) // hold all AY in reset
 	if e.Selected() != 2 || !e.Disabled() {
-		t.Errorf("after Select(0x06): selected=%d disabled=%v, want 2/true",
+		t.Errorf("after SelectChip(2)+Select(0x03): selected=%d disabled=%v, want 2/true",
 			e.Selected(), e.Disabled())
 	}
 
-	// Re-enable + select chip 0 (val 0x00). State must fully
-	// reset on both axes.
-	e.Select(0x00)
-	if e.Selected() != 0 || e.Disabled() {
-		t.Errorf("after Select(0x00): selected=%d disabled=%v, want 0/false",
-			e.Selected(), e.Disabled())
-	}
-
-	// Out-of-range chip-select with disable bit set — verify the
-	// clamp doesn't accidentally clear the disable flag.
-	e.Select(0x07)
-	if e.Selected() != 2 || !e.Disabled() {
-		t.Errorf("after Select(0x07) clamp: selected=%d disabled=%v, want 2/true",
+	e.Select(0x00) // YM active — must re-enable WITHOUT touching the chip
+	if e.Selected() != 2 || e.Disabled() {
+		t.Errorf("after Select(0x00): selected=%d disabled=%v, want 2/false",
 			e.Selected(), e.Disabled())
 	}
 }
 
 func TestEngineResetClears(t *testing.T) {
 	e := NewEngine()
-	e.Select(0x06) // chip 2, disabled
+	e.SelectChip(2)
+	e.Select(0x03) // chip 2, disabled
 	e.Reset()
 	if e.Selected() != 0 {
 		t.Errorf("after Reset: Selected = %d, want 0", e.Selected())
@@ -125,13 +133,13 @@ func TestEngineResetClears(t *testing.T) {
 func TestEngineResetClearsAllChips(t *testing.T) {
 	e := NewEngine()
 	for i := 0; i < 3; i++ {
-		e.Select(byte(i))
+		e.SelectChip(byte(i))
 		c := e.Active()
 		c.WriteRegister(RegToneALow, byte(0xAA+i))
 	}
 	e.Reset()
 	for i := 0; i < 3; i++ {
-		e.Select(byte(i))
+		e.SelectChip(byte(i))
 		if got := e.Active().ReadRegister(RegToneALow); got != 0 {
 			t.Errorf("chip %d after Reset: ToneALow = $%02X, want 0", i, got)
 		}
@@ -177,13 +185,13 @@ func TestEngineSetChip_Replaces(t *testing.T) {
 	}
 }
 
-// TestEngineSelectMaskedToLowBits verifies bits 7:3 are ignored on
-// Select (only bits 2:0 used: bit 2 = disable, bits 1:0 = chip).
-func TestEngineSelectMaskedToLowBits(t *testing.T) {
+// TestEngineSelectOnlyBits10Matter verifies Select only consults NR$06 bits
+// 1-0 (the audio chip mode); all other bits — including bit 2 (PS/2) — are
+// irrelevant to whether AY is silenced.
+func TestEngineSelectOnlyBits10Matter(t *testing.T) {
 	e := NewEngine()
-	e.Select(0xF8) // bits 7:3 set, bits 2:0 = 000
-	if e.Selected() != 0 || e.Disabled() {
-		t.Errorf("Select($F8): Selected=%d Disabled=%v, want 0/false (bits 7:3 ignored)",
-			e.Selected(), e.Disabled())
+	e.Select(0xFC) // bits 1-0 = 00 (YM, active); every other bit set
+	if e.Disabled() {
+		t.Errorf("Select($FC): bits 1-0 == 00 should be active regardless of other bits")
 	}
 }

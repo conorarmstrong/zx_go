@@ -39,7 +39,7 @@ func TestEngineMixIntoDisabledIsSilent(t *testing.T) {
 	ch.WriteRegister(7, 0x3E)
 	ch.WriteRegister(8, 0x0F)
 
-	e.Select(0x04) // bit 2 set → disabled
+	e.Select(0x03) // bits 1-0 = 11 → hold all AY in reset (disabled)
 	buf := make([]int16, 1024)
 	e.MixInto(buf)
 	if nonSilent(buf) {

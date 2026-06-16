@@ -29,8 +29,8 @@ func TestPort0xFFFDRoutesToEngineActiveChip(t *testing.T) {
 	}
 
 	// Switch to chip 2 and write again — only chip 2's register
-	// should now move.
-	engine.Select(2)
+	// should now move. (Chip select is the TurboSound mechanism, not NR$06.)
+	engine.SelectChip(2)
 	u.WritePort(0xFFFD, 7) // mixer register
 	if engine.Chip(2).Selected() != 7 {
 		t.Errorf("chip 2 register after switch + FFFD write = %d, want 7", engine.Chip(2).Selected())
@@ -45,7 +45,7 @@ func TestEngineDisabledDropsAYWrites(t *testing.T) {
 	engine := ay.NewEngine()
 	u.SetNextAY(engine)
 
-	engine.Select(0x04) // bit 2 = disable AY
+	engine.Select(0x03) // NR$06 bits 1-0 = 11: hold all AY in reset (disabled)
 	u.WritePort(0xFFFD, 14)
 	// All three chips should be untouched.
 	for i := 0; i < 3; i++ {

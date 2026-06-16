@@ -22,25 +22,36 @@ func NewEngine() *Engine {
 	}
 }
 
-// Select sets the active chip from a NextReg 0x06 byte. The
-// low 2 bits give the chip index (0..2); a value of 3 is clamped
-// to chip 2. Bit 2 disables AY entirely (the engine still routes
-// reads / writes but mixing-side code can use Disabled() to skip
-// sample generation).
+// Select applies a NextReg 0x06 ("Peripheral 2") write. Per the FPGA spec,
+// bits 1-0 are the AUDIO CHIP MODE (00 = YM, 01 = AY, 10 = ZXN-8950,
+// 11 = hold all AY in reset) and bit 2 is PS/2 mode — NOT AY-related. So only
+// "hold all AY in reset" (bits 1-0 == 11) silences the engine; YM/AY/8950 are
+// all active (we model AY behaviour for each). NR$06 does NOT select which
+// TurboSound chip is active — that is SelectChip, driven by the $FFFD
+// chip-select protocol.
+//
+// (The earlier code read bit 2 as "AY disable" and bits 1-0 as a chip index;
+// NextZXOS sets bit 2 for PS/2 during boot, which then wrongly muted all AY —
+// e.g. 128K music under the Next's 128K persona.)
 func (e *Engine) Select(val byte) {
-	idx := val & 0x03
+	e.disabled = val&0x03 == 0x03
+}
+
+// SelectChip sets the active TurboSound chip (0..2), clamping higher values.
+// Driven by the $FFFD chip-select protocol (write 0xFF/0xFE/0xFD to select
+// chip 0/1/2), not by NextReg 0x06.
+func (e *Engine) SelectChip(idx byte) {
 	if idx > 2 {
 		idx = 2
 	}
 	e.selected = idx
-	e.disabled = val&0x04 != 0
 }
 
 // Selected returns the active chip index (0..2).
 func (e *Engine) Selected() byte { return e.selected }
 
-// Disabled reports whether NextReg 0x06 bit 2 is set, suppressing
-// AY output system-wide.
+// Disabled reports whether AY output is suppressed (NextReg 0x06 bits 1-0 == 11,
+// "hold all AY in reset").
 func (e *Engine) Disabled() bool { return e.disabled }
 
 // Active returns the currently-selected chip. Port writes through

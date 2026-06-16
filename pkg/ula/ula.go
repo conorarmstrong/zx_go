@@ -1217,6 +1217,12 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 				})
 			}
 		}
+	} else if u.nextAY != nil && (addr&0xC002) == 0xC000 && val >= 0xFD {
+		// Spectrum Next TurboSound chip select: writing 0xFF/0xFE/0xFD to
+		// port 0xFFFD selects AY chip 0/1/2 (chip = 0xFF - val). Register
+		// selects are 0x00-0x0F, so there is no overlap. (NextReg 0x06 does
+		// NOT select the chip.)
+		u.nextAY.SelectChip(0xFF - val)
 	} else if chip := u.activeAY(); chip != nil && (addr&0xC002) == 0xC000 {
 		// AY-3-8912 register select: port 0xFFFD on 128K+ models.
 		// Decoded as A15=1, A14=1, A1=0.

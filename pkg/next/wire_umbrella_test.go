@@ -96,11 +96,16 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 		t.Errorf("after NextReg 0x50=0x42: MMU slot 0 = %#x, want 0x42", mem.GetMMU(0))
 	}
 
-	// 0x06: AY chip select
+	// 0x06: AY audio-chip mode (bits 1-0). Only 11 = "hold all AY in reset"
+	// disables; bit 2 is PS/2, NOT AY-disable. (It does not select the chip.)
 	disp.Select(0x06)
-	disp.WriteData(0x02)
-	if engine.Selected() != 2 {
-		t.Errorf("after NextReg 0x06=0x02: engine.Selected = %d, want 2", engine.Selected())
+	disp.WriteData(0x03) // bits 1-0 = 11 → hold AY in reset
+	if !engine.Disabled() {
+		t.Errorf("after NextReg 0x06=0x03: engine should be disabled (hold in reset)")
+	}
+	disp.WriteData(0x04) // bit 2 = PS/2 mode, bits 1-0 = 00 → AY active again
+	if engine.Disabled() {
+		t.Errorf("after NextReg 0x06=0x04: bit 2 is PS/2, must NOT disable AY")
 	}
 
 	// 0x12: Layer 2 active bank
@@ -259,8 +264,8 @@ func TestWirePalette44StateMachine(t *testing.T) {
 	disp.Select(0x44)
 
 	pairs := []struct {
-		hi, lo  byte
-		want    uint16
+		hi, lo byte
+		want   uint16
 	}{
 		{0xFF, 0x01, 0x01FF},
 		{0x80, 0x00, 0x100},
