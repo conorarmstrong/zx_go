@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.2]
+
+Fixes **AY music on the Spectrum Next** — 128K games (e.g. Renegade) run under
+the Next's 128K persona now play their music.
+
+### Fixed
+- **AY music was silent on the Spectrum Next** (e.g. a 128K game like Renegade
+  run under the Next's 128K persona). Two bugs:
+  1. **NextReg `$06` was misread.** `$06` ("Peripheral 2") bits 1-0 are the
+     audio chip mode (00 YM / 01 AY / 10 ZXN-8950 / **11 = hold all AY in
+     reset**) and **bit 2 is PS/2 mode** — but `engine.Select` read bit 2 as
+     "AY disable" and bits 1-0 as a chip index. NextZXOS sets bit 2 (PS/2)
+     during boot, which then muted all AY. Now only bits 1-0 == 11 silences the
+     engine, and the TurboSound chip select moves to the `$FFFD` protocol
+     (write `$FF`/`$FE`/`$FD` to select chip 0/1/2, new `Engine.SelectChip`).
+  2. **The engine was never mixed into audio.** `$FFFD`/`$BFFD` writes route to
+     the engine's active chip, but the mixer was still fed the classic single
+     `u.ay`, so the generated music was never heard. The engine now satisfies
+     the audio AY source (new `Engine.MixInto` sums its TurboSound chips) and is
+     wired into the mixer on the Next (and re-wired across reset).
+
+  Classic 128K AY is unchanged.
+
 ## [v1.2.1]
 
 Adds the **test/evidence layer**: an automated real-software compatibility
@@ -25,23 +48,7 @@ tests can't provide (the Renegade-128K tape failure passed every test).
   fuzzing (`-fuzz`) found no panics across millions of executions, so the
   parsers reject hostile/corrupt input cleanly rather than crashing.
 
-### Fixed
-- **AY music was silent on the Spectrum Next** (e.g. a 128K game like Renegade
-  run under the Next's 128K persona). Two bugs:
-  1. **NextReg `$06` was misread.** `$06` ("Peripheral 2") bits 1-0 are the
-     audio chip mode (00 YM / 01 AY / 10 ZXN-8950 / **11 = hold all AY in
-     reset**) and **bit 2 is PS/2 mode** — but `engine.Select` read bit 2 as
-     "AY disable" and bits 1-0 as a chip index. NextZXOS sets bit 2 (PS/2)
-     during boot, which then muted all AY. Now only bits 1-0 == 11 silences the
-     engine, and the TurboSound chip select moves to the `$FFFD` protocol
-     (write `$FF`/`$FE`/`$FD` to select chip 0/1/2, new `Engine.SelectChip`).
-  2. **The engine was never mixed into audio.** `$FFFD`/`$BFFD` writes route to
-     the engine's active chip, but the mixer was still fed the classic single
-     `u.ay`, so the generated music was never heard. The engine now satisfies
-     the audio AY source (new `Engine.MixInto` sums its TurboSound chips) and is
-     wired into the mixer on the Next (and re-wired across reset).
-
-  Classic 128K AY is unchanged.
+## [v1.2.0]
 
 Adds the **Sinclair ZX80 and ZX81** and the **Pentagon 128** as supported
 machines, the **TR-DOS / Beta Disk** interface, **quick save/load** state
