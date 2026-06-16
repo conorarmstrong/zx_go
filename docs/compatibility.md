@@ -207,3 +207,42 @@ This manifest is the cheapest credibility lever in the project: a
 title list with verified statuses is more useful than any number
 of internal benchmarks for telling a prospective user "yes, this
 works for what you want to do".
+
+## Automated compatibility corpus
+
+`TestCompatibilityCorpus` (in `cmd/zx_go`) turns this manifest into an
+automated regression guard: it loads a real title headless, drives it to
+its title/menu screen, and asserts the rendered screen matches a recorded
+golden hash over a settle window. This catches "a real game silently
+stopped loading" — the class of bug a mechanism-level unit test passes
+straight through (e.g. the Renegade-128K tape failure).
+
+Game files are copyrighted and **not** committed. Point the corpus at a
+folder holding them (titles whose files are absent skip, so CI stays
+green):
+
+```bash
+# Run the corpus against your own game folder
+ZX_GO_CORPUS=/path/to/games go test ./cmd/zx_go/ -run TestCompatibilityCorpus -v
+
+# Record/refresh a title's golden screen hash (new title, or intended
+# rendering change)
+ZX_GO_CORPUS_UPDATE=1 ZX_GO_CORPUS=/path/to/games \
+  go test ./cmd/zx_go/ -run TestCompatibilityCorpus -v
+```
+
+To add a title, append a `corpusTitle` to the table in `corpus_test.go`
+(file, model, load type, key schedule, frame count) and record its golden.
+
+## Loader fuzzing
+
+The file parsers are fuzzed (Go native fuzzing) so corrupt or hostile
+input is rejected, never crashes:
+
+```bash
+go test ./pkg/snapshot/ -run x -fuzz FuzzLoadBytes -fuzztime 60s   # .sna/.z80/.szx
+go test ./pkg/betadisk/ -run x -fuzz FuzzLoadImage -fuzztime 60s   # .trd
+go test ./pkg/ula/      -run x -fuzz FuzzLoadTAP  -fuzztime 60s    # .tap (+ FuzzLoadTZX)
+```
+
+The seed corpora run as part of the normal `go test ./...`.

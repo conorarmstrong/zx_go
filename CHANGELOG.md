@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.1]
+
+Adds the **test/evidence layer**: an automated real-software compatibility
+corpus and loader fuzzing — the regression guard the mechanism-level unit
+tests can't provide (the Renegade-128K tape failure passed every test).
+
+### Added
+- **Compatibility corpus** (`cmd/zx_go` `TestCompatibilityCorpus`) — loads real
+  software headless, drives it to its title/menu screen, and asserts the screen
+  matches a recorded golden over a settle window (robust to the odd transient
+  frame). It catches "a real game silently stopped loading" — exactly the class
+  of bug the Renegade-128K tape failure was. Game files are copyrighted and not
+  committed; point it at a folder with `ZX_GO_CORPUS` (titles whose files are
+  absent skip, so CI stays green), and record goldens with
+  `ZX_GO_CORPUS_UPDATE=1`. Seeded with Renegade 128K. See `docs/compatibility.md`.
+- **Loader fuzzing** — Go native fuzz targets for the snapshot (`FuzzLoadBytes`
+  — .sna/.z80/.szx), TR-DOS image (`FuzzLoadImage`), and tape (`FuzzLoadTAP` /
+  `FuzzLoadTZX`) parsers. Their seed corpora run in the normal suite; extended
+  fuzzing (`-fuzz`) found no panics across millions of executions, so the
+  parsers reject hostile/corrupt input cleanly rather than crashing.
+
 ## [v1.2.0]
 
 Adds the **Sinclair ZX80 and ZX81** and the **Pentagon 128** as supported
