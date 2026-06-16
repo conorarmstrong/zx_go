@@ -415,7 +415,21 @@ func (u *ULA) GetPortTracer() PortTracer { return u.portTracer }
 // When set, port 0xFFFD / 0xBFFD traffic dispatches to the
 // currently-active chip per NextReg 0x06's chip-select. Passing
 // nil restores the single-AY routing.
-func (u *ULA) SetNextAY(e *ay.Engine) { u.nextAY = e }
+func (u *ULA) SetNextAY(e *ay.Engine) {
+	u.nextAY = e
+	// Route the engine into the audio mixer so its (TurboSound) chips are
+	// actually heard. Without this the mixer kept pulling from the single
+	// u.ay — a chip the Next's port writes never reach — so 128K/AY music was
+	// silent on the Next. SetNextAY runs after EnableAudio during Next setup,
+	// so this is where the swap has to happen.
+	if u.audio != nil {
+		if e != nil {
+			u.audio.SetAY(e)
+		} else if u.ay != nil {
+			u.audio.SetAY(u.ay)
+		}
+	}
+}
 
 // activeAY returns the AY chip that should currently service port
 // 0xFFFD / 0xBFFD traffic. On ModelNext with an Engine wired, this
@@ -1361,7 +1375,12 @@ func (u *ULA) EnableAudio() {
 		return
 	}
 	u.audio = audioSys
-	if u.ay != nil {
+	// Prefer the Next's multi-chip AY engine when wired; otherwise the classic
+	// single AY. (On the Next, SetNextAY usually runs after this and re-wires
+	// it anyway, but handle the already-wired order too.)
+	if u.nextAY != nil {
+		u.audio.SetAY(u.nextAY)
+	} else if u.ay != nil {
 		u.audio.SetAY(u.ay)
 	}
 	// The Spectrum Next DAC (ModelNext) is mixed event-timed in flushAudioFrame
@@ -1447,11 +1466,20 @@ func (u *ULA) Reset() {
 	if u.mem.GetCurrentModel() != roms.Model48K {
 		if u.ay == nil {
 			u.ay = ay.New()
-			if u.audio != nil {
-				u.audio.SetAY(u.ay)
-			}
 		} else {
 			u.ay.Reset()
+		}
+		if u.nextAY != nil {
+			u.nextAY.Reset() // reset all TurboSound chips (incl. chip 0 == u.ay)
+		}
+		// Keep the mixer pointed at the engine on the Next (chip 0 == u.ay), or
+		// the single AY otherwise — so AY music survives a reset/reboot.
+		if u.audio != nil {
+			if u.nextAY != nil {
+				u.audio.SetAY(u.nextAY)
+			} else {
+				u.audio.SetAY(u.ay)
+			}
 		}
 	} else {
 		if u.ay != nil {

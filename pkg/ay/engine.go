@@ -68,6 +68,27 @@ func (e *Engine) SetChip(i int, c *AY) {
 	e.chips[i] = c
 }
 
+// MixInto sums all three TurboSound chips into buf, so the Engine satisfies the
+// audio system's AY source (audio.AYSource). Each AY.MixInto adds (saturating)
+// its own contribution, so silent chips (no registers written) contribute
+// nothing — making this correct for a plain 128K (only chip 0 used) as well as
+// TurboSound. When AY output is disabled (NextReg 0x06 bit 2) nothing is mixed.
+//
+// This is what makes 128K/AY music audible on the Next: port writes route to
+// engine.Active(), but the audio mixer must pull from the engine — feeding it
+// the ULA's single u.ay (as the classic path did) mixes a chip the Next never
+// writes to, so the music was silent.
+func (e *Engine) MixInto(buf []int16) {
+	if e.disabled {
+		return
+	}
+	for _, c := range e.chips {
+		if c != nil {
+			c.MixInto(buf)
+		}
+	}
+}
+
 // Reset reinitialises all three chips and selects chip 0.
 func (e *Engine) Reset() {
 	for _, c := range e.chips {
