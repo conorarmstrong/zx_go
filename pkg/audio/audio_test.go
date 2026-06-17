@@ -121,22 +121,37 @@ func TestPushAndPopRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPopUnderflowHoldsLastSample verifies that when the queue is
-// drained and more samples are requested than available, the unfilled
-// slots hold the last delivered value (DC) rather than zero/garbage —
-// this is what prevents the audio system from clicking on underrun.
-func TestPopUnderflowHoldsLastSample(t *testing.T) {
+// TestPopUnderflowDecaysToSilence verifies that when the queue is drained
+// and more samples are requested than available, the unfilled slots continue
+// from the last delivered value (so there's no jump into the underrun) and
+// then decay toward 0. A sustained underrun must reach ~silence rather than
+// hold a flat DC plateau — holding flat DC is what clicked when the signal
+// stepped back on resume.
+func TestPopUnderflowDecaysToSilence(t *testing.T) {
 	as := fakeSystem()
 	as.PushBeeperSamples([]int16{100, 200, 300})
 
 	out := make([]int16, 6)
 	as.popBeeperSamples(out)
 
-	want := []int16{100, 200, 300, 300, 300, 300} // last sample held
-	for i := range want {
-		if out[i] != want[i] {
-			t.Errorf("sample %d: got %d, want %d", i, out[i], want[i])
-		}
+	// Real samples drain first; the first underrun slot continues from the
+	// last real sample (continuous — no step into the gap).
+	if out[0] != 100 || out[1] != 200 || out[2] != 300 {
+		t.Fatalf("drained samples = %v, want [100 200 300 ...]", out[:3])
+	}
+	if out[3] != 300 {
+		t.Errorf("first underrun slot = %d, want 300 (continuous with last real sample)", out[3])
+	}
+	// Then it decays toward 0 (strictly shrinking, no flat plateau).
+	if out[4] >= out[3] || out[5] >= out[4] {
+		t.Errorf("underrun not decaying toward silence: %v", out[3:])
+	}
+
+	// A long underrun must fade essentially to silence.
+	long := make([]int16, 4000)
+	as.popBeeperSamples(long)
+	if v := long[len(long)-1]; v < -2 || v > 2 {
+		t.Errorf("after a long underrun, tail = %d, want ~0 (faded to silence)", v)
 	}
 }
 

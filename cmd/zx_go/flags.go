@@ -147,6 +147,24 @@ type cliFlags struct {
 	// step traces. Also reduces CPU overhead for headless runs.
 	noSound bool
 
+	// recordAudio, when non-empty, begins WAV capture of the mixed
+	// audio output at startup (the exact stream sent to the device).
+	// A diagnostic for audio artefacts (clicks/pops) that only appear
+	// in the live GUI: the captured file is ground truth for what we
+	// emit, independent of the host's Core Audio / speaker behaviour.
+	recordAudio string
+
+	// audioKeepAlive overrides the sub-audible keep-alive dither level
+	// (peak amplitude in 16-bit units) that stops the host audio amp
+	// powering down during silence and popping on the next sound. -1
+	// means "use the built-in default"; 0 disables it.
+	audioKeepAlive int
+
+	// audioDCBlock toggles the audio DC-blocking high-pass. On by default
+	// (removes the idle DC rail / battery-click); --audio-dc-block=false
+	// emits raw ±beeper levels — an A/B diagnostic for beeper-audio fidelity.
+	audioDCBlock bool
+
 	// warmBoot opts INTO the captured-reference-state warm-boot path,
 	// which bypasses the real FPGA bootrom → TBBLUE.FW → NextZXOS
 	// chain and loads pre-captured CPU/RAM/NextRegs state directly.
@@ -287,6 +305,9 @@ func parseCLI() *cliFlags {
 		debuggerPause       = flag.Bool("debugger-pause-at-start", false, "When --debugger-port is set, start with the CPU paused so breakpoints can be set before any instruction runs")
 		captureNextSnapshot = flag.String("capture-next-snapshot", "", "Capture warm-boot snapshot from a running reference Next emulator. Argument is HOST:PORT (e.g. localhost:10000) — connect to its ZRCP. Captures the full Machine RAM (2 MB) + all 256 NextRegs + CPU registers; writes them into the install dir for zx_go to use on subsequent boots. Exits when done. See docs/spectrum-next.md for the procedure.")
 		noSound             = flag.Bool("no-sound", false, "Mute audio output (no oto context, no beeper / AY / DAC mix). Useful during long debugger sessions where the beeper sings under step traces, and for headless runs that don't need audio.")
+		recordAudio         = flag.String("record-audio", "", "Capture the mixed audio output to this WAV path from startup (the exact stream sent to the device). Diagnostic for clicks/pops that only appear live — the file is ground truth for what we emit.")
+		audioKeepAlive      = flag.Int("audio-keepalive-level", -1, "Peak amplitude (16-bit units, out of 32767) of the keep-alive dither that stops the macOS speaker amp powering down during silence and popping on the next sound. -1 = built-in default (off); set e.g. 16/24 to enable if the startup/load pop bothers you (trades a faint noise floor).")
+		audioDCBlock        = flag.Bool("audio-dc-block", true, "Apply the DC-blocking high-pass to audio output (removes the idle DC rail / 'battery click'). Use --audio-dc-block=false to emit raw beeper levels — an A/B diagnostic for beeper-audio fidelity.")
 		sdWriteback         = flag.Bool("sd-writeback", false, "Persist guest writes on the mounted SD image back to the image file at exit (previous file kept as .bak). Default: writes live in RAM only.")
 		warmBoot            = flag.Bool("warm-boot", false, "Opt INTO the captured-reference-state warm-boot path (DEBUG SHORTCUT — bypasses real FPGA bootrom → NextZXOS chain). Default is the real cold-boot path. Requires the warm-boot snapshot files to be installed; capture via --capture-next-snapshot.")
 		nextBisect          = flag.String("next-bisect", "", "DEV: first-divergence bisection of our Next boot vs a live reference emulator, then exit. Format: 'anchorPC,lo,hi,refEmuDir,sdImage' (anchorPC hex, e.g. $3E00). Compares SP+regs+MMU8 at the n-th hit of anchorPC, kill+relaunching the reference emulator per probe.")
@@ -407,6 +428,9 @@ func parseCLI() *cliFlags {
 	f.debuggerPauseAtStart = *debuggerPause
 	f.captureNextSnapshot = *captureNextSnapshot
 	f.noSound = *noSound
+	f.recordAudio = *recordAudio
+	f.audioKeepAlive = *audioKeepAlive
+	f.audioDCBlock = *audioDCBlock
 	f.warmBoot = *warmBoot
 	f.sdWriteback = *sdWriteback
 	f.nextBisect = *nextBisect

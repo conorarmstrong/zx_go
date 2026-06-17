@@ -68,6 +68,12 @@ const (
 	// tape load into ~10 s of wall-clock without starving the UI thread
 	// (the emulation core sustains well over 64 frames per 20 ms tick).
 	tapeTurboFramesPerTick = 64
+
+	// tapeLoadReadThreshold is the per-frame port-$FE read count above which
+	// the CPU is considered to be in a tape loader's edge-timing loop (which
+	// polls $FE thousands of times per frame) rather than a running game
+	// (which reads it only sparsely, for the keyboard). Gates fast-load turbo.
+	tapeLoadReadThreshold = 500
 )
 
 // frameTStatesForModel returns the ULA frame length in 3.5 MHz T-states
@@ -126,6 +132,13 @@ type emulator struct {
 	// turbo loaders go through the edge-timed ROM/loader loop, which can't be
 	// trap-accelerated) finishes in seconds. Toggled from the Tape menu.
 	fastTape atomic.Bool
+
+	// tapeReadActive tracks whether the previous tick saw a tape-loader-like
+	// rate of port-$FE reads. Turbo only engages while this holds, so once a
+	// game stops loading and starts running (e.g. its menu), turbo disengages
+	// and the game runs at normal speed with audio — even if the tape still
+	// has blocks queued for a later multi-load stage.
+	tapeReadActive bool
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -539,6 +552,7 @@ func loadDiscipleDisk(emu *emulator, w fyne.Window, drive int) {
 			dialog.ShowError(fmt.Errorf("failed to load disk: %w", err), w)
 			return
 		}
+		slog.Info("disk inserted", "interface", "DISCiPLE", "drive", drive+1, "path", path)
 		dialog.ShowInformation("Disk Loaded",
 			"Inserted "+filepath.Base(path)+" into DISCiPLE drive "+fmt.Sprintf("%d", drive+1)+".", w)
 	}, w)
@@ -576,6 +590,7 @@ func loadPlus3Disk(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel
 		if drive == 1 {
 			driveName = "B"
 		}
+		slog.Info("disk inserted", "interface", "+3", "drive", driveName, "path", path)
 		dialog.ShowInformation("Disk Loaded",
 			"Inserted "+filepath.Base(path)+" into drive "+driveName+".", w)
 	}, w)
@@ -617,6 +632,7 @@ func loadTRDDisk(emu *emulator, w fyne.Window, drive int) {
 		if drive == 1 {
 			driveName = "B"
 		}
+		slog.Info("disk inserted", "interface", "TR-DOS", "drive", driveName, "path", path)
 		dialog.ShowInformation("TR-DOS Disk Loaded",
 			"Inserted "+filepath.Base(path)+" into TR-DOS drive "+driveName+".\n"+
 				"From BASIC, enter TR-DOS with: RANDOMIZE USR 15616  (or the 128 menu).", w)
@@ -669,6 +685,7 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	// Initialize audio unless --no-sound was passed
 	if cliFlagsActive == nil || !cliFlagsActive.noSound {
 		ula.EnableAudio()
+		configureAudioExtras(ula)
 	} else {
 		slog.Info("--no-sound: audio disabled")
 	}
@@ -708,6 +725,33 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	e.paused.Store(true)
 	e.fastTape.Store(true) // accelerate tape loading by default
 	return e, nil
+}
+
+// configureAudioExtras applies post-EnableAudio CLI options: the keep-alive
+// dither level override and startup WAV capture.
+func configureAudioExtras(u *ula.ULA) {
+	if cliFlagsActive != nil && cliFlagsActive.audioKeepAlive >= 0 {
+		u.SetAudioKeepAliveLevel(int16(cliFlagsActive.audioKeepAlive))
+	}
+	if cliFlagsActive != nil {
+		u.SetDCBlockEnabled(cliFlagsActive.audioDCBlock)
+	}
+	maybeStartAudioRecording(u)
+}
+
+// maybeStartAudioRecording begins WAV capture at startup when
+// --record-audio <path> was supplied. The captured file is the exact
+// mixed mono stream we hand to the audio device, so it's ground truth for
+// diagnosing clicks/pops that only manifest live.
+func maybeStartAudioRecording(u *ula.ULA) {
+	if cliFlagsActive == nil || cliFlagsActive.recordAudio == "" {
+		return
+	}
+	if err := u.StartRecording(cliFlagsActive.recordAudio); err != nil {
+		slog.Error("--record-audio: failed to start recording", "path", cliFlagsActive.recordAudio, "err", err)
+		return
+	}
+	slog.Info("--record-audio: capturing mixed audio output", "path", cliFlagsActive.recordAudio)
 }
 
 // tapeLoadingActive reports whether a tape is mid-load (playing with blocks
@@ -926,15 +970,39 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						// and can't be trap-accelerated) finishes in seconds
 						// instead of minutes. Rendering still happens at 50 Hz.
 						n := 1
-						if e.fastTape.Load() && e.tapeLoadingActive() {
+						// Turbo only while a loader is actively reading tape
+						// edges (high $FE read rate last tick) — not merely while
+						// the tape has blocks left. Otherwise a multi-load game
+						// keeps running at 64x at its menu (rapid attract cycling)
+						// with audio muted.
+						turbo := e.fastTape.Load() && e.tapeLoadingActive() && e.tapeReadActive
+						if turbo {
 							n = tapeTurboFramesPerTick
 						}
+						// During turbo, 64 emulated frames collapse into one audio
+						// frame, so the reconstructed loading sound is garbled —
+						// mute it (the real screech is available at normal speed).
+						if e.ula != nil {
+							e.ula.SetFastLoad(turbo)
+						}
+						heavyReads := false
 						for k := 0; k < n; k++ {
+							var before uint64
+							if e.ula != nil {
+								before = e.ula.FEReadCount()
+							}
 							e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
+							if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
+								heavyReads = true
+							}
 							if k+1 < n && e.peripherals != nil {
 								e.peripherals.Frame()
 							}
 						}
+						// Drive next tick's turbo decision from this tick's read
+						// rate. The first loading tick runs at 1x (n=1) and sees
+						// the heavy reads, so turbo engages on the next tick.
+						e.tapeReadActive = heavyReads
 					}
 
 					frameCount++
@@ -2332,6 +2400,27 @@ func main() {
 		dialog.ShowInformation("Model Changed", fmt.Sprintf("Successfully switched to %s\n\nThe emulator has been automatically rebooted with the new ROM.", roms.GetModelName(currentModel)), w)
 	}
 
+	// ensureModelForSnapshot puts the machine on a stock 128K before applying
+	// a plain 128K snapshot loaded from a user file, when the current model
+	// can't run one as-is:
+	//   - 48K has no bank paging at all, so the banks can't be placed;
+	//   - +2A/+3 use a different paging scheme (port $1FFD) that a plain 128K
+	//     snapshot doesn't carry, so it pages wrongly and crashes a few
+	//     seconds in.
+	// 128K/+2/Pentagon already page a 128K snapshot correctly, so they're left
+	// alone. Reuses the fully-wired model switch (ROM reload + AY re-wire).
+	// Only file loads need this; in-session restores (RZX/quick-save) already
+	// match the running model.
+	ensureModelForSnapshot := func(snap *snapshot.Snapshot) {
+		if !snap.Memory.Is128K {
+			return
+		}
+		switch emu.mem.GetCurrentModel() {
+		case roms.Model48K, roms.ModelPlus2A, roms.ModelPlus3:
+			switchModel(roms.Model128K)
+		}
+	}
+
 	// loadFileByPath auto-detects file type by extension and routes
 	// to the appropriate loader. Used by the unified "Open File..."
 	// menu item, the Recent submenu, and the drag-and-drop window
@@ -2358,6 +2447,7 @@ func main() {
 			}
 			emu.ula.SetTapePlayer(tp)
 			tp.Play()
+			slog.Info("tape loaded", "format", "TAP", "blocks", tp.BlockCount(), "path", path)
 			return "tape", nil
 		case ".tzx":
 			tp := ula.NewTapePlayer()
@@ -2366,15 +2456,18 @@ func main() {
 			}
 			emu.ula.SetTapePlayer(tp)
 			tp.Play()
+			slog.Info("tape loaded", "format", "TZX", "blocks", tp.BlockCount(), "path", path)
 			return "tape", nil
 		case ".z80", ".sna", ".szx":
 			snap := snapshot.New()
 			if err := snap.Load(path); err != nil {
 				return "", fmt.Errorf("load snapshot: %w", err)
 			}
+			ensureModelForSnapshot(snap)
 			if err := applySnapshotToEmulator(emu, snap); err != nil {
 				return "", fmt.Errorf("apply snapshot: %w", err)
 			}
+			slog.Info("snapshot loaded", "format", getFormatName(snap.Format), "is128k", snap.Memory.Is128K, "path", path)
 			return "snapshot", nil
 		case ".p", ".81":
 			if emu.zx8x == nil || emu.model != roms.ModelZX81 {
@@ -2623,6 +2716,10 @@ func main() {
 							return
 						}
 
+						// Bring the machine up to 128K first if this is a 128K
+						// snapshot (a 48K machine can't page its banks).
+						ensureModelForSnapshot(snap)
+
 						// Apply snapshot to emulator
 						if err := applySnapshotToEmulator(emu, snap); err != nil {
 							dialog.ShowError(fmt.Errorf("failed to apply snapshot: %w", err), w)
@@ -2755,6 +2852,7 @@ func main() {
 						}
 						emu.ula.SetTapePlayer(tp)
 						tp.Play()
+						slog.Info("tape loaded", "format", "TAP", "blocks", tp.BlockCount(), "path", reader.URI().Path())
 						dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
 						_ = reader.Close()
 					}, w)
@@ -2778,6 +2876,7 @@ func main() {
 						}
 						emu.ula.SetTapePlayer(tp)
 						tp.Play()
+						slog.Info("tape loaded", "format", "TZX", "blocks", tp.BlockCount(), "path", reader.URI().Path())
 						dialog.ShowInformation("Tape Loaded", fmt.Sprintf("Loaded %d blocks from:\n%s\n\nTape is now playing.", tp.BlockCount(), reader.URI().Name()), w)
 						_ = reader.Close()
 					}, w)

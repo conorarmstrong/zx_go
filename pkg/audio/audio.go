@@ -90,6 +90,12 @@ type AudioSystem struct {
 	dacMu sync.RWMutex
 	dac   DACSource
 
+	// keepAlive is the peak amplitude of the sub-audible dither mixed into the
+	// output to stop the host audio amp powering down during silence (and
+	// popping on the next sound). 0 disables. Read/written only on the oto
+	// goroutine path + setup, so a plain field is fine.
+	keepAlive int16
+
 	// WAV recording state. When recFile is non-nil the audio reader
 	// appends each generated sample to the file as 16-bit mono PCM.
 	recMu      sync.Mutex
@@ -103,6 +109,7 @@ type audioReader struct {
 	audioSys  *AudioSystem
 	buffer    []byte
 	mixBuffer []int16
+	ditherRNG uint32 // xorshift32 state for the keep-alive dither
 }
 
 // oto permits exactly ONE audio context per process — a second
@@ -138,11 +145,12 @@ func New() (*AudioSystem, error) {
 		return nil, fmt.Errorf("failed to create audio context: %w", err)
 	}
 
-	as := &AudioSystem{context: ctx}
+	as := &AudioSystem{context: ctx, keepAlive: defaultKeepAliveLevel}
 	as.reader = &audioReader{
 		audioSys:  as,
 		buffer:    make([]byte, BufferSize*ChannelCount*2),
 		mixBuffer: make([]int16, BufferSize),
+		ditherRNG: 0x9E3779B9, // any non-zero seed
 	}
 	as.prefillSilence()
 	as.player = ctx.NewPlayer(as.reader)
@@ -188,9 +196,21 @@ func (as *AudioSystem) PushBeeperSamples(samples []int16) {
 	}
 }
 
-// popBeeperSamples drains up to len(out) samples from the ring buffer
-// into out. Any unfilled slots are held at lastSample (DC) so the
-// audio output stays smooth across underruns instead of clicking.
+// underrunDecayNum/underrunDecayDen is the per-sample multiplier applied to
+// the held level while the ring buffer is starved. ~255/256 gives a ~6 ms
+// time constant: a brief gap is essentially held, but a sustained drain (a
+// pause, a model switch, or a heavy fast-load tick that starves the producer)
+// fades to silence rather than holding a flat DC plateau — which would step
+// back to the signal when production resumes and click. (Holding flat DC, as
+// the code used to, is exactly what produced the "battery click" on resume.)
+const (
+	underrunDecayNum = 255
+	underrunDecayDen = 256
+)
+
+// popBeeperSamples drains up to len(out) samples from the ring buffer into
+// out. Any unfilled slots continue from the last delivered sample and then
+// decay toward 0, so underruns fade to silence smoothly instead of clicking.
 // Returns the slice unchanged.
 func (as *AudioSystem) popBeeperSamples(out []int16) {
 	as.queueMu.Lock()
@@ -207,6 +227,7 @@ func (as *AudioSystem) popBeeperSamples(out []int16) {
 	}
 	for ; n < len(out); n++ {
 		out[n] = as.lastSample
+		as.lastSample = int16(int32(as.lastSample) * underrunDecayNum / underrunDecayDen)
 	}
 }
 
@@ -247,8 +268,14 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 		dac.MixInto(mixBuf)
 	}
 
-	// Step 3: WAV recording — append the mono mix before expansion.
+	// Step 3: WAV recording — append the mono mix before expansion (and
+	// before the keep-alive dither, so captures stay clean for diagnostics).
 	ar.audioSys.writeRecording(mixBuf)
+
+	// Step 3.5: keep-alive dither — a sub-audible noise floor that stops the
+	// host audio amp powering down during silence and popping on the next
+	// sound. Added to the device output only.
+	applyKeepAliveDither(mixBuf, ar.audioSys.keepAlive, &ar.ditherRNG)
 
 	// Step 4: emit the mono mix as interleaved stereo bytes.
 	for i := 0; i < samples; i++ {
@@ -290,6 +317,16 @@ func (as *AudioSystem) SetDAC(dac DACSource) {
 	as.dacMu.Lock()
 	defer as.dacMu.Unlock()
 	as.dac = dac
+}
+
+// SetKeepAliveLevel sets the peak amplitude of the sub-audible keep-alive
+// dither (0 disables). Used to tune the level that stops the host audio amp
+// powering down during silence without becoming audible.
+func (as *AudioSystem) SetKeepAliveLevel(level int16) {
+	if level < 0 {
+		level = 0
+	}
+	as.keepAlive = level
 }
 
 // Close closes the audio system and releases resources.

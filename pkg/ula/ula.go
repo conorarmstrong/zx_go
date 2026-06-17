@@ -89,6 +89,24 @@ type ULA struct {
 	frameStartTstate       uint64
 	frameStartSpeakerState bool
 
+	// dc models the capacitor-coupled audio output: it high-pass-filters the
+	// per-frame mix so a held speaker level decays to silence instead of
+	// sitting at a full-scale DC rail (which made power-on/reset/tape
+	// boundaries click like a speaker wired to a battery). dcEnabled allows
+	// disabling it (A/B diagnostics) — when off, the raw ±beeper levels are
+	// emitted (faithful square waves, but the idle DC rail/click returns).
+	dc        dcBlocker
+	dcEnabled bool
+
+	// fastLoad, when set, mutes audio output: during fast-tape turbo many
+	// emulated frames collapse into one audio frame, so the reconstructed
+	// loading sound is garbled. Silence is emitted instead.
+	fastLoad bool
+
+	// feReadCount is a monotonic count of port-$FE reads, used to detect
+	// active tape loading by its read rate (see ReadPort).
+	feReadCount uint64
+
 	// Tape loading state
 	tape *TapePlayer
 
@@ -466,6 +484,11 @@ func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 		kbd: kbd,
 		img: image.NewRGBA(image.Rect(0, 0, TotalWidth, TotalHeight)),
 	}
+	// Bound the DC-blocked audio to the speaker's physical amplitude so an
+	// isolated speaker toggle clicks at the level, not the high-pass's 2x
+	// step-response overshoot.
+	u.dc.limit = int32(beeperHigh)
+	u.dcEnabled = true
 	u.initPalette()
 
 	// Audio initialization is deferred to EnableAudio() to avoid crashes
@@ -876,6 +899,12 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		// (bit 6 = 0 default, bits 5 and 7 = 1) and the AND with
 		// the keyboard scan ORs in 0xE0 so the kbd matrix only
 		// affects bits 0-4.
+		// Count port-$FE reads. A tape loader polls this register thousands
+		// of times per frame to time edges, whereas a running game reads it
+		// only sparsely for the keyboard — so the rate cleanly distinguishes
+		// "actively loading" from "game running", which the fast-load turbo
+		// uses to know when to stop accelerating.
+		u.feReadCount++
 		val := byte(0xBF)
 		if u.tapeLevel() {
 			val |= 0x40
@@ -1402,6 +1431,36 @@ func (u *ULA) SetPeripherals(pm *peripherals.PeripheralManager) {
 	u.peripherals = pm
 }
 
+// SetAudioKeepAliveLevel forwards a keep-alive dither level to the audio
+// system (no-op if audio isn't enabled). See audio.SetKeepAliveLevel.
+func (u *ULA) SetAudioKeepAliveLevel(level int16) {
+	if u.audio != nil {
+		u.audio.SetKeepAliveLevel(level)
+	}
+}
+
+// SetDCBlockEnabled toggles the audio DC-blocking high-pass filter. Off emits
+// the raw ±beeper levels (faithful squares, but the idle DC rail/click
+// returns) — primarily an A/B diagnostic.
+func (u *ULA) SetDCBlockEnabled(enabled bool) {
+	u.dcEnabled = enabled
+}
+
+// SetFastLoad toggles fast-tape-turbo audio muting. While true, flushAudioFrame
+// emits silence because the per-frame audio reconstruction is meaningless when
+// dozens of emulated frames are collapsed into one audio frame.
+func (u *ULA) SetFastLoad(on bool) {
+	u.fastLoad = on
+}
+
+// FEReadCount returns the monotonic count of port-$FE reads. The fast-load
+// turbo samples this per frame: a high read rate means the CPU is in a tape
+// loader's edge-timing loop, a low rate means the game is running (only
+// sparse keyboard reads), so turbo can stop once the program is live.
+func (u *ULA) FEReadCount() uint64 {
+	return u.feReadCount
+}
+
 // SetTapePlayer sets the tape player for tape loading. The tape clock is
 // re-synced to the current CPU T-state so playback starts "now" rather than
 // jumping forward by the whole elapsed run.
@@ -1465,6 +1524,10 @@ func (u *ULA) Reset() {
 	if u.audio != nil {
 		u.audio.Reset()
 	}
+	// Re-arm the DC blocker so the first post-reset frame establishes a fresh
+	// silent baseline (the audio queue is re-primed with silence too). This is
+	// what stops the reset itself (e.g. a +3 disk boot) from clicking.
+	u.dc.reset()
 
 	// Sync the AY presence with the current memory model. SwitchModel may
 	// have changed the machine since the ULA was created, so we (re)create
@@ -1511,6 +1574,21 @@ func (u *ULA) flushAudioFrame() {
 	if u.audio == nil {
 		return
 	}
+	// During fast-tape turbo, many emulated frames collapse into this single
+	// audio frame, so the reconstructed waveform is garbled. Emit silence and
+	// re-arm the DC blocker so normal audio resumes cleanly once loading ends.
+	if u.fastLoad {
+		u.audioEvents = u.audioEvents[:0]
+		u.tapeAudioEvents = u.tapeAudioEvents[:0]
+		u.frameStartTapeState = false
+		u.frameStartSpeakerState = u.Speaker
+		u.dc.reset()
+		u.audio.PushBeeperSamples(make([]int16, audio.SamplesPerFrame))
+		if u.mem.TStates != nil {
+			u.frameStartTstate = *u.mem.TStates
+		}
+		return
+	}
 	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
 	// Mix the SpecDrum/Covox DAC frame (event-timed, sample-accurate) into the
 	// beeper waveform before pushing it.
@@ -1538,6 +1616,14 @@ func (u *ULA) flushAudioFrame() {
 		u.frameStartTapeState = false
 	}
 	u.tapeAudioEvents = u.tapeAudioEvents[:0]
+
+	// AC-couple the mix (beeper + tape + DAC) like the hardware's output
+	// capacitor: a held level decays to silence and only edges make sound, so
+	// idle/power-on/reset and the gaps between loader blocks no longer step
+	// to a full-scale DC rail (the "battery click").
+	if u.dcEnabled {
+		u.dc.process(samples)
+	}
 
 	u.audio.PushBeeperSamples(samples)
 	u.frameStartSpeakerState = finalState
@@ -1636,18 +1722,21 @@ func generateSquareWaveFrame(events []audioEvent, initialState bool, low, high i
 	return samples, state
 }
 
-// Beeper amplitude levels — symmetric around zero so a constant
-// 50% duty cycle averages to silence. The amplitude is high (~60%
-// of int16 range) because on a real Spectrum the beeper is
-// significantly louder than the AY chip — it's a 1-bit DAC driven
-// directly by the speaker bit, with no attenuation. The remaining
-// headroom (32767 − 20000 = 12767) is enough to mix in one AY
-// channel at maximum volume without clipping; the worst case (all
-// 3 AY channels at maximum + beeper at peak) is rare and clips
-// gracefully via the int32 saturation in MixInto.
+// Beeper amplitude levels — symmetric around zero. The 1-bit speaker is
+// rendered at ±beeperHigh and the per-frame mix is then DC-blocked (see
+// dcBlocker) to model the real Spectrum's capacitor-coupled output, so an
+// idle level decays to silence instead of sitting at a full-scale rail.
+//
+// The amplitude is capped so that a *full swing* (beeperLow→beeperHigh =
+// 2·beeperHigh = 32000) stays inside int16: the DC blocker's step response
+// is the swing height, so an isolated speaker toggle renders as a clean
+// 32000 transient rather than a clipped 40000 spike. The remaining headroom
+// (32767 − 16000) also covers one AY channel at max without clipping; the
+// worst case (3 AY channels + beeper at peak) is rare and clips gracefully
+// via the int32 saturation in MixInto.
 const (
-	beeperHigh int16 = 20000
-	beeperLow  int16 = -20000
+	beeperHigh int16 = 16000
+	beeperLow  int16 = -16000
 
 	// tapeAudioAmplitude is the peak level of the mixed-in tape-loading sound.
 	// Below the beeper so it's clearly the loading tone, not deafening, and

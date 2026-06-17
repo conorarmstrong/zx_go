@@ -263,6 +263,7 @@ func newNextEmulator() (*emulator, error) {
 	u.SetPeripherals(pm)
 	if cliFlagsActive == nil || !cliFlagsActive.noSound {
 		u.EnableAudio()
+		configureAudioExtras(u)
 	} else {
 		slog.Info("--no-sound: audio disabled")
 	}
