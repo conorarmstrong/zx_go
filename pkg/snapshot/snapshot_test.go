@@ -855,18 +855,17 @@ func TestZ80V2Load128K(t *testing.T) {
 	extHeader[2] = Z80_HW_128K // hardware mode
 	extHeader[3] = 0x10        // Port7FFD
 
-	// For 128K, page numbers: 3=>bank0, 4=>bank2, 5=>bank0(?), 6=>bank3, 7=>bank4, 8=>bank5, 9=>bank6, 10=>bank7, 11=>bank1
-	// We write pages for bank 5 (page 8), bank 2 (page 4), bank 0 (page 3),
-	// bank 1 (page 11), bank 3 (page 6), bank 4 (page 7), bank 6 (page 9), bank 7 (page 10)
+	// Per the .z80 spec, 128K page N holds RAM bank N-3:
+	// page 3=>bank0, 4=>bank1, 5=>bank2, 6=>bank3, 7=>bank4, 8=>bank5, 9=>bank6, 10=>bank7.
 	type memBlock struct {
 		pageNum byte
 		fill    byte
 	}
 	blocks := []memBlock{
 		{8, 0x55},  // bank 5
-		{4, 0x22},  // bank 2
+		{5, 0x22},  // bank 2
 		{3, 0x00},  // bank 0
-		{11, 0x11}, // bank 1
+		{4, 0x11},  // bank 1
 		{6, 0x33},  // bank 3
 		{7, 0x44},  // bank 4
 		{9, 0x66},  // bank 6
@@ -1643,7 +1642,9 @@ func TestZ80HardwareModeDetection(t *testing.T) {
 			binary.LittleEndian.PutUint16(header[8:10], 0xFFF0)
 			header[12] = 0x01
 
-			extHeaderLen := uint16(23)
+			// The hwMode constants are the version-3 mode numbers, so build a
+			// version-3 header (length 54) to match their meaning.
+			extHeaderLen := uint16(54)
 			extHeader := make([]byte, extHeaderLen)
 			binary.LittleEndian.PutUint16(extHeader[0:2], 0x1234) // PC
 			extHeader[2] = tc.hwMode

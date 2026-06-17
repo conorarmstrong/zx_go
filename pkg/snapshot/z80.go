@@ -107,21 +107,24 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 		// PC is in extended header
 		s.CPU.PC = binary.LittleEndian.Uint16(extHeader[0:2])
 		
-		// Hardware mode
+		// Hardware mode. Its meaning depends on the snapshot version, which
+		// the additional-header length distinguishes: 23 = v2, 54/55 = v3.
+		// In v2, mode 3 = 128K and 4 = 128K+IF1; in v3 mode 3 is 48K+MGT and
+		// the 128K machines are 4/5 (128K, 128K+IF1) and 12/13/14 (+2/+2A/+3).
+		// Get this wrong and a 128K snapshot loads as 48K (or vice-versa) and
+		// crashes on resume.
 		hwMode := extHeader[2]
-		
-		// Set memory model based on hardware mode
-		switch hwMode {
-		case Z80_HW_48K, Z80_HW_48K_IF1, Z80_HW_SAMRAM:
-			s.Memory.Is128K = false
-		case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3:
-			s.Memory.Is128K = true
-			// Port 0x7FFD value for 128K machines
-			if len(extHeader) > 3 {
-				s.Memory.Port7FFD = extHeader[3]
+		if headerLen == 23 { // version 2
+			s.Memory.Is128K = hwMode == 3 || hwMode == 4
+		} else { // version 3+
+			switch hwMode {
+			case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3:
+				s.Memory.Is128K = true
 			}
-		default:
-			s.Memory.Is128K = false
+		}
+		if s.Memory.Is128K && len(extHeader) > 3 {
+			// Port 0x7FFD paging value for 128K machines.
+			s.Memory.Port7FFD = extHeader[3]
 		}
 		
 		// Read memory blocks
@@ -188,20 +191,21 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 		
 		blockLen := binary.LittleEndian.Uint16(blockHeader[0:2])
 		pageNum := blockHeader[2]
-		
-		// Read block data
-		blockData := make([]byte, blockLen)
-		if _, err := io.ReadFull(file, blockData); err != nil {
-			return fmt.Errorf("failed to read block data: %w", err)
-		}
-		
-		// Decompress if needed
+
+		// A block length of 0xFFFF is a sentinel meaning "16384 bytes,
+		// uncompressed" — NOT a real length. Read exactly 16384 raw bytes in
+		// that case; reading 0xFFFF bytes would over-read into the next block.
 		var memData []byte
 		if blockLen == 0xFFFF {
-			// Uncompressed 16KB block
-			memData = blockData
+			memData = make([]byte, 16384)
+			if _, err := io.ReadFull(file, memData); err != nil {
+				return fmt.Errorf("failed to read uncompressed block %d: %w", pageNum, err)
+			}
 		} else {
-			// Compressed block
+			blockData := make([]byte, blockLen)
+			if _, err := io.ReadFull(file, blockData); err != nil {
+				return fmt.Errorf("failed to read block data: %w", err)
+			}
 			decompressed, err := s.decompressZ80(blockData)
 			if err != nil {
 				return fmt.Errorf("failed to decompress block %d: %w", pageNum, err)
@@ -209,30 +213,29 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 			memData = decompressed
 		}
 		
-		// Map page number to RAM bank
+		// Map the .z80 page number to a RAM bank. The mapping differs by
+		// machine: in 128K mode the page number IS the physical bank + 3
+		// (page 3→bank 0 … page 10→bank 7), whereas in 48K mode only pages
+		// 4/5/8 carry RAM and map to the banks at the fixed 48K addresses.
+		// Conflating the two (using the 48K meaning of pages 4/5 for a 128K
+		// snapshot) scrambles banks 0/1/2 and resets the loaded program.
 		var bankNum int
-		switch pageNum {
-		case 4: // 0x8000-0xBFFF (48K page 2)
-			bankNum = 2
-		case 5: // 0xC000-0xFFFF (48K page 0) 
-			bankNum = 0
-		case 8: // 0x4000-0x7FFF (48K page 5)
-			bankNum = 5
-		case 3: // 128K RAM bank 0
-			bankNum = 0
-		case 6: // 128K RAM bank 3
-			bankNum = 3
-		case 7: // 128K RAM bank 4
-			bankNum = 4
-		case 9: // 128K RAM bank 6
-			bankNum = 6
-		case 10: // 128K RAM bank 7
-			bankNum = 7
-		case 11: // 128K RAM bank 1
-			bankNum = 1
-		default:
-			// Unknown page number, skip
-			continue
+		if s.Memory.Is128K {
+			if pageNum < 3 || pageNum > 10 {
+				continue // ROM / Multiface / IF1 pages carry no RAM bank
+			}
+			bankNum = int(pageNum) - 3
+		} else {
+			switch pageNum {
+			case 8: // 0x4000-0x7FFF
+				bankNum = 5
+			case 4: // 0x8000-0xBFFF
+				bankNum = 2
+			case 5: // 0xC000-0xFFFF
+				bankNum = 0
+			default:
+				continue // unknown / ROM page
+			}
 		}
 		
 		// Copy data to appropriate RAM bank
@@ -387,12 +390,10 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	
 	// Write memory blocks
 	if s.Memory.Is128K {
-		// Write all 128K RAM banks
-		banks := []int{0, 1, 2, 3, 4, 5, 6, 7}
-		pageNums := []byte{3, 11, 4, 6, 7, 8, 9, 10}
-		
-		for i, bankNum := range banks {
-			if err := s.writeZ80MemoryBlock(file, s.Memory.RAM[bankNum], pageNums[i]); err != nil {
+		// Write all 128K RAM banks. Per the .z80 spec the page number for
+		// 128K RAM is the bank number + 3 (bank 0→page 3 … bank 7→page 10).
+		for bankNum := 0; bankNum < 8; bankNum++ {
+			if err := s.writeZ80MemoryBlock(file, s.Memory.RAM[bankNum], byte(bankNum+3)); err != nil {
 				return fmt.Errorf("failed to write RAM bank %d: %w", bankNum, err)
 			}
 		}
