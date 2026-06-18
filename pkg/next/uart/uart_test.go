@@ -100,7 +100,6 @@ func TestATCIPSENDReturnsPrompt(t *testing.T) {
 	}
 }
 
-
 func TestATCaseInsensitive(t *testing.T) {
 	u := New()
 	for _, b := range []byte("at\r") {

@@ -244,11 +244,11 @@ func TestBankReadBackNoAutoInc(t *testing.T) {
 	b := NewBank()
 	b.SetIndex(0x10)
 	// Store a 9-bit value with a set LSB at index $10 of the selected palette.
-	b.Active().Set(0x10, 0x1A5) // 1_1010_0101
-	if got := b.Read8(); got != 0xD2 {     // (0x1A5 >> 1) & 0xFF = 0xD2
+	b.Active().Set(0x10, 0x1A5)        // 1_1010_0101
+	if got := b.Read8(); got != 0xD2 { // (0x1A5 >> 1) & 0xFF = 0xD2
 		t.Errorf("Read8 = $%02X, want $D2 (bits 8:1)", got)
 	}
-	if got := b.ReadNR44(); got != 0x01 {  // value bit 0 = 1
+	if got := b.ReadNR44(); got != 0x01 { // value bit 0 = 1
 		t.Errorf("ReadNR44 = $%02X, want $01 (value bit 0)", got)
 	}
 	if b.Index() != 0x10 {

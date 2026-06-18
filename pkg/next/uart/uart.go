@@ -66,8 +66,8 @@ func (u *UART) ReadData() byte {
 //
 //   - "AT"             -> "OK\r\n"   (probe / liveness)
 //   - any "AT+..."     -> "OK\r\n"   (config commands accepted
-//                                     silently — Sprint 8 doesn't
-//                                     model real Wi-Fi state)
+//     silently — Sprint 8 doesn't
+//     model real Wi-Fi state)
 //   - "AT+GMR"         -> identity + "OK\r\n"
 //   - "AT+CIPSEND"     -> ">\r\n"    (prompt for the bytes payload)
 //   - anything else    -> "ERROR\r\n"

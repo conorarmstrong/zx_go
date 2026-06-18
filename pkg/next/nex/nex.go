@@ -8,10 +8,10 @@
 //   - 512 bytes  header  (magic "Next", version "V1.2", flags, etc.)
 //   - 512 bytes  palette (if header bit 10:0 set)
 //   - N bytes    screen  (if header bit 10:1 set; size depends on
-//                         the screen-mode sub-flags)
+//     the screen-mode sub-flags)
 //   - 2048 bytes Copper  (if header bit 10:5 set)
 //   - 16K bank blocks in the documented order
-//       [5, 2, 0, 1, 3, 4, 6, 7, 8, 9, ..., 111]
+//     [5, 2, 0, 1, 3, 4, 6, 7, 8, 9, ..., 111]
 //     where each block is present iff BankLoad[bank] is true.
 //
 // Sprint 4 lands the parser; Apply() loads parsed banks into a
@@ -64,21 +64,21 @@ func computeLoadOrder() []int {
 // that drive .NEX loading. Fields not directly modelled here are
 // available via RawHeader for future extension.
 type Header struct {
-	Version     string             // e.g. "V1.2"
-	RAMRequired byte               // 0 = 768K, 1 = 1792K
-	NumFiles    byte               // NextZXOS support files (rare)
-	ScreenFlags byte               // bitmask, see HasPalette / HasScreen / HasCopper
+	Version     string // e.g. "V1.2"
+	RAMRequired byte   // 0 = 768K, 1 = 1792K
+	NumFiles    byte   // NextZXOS support files (rare)
+	ScreenFlags byte   // bitmask, see HasPalette / HasScreen / HasCopper
 	Border      byte
 	SP          uint16
 	PC          uint16
-	NumBanks    uint16             // number of banks present in the file
-	BankLoad    [MaxBanks]bool     // true for each 16K bank that is in the file
-	StartDelay  byte               // frames to delay before launching
-	Preserve    byte               // 1 = preserve NextRegs across load
+	NumBanks    uint16         // number of banks present in the file
+	BankLoad    [MaxBanks]bool // true for each 16K bank that is in the file
+	StartDelay  byte           // frames to delay before launching
+	Preserve    byte           // 1 = preserve NextRegs across load
 	CoreMajor   byte
 	CoreMinor   byte
 	CoreSub     byte
-	EntryBank   byte               // bank mapped at 0xC000 before JP PC
+	EntryBank   byte // bank mapped at 0xC000 before JP PC
 	RawHeader   [HeaderSize]byte
 }
 
@@ -126,9 +126,9 @@ const screenModeBits = flagLayer2 | flagULA | flagLoRes | flagHiRes | flagTimex 
 type NEX struct {
 	Header  Header
 	Palette []byte
-	Screen  []byte           // empty if absent; raw bytes regardless of mode
+	Screen  []byte // empty if absent; raw bytes regardless of mode
 	Copper  []byte
-	Banks   map[int][]byte   // 16K bank id -> 16384-byte slice
+	Banks   map[int][]byte // 16K bank id -> 16384-byte slice
 }
 
 // ParseFile reads and parses a .NEX file from disk.

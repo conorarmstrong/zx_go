@@ -99,10 +99,10 @@ func TestReadROMByte_OutOfRange(t *testing.T) {
 }
 
 func TestWriteROMByte_LazyAllocAndBounds(t *testing.T) {
-	p := New(nil) // no ROM at construction
-	p.WriteROMByte(-1, 0xFF)        // OOB low — silently dropped
-	p.WriteROMByte(ROMSize, 0xFF)   // OOB high — silently dropped
-	p.WriteROMByte(0x100, 0xAB)     // triggers lazy alloc
+	p := New(nil)                 // no ROM at construction
+	p.WriteROMByte(-1, 0xFF)      // OOB low — silently dropped
+	p.WriteROMByte(ROMSize, 0xFF) // OOB high — silently dropped
+	p.WriteROMByte(0x100, 0xAB)   // triggers lazy alloc
 	if got := p.ReadROMByte(0x100); got != 0xAB {
 		t.Errorf("after lazy alloc + write: ReadROMByte = %#x, want 0xAB", got)
 	}
@@ -162,9 +162,9 @@ type stubCard struct {
 	readNext byte
 }
 
-func (s *stubCard) WriteCS(b byte)         { s.cs = b }
-func (s *stubCard) WriteData(b byte)       { s.written = append(s.written, b) }
-func (s *stubCard) ReadData() byte         { return s.readNext }
+func (s *stubCard) WriteCS(b byte)   { s.cs = b }
+func (s *stubCard) WriteData(b byte) { s.written = append(s.written, b) }
+func (s *stubCard) ReadData() byte   { return s.readNext }
 
 func TestSetCard_RoutesSPIPorts(t *testing.T) {
 	p := New(nil)

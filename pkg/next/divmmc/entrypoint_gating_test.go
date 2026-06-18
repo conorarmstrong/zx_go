@@ -273,8 +273,9 @@ func TestGate_AllZeroEntryPoints_NoTriggerFires(t *testing.T) {
 // expected trigger PCs fire — covering the boot-time NextZXOS paths.
 //
 // Per WireDivMMCEntryPoints docs:
-//   B8 = $83 = bits 0,1,7 → $0000/$0008/$0038 trigger
-//   BB = $CD = bits 0,2,3,6,7 → $0066/$04C6/$0562 + [bit 7 = $3DXX]
+//
+//	B8 = $83 = bits 0,1,7 → $0000/$0008/$0038 trigger
+//	BB = $CD = bits 0,2,3,6,7 → $0066/$04C6/$0562 + [bit 7 = $3DXX]
 //
 // Expected to fire: $0000, $0008, $0038, $0066, $04C6, $0562, $3D00+
 // Expected NOT to fire: $04D7 (bit 4), $056A (bit 5)
@@ -375,9 +376,9 @@ func TestB9Gate_GuestWritesB9_EnablesAdditionalRSTs(t *testing.T) {
 func TestBAGate_AlternatePath_BAEnablesRSTWithoutB9(t *testing.T) {
 	p := New(makeROM())
 	p.SetAutomap(true)
-	p.SetEntryPoints0(0x02)        // B8 bit 1 = RST $08
-	p.SetEntryPointsValid0(0x00)   // B9 bit 1 = 0 (instant path closed)
-	p.SetEntryPointsTiming0(0x02)  // BA bit 1 = 1 (rom3 path open)
+	p.SetEntryPoints0(0x02)       // B8 bit 1 = RST $08
+	p.SetEntryPointsValid0(0x00)  // B9 bit 1 = 0 (instant path closed)
+	p.SetEntryPointsTiming0(0x02) // BA bit 1 = 1 (rom3 path open)
 
 	p.Step(0x0008)
 	if !p.IsPagedIn() {

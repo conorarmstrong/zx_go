@@ -11,9 +11,9 @@ import (
 // pulling in pkg/memory.
 type minimalMem struct{}
 
-func (minimalMem) Read(_ uint16) byte      { return 0 }
-func (minimalMem) Write(_ uint16, _ byte)  {}
-func (minimalMem) ContendPort(_ uint16)    {}
+func (minimalMem) Read(_ uint16) byte     { return 0 }
+func (minimalMem) Write(_ uint16, _ byte) {}
+func (minimalMem) ContendPort(_ uint16)   {}
 
 type minimalULA struct{}
 

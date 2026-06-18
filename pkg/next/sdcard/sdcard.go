@@ -228,8 +228,8 @@ type hostFile struct {
 	writable bool
 }
 
-func (h *hostFile) Close() error  { return h.file.Close() }
-func (h *hostFile) IsDir() bool   { return false }
+func (h *hostFile) Close() error { return h.file.Close() }
+func (h *hostFile) IsDir() bool  { return false }
 func (h *hostFile) Read(buf []byte) (int, error) {
 	return h.file.Read(buf)
 }
@@ -275,14 +275,20 @@ type hostDir struct {
 	idx     int
 }
 
-func (d *hostDir) Close() error                                  { return nil }
-func (d *hostDir) IsDir() bool                                   { return true }
-func (d *hostDir) Read(_ []byte) (int, error)                    { return 0, errors.New("sdcard: read on directory handle") }
-func (d *hostDir) Write(_ []byte) (int, error)                   { return 0, errors.New("sdcard: write on directory handle") }
-func (d *hostDir) Seek(_ int64, _ int) (int64, error)            { return 0, errors.New("sdcard: seek on directory handle") }
-func (d *hostDir) Pos() int64                                    { return int64(d.idx) }
-func (d *hostDir) Truncate(_ int64) error                        { return errors.New("sdcard: truncate on directory handle") }
-func (d *hostDir) Sync() error                                   { return nil }
+func (d *hostDir) Close() error { return nil }
+func (d *hostDir) IsDir() bool  { return true }
+func (d *hostDir) Read(_ []byte) (int, error) {
+	return 0, errors.New("sdcard: read on directory handle")
+}
+func (d *hostDir) Write(_ []byte) (int, error) {
+	return 0, errors.New("sdcard: write on directory handle")
+}
+func (d *hostDir) Seek(_ int64, _ int) (int64, error) {
+	return 0, errors.New("sdcard: seek on directory handle")
+}
+func (d *hostDir) Pos() int64             { return int64(d.idx) }
+func (d *hostDir) Truncate(_ int64) error { return errors.New("sdcard: truncate on directory handle") }
+func (d *hostDir) Sync() error            { return nil }
 func (d *hostDir) Stat() (FileInfo, error) {
 	return FileInfo{IsDir: true}, nil
 }

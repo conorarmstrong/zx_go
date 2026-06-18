@@ -857,8 +857,9 @@ func TestSpec_NR8A_BusPortPropagate_ReservedBitsMaskedOnRead(t *testing.T) {
 // VHDL zxnext.vhd:5681-5705 (write) + :5923 (read).
 //
 // Write semantics (issue 2/3 board):
-//   bit 7    → flashboot (always stored)
-//   bits 4:0 → coreid (only when config_mode = 1)
+//
+//	bit 7    → flashboot (always stored)
+//	bits 4:0 → coreid (only when config_mode = 1)
 //
 // Read returns: '0' & coreid(5 bits) & button_state(2 bits).
 // So bit 7 of READ is always 0 (NOT the stored flashboot value),
@@ -1200,8 +1201,8 @@ func TestSpec_NR1C_ClipIdxReset_ReadsPackedIndices(t *testing.T) {
 	WireClipWindows(disp, nil)
 
 	// Advance the Layer2 and sprite clip indexes by one write each.
-	disp.WriteReg(0x18, 0x00) // l2 idx → 1
-	disp.WriteReg(0x19, 0x00) // spr idx → 1
+	disp.WriteReg(0x18, 0x00)                   // l2 idx → 1
+	disp.WriteReg(0x19, 0x00)                   // spr idx → 1
 	if got := disp.ReadReg(0x1C); got != 0x05 { // spr(1)<<2 | l2(1)
 		t.Errorf("NR$1C packed indices = $%02X, want $05", got)
 	}

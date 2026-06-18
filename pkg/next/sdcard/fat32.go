@@ -242,7 +242,6 @@ func (b *fat32Builder) clusterOffset(c uint32) int {
 	return b.dataOffset + int(c-2)*b.spc*512
 }
 
-
 // appendDirent writes one 32-byte entry into the first free slot of
 // the directory chain rooted at dirClus, extending the chain when
 // full. Returns false when the disk is full.

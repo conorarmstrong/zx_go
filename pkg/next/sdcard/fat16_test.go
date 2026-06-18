@@ -164,12 +164,12 @@ func TestBuildFAT16_Subdirectory(t *testing.T) {
 
 func TestToFAT83(t *testing.T) {
 	cases := map[string]string{
-		"hello.txt":     "HELLO.TXT",
+		"hello.txt":       "HELLO.TXT",
 		"longfilename.zx": "LONGFILE.ZX",
-		"NEXTZXOS.SYS":  "NEXTZXOS.SYS",
-		"weird name.s":  "WEIRD_NA.S",
-		"noext":         "NOEXT",
-		".dotfile":      "DOTFILE",
+		"NEXTZXOS.SYS":    "NEXTZXOS.SYS",
+		"weird name.s":    "WEIRD_NA.S",
+		"noext":           "NOEXT",
+		".dotfile":        "DOTFILE",
 	}
 	for in, want := range cases {
 		if got := toFAT83(in); got != want {
@@ -207,10 +207,11 @@ func TestToFAT83_BasenameTruncation(t *testing.T) {
 
 // TestToFAT83_MultipleDots — only the LAST dot separates name from
 // extension. "a.b.c.txt" → "A.B.C" → ...wait — actually:
-//   upper = "A.B.C.TXT"
-//   dot = index of last . = position of last . before "TXT"
-//   base = "A.B.C", ext = "TXT"
-//   sanitised base = "A_B_C" (dots illegal in basename) — let's see
+//
+//	upper = "A.B.C.TXT"
+//	dot = index of last . = position of last . before "TXT"
+//	base = "A.B.C", ext = "TXT"
+//	sanitised base = "A_B_C" (dots illegal in basename) — let's see
 func TestToFAT83_MultipleDots(t *testing.T) {
 	// "a.b.c.txt" → last "." separates. base="a.b.c" → sanitised
 	// removes/replaces internal dots; the resulting form depends on

@@ -80,7 +80,7 @@ func BuildFAT16(dir string, opts BuildOpts) ([]byte, error) {
 	}
 	const reservedSectors = 1
 	const numFATs = 2
-	const rootDirEntries = 512 // 32 sectors of 16 entries
+	const rootDirEntries = 512                                // 32 sectors of 16 entries
 	const rootDirSectors = (rootDirEntries * 32) / sectorSize // 32 sectors
 	// Partition start LBA. We use 2048 (1 MB alignment) to match modern
 	// SD-card formatting conventions. the reference Spectrum Next emulator's tbblue.mmc uses the
@@ -107,23 +107,23 @@ func BuildFAT16(dir string, opts BuildOpts) ([]byte, error) {
 
 	img := make([]byte, totalSectors*sectorSize)
 	b := &builder{
-		img: img,
-		sectorSize: sectorSize,
+		img:               img,
+		sectorSize:        sectorSize,
 		sectorsPerCluster: sectorsPerCluster,
-		reservedSectors: reservedSectors,
-		numFATs: numFATs,
-		fatSize: fatSize,
-		rootDirSectors: rootDirSectors,
-		rootDirEntries: rootDirEntries,
-		totalSectors: totalSectors,
-		totalClusters: totalClusters,
+		reservedSectors:   reservedSectors,
+		numFATs:           numFATs,
+		fatSize:           fatSize,
+		rootDirSectors:    rootDirSectors,
+		rootDirEntries:    rootDirEntries,
+		totalSectors:      totalSectors,
+		totalClusters:     totalClusters,
 		partitionStartLBA: partitionStartLBA,
-		fatOffset: (partitionStartLBA + reservedSectors) * sectorSize,
-		rootDirOffset: (partitionStartLBA + reservedSectors + numFATs*fatSize) * sectorSize,
-		dataOffset: (partitionStartLBA + reservedSectors + numFATs*fatSize + rootDirSectors) * sectorSize,
-		nextFreeCluster: 2,
-		volumeLabel: opts.VolumeLabel,
-		skipFile: opts.SkipFile,
+		fatOffset:         (partitionStartLBA + reservedSectors) * sectorSize,
+		rootDirOffset:     (partitionStartLBA + reservedSectors + numFATs*fatSize) * sectorSize,
+		dataOffset:        (partitionStartLBA + reservedSectors + numFATs*fatSize + rootDirSectors) * sectorSize,
+		nextFreeCluster:   2,
+		volumeLabel:       opts.VolumeLabel,
+		skipFile:          opts.SkipFile,
 	}
 	b.writeMBR()
 	b.writeBPB()
@@ -138,34 +138,34 @@ func BuildFAT16(dir string, opts BuildOpts) ([]byte, error) {
 type builder struct {
 	img []byte
 
-	sectorSize int
+	sectorSize        int
 	sectorsPerCluster int
-	reservedSectors int
-	numFATs int
-	fatSize int
-	rootDirSectors int
-	rootDirEntries int
-	totalSectors int
-	totalClusters int
+	reservedSectors   int
+	numFATs           int
+	fatSize           int
+	rootDirSectors    int
+	rootDirEntries    int
+	totalSectors      int
+	totalClusters     int
 	partitionStartLBA int
 
-	fatOffset int // byte offset of FAT 1
+	fatOffset     int // byte offset of FAT 1
 	rootDirOffset int // byte offset of root directory
-	dataOffset int // byte offset of first cluster (cluster #2)
+	dataOffset    int // byte offset of first cluster (cluster #2)
 
 	nextFreeCluster uint16
 
 	volumeLabel string
-	skipFile func(hostPath string, isDir bool) bool
+	skipFile    func(hostPath string, isDir bool) bool
 }
 
 const (
 	attrReadOnly = 0x01
-	attrHidden = 0x02
-	attrSystem = 0x04
-	attrVolume = 0x08
-	attrDir = 0x10
-	attrArchive = 0x20
+	attrHidden   = 0x02
+	attrSystem   = 0x04
+	attrVolume   = 0x08
+	attrDir      = 0x10
+	attrArchive  = 0x20
 
 	fatEOC = 0xFFFF // end of cluster chain
 )
@@ -207,17 +207,17 @@ func (b *builder) writeBPB() {
 	} else {
 		binary.LittleEndian.PutUint16(b.img[off+19:off+21], 0)
 	}
-	b.img[off+21] = 0xF8 // media descriptor (fixed)
-	binary.LittleEndian.PutUint16(b.img[off+22:off+24], uint16(b.fatSize)) // sectors per FAT
-	binary.LittleEndian.PutUint16(b.img[off+24:off+26], 63) // sectors per track
-	binary.LittleEndian.PutUint16(b.img[off+26:off+28], 255) // heads
+	b.img[off+21] = 0xF8                                                             // media descriptor (fixed)
+	binary.LittleEndian.PutUint16(b.img[off+22:off+24], uint16(b.fatSize))           // sectors per FAT
+	binary.LittleEndian.PutUint16(b.img[off+24:off+26], 63)                          // sectors per track
+	binary.LittleEndian.PutUint16(b.img[off+26:off+28], 255)                         // heads
 	binary.LittleEndian.PutUint32(b.img[off+28:off+32], uint32(b.partitionStartLBA)) // hidden sectors = partition LBA
 	if partitionSectors >= 0x10000 {
 		binary.LittleEndian.PutUint32(b.img[off+32:off+36], uint32(partitionSectors))
 	}
-	b.img[off+36] = 0x80 // drive number (hard disk)
-	b.img[off+37] = 0x00 // reserved
-	b.img[off+38] = 0x29 // extended boot signature
+	b.img[off+36] = 0x80                                            // drive number (hard disk)
+	b.img[off+37] = 0x00                                            // reserved
+	b.img[off+38] = 0x29                                            // extended boot signature
 	binary.LittleEndian.PutUint32(b.img[off+39:off+43], 0x12345678) // volume ID
 	label := padFAT(b.volumeLabel, 11)
 	copy(b.img[off+43:off+54], label)
@@ -563,20 +563,20 @@ func padFAT(s string, n int) string {
 // the CPU.
 func NextBootFilter() func(hostPath string, isDir bool) bool {
 	skipBaseName := map[string]bool{
-		"QXL.WIN": true,
+		"QXL.WIN":         true,
 		"CONTRIBUTING.md": true,
-		"LICENSE.md": true,
-		"README.md": true,
+		"LICENSE.md":      true,
+		"README.md":       true,
 	}
 	skipDir := map[string]bool{
-		"apps": true,
-		"demos": true,
-		"docs": true,
-		"games": true,
-		"src": true,
-		"home": true,
-		"tmp": true,
-		"TBUS": true,
+		"apps":   true,
+		"demos":  true,
+		"docs":   true,
+		"games":  true,
+		"src":    true,
+		"home":   true,
+		"tmp":    true,
+		"TBUS":   true,
 		"extras": true,
 	}
 	return func(hostPath string, isDir bool) bool {

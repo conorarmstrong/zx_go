@@ -78,8 +78,8 @@ type Compositor struct {
 	tilemap        *tilemap.Tilemap
 	prioritySource PrioritySource
 	transparency   byte
-	spriteTrans    byte // sprite transparency index (NextReg 0x4B)
-	tilemapTrans   byte // tilemap transparency nibble (NextReg 0x4C, low 4 bits)
+	spriteTrans    byte    // sprite transparency index (NextReg 0x4B)
+	tilemapTrans   byte    // tilemap transparency nibble (NextReg 0x4C, low 4 bits)
 	fallback       [4]byte // NR$4A fallback RGBA, shown when every layer is transparent
 
 	// ULA transparency: the classic ULA renders via its own 16-colour

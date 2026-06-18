@@ -27,11 +27,11 @@ package copper
 
 // Instruction is one decoded copper opcode.
 type Instruction struct {
-	Op   Op
-	Reg  byte   // for MOVE: which NextReg to write
-	Val  byte   // for MOVE: byte to write
-	Y    uint16 // for WAIT: target scanline (0..511)
-	X    byte   // for WAIT: target hpos / 8
+	Op  Op
+	Reg byte   // for MOVE: which NextReg to write
+	Val byte   // for MOVE: byte to write
+	Y   uint16 // for WAIT: target scanline (0..511)
+	X   byte   // for WAIT: target hpos / 8
 }
 
 // Op identifies the four copper opcodes.
@@ -48,10 +48,10 @@ const (
 type StartMode byte
 
 const (
-	StartStop      StartMode = 0 // copper halted
-	StartFromZero  StartMode = 1 // run from instruction 0 once
-	StartContinue  StartMode = 2 // continue from current cursor
-	StartOnVBL     StartMode = 3 // restart from 0 every VBL
+	StartStop     StartMode = 0 // copper halted
+	StartFromZero StartMode = 1 // run from instruction 0 once
+	StartContinue StartMode = 2 // continue from current cursor
+	StartOnVBL    StartMode = 3 // restart from 0 every VBL
 )
 
 // MaxInstructions is the size of the copper instruction memory in

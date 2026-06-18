@@ -73,7 +73,7 @@ func TestComposeScanlineSULLayer2Priority(t *testing.T) {
 
 	c := New(pal, l2)
 	c.SetPrioritySource(fixedPriority{ModeSUL}) // L2 below ULA
-	c.SetTransparency(0xE3)                      // default → opaque ULA
+	c.SetTransparency(0xE3)                     // default → opaque ULA
 
 	ulaRGBA := make([]byte, Width*4)
 	ulaRGBA[0], ulaRGBA[1], ulaRGBA[2], ulaRGBA[3] = 0x10, 0x20, 0x30, 0xFF
