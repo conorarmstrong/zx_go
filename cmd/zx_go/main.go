@@ -46,6 +46,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
+	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/rzx"
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
@@ -657,6 +658,40 @@ func userKeymapPath() string {
 	return filepath.Join(cfg, "zx_go", "keymap.json")
 }
 
+// configureClassicIntTiming sets the maskable frame interrupt to the
+// hardware-faithful narrow pulse for 128K-family models, replacing the legacy
+// "held for the whole frame" model. The held model re-fires the INT as soon as
+// interrupts are re-enabled, so when a game's ISR (or a DI section) spans the
+// frame boundary, it takes an interrupt that real hardware MISSES — drifting
+// timing-sensitive code (the cause of garbled sprites in Ghouls 'n' Ghosts).
+// Pulse/assert values come from next.FrameIntTiming, already validated against
+// a reference emulator. 48K keeps the legacy held model; the Next sets its own.
+// Opt out for A/B with ZX_GO_NO_INT_TIMING.
+func configureClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
+	if cpu == nil || model == roms.ModelNext {
+		return
+	}
+	var nr03 byte
+	switch model {
+	case roms.Model128K, roms.ModelPlus2:
+		nr03 = 0x02
+	case roms.ModelPlus3, roms.ModelPlus2A:
+		nr03 = 0x03
+	case roms.ModelPentagon:
+		nr03 = 0x04
+	default: // 48K and others: keep the legacy held-INT model.
+		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
+		return
+	}
+	if os.Getenv("ZX_GO_NO_INT_TIMING") != "" {
+		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
+		return
+	}
+	assert, pulse := next.FrameIntTiming(nr03, false)
+	cpu.IntAssertTstate = uint64(assert)
+	cpu.IntPulseTstates = uint64(pulse)
+}
+
 func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	if model == roms.ModelNext {
 		return newNextEmulator()
@@ -676,6 +711,7 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	}
 	ula := ula.New(mem, kbd)
 	cpu := z80.New(mem, ula)
+	configureClassicIntTiming(cpu, model)
 
 	// Classic-Spectrum SpecDrum/Covox DAC (both off until enabled from the
 	// Peripherals menu). Event-timed and mixed into the beeper by the ULA.
@@ -2387,6 +2423,9 @@ func main() {
 
 		// Automatic reboot after model switch
 		emu.reboot()
+		// Re-apply the per-model frame-INT timing (reboot's CPU reset keeps
+		// the fields, but the model just changed).
+		configureClassicIntTiming(emu.cpu, newModel)
 
 		// Update window title to show current model
 		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(currentModel)))
