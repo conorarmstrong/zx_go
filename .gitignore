@@ -118,3 +118,7 @@ cmd/zx_go/memdiff_cspect.go
 cmd/zx_go/memdiff_test.go
 cmd/zx_go/nrdiff_cspect.go
 cmd/zx_go/oracle_test.go
+
+# Local-only headless tape/snapshot diagnostic (env-gated; not part of the
+# shipped test suite).
+cmd/zx_go/tzxload_test.go
