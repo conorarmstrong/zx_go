@@ -164,6 +164,23 @@ func (tp *TapePlayer) Stop() {
 	tp.playing = false
 }
 
+// Resume re-enables playback WITHOUT restarting the current block (unlike
+// Play, which regenerates the block's pulses from the start). Used by the
+// loader-activity auto-pause: the tape is paused while the running program is
+// not reading edges (e.g. a multi-load game's menu, or inter-block
+// processing) so it doesn't advance past the next part, then resumed exactly
+// where it left off when the loader starts reading again. Update() continues
+// from the preserved pulse position (and re-generates only if a block boundary
+// was crossed).
+func (tp *TapePlayer) Resume() {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	if len(tp.blocks) == 0 || tp.blockIdx >= len(tp.blocks) {
+		return
+	}
+	tp.playing = true
+}
+
 // IsPlaying returns whether the tape is playing.
 func (tp *TapePlayer) IsPlaying() bool {
 	tp.mu.Lock()

@@ -70,6 +70,13 @@ const (
 	// (the emulation core sustains well over 64 frames per 20 ms tick).
 	tapeTurboFramesPerTick = 64
 
+	// tapeAutoPauseTicks is how many consecutive ticks the loader can be idle
+	// (no tape-rate $FE reads) before the tape is auto-paused so it doesn't
+	// advance past the next multi-load part. The loader polls continuously
+	// while loading, so this only triggers when the program is actually
+	// running (menu / inter-block processing).
+	tapeAutoPauseTicks = 10
+
 	// tapeLoadReadThreshold is the per-frame port-$FE read count above which
 	// the CPU is considered to be in a tape loader's edge-timing loop (which
 	// polls $FE thousands of times per frame) rather than a running game
@@ -140,6 +147,7 @@ type emulator struct {
 	// and the game runs at normal speed with audio — even if the tape still
 	// has blocks queued for a later multi-load stage.
 	tapeReadActive bool
+	tapeIdleTicks  int // consecutive ticks the loader has been idle (auto-pause)
 
 	// SD write-back (opt-in via --sd-writeback): the mounted image
 	// source + its file path, so guest writes can be persisted at
@@ -1039,6 +1047,29 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						// rate. The first loading tick runs at 1x (n=1) and sees
 						// the heavy reads, so turbo engages on the next tick.
 						e.tapeReadActive = heavyReads
+
+						// Loader-activity auto-pause: while the running program is
+						// not reading tape edges (a multi-load game's menu, or
+						// inter-block processing), pause the tape so it doesn't
+						// advance past the next part — which would mis-load it
+						// (garbled audio, no music). Resume the instant the loader
+						// starts reading again. This also stops the residual
+						// loading sound once a part has finished loading.
+						if e.ula != nil && os.Getenv("ZX_GO_NO_TAPE_AUTOPAUSE") == "" {
+							if tp := e.ula.GetTapePlayer(); tp != nil && tp.HasMoreBlocks() {
+								if heavyReads {
+									e.tapeIdleTicks = 0
+									if !tp.IsPlaying() {
+										tp.Resume()
+									}
+								} else if tp.IsPlaying() {
+									e.tapeIdleTicks++
+									if e.tapeIdleTicks > tapeAutoPauseTicks {
+										tp.Stop()
+									}
+								}
+							}
+						}
 					}
 
 					frameCount++
