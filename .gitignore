@@ -87,6 +87,10 @@ roms/next/sd.img
 /BOOT_LOG.md
 /docs/internal/
 
+# SAM Coupé implementation plan — references the SimCoupe emulator as the
+# hardware oracle throughout. Local-only, not part of the public repo.
+/sam_coupe.md
+
 # MAME runtime config written to the working dir when the oracle runs.
 /cfg/
 
