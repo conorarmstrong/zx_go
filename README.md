@@ -124,9 +124,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 
 Most emulators treat the Next as a fast 128K with extra registers. **zx_go emulates the real thing** — it is the most active area of the codebase.
 
-| | |
-| :---: | :---: |
-| ![NextZXOS Guide](guide.png) | ![ZX Spectrum +3 menu](screenshot_plus3.png) |
+![ZX Spectrum +3 / +2A menu](screenshot_plus3.png)
 
 **Authentic cold boot.** `./bin/zx_go --next` runs the genuine chain with no captured-state replay: FPGA bootrom splash → TBBLUE firmware → NextZXOS welcome → main menu. The **Browser** lists your SD card's `C:/`, **NextBASIC** runs interactively (type, `RUN`, `BREAK`), **128K BASIC** opens the real Sinclair "128" menu pixel-for-pixel, and pressing SPACE at the splash gives the firmware **config menu** that boots any machine personality.
 
