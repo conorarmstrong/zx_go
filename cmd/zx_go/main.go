@@ -33,6 +33,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
+	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
@@ -46,7 +47,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
-	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/rzx"
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
@@ -673,10 +673,14 @@ func userKeymapPath() string {
 // frame boundary, it takes an interrupt that real hardware MISSES — drifting
 // timing-sensitive code (the cause of garbled sprites in Ghouls 'n' Ghosts).
 // Pulse/assert values come from next.FrameIntTiming, already validated against
-// a reference emulator. 48K keeps the legacy held model; the Next sets its own.
+// a reference emulator. 48K keeps the legacy held model. The Next gets the same
+// narrow pulse (it boots in +3/128K timing, NR$03 "011") — this is what the
+// Machine-menu switch path relies on, since otherwise the Next inherits the
+// previous model's INT mode (e.g. 48K held), re-firing the frame INT across
+// DI'd ISR boundaries and garbling software sprites in 128K personality.
 // Opt out for A/B with ZX_GO_NO_INT_TIMING.
 func configureClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
-	if cpu == nil || model == roms.ModelNext {
+	if cpu == nil {
 		return
 	}
 	var nr03 byte
@@ -687,6 +691,8 @@ func configureClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
 		nr03 = 0x03
 	case roms.ModelPentagon:
 		nr03 = 0x04
+	case roms.ModelNext:
+		nr03 = 0x03 // NextZXOS boots in +3/128K timing (NR$03 default "011")
 	default: // 48K and others: keep the legacy held-INT model.
 		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
 		return
@@ -806,6 +812,18 @@ func (e *emulator) tapeLoadingActive() bool {
 	}
 	tp := e.ula.GetTapePlayer()
 	return tp != nil && tp.IsPlaying() && tp.HasMoreBlocks()
+}
+
+// tapeAudioMuted reports whether beeper audio should be muted because a
+// fast-tape load is in progress. Crucially this is decoupled from the per-tick
+// turbo burst: muting spans the WHOLE load — including the brief inter-block
+// gaps where the loader isn't reading edges this tick — so the output doesn't
+// blip on/off at every block boundary (the "stuttering noise" during a
+// multi-block load). When fast-tape is disabled the tape loads at 1x with its
+// authentic loading sound, so nothing is muted. Once the loader goes idle and
+// the tape auto-pauses, this returns false and the game's music plays.
+func (e *emulator) tapeAudioMuted() bool {
+	return e.fastTape.Load() && e.tapeLoadingActive()
 }
 
 func (e *emulator) startKeyProcessor() {
@@ -1023,11 +1041,16 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						if turbo {
 							n = tapeTurboFramesPerTick
 						}
-						// During turbo, 64 emulated frames collapse into one audio
-						// frame, so the reconstructed loading sound is garbled —
-						// mute it (the real screech is available at normal speed).
+						// Mute for the whole fast-tape load, not just the turbo
+						// ticks: at every inter-block gap the read rate dips and
+						// turbo would disengage for a tick, leaking one garbled
+						// mid-load frame + re-arming the DC blocker — an audible
+						// blip at each block boundary (the multi-load "stutter").
+						// tapeAudioMuted stays true across those gaps; it clears
+						// only when the tape auto-pauses (so music plays) or when
+						// fast-tape is off (so the real loading sound is audible).
 						if e.ula != nil {
-							e.ula.SetFastLoad(turbo)
+							e.ula.SetFastLoad(e.tapeAudioMuted())
 						}
 						heavyReads := false
 						for k := 0; k < n; k++ {

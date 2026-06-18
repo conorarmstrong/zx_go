@@ -242,15 +242,17 @@ func newNextEmulator() (*emulator, error) {
 	// held-assert model over-fired the frame INT at 28 MHz. Opt out with
 	// ZX_GO_NO_INT_TIMING=1 for held-assert A/B comparison; ZX_GO_INT_ASSERT
 	// overrides the assert tstate for frame-origin sweeps.
+	//
+	// Same setup the Machine-menu switch path uses (configureClassicIntTiming
+	// for ModelNext) so direct-boot and switch-to-Next behave identically; the
+	// ZX_GO_INT_ASSERT debug override is then layered on top.
+	configureClassicIntTiming(cpu, roms.ModelNext)
 	if os.Getenv("ZX_GO_NO_INT_TIMING") == "" {
-		assert, pulse := next.FrameIntTiming(0x03, false)
 		if v := os.Getenv("ZX_GO_INT_ASSERT"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
-				assert = n
+				cpu.IntAssertTstate = uint64(n)
 			}
 		}
-		cpu.IntAssertTstate = uint64(assert)
-		cpu.IntPulseTstates = uint64(pulse)
 	}
 	if path := os.Getenv("ZX_GO_SP_LOG"); path != "" {
 		if f, err := os.Create(path); err == nil {
