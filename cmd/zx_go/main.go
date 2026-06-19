@@ -350,6 +350,7 @@ type keyboardWidget struct {
 	widget.BaseWidget
 	onKeyDown   func(*fyne.KeyEvent)
 	onKeyUp     func(*fyne.KeyEvent)
+	onTypedRune func(rune)
 	onMouseMove func(dx, dy int)
 	onMouseBtn  func(btn int, pressed bool)
 
@@ -386,7 +387,11 @@ func (kw *keyboardWidget) TypedKey(key *fyne.KeyEvent) {
 }
 
 func (kw *keyboardWidget) TypedRune(r rune) {
-	// Ignore typed runes
+	// Typed characters drive layout-independent symbol entry (see
+	// emulator.handleTypedRune). Physical keys still drive letters/digits.
+	if kw.onTypedRune != nil {
+		kw.onTypedRune(r)
+	}
 }
 
 func (kw *keyboardWidget) FocusGained() {}
@@ -929,6 +934,20 @@ func (e *emulator) dispatchJoystick(direction int, pressed bool) {
 	}
 }
 
+// handleTypedRune injects a typed symbol character (e.g. '.', ';', ':') into
+// the Spectrum keyboard as a layout-independent SYMBOL-SHIFT combination — so
+// symbols type correctly whatever the host keyboard layout (a French AZERTY
+// full stop is Shift+';'-key, which the physical key path can't express).
+// Letters/digits are ignored here (TypeRune returns false) and keep coming from
+// the physical key path so games can hold them. The ZX80/81 use a different
+// keyword keyboard, so this is Spectrum/Next-only.
+func (e *emulator) handleTypedRune(r rune) {
+	if e.kbd == nil || e.zx8x != nil || e.paused.Load() {
+		return
+	}
+	e.kbd.TypeRune(r)
+}
+
 func (e *emulator) handleKeyUp(ev *fyne.KeyEvent) {
 	e.keyMutex.Lock()
 
@@ -1097,6 +1116,10 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 					frameCount++
 					atomic.AddInt32(&e.frameCounter, 1)
+					// Advance the typed-character symbol pulse (no-op when idle).
+					if e.kbd != nil {
+						e.kbd.Tick()
+					}
 					if e.peripherals != nil {
 						e.peripherals.Frame()
 					}
@@ -2332,6 +2355,7 @@ func main() {
 		emu.handleKeyDown,
 		emu.handleKeyUp,
 	)
+	keyboardWidget.onTypedRune = emu.handleTypedRune
 	keyboardWidget.onMouseMove = func(dx, dy int) {
 		emu.peripherals.KempstonMouseMove(dx, dy)
 	}

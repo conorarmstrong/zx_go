@@ -21,7 +21,22 @@ type Keyboard struct {
 	// Special key states
 	breakPressed bool
 	nmiCallback  func() // Callback for NMI (Multiface red button simulation)
+
+	// Typed-character symbol pulse. TypeRune injects the SYMBOL-SHIFT
+	// combination for a typed symbol (e.g. '.', ';', ':') as a brief overlay
+	// on the physical matrix, so symbols type correctly regardless of the host
+	// keyboard layout (a French AZERTY '.' is Shift+';'-key, which the physical
+	// key path can't express). While pulseFrames > 0, Scan applies pulseMatrix
+	// and releases CAPS SHIFT (so a host Shift used to reach the symbol doesn't
+	// corrupt it). pulseFrames counts down once per 50 Hz frame in Tick().
+	pulseMatrix [8]byte
+	pulseFrames int
 }
+
+// runePulseFrames is how many 50 Hz frames an injected symbol is held. Two
+// frames guarantees the ROM's keyboard scan sees it at least once while keeping
+// the overlay window small enough not to disturb concurrently-held keys.
+const runePulseFrames = 2
 
 type keyMapping struct {
 	row, mask byte
@@ -32,6 +47,9 @@ func New() *Keyboard {
 	k := &Keyboard{}
 	for i := range k.matrix {
 		k.matrix[i] = 0xFF // All keys up
+	}
+	for i := range k.pulseMatrix {
+		k.pulseMatrix[i] = 0xFF
 	}
 	k.initKeyMap()
 	return k
@@ -144,10 +162,18 @@ func (k *Keyboard) Scan(addr uint16) byte {
 
 	result := byte(0xFF)
 	addrHi := byte(addr >> 8)
+	pulse := k.pulseFrames > 0
 
 	for row := 0; row < 8; row++ {
 		if (addrHi & (1 << row)) == 0 {
-			result &= k.matrix[row]
+			m := k.matrix[row]
+			if pulse {
+				if row == 0 {
+					m |= 0x01 // release CAPS SHIFT so a host Shift doesn't corrupt the symbol
+				}
+				m &= k.pulseMatrix[row] // overlay the injected SYMBOL-SHIFT combo
+			}
+			result &= m
 		}
 	}
 	return result
@@ -266,24 +292,89 @@ func (k *Keyboard) initKeyMap() {
 		desktop.KeySuperLeft:    {{7, 0x02}}, // Cmd on macOS, Win key elsewhere
 		desktop.KeySuperRight:   {{7, 0x02}},
 
-		// Fyne key constants for punctuation (using Symbol Shift combinations)
-		fyne.KeyBackTick:     {{7, 0x02}, {4, 0x01}}, // Symbol Shift + 0 = Backtick
-		fyne.KeyApostrophe:   {{7, 0x02}, {5, 0x01}}, // Symbol Shift + P = Quote
-		fyne.KeySemicolon:    {{7, 0x02}, {2, 0x02}}, // Symbol Shift + O = Semicolon
-		fyne.KeyBackslash:    {{7, 0x02}, {6, 0x01}}, // Symbol Shift + ENTER = Backslash
-		fyne.KeyRightBracket: {{7, 0x02}, {5, 0x10}}, // Symbol Shift + Y = Right bracket
-		fyne.KeyLeftBracket:  {{7, 0x02}, {5, 0x08}}, // Symbol Shift + U = Left bracket
-		fyne.KeyMinus:        {{7, 0x02}, {6, 0x08}}, // Symbol Shift + J = Hyphen/minus
-		fyne.KeyEqual:        {{7, 0x02}, {6, 0x02}}, // Symbol Shift + L = Equals
-		fyne.KeyPeriod:       {{7, 0x02}, {7, 0x04}}, // Symbol Shift + M = Period
-		fyne.KeyComma:        {{7, 0x02}, {7, 0x08}}, // Symbol Shift + N = Comma
+		// Punctuation/symbols are NOT mapped from physical key names here.
+		// A key's physical name is layout-dependent and shift-independent
+		// (a French AZERTY '.' is Shift+';'-key — same name as ';'), so a
+		// physical mapping can't tell ';' from '.' and a host Shift would add
+		// CAPS SHIFT and corrupt the symbol. Instead symbols are driven from
+		// the typed character via TypeRune/symbolRuneTable, which is correct
+		// for every keyboard layout.
 
-		// Additional string-based keys for special characters
-		"\"": {{7, 0x02}, {5, 0x01}}, // Symbol Shift + P = Quote (double quote)
-
-		// Additional useful keys
+		// Control keys.
 		fyne.KeyTab:    {{0, 0x01}, {7, 0x01}}, // CAPS SHIFT + SPACE (BREAK)
 		fyne.KeyEscape: {{0, 0x01}, {7, 0x01}}, // CAPS SHIFT + SPACE (BREAK)
+	}
+}
+
+// symbolRuneTable maps a typed character to the second key of its Spectrum
+// SYMBOL-SHIFT combination (TypeRune adds SYMBOL SHIFT itself). It is the
+// layout-independent source of truth for symbols; letters and digits are NOT
+// here — they come from the physical key path so games can hold them.
+// Combos use the same row/bit layout as the matrix (Z=row0 bit1, O=row5 bit1,
+// M=row7 bit2, etc.). Verified against the ZX Spectrum symbol-shift legend.
+var symbolRuneTable = map[rune][]keyMapping{
+	'!':  {{3, 0x01}}, // SYM+1
+	'@':  {{3, 0x02}}, // SYM+2
+	'#':  {{3, 0x04}}, // SYM+3
+	'$':  {{3, 0x08}}, // SYM+4
+	'%':  {{3, 0x10}}, // SYM+5
+	'&':  {{4, 0x10}}, // SYM+6
+	'\'': {{4, 0x08}}, // SYM+7
+	'(':  {{4, 0x04}}, // SYM+8
+	')':  {{4, 0x02}}, // SYM+9
+	'_':  {{4, 0x01}}, // SYM+0
+	'<':  {{2, 0x08}}, // SYM+R
+	'>':  {{2, 0x10}}, // SYM+T
+	';':  {{5, 0x02}}, // SYM+O
+	'"':  {{5, 0x01}}, // SYM+P
+	'=':  {{6, 0x02}}, // SYM+L
+	'+':  {{6, 0x04}}, // SYM+K
+	'-':  {{6, 0x08}}, // SYM+J
+	'^':  {{6, 0x10}}, // SYM+H
+	':':  {{0, 0x02}}, // SYM+Z
+	'£':  {{0, 0x04}}, // SYM+X
+	'?':  {{0, 0x08}}, // SYM+C
+	'/':  {{0, 0x10}}, // SYM+V
+	'*':  {{7, 0x10}}, // SYM+B
+	',':  {{7, 0x08}}, // SYM+N
+	'.':  {{7, 0x04}}, // SYM+M
+}
+
+// TypeRune injects the Spectrum SYMBOL-SHIFT combination for the typed
+// character r (e.g. '.', ';', ':') as a brief overlay pulse, independent of the
+// host keyboard layout. Returns true if r is a known Spectrum symbol (letters
+// and digits return false — they are handled by the physical key path).
+func (k *Keyboard) TypeRune(r rune) bool {
+	combo, ok := symbolRuneTable[r]
+	if !ok {
+		return false
+	}
+	k.matrixMu.Lock()
+	defer k.matrixMu.Unlock()
+	for i := range k.pulseMatrix {
+		k.pulseMatrix[i] = 0xFF
+	}
+	k.pulseMatrix[7] &= ^byte(0x02) // SYMBOL SHIFT
+	for _, m := range combo {
+		k.pulseMatrix[m.row] &= ^m.mask
+	}
+	k.pulseFrames = runePulseFrames
+	return true
+}
+
+// Tick advances the typed-character symbol pulse by one 50 Hz frame, releasing
+// it when it expires. Safe to call every frame for every machine (no-op when no
+// pulse is active).
+func (k *Keyboard) Tick() {
+	k.matrixMu.Lock()
+	defer k.matrixMu.Unlock()
+	if k.pulseFrames > 0 {
+		k.pulseFrames--
+		if k.pulseFrames == 0 {
+			for i := range k.pulseMatrix {
+				k.pulseMatrix[i] = 0xFF
+			}
+		}
 	}
 }
 
@@ -339,7 +430,7 @@ func zx8xKeyMap() map[fyne.KeyName][]keyMapping {
 		// Row 7: SPACE, ., M, N, B
 		fyne.KeySpace:  {{7, 0x01}},
 		fyne.KeyPeriod: {{7, 0x02}},
-		fyne.KeyM: {{7, 0x04}}, "m": {{7, 0x04}},
+		fyne.KeyM:      {{7, 0x04}}, "m": {{7, 0x04}},
 		fyne.KeyN: {{7, 0x08}}, "n": {{7, 0x08}},
 		fyne.KeyB: {{7, 0x10}}, "b": {{7, 0x10}},
 		// Cursor keys: SHIFT + 5/6/7/8 (same arrow scheme as the Spectrum)
