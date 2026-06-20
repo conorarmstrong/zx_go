@@ -93,6 +93,7 @@ func (m *Machine) WritePort(addr uint16, val byte) {
 	case portKeyboard: // BORDER (colour + MIC + BEEP + SOFF)
 		m.flushRaster() // border/SOFF affect display: flush at the old value first
 		m.border = val
+		m.Mem.SetScreenOff(val&borderSOFF != 0) // SOFF changes screen contention
 	case portLMPR:
 		m.Mem.SetLMPR(val)
 	case portHMPR:

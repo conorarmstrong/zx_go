@@ -2,6 +2,7 @@ package sam
 
 import (
 	"image"
+	"os"
 
 	"github.com/conorarmstrong/zx_go/pkg/saa1099"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
@@ -70,6 +71,12 @@ func New(rom0, rom1 []byte) *Machine {
 	// raster up to the current line before the memory changes.
 	m.frame = image.NewRGBA(image.Rect(0, 0, samActiveWidth, samActiveHeight))
 	m.Mem.SetVideoWriteHook(m.flushRaster)
+	// ASIC memory + I/O contention (z80.New wired ContendMemory via the
+	// SetTStatePtr/ContendMemory interfaces); MemContend gates the memory side.
+	m.CPU.MemContend = true
+	if os.Getenv("ZX_GO_SAM_NO_CONTENTION") != "" {
+		m.Mem.SetContentionEnabled(false)
+	}
 	return m
 }
 

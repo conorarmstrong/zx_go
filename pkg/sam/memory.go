@@ -44,6 +44,15 @@ type Memory struct {
 	// onVideoWrite, when set, is invoked whenever the CPU writes to displayed
 	// video memory — the hook the renderer uses for line-accurate updates.
 	onVideoWrite func()
+
+	// ASIC contention (Sprint 7). tstatePtr is the CPU's frame-relative T-state
+	// counter (shared via SetTStatePtr); activeContention is the per-T-state
+	// delay table for the current screen mode; contentionEnabled gates it all
+	// (ZX_GO_SAM_NO_CONTENTION opt-out); screenOff mirrors BORDER bit 7.
+	tstatePtr         *uint64
+	activeContention  []byte
+	contentionEnabled bool
+	screenOff         bool
 }
 
 const (
@@ -87,7 +96,9 @@ func NewMemoryWithRAM(rom0, rom1 []byte, internalKB, externalMB int) *Memory {
 	if externalMB > 0 {
 		m.extRAM = make([][PageSize]byte, externalMB*extPagesPerMB)
 	}
+	m.contentionEnabled = true
 	m.updatePaging()
+	m.updateContention()
 	return m
 }
 
@@ -178,9 +189,6 @@ func (m *Memory) Write(addr uint16, val byte) {
 	}
 }
 
-// ContendPort is the per-I/O ASIC contention hook. No-op until Sprint 7.
-func (m *Memory) ContendPort(port uint16) {}
-
 // Paging-register writes (called by the I/O port dispatch in Sprint 2). LMPR,
 // HMPR, LEPR and HEPR change the CPU map; VMPR only selects the displayed page.
 func (m *Memory) SetLMPR(v byte) { m.lmpr = v; m.updatePaging() }
@@ -193,6 +201,7 @@ func (m *Memory) SetHEPR(v byte) { m.hepr = v; m.updatePaging() }
 func (m *Memory) SetVMPR(v byte) {
 	m.vmpr = v & (vmprModeMask | vmprPageMask)
 	m.recomputeVideoSections()
+	m.updateContention() // screen mode selects the contention table
 }
 
 // Register read-backs. VMPR reads OR in the RXMIDI status bit (SimCoupe

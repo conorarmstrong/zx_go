@@ -86,7 +86,7 @@ func TestRenderBootScreen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 400; i++ { // enough frames for the (contended) boot to draw
 		m.RunFrame()
 	}
 	t.Logf("boot screen mode = %d, VMPR=%#02x, border=%#x", m.Mem.ScreenMode(), m.Mem.VMPR(), m.BorderColour())
