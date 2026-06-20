@@ -49,6 +49,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/rzx"
+	"github.com/conorarmstrong/zx_go/pkg/sam"
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 	"github.com/conorarmstrong/zx_go/pkg/version"
@@ -126,6 +127,12 @@ type emulator struct {
 	// display has no ULA. When set, the render loop reads zx8x.Image() and the
 	// ula/peripherals fields are nil.
 	zx8x *zx8x.Machine
+
+	// sam is non-nil only for the SAM Coupé, which has its own memory map,
+	// I/O/ASIC, keyboard and sound (pkg/sam). When set, the run loop calls
+	// sam.RunFrame(), the render loop reads sam.Render(), keys route to sam.Kbd,
+	// and the ula/mem/kbd fields hold inert stand-ins (the SAM uses its own).
+	sam *sam.Machine
 
 	// speccyDAC is the classic-Spectrum SpecDrum/Covox 8-bit DAC (non-nil on
 	// 48K/128K/+2/+2A/+3; nil on Next/ZX8x). Toggled from the Peripherals menu.
@@ -718,6 +725,9 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 	if isZX8x(model) {
 		return newZX8xEmulator(model)
 	}
+	if model == roms.ModelSAM {
+		return newSamEmulator()
+	}
 	kbd := keyboard.New()
 	if path := userKeymapPath(); path != "" {
 		if err := kbd.LoadOverrides(path); err != nil {
@@ -839,7 +849,11 @@ func (e *emulator) startKeyProcessor() {
 			select {
 			case ks := <-e.keyQueue:
 				// Process the key state change
-				e.kbd.HandleKeyWithModifiers(ks.key, ks.pressed, false, false, false, false)
+				if e.sam != nil {
+					e.samSetKey(ks.key, ks.pressed)
+				} else {
+					e.kbd.HandleKeyWithModifiers(ks.key, ks.pressed, false, false, false, false)
+				}
 			case <-e.stopChan:
 				return
 			}
@@ -942,7 +956,7 @@ func (e *emulator) dispatchJoystick(direction int, pressed bool) {
 // the physical key path so games can hold them. The ZX80/81 use a different
 // keyword keyboard, so this is Spectrum/Next-only.
 func (e *emulator) handleTypedRune(r rune) {
-	if e.kbd == nil || e.zx8x != nil || e.paused.Load() {
+	if e.kbd == nil || e.zx8x != nil || e.sam != nil || e.paused.Load() {
 		return
 	}
 	e.kbd.TypeRune(r)
@@ -1002,6 +1016,8 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					switch {
 					case e.zx8x != nil:
 						e.zx8x.RunFrame()
+					case e.sam != nil:
+						e.sam.RunFrame()
 					case e.rzxPlayback.Load() != nil:
 						playback := e.rzxPlayback.Load()
 						e.cpu.ExecuteRZXFrame(uint64(playback.Instructions()))
@@ -2124,6 +2140,12 @@ func main() {
 	// hooks against a freshly-constructed emulator, run frames,
 	// optionally dump state, exit.
 	if flags.headless {
+		// The SAM has its own memory/IO and isn't wired into runHeadless's
+		// Spectrum-bound instrumentation; use its dedicated headless path.
+		if flags.startInSAM {
+			runSAMHeadless(flags)
+			return
+		}
 		runHeadless(flags)
 		return
 	}
@@ -2162,6 +2184,8 @@ func main() {
 		currentModel = roms.ModelZX80
 	case flags.startInPentagon:
 		currentModel = roms.ModelPentagon
+	case flags.startInSAM:
+		currentModel = roms.ModelSAM
 	}
 	_ = cfg.Model
 	currentScale := 200
@@ -2393,6 +2417,7 @@ func main() {
 		emu.kbd = fresh.kbd
 		emu.peripherals = fresh.peripherals
 		emu.zx8x = fresh.zx8x
+		emu.sam = fresh.sam
 		emu.model = newModel
 		emu.nextEsxdos, emu.nextDAC, emu.nextRegs = fresh.nextEsxdos, fresh.nextDAC, fresh.nextRegs
 		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
@@ -2428,10 +2453,10 @@ func main() {
 			}
 		}
 
-		// Crossing the ZX80/ZX81 boundary changes the machine type entirely
-		// (no ULA / peripherals), so rebuild the core instead of the in-place
-		// Spectrum↔Spectrum paging swap below.
-		if isZX8x(newModel) || emu.zx8x != nil {
+		// Crossing the ZX80/ZX81 or SAM Coupé boundary changes the machine type
+		// entirely (own memory/IO, no Spectrum ULA), so rebuild the core instead
+		// of the in-place Spectrum↔Spectrum paging swap below.
+		if isZX8x(newModel) || emu.zx8x != nil || newModel == roms.ModelSAM || emu.sam != nil {
 			rebuildEmulatorCore(newModel)
 			return
 		}
@@ -3390,6 +3415,7 @@ func main() {
 			fyne.NewMenuItem("+2A", func() { switchModel(roms.ModelPlus2A) }),
 			fyne.NewMenuItem("+3", func() { switchModel(roms.ModelPlus3) }),
 			fyne.NewMenuItem("Pentagon 128", func() { switchModel(roms.ModelPentagon) }),
+			fyne.NewMenuItem("SAM Coupé", func() { switchModel(roms.ModelSAM) }),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Sinclair ZX81", func() { switchModel(roms.ModelZX81) }),
 			fyne.NewMenuItem("Sinclair ZX80", func() { switchModel(roms.ModelZX80) }),

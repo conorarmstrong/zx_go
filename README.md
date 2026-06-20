@@ -19,7 +19,7 @@ The 48K was the author's first computer; this began as a Go learning exercise an
 
 ## Highlights
 
-- 🖥️ **Ten machines, one emulator** — ZX80 · ZX81 · Spectrum 48K · 128K · +2 · +2A · +3 · Pentagon 128 · **Spectrum Next**.
+- 🖥️ **The whole family, one emulator** — ZX80 · ZX81 · Spectrum 48K · 128K · +2 · +2A · +3 · Pentagon 128 · **Spectrum Next** · **SAM Coupé**.
 - ⚡ **The Next, done properly** — authentic cold boot to NextZXOS, Layer 2 (incl. 320×256 / 640×256 hi-res), 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, Turbosound, DACs, RTC, and all four clocks up to 28 MHz.
 - 💾 **Every common format** — snapshots (`.sna`/`.z80`/`.szx`), tapes (`.tap`/`.tzx`), six disk formats, TR-DOS `.trd`, microdrive `.mdr`, `.NEX`, and RZX recordings.
 - 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
@@ -76,6 +76,7 @@ Prefer not to build? Grab a [pre-built binary](#installation).
 | **Spectrum +2A / +3** | ✅ Interactive | `$1FFD` 4-ROM paging; the +3 adds the integrated μPD765A FDC and disks. |
 | **Pentagon 128** | ✅ Interactive | Soviet clone: 128K + AY, **no contention**, 71680-T frame, TR-DOS `.trd` via the Beta Disk interface. `--pentagon`. |
 | **ZX Spectrum Next** | ✅ Cold-boots NextZXOS | Real FPGA boot chain → NextZXOS desktop; full custom hardware. See [below](#the-spectrum-next). |
+| **SAM Coupé** | ✅ Boots SAM BASIC | MGT's 1989 Z80B machine: custom ASIC (4 screen modes, 128-colour palette), 256/512K paging, SAA1099 stereo sound, WD1772 disk, ASIC contention. ROM 3.0 bundled. `--sam`. See [docs/sam-coupe.md](docs/sam-coupe.md). |
 
 Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A 4-ROM paging, all tape formats, and all six disk formats are supported. Switch models any time from the **Machine** menu (state is cold-wiped).
 
@@ -242,6 +243,7 @@ Wondering how zx_go stacks up against **CSpect**, **ZEsarUX**, and **MAME** (`tb
 | [User manual](docs/manual.md) | Day-to-day use: machines, loading, saving, peripherals, sound, shortcuts, troubleshooting. |
 | [Spectrum Next](docs/spectrum-next.md) | ROM install, SD-card setup, boot status, `.NEX`, licensing. |
 | [ZX80 / ZX81](docs/zx80-zx81.md) | The CPU-generated-display machines in detail. |
+| [SAM Coupé](docs/sam-coupe.md) | The MGT SAM Coupé: modes, sound, disk, status. |
 | [Debuggers](DEBUGGER.md) | Full visual + telnet + headless reference. |
 | [Compatibility](docs/compatibility.md) | The tested-title manifest and how class evidence works. |
 | [Comparison](COMPARISON.md) | vs. other Spectrum Next emulators. |

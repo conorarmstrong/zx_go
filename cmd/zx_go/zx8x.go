@@ -59,5 +59,8 @@ func (e *emulator) renderFrame() *image.RGBA {
 	if e.zx8x != nil {
 		return e.zx8x.Image()
 	}
+	if e.sam != nil {
+		return e.sam.Render()
+	}
 	return e.ula.Render()
 }
