@@ -59,6 +59,11 @@ const (
 	// ModelPentagon is the Soviet ZX Spectrum 128 clone: 128K paging and AY
 	// like the 128K, but with no memory contention and a longer 71680-T frame.
 	ModelPentagon
+	// ModelSAM is the MGT SAM Coupé (1989): a Z80B at 6 MHz with a custom ASIC
+	// (four screen modes, 128-colour palette), 256/512K paged memory, an SAA1099
+	// stereo sound chip and a WD1772 floppy controller. Self-contained in
+	// pkg/sam (like pkg/zx8x). Appended last to keep existing iota values stable.
+	ModelSAM
 )
 
 // ROMMappingEntry defines how ROMs are mapped in memory
@@ -263,6 +268,8 @@ func GetModelName(model SpectrumModel) string {
 		return "Sinclair ZX80"
 	case ModelPentagon:
 		return "Pentagon 128"
+	case ModelSAM:
+		return "SAM Coupé"
 	default:
 		return "Unknown Model"
 	}
