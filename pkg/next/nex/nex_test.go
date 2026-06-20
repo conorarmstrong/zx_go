@@ -16,17 +16,17 @@ type buildOpts struct {
 	version     string
 	border      byte
 	sp, pc      uint16
-	numBanks    uint16
+	numBanks    byte // byte 9 (informational; the bank stream is driven by bankLoad)
+	numFiles    uint16
 	bankLoad    [MaxBanks]bool
 	bankData    map[int][]byte // 16K each
-	hasPalette  bool
-	screenFlags byte // raw byte-10 override (escapes the helper bits)
-	hasCopper   bool
-	palette     []byte
-	copper      []byte
+	screenFlags byte           // raw byte-10 loading-screen flags
+	palette     []byte         // written iff the format says a palette is present (512)
+	screen      []byte         // loading-screen block bytes (caller sizes to match screenFlags)
 	startDelay  byte
 	preserve    byte
 	entryBank   byte
+	fileHandle  uint16
 }
 
 func buildNEX(o buildOpts) []byte {
@@ -36,39 +36,35 @@ func buildNEX(o buildOpts) []byte {
 		o.version = "V1.2"
 	}
 	copy(hdr[4:8], []byte(o.version))
+	hdr[9] = o.numBanks
 	hdr[10] = o.screenFlags
-	if o.hasPalette {
-		hdr[10] |= flagPalette
-	}
-	if o.hasCopper {
-		hdr[10] |= flagCopper
-	}
 	hdr[11] = o.border
 	binary.LittleEndian.PutUint16(hdr[12:14], o.sp)
 	binary.LittleEndian.PutUint16(hdr[14:16], o.pc)
-	binary.LittleEndian.PutUint16(hdr[16:18], o.numBanks)
+	binary.LittleEndian.PutUint16(hdr[16:18], o.numFiles)
 	for i := 0; i < MaxBanks; i++ {
 		if o.bankLoad[i] {
 			hdr[18+i] = 1
 		}
 	}
-	hdr[130] = o.startDelay
+	hdr[133] = o.startDelay
 	hdr[134] = o.preserve
 	hdr[139] = o.entryBank
+	binary.LittleEndian.PutUint16(hdr[140:142], o.fileHandle)
 
 	buf := new(bytes.Buffer)
 	buf.Write(hdr)
-	if o.hasPalette {
-		if o.palette == nil {
-			o.palette = make([]byte, PaletteSize)
+	// The palette block precedes the loading screen, present whenever a
+	// screen flag is set and the no-palette bit is clear.
+	if o.screenFlags != 0 && o.screenFlags&flagNoPalette == 0 {
+		pal := o.palette
+		if pal == nil {
+			pal = make([]byte, PaletteSize)
 		}
-		buf.Write(o.palette)
+		buf.Write(pal)
 	}
-	if o.hasCopper {
-		if o.copper == nil {
-			o.copper = make([]byte, CopperSize)
-		}
-		buf.Write(o.copper)
+	if o.screen != nil {
+		buf.Write(o.screen)
 	}
 	for _, bank := range LoadOrder {
 		if !o.bankLoad[bank] {
@@ -81,6 +77,42 @@ func buildNEX(o buildOpts) []byte {
 		buf.Write(data)
 	}
 	return buf.Bytes()
+}
+
+// TestParseSkipsLayer2LoadingScreen pins the real-world bug: a .NEX
+// whose offset-10 flags request a Layer 2 loading screen (bit 0)
+// carries a 512-byte palette AND a 49152-byte Layer 2 screen before
+// the bank stream. The parser must skip both so the banks land at the
+// right file offset. (Most published Next games — nextoid, warhawk,
+// spectron — set bit 0, so getting this wrong corrupts every bank and
+// the game crashes back to the menu.)
+func TestParseSkipsLayer2LoadingScreen(t *testing.T) {
+	hdr := make([]byte, HeaderSize)
+	copy(hdr[0:4], Magic[:])
+	copy(hdr[4:8], []byte("V1.2"))
+	hdr[9] = 1     // 1 bank to load (banks-to-load count is byte 9)
+	hdr[10] = 0x01 // bit 0 = Layer 2 loading screen present
+	hdr[18+5] = 1  // bank 5 present (first in load order)
+
+	buf := new(bytes.Buffer)
+	buf.Write(hdr)
+	buf.Write(bytes.Repeat([]byte{0xAA}, 512))       // palette
+	buf.Write(bytes.Repeat([]byte{0xBB}, 49152))     // Layer 2 screen
+	buf.Write(bytes.Repeat([]byte{0x55}, BankSize))  // bank 5 payload
+
+	got, err := Parse(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.Banks[5] == nil || got.Banks[5][0] != 0x55 || got.Banks[5][BankSize-1] != 0x55 {
+		t.Fatalf("bank 5 misaligned: got %#x, want 0x55 (Layer 2 screen not skipped)", got.Banks[5][0])
+	}
+	if len(got.Palette) != 512 || got.Palette[0] != 0xAA {
+		t.Errorf("palette not parsed: len=%d", len(got.Palette))
+	}
+	if len(got.Screen) != 49152 || got.Screen[0] != 0xBB {
+		t.Errorf("Layer 2 screen not parsed: len=%d", len(got.Screen))
+	}
 }
 
 func TestParseRejectsBadMagic(t *testing.T) {
@@ -119,7 +151,13 @@ func TestParseWithPalette(t *testing.T) {
 	for i := range pal {
 		pal[i] = byte(i & 0xFF)
 	}
-	data := buildNEX(buildOpts{hasPalette: true, palette: pal})
+	// A palette only appears alongside a loading screen; pair it with a
+	// ULA screen (the smallest, 6912 bytes).
+	data := buildNEX(buildOpts{
+		screenFlags: flagULA,
+		palette:     pal,
+		screen:      bytes.Repeat([]byte{0xCC}, screenULA),
+	})
 	got, err := Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -131,6 +169,9 @@ func TestParseWithPalette(t *testing.T) {
 		if got.Palette[i] != b {
 			t.Errorf("palette[%d] = %#x, want %#x", i, got.Palette[i], b)
 		}
+	}
+	if len(got.Screen) != screenULA || got.Screen[0] != 0xCC {
+		t.Errorf("ULA screen not parsed: len=%d", len(got.Screen))
 	}
 }
 
@@ -162,15 +203,15 @@ func TestParseBanksInLoadOrder(t *testing.T) {
 	}
 }
 
-func TestParsePaletteCopperAndBank(t *testing.T) {
-	// Palette + Copper + one bank — Sprint 4's full read sequence
-	// (no screen-mode bits because Sprint 4 refuses those).
+func TestParsePaletteScreenAndBank(t *testing.T) {
+	// Palette + Layer 2 screen + one bank — the full optional-section
+	// read sequence, with the bank required to land correctly after it.
 	o := buildOpts{
-		hasPalette: true,
-		hasCopper:  true,
-		numBanks:   1,
-		bankData:   map[int][]byte{0: bytes.Repeat([]byte{0xC0}, BankSize)},
-		entryBank:  0,
+		screenFlags: flagLayer2,
+		screen:      bytes.Repeat([]byte{0xBB}, screenLayer2),
+		numBanks:    1,
+		bankData:    map[int][]byte{0: bytes.Repeat([]byte{0xC0}, BankSize)},
+		entryBank:   0,
 	}
 	o.bankLoad[0] = true
 	data := buildNEX(o)
@@ -182,34 +223,100 @@ func TestParsePaletteCopperAndBank(t *testing.T) {
 	if len(got.Palette) != PaletteSize {
 		t.Errorf("palette length = %d, want %d", len(got.Palette), PaletteSize)
 	}
-	if len(got.Copper) != CopperSize {
-		t.Errorf("copper length = %d, want %d", len(got.Copper), CopperSize)
+	if len(got.Screen) != screenLayer2 {
+		t.Errorf("screen length = %d, want %d", len(got.Screen), screenLayer2)
 	}
-	if _, ok := got.Banks[0]; !ok {
-		t.Errorf("bank 0 missing")
+	if b, ok := got.Banks[0]; !ok || b[0] != 0xC0 {
+		t.Errorf("bank 0 missing or misaligned")
 	}
 }
 
-func TestParseRefusesUnsupportedScreenModes(t *testing.T) {
+// TestParseLoadingScreenSizes verifies each loading-screen kind is read
+// at its exact size so the bank that follows it stays aligned. A bank
+// filled with a marker byte must survive intact (it would be corrupted
+// by the screen bytes if the size were wrong).
+func TestParseLoadingScreenSizes(t *testing.T) {
 	cases := []struct {
 		name string
 		flag byte
+		size int
 	}{
-		{"Layer 2", flagLayer2},
-		{"ULA", flagULA},
-		{"LoRes", flagLoRes},
-		{"HiRes", flagHiRes},
-		{"Timex", flagTimex},
-		{"ULAnext", flagULAnext},
+		{"Layer2", flagLayer2, screenLayer2},
+		{"ULA", flagULA, screenULA},
+		{"LoRes", flagLoRes, screenLoRes},
+		{"HiRes", flagHiRes, screenHiRes},
+		{"HiColour", flagHiColour, screenHiColour},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			data := buildNEX(buildOpts{screenFlags: c.flag})
-			_, err := Parse(bytes.NewReader(data))
-			if err == nil {
-				t.Errorf("Parse with %s flag set: expected error, got nil", c.name)
+			o := buildOpts{
+				screenFlags: c.flag,
+				screen:      bytes.Repeat([]byte{0xEE}, c.size),
+				bankData:    map[int][]byte{5: bytes.Repeat([]byte{0x55}, BankSize)},
+			}
+			o.bankLoad[5] = true
+			got, err := Parse(bytes.NewReader(buildNEX(o)))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(got.Screen) != c.size {
+				t.Errorf("%s screen length = %d, want %d", c.name, len(got.Screen), c.size)
+			}
+			if got.Banks[5] == nil || got.Banks[5][0] != 0x55 {
+				t.Errorf("%s: bank 5 misaligned (screen size wrong)", c.name)
 			}
 		})
+	}
+}
+
+// TestParseNoPaletteBit: bit 7 (0x80) suppresses the palette block even
+// when a loading screen is present, so the bank must land 512 bytes
+// earlier than it otherwise would.
+func TestParseNoPaletteBit(t *testing.T) {
+	o := buildOpts{
+		screenFlags: flagLayer2 | flagNoPalette,
+		screen:      bytes.Repeat([]byte{0xBB}, screenLayer2),
+		bankData:    map[int][]byte{5: bytes.Repeat([]byte{0x55}, BankSize)},
+	}
+	o.bankLoad[5] = true
+	got, err := Parse(bytes.NewReader(buildNEX(o)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.Header.HasPalette() {
+		t.Errorf("HasPalette = true with no-palette bit set")
+	}
+	if len(got.Palette) != 0 {
+		t.Errorf("palette read (%d bytes) despite no-palette bit", len(got.Palette))
+	}
+	if got.Banks[5] == nil || got.Banks[5][0] != 0x55 {
+		t.Errorf("bank 5 misaligned with no-palette bit")
+	}
+}
+
+// TestParseHeaderFieldOffsets pins the header fields whose offsets the
+// original parser had wrong (banks-to-load vs extra-files were swapped;
+// start delay read from the loading-bar byte) plus the file handle.
+func TestParseHeaderFieldOffsets(t *testing.T) {
+	o := buildOpts{numBanks: 9, numFiles: 3, startDelay: 7, entryBank: 4, fileHandle: 0x4000}
+	got, err := Parse(bytes.NewReader(buildNEX(o)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.Header.NumBanks != 9 {
+		t.Errorf("NumBanks = %d, want 9 (byte 9)", got.Header.NumBanks)
+	}
+	if got.Header.NumFiles != 3 {
+		t.Errorf("NumFiles = %d, want 3 (byte 16-17)", got.Header.NumFiles)
+	}
+	if got.Header.StartDelay != 7 {
+		t.Errorf("StartDelay = %d, want 7 (byte 133)", got.Header.StartDelay)
+	}
+	if got.Header.EntryBank != 4 {
+		t.Errorf("EntryBank = %d, want 4 (byte 139)", got.Header.EntryBank)
+	}
+	if got.Header.FileHandle != 0x4000 {
+		t.Errorf("FileHandle = %#x, want 0x4000 (byte 140-141)", got.Header.FileHandle)
 	}
 }
 

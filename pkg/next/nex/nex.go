@@ -64,63 +64,74 @@ func computeLoadOrder() []int {
 // that drive .NEX loading. Fields not directly modelled here are
 // available via RawHeader for future extension.
 type Header struct {
-	Version     string // e.g. "V1.2"
-	RAMRequired byte   // 0 = 768K, 1 = 1792K
-	NumFiles    byte   // NextZXOS support files (rare)
-	ScreenFlags byte   // bitmask, see HasPalette / HasScreen / HasCopper
-	Border      byte
-	SP          uint16
-	PC          uint16
-	NumBanks    uint16         // number of banks present in the file
-	BankLoad    [MaxBanks]bool // true for each 16K bank that is in the file
-	StartDelay  byte           // frames to delay before launching
-	Preserve    byte           // 1 = preserve NextRegs across load
-	CoreMajor   byte
-	CoreMinor   byte
-	CoreSub     byte
-	EntryBank   byte // bank mapped at 0xC000 before JP PC
+	Version     string         // e.g. "V1.2"
+	RAMRequired byte           // byte 8: 0 = 768K, 1 = 1792K
+	NumBanks    byte           // byte 9: number of 16K banks to load
+	ScreenFlags byte           // byte 10: loading-screen flags, see HasPalette / HasScreen
+	Border      byte           // byte 11
+	SP          uint16         // byte 12-13
+	PC          uint16         // byte 14-15
+	NumFiles    uint16         // byte 16-17: extra NextZXOS files (usually 0)
+	BankLoad    [MaxBanks]bool // byte 18-129: true for each 16K bank in the file
+	StartDelay  byte           // byte 133: frames to delay before launching
+	Preserve    byte           // byte 134: 1 = preserve NextRegs across load
+	CoreMajor   byte           // byte 135
+	CoreMinor   byte           // byte 136
+	CoreSub     byte           // byte 137
+	EntryBank   byte           // byte 139: bank mapped at 0xC000 before JP PC
+	FileHandle  uint16         // byte 140-141: 0 = close the .nex, else keep it open
 	RawHeader   [HeaderSize]byte
 }
 
 // Screen-flag bits in header byte 10 (per the SpecNext NEX_file_format
-// page). Sprint 4 supports palette and Copper; every "screen mode"
-// bit (Layer 2 / ULA / LoRes / HiRes / HiColor / Timex / ULAnext)
-// makes the file un-parseable here — Sprint 6's video stack will
-// land proper handling.
+// page). Each set bit means a loading-screen block of that kind sits
+// between the optional palette and the bank stream. Bit 7 suppresses
+// the palette block. There is no "palette" or "copper" bit: the palette
+// accompanies a loading screen, and standard NEX V1.2 carries no Copper
+// section.
 const (
-	flagPalette = 0x01
-	flagLayer2  = 0x02
-	flagULA     = 0x04
-	flagLoRes   = 0x08
-	flagHiRes   = 0x10
-	flagHiColor = 0x20 // also "copper present" on some pre-V1.2 spec drafts; see note below
-	flagTimex   = 0x40
-	flagULAnext = 0x80
+	flagLayer2    = 0x01 // 49152-byte Layer 2 (256x192) loading screen
+	flagULA       = 0x02 // 6912-byte classic ULA loading screen
+	flagLoRes     = 0x04 // 12288-byte LoRes (128x96) loading screen
+	flagHiRes     = 0x08 // 12288-byte Timex hi-res loading screen
+	flagHiColour  = 0x10 // 12288-byte Timex hi-colour loading screen
+	flagNoPalette = 0x80 // when set, the 512-byte palette block is omitted
 )
 
-// flagCopper is byte 11 bit 7 in pre-V1.2 spec drafts, or a separate
-// header byte in V1.2. Different reference loaders disagree; the
-// SpecNext wiki currently documents byte 10 bit 5 (0x20) as
-// "HiColor screen", with Copper presence flagged by a non-zero
-// header byte at offset 18+112 = 130 (where the bank count would
-// otherwise be). We treat byte 10 bit 5 as HiColor (refused) and
-// expose a Sprint-6-ready hook for Copper that currently sees
-// nothing.
-const flagCopper = flagHiColor
+// screenModeBits is the mask of the five loading-screen kinds.
+const screenModeBits = flagLayer2 | flagULA | flagLoRes | flagHiRes | flagHiColour
 
-// HasPalette reports whether the optional 512-byte palette section
-// follows the header.
-func (h *Header) HasPalette() bool { return h.ScreenFlags&flagPalette != 0 }
+// Loading-screen block sizes, in bytes, indexed by their flag bit.
+const (
+	screenLayer2   = 49152
+	screenULA      = 6912
+	screenLoRes    = 12288
+	screenHiRes    = 12288
+	screenHiColour = 12288
+)
 
-// HasCopper reports whether a 2048-byte Copper program follows.
-// Sprint 4 honours the bit if set on file but Sprint 6 will refine
-// against canonical reference loader behaviour.
-func (h *Header) HasCopper() bool { return h.ScreenFlags&flagCopper != 0 }
+// loadingScreens lists the loading-screen blocks in the file order the
+// canonical loader reads them (after the optional palette).
+var loadingScreens = []struct {
+	flag byte
+	size int
+	name string
+}{
+	{flagLayer2, screenLayer2, "Layer 2"},
+	{flagULA, screenULA, "ULA"},
+	{flagLoRes, screenLoRes, "LoRes"},
+	{flagHiRes, screenHiRes, "HiRes"},
+	{flagHiColour, screenHiColour, "HiColour"},
+}
 
-// screenModeBits is the mask of bits Sprint 4 cannot parse. Any
-// of these set in ScreenFlags causes Parse to refuse the file
-// rather than silently mis-align the bank stream.
-const screenModeBits = flagLayer2 | flagULA | flagLoRes | flagHiRes | flagTimex | flagULAnext
+// HasScreen reports whether any loading-screen block precedes the banks.
+func (h *Header) HasScreen() bool { return h.ScreenFlags&screenModeBits != 0 }
+
+// HasPalette reports whether the 512-byte palette block is present. The
+// palette accompanies a loading screen unless the no-palette bit is set.
+func (h *Header) HasPalette() bool {
+	return h.ScreenFlags != 0 && h.ScreenFlags&flagNoPalette == 0
+}
 
 // NEX is a fully-parsed .NEX file.
 type NEX struct {
@@ -162,49 +173,47 @@ func Parse(r io.Reader) (*NEX, error) {
 	copy(h.RawHeader[:], hdrBytes)
 	h.Version = string(bytes.TrimRight(hdrBytes[4:8], "\x00 "))
 	h.RAMRequired = hdrBytes[8]
-	h.NumFiles = hdrBytes[9]
+	h.NumBanks = hdrBytes[9]
 	h.ScreenFlags = hdrBytes[10]
 	h.Border = hdrBytes[11]
 	h.SP = binary.LittleEndian.Uint16(hdrBytes[12:14])
 	h.PC = binary.LittleEndian.Uint16(hdrBytes[14:16])
-	h.NumBanks = binary.LittleEndian.Uint16(hdrBytes[16:18])
+	h.NumFiles = binary.LittleEndian.Uint16(hdrBytes[16:18])
 	for i := 0; i < MaxBanks; i++ {
 		h.BankLoad[i] = hdrBytes[18+i] != 0
 	}
-	h.StartDelay = hdrBytes[130]
-	// Bytes 131–133 hold loading-bar pixel / colour fields kept
-	// only via RawHeader for now; Sprint 6's video stack will
-	// consume them when the loading-bar animation is wired.
-	// Byte 134 is the "preserve NextRegs across load" flag per
-	// the canonical SpecNext NEX_file_format spec.
+	// Bytes 130-132 hold loading-bar on/off, colour and per-bank
+	// delay (kept via RawHeader). Byte 133 is the launch start
+	// delay; byte 134 the "preserve NextRegs across load" flag.
+	h.StartDelay = hdrBytes[133]
 	h.Preserve = hdrBytes[134]
 	h.CoreMajor = hdrBytes[135]
 	h.CoreMinor = hdrBytes[136]
 	h.CoreSub = hdrBytes[137]
 	h.EntryBank = hdrBytes[139]
+	h.FileHandle = binary.LittleEndian.Uint16(hdrBytes[140:142])
 
 	out := &NEX{Header: h, Banks: make(map[int][]byte)}
 
-	// Refuse to parse files that need screen-mode handling we
-	// don't have yet. Loading the wrong number of bytes here
-	// would silently corrupt every subsequent bank, which is
-	// worse than a clean rejection. Sprint 6 will support
-	// Layer 2 / HiRes / HiColor / etc.
-	if mode := h.ScreenFlags & screenModeBits; mode != 0 {
-		return nil, fmt.Errorf("nex: unsupported screen-mode flags %#02x — Sprint 6 will handle Layer 2 / HiRes / HiColor / LoRes / Timex / ULAnext", mode)
-	}
-
+	// Optional sections precede the bank stream, in file order:
+	// the 512-byte palette (unless suppressed), then each requested
+	// loading screen. Reading the wrong size here mis-aligns every
+	// subsequent bank, so the sizes must match the format exactly.
 	if h.HasPalette() {
 		out.Palette = make([]byte, PaletteSize)
 		if _, err := io.ReadFull(r, out.Palette); err != nil {
 			return nil, fmt.Errorf("nex: read palette: %w", err)
 		}
 	}
-	if h.HasCopper() {
-		out.Copper = make([]byte, CopperSize)
-		if _, err := io.ReadFull(r, out.Copper); err != nil {
-			return nil, fmt.Errorf("nex: read copper: %w", err)
+	for _, s := range loadingScreens {
+		if h.ScreenFlags&s.flag == 0 {
+			continue
 		}
+		block := make([]byte, s.size)
+		if _, err := io.ReadFull(r, block); err != nil {
+			return nil, fmt.Errorf("nex: read %s loading screen: %w", s.name, err)
+		}
+		out.Screen = append(out.Screen, block...)
 	}
 
 	for _, bank := range LoadOrder {

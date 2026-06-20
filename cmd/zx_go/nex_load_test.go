@@ -122,6 +122,10 @@ func TestNextNexProgramsLoadIfPresent(t *testing.T) {
 		{"../../roms/next/sd/games/Next/Santa's Pressie/SantasPressie.nex", "santas-pressie", 7, 0x01},
 		// show512 — a 512-colour demo, arrows/SPACE interactive.
 		{"../../roms/next/sd/demos/show512/show512.nex", "show512-demo", 7, 0x01},
+		// ScrollNutter — a self-contained demo carrying a Layer 2 loading
+		// screen (flags=0x01); exercises a .nex whose optional palette +
+		// 48K Layer 2 screen sections must be skipped to align the banks.
+		{"../../roms/next/sd/demos/ScrollNutter/ScrollNutter.nex", "scrollnutter-demo", 7, 0x01},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
