@@ -52,6 +52,8 @@ func (m *Machine) ReadPort(addr uint16) (byte, bool) {
 		return m.Mem.HMPR(), true
 	case portVMPR:
 		return m.Mem.VMPR(), true
+	case portCLUT: // ASIC light-pen registers: LPEN (0x0F8) / HPEN (0x1F8)
+		return m.penByte(addr), true
 	case portKempston:
 		return 0x00, true // no joystick attached (active-high, idle 0)
 	default:

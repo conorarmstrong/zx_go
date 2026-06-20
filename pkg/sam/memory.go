@@ -204,6 +204,16 @@ func (m *Memory) SetVMPR(v byte) {
 	m.updateContention() // screen mode selects the contention table
 }
 
+// Reset returns the paging registers to their power-on state (ROM0 in section A,
+// internal RAM in B/C/D, no external paging, screen enabled), leaving installed
+// RAM/ROM contents untouched. The boot ROM re-initialises RAM itself.
+func (m *Memory) Reset() {
+	m.lmpr, m.hmpr, m.vmpr, m.lepr, m.hepr = 0, 0, 0, 0, 0
+	m.screenOff = false
+	m.updatePaging()
+	m.updateContention()
+}
+
 // Register read-backs. VMPR reads OR in the RXMIDI status bit (SimCoupe
 // SAMIO.cpp:476-477); the others read back the stored value.
 func (m *Memory) LMPR() byte { return m.lmpr }

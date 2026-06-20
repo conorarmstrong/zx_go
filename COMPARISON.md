@@ -73,7 +73,8 @@ support and that redistribution is not permitted.
 | ZX Spectrum Next | ✅ | ✅ | ✅ | ✅ |
 | ZX80 / ZX81 | ✅ ⁷ | ❌ | ✅ | ✅ |
 | Pentagon 128 | ✅ ⁹ | ❌ | ✅ | ✅ |
-| Other systems (CPC, MSX, Sam, QL, …) | ❌ | ❌ | ✅ | ✅ ⁶ |
+| SAM Coupé | ✅ ¹⁰ | ❌ | ✅ | ✅ |
+| Other systems (CPC, MSX, QL, …) | ❌ | ❌ | ✅ | ✅ ⁶ |
 
 ⁵ ZEsarUX emulates +2A/+3 but disk support is DSK-focused.
 ⁶ MAME is a multi-system emulator covering tens of thousands of machines;
@@ -86,6 +87,11 @@ images on the Pentagon (and the 48K/128K); `.scl` is not yet supported.
 ⁷ zx_go runs the genuine ZX80 (4K) and ZX81 (8K) ROMs with a faithful
 CPU-generated display, so each machine uses its own native keyword layout
 (e.g. PRINT is on O for the ZX80, P for the ZX81). `.P` / `.O` programs load.
+¹⁰ SAM Coupé (MGT, 1989): boots the bundled MGT ROM 3.0 to SAM BASIC; all four
+screen modes, the 128-colour palette + CLUT, SAA1099 stereo sound, the WD1772
+floppy with MGT/SAD images (real disk games boot — verified with Manic Miner and
+Tetris), ASIC memory/IO contention, the light-pen registers, and the frame/line
+interrupts. `--sam` or **Machine → SAM Coupé**. See `docs/sam-coupe.md`.
 
 ---
 

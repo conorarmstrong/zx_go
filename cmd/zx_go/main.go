@@ -26,6 +26,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/audiodac"
 	"github.com/conorarmstrong/zx_go/pkg/betadisk"
 	"github.com/conorarmstrong/zx_go/pkg/config"
@@ -133,6 +134,12 @@ type emulator struct {
 	// sam.RunFrame(), the render loop reads sam.Render(), keys route to sam.Kbd,
 	// and the ula/mem/kbd fields hold inert stand-ins (the SAM uses its own).
 	sam *sam.Machine
+
+	// samAudio plays the SAM Coupé's SAA1099 output. Created (GUI only, unless
+	// --no-sound) when the SAM machine is built; the run loop pushes a mono
+	// downmix each frame. nil for every other machine and in headless mode.
+	samAudio    *audio.AudioSystem
+	samAudioBuf []int16 // reused per-frame mono buffer for samAudio
 
 	// speccyDAC is the classic-Spectrum SpecDrum/Covox 8-bit DAC (non-nil on
 	// 48K/128K/+2/+2A/+3; nil on Next/ZX8x). Toggled from the Peripherals menu.
@@ -662,6 +669,49 @@ func loadTRDDisk(emu *emulator, w fyne.Window, drive int) {
 	fd.Show()
 }
 
+// loadSAMDisk shows an MGT/SAD/DSK file picker and inserts the chosen image into
+// the given SAM Coupé drive (0 = drive 1, 1 = drive 2). SAM-only.
+func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
+	if emu.sam == nil {
+		dialog.ShowInformation("Load SAM Disk",
+			"SAM disks run on the SAM Coupé.\n"+
+				"Switch to it from the Machine menu first.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		data, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		if readErr != nil {
+			dialog.ShowError(fmt.Errorf("failed to read disk: %w", readErr), w)
+			return
+		}
+		disk, derr := sam.LoadDisk(data)
+		if derr != nil {
+			dialog.ShowError(fmt.Errorf("failed to load SAM disk: %w", derr), w)
+			return
+		}
+		_ = emu.withEmulationPaused(func() error {
+			emu.sam.InsertDisk(drive, disk)
+			return nil
+		})
+		slog.Info("disk inserted", "interface", "SAM", "drive", drive+1, "path", path)
+		dialog.ShowInformation("Disk Loaded",
+			fmt.Sprintf("Inserted %s into SAM drive %d.\n"+
+				"From SAM BASIC, boot it with:  BOOT  (or load with LOAD).",
+				filepath.Base(path), drive+1), w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".mgt", ".sad", ".dsk", ".img"}))
+	fd.Show()
+}
+
 // userKeymapPath returns the absolute path to the user's keymap override
 // file under the platform-appropriate config dir: keymap.json inside
 // `<os.UserConfigDir>/zx_go/` (= `%AppData%\zx_go\keymap.json` on
@@ -726,7 +776,23 @@ func newEmulator(model roms.SpectrumModel) (*emulator, error) {
 		return newZX8xEmulator(model)
 	}
 	if model == roms.ModelSAM {
-		return newSamEmulator()
+		e, err := newSamEmulator()
+		if err != nil {
+			return nil, err
+		}
+		// Enable SAA1099 audio (GUI path only; runSAMHeadless calls
+		// newSamEmulator directly and stays silent). --no-sound opts out.
+		if cliFlagsActive == nil || !cliFlagsActive.noSound {
+			if as, aerr := audio.New(); aerr != nil {
+				slog.Warn("sam: audio init failed", "err", aerr)
+			} else if serr := as.Start(); serr != nil {
+				slog.Warn("sam: audio start failed", "err", serr)
+				_ = as.Close()
+			} else {
+				e.samAudio = as
+			}
+		}
+		return e, nil
 	}
 	kbd := keyboard.New()
 	if path := userKeymapPath(); path != "" {
@@ -935,7 +1001,7 @@ func (e *emulator) dispatchJoystick(direction int, pressed bool) {
 		case 4:
 			mask = ula.KempstonFire
 		}
-		if mask != 0 {
+		if mask != 0 && e.ula != nil {
 			e.ula.SetKempstonButton(mask, pressed)
 		}
 	case JoystickSinclair1, JoystickSinclair2, JoystickCursor:
@@ -956,7 +1022,15 @@ func (e *emulator) dispatchJoystick(direction int, pressed bool) {
 // the physical key path so games can hold them. The ZX80/81 use a different
 // keyword keyboard, so this is Spectrum/Next-only.
 func (e *emulator) handleTypedRune(r rune) {
-	if e.kbd == nil || e.zx8x != nil || e.sam != nil || e.paused.Load() {
+	if e.paused.Load() {
+		return
+	}
+	// The SAM has its own keyboard with its own symbol layout.
+	if e.sam != nil {
+		e.sam.Kbd.TypeRune(r)
+		return
+	}
+	if e.kbd == nil || e.zx8x != nil {
 		return
 	}
 	e.kbd.TypeRune(r)
@@ -1018,6 +1092,13 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						e.zx8x.RunFrame()
 					case e.sam != nil:
 						e.sam.RunFrame()
+						if e.samAudio != nil {
+							if e.samAudioBuf == nil {
+								e.samAudioBuf = make([]int16, sam.SamplesPerFrame)
+							}
+							e.sam.GenerateAudioMono(e.samAudioBuf)
+							e.samAudio.PushBeeperSamples(e.samAudioBuf)
+						}
 					case e.rzxPlayback.Load() != nil:
 						playback := e.rzxPlayback.Load()
 						e.cpu.ExecuteRZXFrame(uint64(playback.Instructions()))
@@ -1186,6 +1267,10 @@ func (e *emulator) reboot() {
 		e.zx8x.Reset()
 		return
 	}
+	if e.sam != nil {
+		e.sam.Reset()
+		return
+	}
 	e.cpu.Reset()
 	e.ula.Reset()
 
@@ -1289,7 +1374,14 @@ func (e *emulator) cleanup() {
 	if e.ticker != nil {
 		e.ticker.Stop()
 	}
-	e.ula.Close()
+	// e.ula is nil for the SAM Coupé and ZX80/ZX81 (no Spectrum ULA), so guard
+	// the close — otherwise quitting in those modes nil-panics.
+	if e.ula != nil {
+		e.ula.Close()
+	}
+	if e.samAudio != nil {
+		_ = e.samAudio.Close()
+	}
 }
 
 // getFormatName returns a human-readable name for the snapshot format
@@ -1803,6 +1895,11 @@ var tapeTrace = os.Getenv("ZX_GO_TAPE_TRACE") != ""
 
 func installTapeTrap(emu *emulator) {
 	emu.cpu.TrapCheck = func(pc uint16) bool {
+		// The trap drives the Spectrum ULA tape player; machines without a
+		// ULA (SAM Coupé, ZX80/81) share the $0556 PC but must never trap.
+		if emu.ula == nil {
+			return false
+		}
 		if pc != 0x0556 {
 			return false
 		}
@@ -2264,10 +2361,10 @@ func main() {
 		emu.crtFilter.Store(true)
 	}
 	emu.joystickType = configStringToJoystick(cfg.Joystick)
-	if emu.joystickType == JoystickKempston {
+	if emu.joystickType == JoystickKempston && emu.ula != nil {
 		emu.ula.KempstonEnabled = true
 	}
-	if os.Getenv("ZX_GO_BORDER_TRACE") != "" {
+	if os.Getenv("ZX_GO_BORDER_TRACE") != "" && emu.ula != nil {
 		var n int
 		emu.ula.SetBorderTracer(func(port uint16, val byte, newBorder byte, scanline int) {
 			if n < 200 {
@@ -2323,7 +2420,7 @@ func main() {
 	// boot, feeding it garbage and crashing the boot into a DI/HALT
 	// (the development log; the user-reported GUI black screen). Skip
 	// restoring them when the current model is the Next.
-	classicPeripheralsOK := currentModel != roms.ModelNext && !isZX8x(currentModel)
+	classicPeripheralsOK := currentModel != roms.ModelNext && !isZX8x(currentModel) && currentModel != roms.ModelSAM
 	if cfg.Disciple && classicPeripheralsOK {
 		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
 			slog.Warn("config: enable Disciple failed", "err", err)
@@ -2411,6 +2508,16 @@ func main() {
 			}
 			return
 		}
+		// Stop the outgoing machine's audio devices before swapping the core,
+		// so we don't leak the old SAM SAA player (or the old ULA's player when
+		// crossing into a machine that has no ULA).
+		if emu.samAudio != nil {
+			_ = emu.samAudio.Close()
+			emu.samAudio, emu.samAudioBuf = nil, nil
+		}
+		if emu.ula != nil && fresh.ula == nil {
+			emu.ula.Close()
+		}
 		emu.cpu = fresh.cpu
 		emu.mem = fresh.mem
 		emu.ula = fresh.ula
@@ -2418,6 +2525,7 @@ func main() {
 		emu.peripherals = fresh.peripherals
 		emu.zx8x = fresh.zx8x
 		emu.sam = fresh.sam
+		emu.samAudio = fresh.samAudio
 		emu.model = newModel
 		emu.nextEsxdos, emu.nextDAC, emu.nextRegs = fresh.nextEsxdos, fresh.nextDAC, fresh.nextRegs
 		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
@@ -3054,6 +3162,12 @@ func main() {
 				}),
 				fyne.NewMenuItem("Eject TR-DOS Disk B", func() {
 					emu.ejectTRD(1)
+				}),
+				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad)...", func() {
+					loadSAMDisk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad)...", func() {
+					loadSAMDisk(emu, w, 1)
 				}),
 				fyne.NewMenuItem("Save Disk A (DSK)...", func() {
 					savePlus3Disk(emu, w, 0)

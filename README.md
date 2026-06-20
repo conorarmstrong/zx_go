@@ -76,7 +76,7 @@ Prefer not to build? Grab a [pre-built binary](#installation).
 | **Spectrum +2A / +3** | ✅ Interactive | `$1FFD` 4-ROM paging; the +3 adds the integrated μPD765A FDC and disks. |
 | **Pentagon 128** | ✅ Interactive | Soviet clone: 128K + AY, **no contention**, 71680-T frame, TR-DOS `.trd` via the Beta Disk interface. `--pentagon`. |
 | **ZX Spectrum Next** | ✅ Cold-boots NextZXOS | Real FPGA boot chain → NextZXOS desktop; full custom hardware. See [below](#the-spectrum-next). |
-| **SAM Coupé** | ✅ Boots SAM BASIC | MGT's 1989 Z80B machine: custom ASIC (4 screen modes, 128-colour palette), 256/512K paging, SAA1099 stereo sound, WD1772 disk, ASIC contention. ROM 3.0 bundled. `--sam`. See [docs/sam-coupe.md](docs/sam-coupe.md). |
+| **SAM Coupé** | ✅ Interactive | MGT's 1989 Z80B machine: custom ASIC (4 screen modes, 128-colour palette, bordered display), 256/512K paging, SAA1099 sound, WD1772 floppy — **real disk games boot** (File → Load SAM Disk, then `BOOT`). Cold-boots the bundled MGT ROM 3.0 to SAM BASIC. `--sam`. See [docs/sam-coupe.md](docs/sam-coupe.md). |
 
 Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A 4-ROM paging, all tape formats, and all six disk formats are supported. Switch models any time from the **Machine** menu (state is cold-wiped).
 

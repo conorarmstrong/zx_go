@@ -6,11 +6,20 @@ import (
 )
 
 // Internal render resolution: the active display, unified at MODE 3's native
-// 512-pixel width (lo-res modes 1/2/4 double each pixel). The border is added
-// with the GUI hookup. Scaled to 4:3 by the GUI.
+// 512-pixel width (lo-res modes 1/2/4 double each pixel), surrounded by a border
+// in the current BORDER colour. Scaled to 4:3 by the GUI.
 const (
 	samActiveWidth  = 512
 	samActiveHeight = 192
+
+	// Border margins around the active display. Matched to the classic Spectrum
+	// look (32 px sides, 24 lines top/bottom on the 512-wide buffer); the SAM's
+	// real overscan is larger but, like every emulator, only a slice is shown.
+	samBorderLeft = 32
+	samBorderTop  = 24
+
+	samTotalWidth  = samActiveWidth + 2*samBorderLeft // 576
+	samTotalHeight = samActiveHeight + 2*samBorderTop // 240
 )
 
 const (
@@ -37,40 +46,74 @@ func (m *Machine) Render() *image.RGBA { return m.frame }
 // renderer unit tests and for a one-shot repaint).
 func (m *Machine) renderAll() *image.RGBA {
 	m.renderCursor = 0
-	m.flushTo(samActiveHeight)
+	m.flushTo(samTotalHeight)
 	return m.frame
 }
 
-// rasterLine maps the current frame-relative T-state to the active display line
-// (0..192). Lines before the top border / after the display clamp to the ends.
+// rasterLine maps the current frame-relative T-state to the rendered frame line
+// (0..samTotalHeight), where line 0 is the top of the visible top border. Lines
+// before the visible top / after the visible bottom clamp to the ends.
 func (m *Machine) rasterLine() int {
 	rel := m.CPU.Tstates() - m.frameStart
-	line := int(rel/samCyclesPerLine) - samTopBorderLines
-	if line < 0 {
+	ry := int(rel/samCyclesPerLine) - samTopBorderLines + samBorderTop
+	if ry < 0 {
 		return 0
 	}
-	if line > samActiveHeight {
-		return samActiveHeight
+	if ry > samTotalHeight {
+		return samTotalHeight
 	}
-	return line
+	return ry
 }
 
 // flushRaster renders up to the current raster position; the video-write hook
 // and display-affecting OUTs call it before mutating state.
 func (m *Machine) flushRaster() { m.flushTo(m.rasterLine()) }
 
-// flushTo renders scan lines [renderCursor, target) and advances the cursor.
+// flushTo renders rendered-frame lines [renderCursor, target) and advances the
+// cursor. Each line is drawn with the border/CLUT/screen state current at the
+// moment it is flushed, so mid-frame BORDER and palette changes are honoured.
 func (m *Machine) flushTo(target int) {
-	if target > samActiveHeight {
-		target = samActiveHeight
+	if target > samTotalHeight {
+		target = samTotalHeight
 	}
-	for y := m.renderCursor; y < target; y++ {
-		m.renderLine(y)
+	for ry := m.renderCursor; ry < target; ry++ {
+		m.renderFullLine(ry)
 	}
 	if target > m.renderCursor {
 		m.renderCursor = target
 	}
 }
+
+// renderFullLine draws one rendered-frame line: a full border band in the top/
+// bottom margins, or the active scan line flanked by the side borders.
+func (m *Machine) renderFullLine(ry int) {
+	bc := m.borderColour()
+	if ry < samBorderTop || ry >= samBorderTop+samActiveHeight {
+		for x := 0; x < samTotalWidth; x++ {
+			m.frame.SetRGBA(x, ry, bc)
+		}
+		return
+	}
+	for x := 0; x < samBorderLeft; x++ {
+		m.frame.SetRGBA(x, ry, bc)
+		m.frame.SetRGBA(samBorderLeft+samActiveWidth+x, ry, bc)
+	}
+	m.renderLine(ry - samBorderTop)
+}
+
+// setActive plots an active-display pixel (0,0 = top-left of the screen area),
+// offset into the bordered frame.
+func (m *Machine) setActive(x, y int, c color.RGBA) {
+	m.frame.SetRGBA(x+samBorderLeft, y+samBorderTop, c)
+}
+
+// borderColourIndex extracts the 4-bit CLUT index from a BORDER value: low three
+// bits plus bit 5 (SimCoupe BORDER_COLOUR / BORDER_COLOUR_MASK 0x27).
+func borderColourIndex(border byte) byte { return ((border & 0x20) >> 2) | (border & 0x07) }
+
+// borderColour resolves the current border colour through the CLUT and palette,
+// exactly as the active display resolves its colours.
+func (m *Machine) borderColour() color.RGBA { return m.clutColour(borderColourIndex(m.border)) }
 
 // renderLine draws one scan line in the current screen mode.
 func (m *Machine) renderLine(y int) {
@@ -95,7 +138,7 @@ func (m *Machine) renderLine(y int) {
 func (m *Machine) drawBlackLine(y int) {
 	black := color.RGBA{A: 0xFF}
 	for x := 0; x < samActiveWidth; x++ {
-		m.frame.SetRGBA(x, y, black)
+		m.setActive(x, y, black)
 	}
 }
 
@@ -140,8 +183,8 @@ func (m *Machine) renderAttrLine(y, lineBase, attrBase int, perLineAttr, flash b
 				c = inkC
 			}
 			x := (cell*8 + bit) * 2
-			m.frame.SetRGBA(x, y, c)
-			m.frame.SetRGBA(x+1, y, c)
+			m.setActive(x, y, c)
+			m.setActive(x+1, y, c)
 		}
 	}
 }
@@ -161,10 +204,10 @@ func (m *Machine) renderMode3Line(y int) {
 	for b := 0; b < mode34BytesPerLine; b++ {
 		data := m.Mem.VideoMemByte(lineBase + b)
 		x := b * 4
-		m.frame.SetRGBA(x, y, sub[data>>6])
-		m.frame.SetRGBA(x+1, y, sub[(data>>4)&3])
-		m.frame.SetRGBA(x+2, y, sub[(data>>2)&3])
-		m.frame.SetRGBA(x+3, y, sub[data&3])
+		m.setActive(x, y, sub[data>>6])
+		m.setActive(x+1, y, sub[(data>>4)&3])
+		m.setActive(x+2, y, sub[(data>>2)&3])
+		m.setActive(x+3, y, sub[data&3])
 	}
 }
 
@@ -177,9 +220,9 @@ func (m *Machine) renderMode4Line(y int) {
 		hi := m.clutColour(data >> 4)
 		lo := m.clutColour(data & 0x0F)
 		x := b * 4
-		m.frame.SetRGBA(x, y, hi)
-		m.frame.SetRGBA(x+1, y, hi)
-		m.frame.SetRGBA(x+2, y, lo)
-		m.frame.SetRGBA(x+3, y, lo)
+		m.setActive(x, y, hi)
+		m.setActive(x+1, y, hi)
+		m.setActive(x+2, y, lo)
+		m.setActive(x+3, y, lo)
 	}
 }

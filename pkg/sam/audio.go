@@ -16,3 +16,19 @@ const SamplesPerFrame = saa1099.SampleRate / 50
 func (m *Machine) GenerateAudio(buf []int16) {
 	m.SAA.GenerateStereo(buf)
 }
+
+// GenerateAudioMono fills buf (length SamplesPerFrame) with one frame of the
+// SAA1099 output downmixed to mono — the average of the left and right channels.
+// The GUI uses this to feed the shared (currently mono) audio device; true
+// stereo output awaits the shared audio path being widened. A scratch buffer is
+// reused across calls to avoid per-frame allocation.
+func (m *Machine) GenerateAudioMono(buf []int16) {
+	if cap(m.audioScratch) < 2*len(buf) {
+		m.audioScratch = make([]int16, 2*len(buf))
+	}
+	stereo := m.audioScratch[:2*len(buf)]
+	m.SAA.GenerateStereo(stereo)
+	for i := range buf {
+		buf[i] = int16((int32(stereo[2*i]) + int32(stereo[2*i+1])) / 2)
+	}
+}

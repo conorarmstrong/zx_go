@@ -1,11 +1,18 @@
 package sam
 
 import (
+	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"testing"
 )
+
+// activeAt reads a pixel in active-screen coordinates (0,0 = top-left of the
+// 512×192 display area inside the border).
+func activeAt(img *image.RGBA, x, y int) color.RGBA {
+	return img.RGBAAt(x+samBorderLeft, y+samBorderTop)
+}
 
 func TestPaletteSpotValues(t *testing.T) {
 	black := PaletteColour(0)
@@ -36,10 +43,10 @@ func TestRenderMode1(t *testing.T) {
 	writeDisplay(m, 6144+0, 0x01) // attr: paper=0, ink=1
 
 	img := m.renderAll()
-	if got := img.RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(img, 0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("pixel 0 should be ink (white), got %v", got)
 	}
-	if got := img.RGBAAt(2, 0); got != (color.RGBA{0, 0, 0, 255}) {
+	if got := activeAt(img, 2, 0); got != (color.RGBA{0, 0, 0, 255}) {
 		t.Errorf("pixel 1 should be paper (black), got %v", got)
 	}
 }
@@ -52,10 +59,10 @@ func TestRenderMode4(t *testing.T) {
 	writeDisplay(m, 0, 0x12) // byte 0: hi=1, lo=2
 
 	img := m.renderAll()
-	if got := img.RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(img, 0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("hi nibble pixel should be white, got %v", got)
 	}
-	if got := img.RGBAAt(2, 0); got != PaletteColour(0x11) {
+	if got := activeAt(img, 2, 0); got != PaletteColour(0x11) {
 		t.Errorf("lo nibble pixel should be blue, got %v", got)
 	}
 }
@@ -69,11 +76,11 @@ func TestRenderMode1Flash(t *testing.T) {
 	writeDisplay(m, 6144+0, 0x81) // attr: ink=1, paper=0, FLASH (bit7)
 
 	m.frameCount = 0 // flash phase off → ink shows as ink (white)
-	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(m.renderAll(), 0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("flash off: pixel should be ink (white), got %v", got)
 	}
 	m.frameCount = flashFramesPhase // flash phase on → ink/paper swapped
-	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{0, 0, 0, 255}) {
+	if got := activeAt(m.renderAll(), 0, 0); got != (color.RGBA{0, 0, 0, 255}) {
 		t.Errorf("flash on: pixel should be swapped to paper (black), got %v", got)
 	}
 }
@@ -98,11 +105,11 @@ func TestRenderBootScreen(t *testing.T) {
 		_ = f.Close()
 		t.Logf("wrote %s", out)
 	}
-	first := img.RGBAAt(0, 0)
+	first := activeAt(img, 0, 0)
 	uniform := true
 	for y := 0; y < samActiveHeight && uniform; y++ {
 		for x := 0; x < samActiveWidth; x++ {
-			if img.RGBAAt(x, y) != first {
+			if activeAt(img, x, y) != first {
 				uniform = false
 				break
 			}

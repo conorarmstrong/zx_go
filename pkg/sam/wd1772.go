@@ -24,6 +24,7 @@ type WD1772 struct {
 	multiSector bool
 	drqReads    int // consecutive DRQ-pending status reads (LOST_DATA timeout)
 	intrq       bool
+	idxCounter  int // Type I status reads, for the periodic index pulse
 }
 
 // WD179x status bits (meaning is command-type dependent).
@@ -36,9 +37,10 @@ const (
 	wdCRCError   = 0x08
 	wdRNF        = 0x10 // Type II/III: record not found
 	wdSeekError  = 0x10 // Type I
-	wdWriteFault = 0x20
+	wdWriteFault = 0x20 // Type II/III
+	wdSpinUp     = 0x20 // Type I: motor spin-up complete
 	wdWriteProt  = 0x40
-	wdNotReady   = 0x80 // bit 7: drive not ready / motor
+	wdNotReady   = 0x80 // bit 7: drive not ready (no disk); on the 1772 also "motor on"
 
 	wdLostDataReads = 16 // DRQ unserviced for this many status reads → LOST_DATA
 )
@@ -116,13 +118,11 @@ func (f *WD1772) step(cmd byte, dir int) {
 }
 
 // finishTypeI completes a positioning command instantaneously (SimCoupe seeks
-// with no delay), reporting TRACK00 / INDEX and raising INTRQ.
+// with no delay) and raises INTRQ. The live Type I status bits (TRACK00,
+// SPIN_UP, INDEX, NOT-READY) are applied in ReadStatus so they reflect the
+// current disk/head state at read time, as on the WD1772.
 func (f *WD1772) finishTypeI() {
 	f.status = 0
-	if f.cyl == 0 {
-		f.status |= wdTrack00
-	}
-	f.status |= wdIndex
 	f.intrq = true
 }
 
@@ -189,8 +189,12 @@ func (f *WD1772) readAddress() {
 }
 
 func (f *WD1772) forceInterrupt() {
-	f.status &^= wdBusy | wdDRQ
+	// FORCE INTERRUPT terminates any command and reverts the status register to
+	// Type I reporting (head position / spin-up), as on the WD1772. SAMDOS reads
+	// the status here after loading the DOS to confirm the disk is still ready.
+	f.status = 0
 	f.writing = false
+	f.cmdType1 = true
 	f.intrq = true
 }
 
@@ -248,7 +252,26 @@ func (f *WD1772) ReadStatus() byte {
 		}
 	}
 	s := f.status
-	if f.disk == nil {
+	if f.cmdType1 {
+		// Type I live status: head position, motor spin-up and a periodic index
+		// pulse while a disk spins; not-ready when the drive is empty. The SAM
+		// boot ROM checks SPIN_UP after a RESTORE to confirm a disk is present.
+		if f.cyl == 0 {
+			s |= wdTrack00
+		}
+		if f.disk != nil {
+			s |= wdSpinUp
+			if f.disk.WriteProtected() {
+				s |= wdWriteProt
+			}
+			f.idxCounter++
+			if f.idxCounter%4 == 0 {
+				s |= wdIndex
+			}
+		} else {
+			s |= wdNotReady
+		}
+	} else if f.disk == nil {
 		s |= wdNotReady
 	}
 	return s

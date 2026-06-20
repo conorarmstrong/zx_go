@@ -16,10 +16,10 @@ func TestRenderMode2LineAttributes(t *testing.T) {
 	writeDisplay(m, mode2AttrOffset+(1<<5)+0, 0x01)
 
 	img := m.renderAll()
-	if got := img.RGBAAt(0, 1); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(img, 0, 1); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("mode 2 line 1 pixel 0 should be ink (white), got %v", got)
 	}
-	if got := img.RGBAAt(2, 1); got != (color.RGBA{0, 0, 0, 255}) {
+	if got := activeAt(img, 2, 1); got != (color.RGBA{0, 0, 0, 255}) {
 		t.Errorf("mode 2 line 1 pixel 1 should be paper (black), got %v", got)
 	}
 }
@@ -38,13 +38,13 @@ func TestRenderMode3SubCLUTSwap(t *testing.T) {
 
 	img := m.renderAll()
 	// pixel value 1 → sub-entry 1 → clut[2] (swap), pixel value 2 → clut[1].
-	if got := img.RGBAAt(1, 0); got != PaletteColour(0x07) {
+	if got := activeAt(img, 1, 0); got != PaletteColour(0x07) {
 		t.Errorf("mode 3 pixel value 1 should map (swapped) to clut[2]=0x07, got %v", got)
 	}
-	if got := img.RGBAAt(2, 0); got != PaletteColour(0x70) {
+	if got := activeAt(img, 2, 0); got != PaletteColour(0x70) {
 		t.Errorf("mode 3 pixel value 2 should map (swapped) to clut[1]=0x70, got %v", got)
 	}
-	if got := img.RGBAAt(3, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(img, 3, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("mode 3 pixel value 3 should be clut[3]=white, got %v", got)
 	}
 }
@@ -67,14 +67,14 @@ func TestLineAccurateSplit(t *testing.T) {
 
 	m.renderCursor = 0
 	m.clut[1] = 0 // ink black for the top half
-	m.flushTo(96)
+	m.flushTo(samBorderTop + 96)
 	m.clut[1] = 127 // ink white for the bottom half
-	m.flushTo(samActiveHeight)
+	m.flushTo(samTotalHeight)
 
-	if got := m.frame.RGBAAt(0, 10); got != black {
+	if got := activeAt(m.frame, 0, 10); got != black {
 		t.Errorf("top half should use the old CLUT (black ink), got %v", got)
 	}
-	if got := m.frame.RGBAAt(0, 150); got != white {
+	if got := activeAt(m.frame, 0, 150); got != white {
 		t.Errorf("bottom half should use the new CLUT (white ink), got %v", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestSOFFBlanksMode4(t *testing.T) {
 	m.clut[15] = 127    // would render white...
 	writeDisplay(m, 0, 0xFF)
 	m.border = borderSOFF // ...but SOFF blanks modes 3/4
-	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{0, 0, 0, 255}) {
+	if got := activeAt(m.renderAll(), 0, 0); got != (color.RGBA{0, 0, 0, 255}) {
 		t.Errorf("SOFF should blank mode 4 to black, got %v", got)
 	}
 	// SOFF must NOT blank mode 1 (it only affects modes 3/4).
@@ -93,7 +93,7 @@ func TestSOFFBlanksMode4(t *testing.T) {
 	m.clut[1] = 127
 	writeDisplay(m, 0, 0x80)
 	writeDisplay(m, mode12DataBytes, 0x01)
-	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := activeAt(m.renderAll(), 0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("SOFF should not blank mode 1, got %v", got)
 	}
 }

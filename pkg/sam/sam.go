@@ -36,6 +36,8 @@ type Machine struct {
 	border byte     // last BORDER write (colour + MIC + BEEP + SOFF)
 	clut   [16]byte // CLUT palette registers (7-bit indices); consumed by Sprint 3
 	line   byte     // line-interrupt target line (>=192 = disabled)
+	lpen   byte     // ASIC light-pen horizontal register (IN 0x0F8)
+	hpen   byte     // ASIC light-pen line register (IN 0x1F8)
 
 	// frameStart is the CPU T-state count at the start of the current frame,
 	// captured in RunFrame so the STATUS register can report interrupt lines
@@ -50,6 +52,8 @@ type Machine struct {
 	// line still to render this frame (the lazy renderer's cursor).
 	frame        *image.RGBA
 	renderCursor int
+
+	audioScratch []int16 // reused stereo scratch for GenerateAudioMono
 }
 
 // New builds a SAM machine from the two 16 KB ROM halves. z80.New resets the
@@ -69,7 +73,7 @@ func New(rom0, rom1 []byte) *Machine {
 	m.CPU.IntPulseTstates = samIntActiveCycles
 	// Line-accurate renderer: a write to displayed video memory flushes the
 	// raster up to the current line before the memory changes.
-	m.frame = image.NewRGBA(image.Rect(0, 0, samActiveWidth, samActiveHeight))
+	m.frame = image.NewRGBA(image.Rect(0, 0, samTotalWidth, samTotalHeight))
 	m.Mem.SetVideoWriteHook(m.flushRaster)
 	// ASIC memory + I/O contention (z80.New wired ContendMemory via the
 	// SetTStatePtr/ContendMemory interfaces); MemContend gates the memory side.
@@ -94,8 +98,24 @@ func (m *Machine) RunFrame() {
 	m.frameStart = m.CPU.Tstates()
 	m.renderCursor = 0
 	m.CPU.ExecuteFrame(CyclesPerFrame)
-	m.flushTo(samActiveHeight) // render any lines after the last state change
+	m.flushTo(samTotalHeight) // render any lines after the last state change
 	m.frameCount++
+	m.Kbd.Tick() // advance any typed-character symbol pulse
+}
+
+// Reset performs a cold reset: the Z80 restarts at $0000 with ROM0 paged in and
+// the ASIC paging/registers, border, line interrupt and raster state return to
+// power-on. Installed RAM is left for the boot ROM to re-initialise.
+func (m *Machine) Reset() {
+	m.CPU.Reset()
+	m.Mem.Reset()
+	m.border = 0
+	m.line = 0xFF
+	m.CPU.LineIntOffsetTstates = 0
+	m.lpen, m.hpen = 0, 0
+	m.frameStart = 0
+	m.frameCount = 0
+	m.renderCursor = 0
 }
 
 // InsertDisk loads a disk image into drive 1 (drive 0) or drive 2 (drive 1).
