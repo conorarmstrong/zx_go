@@ -86,8 +86,14 @@ func (m *Machine) WritePort(addr uint16, val byte) {
 		m.clut[high&0x0F] = val & 0x7F
 	case portStatus: // LINE interrupt target line
 		m.setLineInterrupt(val)
+	case portSAA: // SAA1099: high byte 0x01 = address latch, else data
+		if addr&0x0100 != 0 {
+			m.SAA.WriteAddress(val)
+		} else {
+			m.SAA.WriteData(val)
+		}
 	default:
-		// SAA (0xFF), MIDI, clock, SD/IDE, floppy: later sprints.
+		// MIDI, clock, SD/IDE, floppy: later sprints.
 	}
 }
 

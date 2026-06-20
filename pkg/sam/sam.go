@@ -3,6 +3,7 @@ package sam
 import (
 	"image"
 
+	"github.com/conorarmstrong/zx_go/pkg/saa1099"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
@@ -28,6 +29,7 @@ type Machine struct {
 	Mem *Memory
 	CPU *z80.CPU
 	Kbd *Keyboard
+	SAA *saa1099.SAA
 
 	border byte     // last BORDER write (colour + MIC + BEEP + SOFF)
 	clut   [16]byte // CLUT palette registers (7-bit indices); consumed by Sprint 3
@@ -54,6 +56,7 @@ func New(rom0, rom1 []byte) *Machine {
 	m := &Machine{
 		Mem:  NewMemory(rom0, rom1),
 		Kbd:  NewKeyboard(),
+		SAA:  saa1099.New(),
 		line: 0xFF, // line interrupt disabled
 	}
 	m.CPU = z80.New(m.Mem, m)
