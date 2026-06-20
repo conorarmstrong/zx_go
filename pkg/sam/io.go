@@ -55,10 +55,34 @@ func (m *Machine) ReadPort(addr uint16) (byte, bool) {
 	case portKempston:
 		return 0x00, true // no joystick attached (active-high, idle 0)
 	default:
-		// Unhandled ASIC/peripheral reads float high (incl. SAA/ATTR 0xFF, MIDI,
-		// clock, floppy — implemented in later sprints).
+		if fdc, reg := m.floppy(low); fdc != nil {
+			fdc.SetSide(int(low>>2) & 1)
+			switch reg {
+			case 0:
+				return fdc.ReadStatus(), true
+			case 1:
+				return fdc.ReadTrack(), true
+			case 2:
+				return fdc.ReadSector(), true
+			default:
+				return fdc.ReadData(), true
+			}
+		}
+		// Unhandled ASIC/peripheral reads float high (ATTR 0xFF, MIDI, clock).
 		return 0xFF, true
 	}
+}
+
+// floppy maps a low-byte port to its WD1772 (drive 1 = 0xE0-E7, drive 2 =
+// 0xF0-F7) and register index (port & 3), or nil if not a floppy port.
+func (m *Machine) floppy(low byte) (*WD1772, int) {
+	switch low & 0xF8 {
+	case 0xE0:
+		return m.FDC[0], int(low & 3)
+	case 0xF0:
+		return m.FDC[1], int(low & 3)
+	}
+	return nil, 0
 }
 
 // WritePort implements the z80.ULA OUT side.
@@ -93,7 +117,21 @@ func (m *Machine) WritePort(addr uint16, val byte) {
 			m.SAA.WriteData(val)
 		}
 	default:
-		// MIDI, clock, SD/IDE, floppy: later sprints.
+		if fdc, reg := m.floppy(low); fdc != nil {
+			fdc.SetSide(int(low>>2) & 1)
+			switch reg {
+			case 0:
+				fdc.WriteCommand(val)
+			case 1:
+				fdc.WriteTrack(val)
+			case 2:
+				fdc.WriteSector(val)
+			default:
+				fdc.WriteData(val)
+			}
+			return
+		}
+		// MIDI, clock, SD/IDE: later sprints.
 	}
 }
 

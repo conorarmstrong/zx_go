@@ -30,6 +30,7 @@ type Machine struct {
 	CPU *z80.CPU
 	Kbd *Keyboard
 	SAA *saa1099.SAA
+	FDC [2]*WD1772 // drive 1 (ports 0xE0-E7), drive 2 (ports 0xF0-F7)
 
 	border byte     // last BORDER write (colour + MIC + BEEP + SOFF)
 	clut   [16]byte // CLUT palette registers (7-bit indices); consumed by Sprint 3
@@ -57,6 +58,7 @@ func New(rom0, rom1 []byte) *Machine {
 		Mem:  NewMemory(rom0, rom1),
 		Kbd:  NewKeyboard(),
 		SAA:  saa1099.New(),
+		FDC:  [2]*WD1772{NewWD1772(), NewWD1772()},
 		line: 0xFF, // line interrupt disabled
 	}
 	m.CPU = z80.New(m.Mem, m)
@@ -87,6 +89,13 @@ func (m *Machine) RunFrame() {
 	m.CPU.ExecuteFrame(CyclesPerFrame)
 	m.flushTo(samActiveHeight) // render any lines after the last state change
 	m.frameCount++
+}
+
+// InsertDisk loads a disk image into drive 1 (drive 0) or drive 2 (drive 1).
+func (m *Machine) InsertDisk(drive int, d *Disk) {
+	if drive == 0 || drive == 1 {
+		m.FDC[drive].InsertDisk(d)
+	}
 }
 
 // BorderColour returns the current 4-bit border CLUT index (BORDER bits map
