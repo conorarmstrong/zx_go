@@ -4328,12 +4328,13 @@ func (c *CPU) cpdr() {
 
 // Block output operations
 func (c *CPU) outi() {
-	// Output and increment. Per Sean Young §3.4: WZ = BC + 1, where
-	// BC is the post-decrement value (B has already been --'d when
-	// the IO write happens on real hardware). We keep the IO write
-	// at the pre-decrement BC address to match our existing
-	// peripheral test expectations, but compute WZ from the post-
-	// decrement value.
+	// Output and increment. Per Sean Young §3.4, on real hardware B is
+	// decremented BEFORE the I/O write, so the port's high byte is the
+	// post-decrement B (the opposite of the IN block ops, which use the
+	// pre-decrement B). The SAM Coupé boot ROM relies on this when it loads
+	// its 16-entry CLUT via OTDR (B = 0x10 → 0x00); writing with the
+	// pre-decrement B shifts the whole palette by one. WZ = BC + 1 with the
+	// post-decrement BC.
 	//
 	// iter 353 timing: 2×M1 (8) + 1 internal at I:R (1) + MR (HL) (3) +
 	// IO-out machine cycle (4 base). The (HL) read routes through c.rd
@@ -4344,11 +4345,11 @@ func (c *CPU) outi() {
 	c.m1(c.currentInstrPC + 1)
 	c.exec(c.ir(), 1)
 	val := c.rd(c.hl())
+	c.B-- // decrement before the OUT: the port high byte is the new B
 	c.mem.ContendPort(c.bc())
 	c.ula.WritePort(c.bc(), val)
 	c.tstates += 4 // IO-out machine-cycle base (ContendPort adds ULA contention)
 	c.setHL(c.hl() + 1)
-	c.B--
 	c.WZ = c.bc() + 1
 
 	c.F = 0
@@ -4369,20 +4370,20 @@ func (c *CPU) outi() {
 }
 
 func (c *CPU) outd() {
-	// Output and decrement. Per Sean Young §3.4: WZ = BC - 1, where
-	// BC is the post-decrement value. See outi for the parallel
-	// reasoning on IO-address vs WZ.
+	// Output and decrement. Per Sean Young §3.4, B is decremented BEFORE the
+	// I/O write, so the port high byte is the post-decrement B (see outi).
+	// WZ = BC - 1 with the post-decrement BC.
 	//
 	// iter 353 timing: same structure as outi (16 T base).
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
 	c.exec(c.ir(), 1)
 	val := c.rd(c.hl())
+	c.B-- // decrement before the OUT: the port high byte is the new B
 	c.mem.ContendPort(c.bc())
 	c.ula.WritePort(c.bc(), val)
 	c.tstates += 4 // IO-out machine-cycle base (ContendPort adds ULA contention)
 	c.setHL(c.hl() - 1)
-	c.B--
 	c.WZ = c.bc() - 1
 
 	c.F = 0

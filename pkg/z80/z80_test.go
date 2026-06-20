@@ -3325,12 +3325,10 @@ func TestOUTI(t *testing.T) {
 
 	cpu.executeEDInstruction(0xA3) // OUTI
 
-	port := cpu.bc() // B is now 0x01, C is 0xFE
-	_ = port
-	// data 0xAB should have been written to port 0x02FE (original BC before decrement)
-	// outi uses bc() BEFORE decrementing B inside outi(), so port = old B<<8 | C = 0x02FE
-	if ula.ports[0x02FE] != 0xAB {
-		t.Errorf("OUTI: expected 0xAB at port 0x02FE, got 0x%02X", ula.ports[0x02FE])
+	// data 0xAB is written to port 0x01FE: a real Z80 decrements B BEFORE the
+	// OUT, so the port high byte is the post-decrement B (0x01), C = 0xFE.
+	if ula.ports[0x01FE] != 0xAB {
+		t.Errorf("OUTI: expected 0xAB at port 0x01FE, got 0x%02X", ula.ports[0x01FE])
 	}
 	if cpu.B != 0x01 {
 		t.Errorf("OUTI: expected B=0x01, got B=0x%02X", cpu.B)
@@ -3382,8 +3380,9 @@ func TestOUTD(t *testing.T) {
 
 	cpu.executeEDInstruction(0xAB) // OUTD
 
-	if ula.ports[0x02FE] != 0xCD {
-		t.Errorf("OUTD: expected 0xCD at port 0x02FE, got 0x%02X", ula.ports[0x02FE])
+	// post-decrement B (0x01) forms the port high byte → 0x01FE.
+	if ula.ports[0x01FE] != 0xCD {
+		t.Errorf("OUTD: expected 0xCD at port 0x01FE, got 0x%02X", ula.ports[0x01FE])
 	}
 	if cpu.B != 0x01 {
 		t.Errorf("OUTD: expected B=0x01, got B=0x%02X", cpu.B)
