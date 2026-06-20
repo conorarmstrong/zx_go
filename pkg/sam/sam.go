@@ -33,6 +33,10 @@ type Machine struct {
 	// captured in RunFrame so the STATUS register can report interrupt lines
 	// relative to the frame.
 	frameStart uint64
+
+	// frameCount increments once per frame; the renderer derives the MODE 1/2
+	// FLASH phase from it (toggles every 16 frames).
+	frameCount uint64
 }
 
 // New builds a SAM machine from the two 16 KB ROM halves. z80.New resets the
@@ -64,6 +68,7 @@ func NewFromROM(romImage []byte) (*Machine, error) {
 func (m *Machine) RunFrame() {
 	m.frameStart = m.CPU.Tstates()
 	m.CPU.ExecuteFrame(CyclesPerFrame)
+	m.frameCount++
 }
 
 // BorderColour returns the current 4-bit border CLUT index (BORDER bits map
