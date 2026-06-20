@@ -67,18 +67,22 @@ func (m *Machine) WritePort(addr uint16, val byte) {
 	high := byte(addr >> 8)
 	switch low {
 	case portKeyboard: // BORDER (colour + MIC + BEEP + SOFF)
+		m.flushRaster() // border/SOFF affect display: flush at the old value first
 		m.border = val
 	case portLMPR:
 		m.Mem.SetLMPR(val)
 	case portHMPR:
+		m.flushRaster() // HMPR carries the mode-3 colour bits
 		m.Mem.SetHMPR(val)
 	case portVMPR:
+		m.flushRaster() // mode/page change
 		m.Mem.SetVMPR(val)
 	case portLEPR:
 		m.Mem.SetLEPR(val)
 	case portHEPR:
 		m.Mem.SetHEPR(val)
 	case portCLUT: // palette register: index in high byte, 7-bit colour in val
+		m.flushRaster() // palette change
 		m.clut[high&0x0F] = val & 0x7F
 	case portStatus: // LINE interrupt target line
 		m.setLineInterrupt(val)

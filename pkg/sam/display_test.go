@@ -35,7 +35,7 @@ func TestRenderMode1(t *testing.T) {
 	writeDisplay(m, 0, 0x80)      // line 0, cell 0 pixel data
 	writeDisplay(m, 6144+0, 0x01) // attr: paper=0, ink=1
 
-	img := m.Render()
+	img := m.renderAll()
 	if got := img.RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("pixel 0 should be ink (white), got %v", got)
 	}
@@ -51,7 +51,7 @@ func TestRenderMode4(t *testing.T) {
 	m.clut[2] = 0x11         // lo nibble → blue
 	writeDisplay(m, 0, 0x12) // byte 0: hi=1, lo=2
 
-	img := m.Render()
+	img := m.renderAll()
 	if got := img.RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("hi nibble pixel should be white, got %v", got)
 	}
@@ -69,11 +69,11 @@ func TestRenderMode1Flash(t *testing.T) {
 	writeDisplay(m, 6144+0, 0x81) // attr: ink=1, paper=0, FLASH (bit7)
 
 	m.frameCount = 0 // flash phase off → ink shows as ink (white)
-	if got := m.Render().RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
+	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("flash off: pixel should be ink (white), got %v", got)
 	}
 	m.frameCount = flashFramesPhase // flash phase on → ink/paper swapped
-	if got := m.Render().RGBAAt(0, 0); got != (color.RGBA{0, 0, 0, 255}) {
+	if got := m.renderAll().RGBAAt(0, 0); got != (color.RGBA{0, 0, 0, 255}) {
 		t.Errorf("flash on: pixel should be swapped to paper (black), got %v", got)
 	}
 }
@@ -91,7 +91,7 @@ func TestRenderBootScreen(t *testing.T) {
 	}
 	t.Logf("boot screen mode = %d, VMPR=%#02x, border=%#x", m.Mem.ScreenMode(), m.Mem.VMPR(), m.BorderColour())
 
-	img := m.Render()
+	img := m.Render() // the frame built line-accurately during RunFrame
 	if out := os.Getenv("SAM_RENDER_OUT"); out != "" {
 		f, _ := os.Create(out)
 		_ = png.Encode(f, img)

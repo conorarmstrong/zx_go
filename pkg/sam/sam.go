@@ -1,6 +1,10 @@
 package sam
 
-import "github.com/conorarmstrong/zx_go/pkg/z80"
+import (
+	"image"
+
+	"github.com/conorarmstrong/zx_go/pkg/z80"
+)
 
 // CyclesPerFrame is the SAM frame length in CPU T-states: 6 MHz / ~50.08 Hz =
 // 384 cycles/line × 312 lines. (SimCoupe SAM.h CPU_CYCLES_PER_FRAME.)
@@ -37,6 +41,11 @@ type Machine struct {
 	// frameCount increments once per frame; the renderer derives the MODE 1/2
 	// FLASH phase from it (toggles every 16 frames).
 	frameCount uint64
+
+	// frame is the line-accurate display buffer; renderCursor is the next scan
+	// line still to render this frame (the lazy renderer's cursor).
+	frame        *image.RGBA
+	renderCursor int
 }
 
 // New builds a SAM machine from the two 16 KB ROM halves. z80.New resets the
@@ -52,6 +61,10 @@ func New(rom0, rom1 []byte) *Machine {
 	// once per frame, held ~128 cycles), reusing the shared Z80 timing hooks.
 	m.CPU.IntAssertTstate = samFrameIntTstate
 	m.CPU.IntPulseTstates = samIntActiveCycles
+	// Line-accurate renderer: a write to displayed video memory flushes the
+	// raster up to the current line before the memory changes.
+	m.frame = image.NewRGBA(image.Rect(0, 0, samActiveWidth, samActiveHeight))
+	m.Mem.SetVideoWriteHook(m.flushRaster)
 	return m
 }
 
@@ -67,7 +80,9 @@ func NewFromROM(romImage []byte) (*Machine, error) {
 // RunFrame executes one 50 Hz SAM frame.
 func (m *Machine) RunFrame() {
 	m.frameStart = m.CPU.Tstates()
+	m.renderCursor = 0
 	m.CPU.ExecuteFrame(CyclesPerFrame)
+	m.flushTo(samActiveHeight) // render any lines after the last state change
 	m.frameCount++
 }
 
