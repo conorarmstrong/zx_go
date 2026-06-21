@@ -11,11 +11,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// nextMenuLoopPC is the PC the NextZXOS ROM spins at while it waits for a key at
-// the welcome screen and the main menu. A loaded .nex program runs from its own
-// code, so PC != this value is our "the program took over the machine" signal.
-const nextMenuLoopPC = 0x0c90
-
 // nextStep runs one CPU instruction through the IRQ-aware single-step path. The
 // NextZXOS cold boot is driven by the per-instruction divMMC/esxDOS hooks (it
 // loads the OS from SD via RST 8), which ExecuteFrame bypasses — so the *boot*

@@ -16,35 +16,6 @@ import (
 // a real Spectrum Next loads these games. The OS CDs into the game's folder
 // and provides the environment, so the game's runtime file opens succeed.
 
-// nextKeyMatrix maps the characters needed to type a NextZXOS command line
-// onto Spectrum keyboard-matrix (row, mask) presses. Symbols use SYMBOL SHIFT
-// (row 7, 0x02) plus the symbol's key. Paths are typed lowercase — the SD card
-// is FAT (case-insensitive) so this still matches mixed-case folder names.
-var nextKeyMatrix = func() map[rune][][2]int {
-	sym := [2]int{7, 0x02} // SYMBOL SHIFT
-	letters := map[rune][2]int{
-		'a': {1, 0x01}, 'b': {7, 0x10}, 'c': {0, 0x08}, 'd': {1, 0x04}, 'e': {2, 0x04},
-		'f': {1, 0x08}, 'g': {1, 0x10}, 'h': {6, 0x10}, 'i': {5, 0x04}, 'j': {6, 0x08},
-		'k': {6, 0x04}, 'l': {6, 0x02}, 'm': {7, 0x04}, 'n': {7, 0x08}, 'o': {5, 0x02},
-		'p': {5, 0x01}, 'q': {2, 0x01}, 'r': {2, 0x08}, 's': {1, 0x02}, 't': {2, 0x10},
-		'u': {5, 0x08}, 'v': {0, 0x10}, 'w': {2, 0x02}, 'x': {0, 0x04}, 'y': {5, 0x10},
-		'z': {0, 0x02},
-		'0': {4, 0x01}, '1': {3, 0x01}, '2': {3, 0x02}, '3': {3, 0x04}, '4': {3, 0x08},
-		'5': {3, 0x10}, '6': {4, 0x10}, '7': {4, 0x08}, '8': {4, 0x04}, '9': {4, 0x02},
-	}
-	m := map[rune][][2]int{
-		' ':  {{7, 0x01}},      // SPACE
-		'.':  {sym, {7, 0x04}}, // SYMBOL SHIFT + M
-		'/':  {sym, {0, 0x10}}, // SYMBOL SHIFT + V
-		'-':  {sym, {6, 0x08}}, // SYMBOL SHIFT + J
-		'\'': {sym, {4, 0x08}}, // SYMBOL SHIFT + 7
-	}
-	for r, k := range letters {
-		m[r] = [][2]int{k}
-	}
-	return m
-}()
-
 // nexRunFrames runs the machine GUI-style for n frames.
 func nexRunFrames(emu *emulator, n int) {
 	for i := 0; i < n; i++ {
@@ -72,7 +43,7 @@ func nexPressCombo(emu *emulator, keys [][2]int, hold, gap int) {
 // nexTypeLine types an ASCII string onto the NextZXOS command line.
 func nexTypeLine(emu *emulator, s string) {
 	for _, c := range s {
-		if keys, ok := nextKeyMatrix[c]; ok {
+		if keys, ok := nexKeyMatrix[c]; ok {
 			nexPressCombo(emu, keys, 4, 10)
 		}
 	}

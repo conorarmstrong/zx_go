@@ -231,6 +231,12 @@ type emulator struct {
 	nextSprites *sprite.Engine
 	nextLayer2  *layer2.Layer2
 
+	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
+	// command from the run loop to load a .nex via the genuine OS
+	// loader (File -> Open). It is advanced once per executed frame and
+	// cleared when finished.
+	nexloadMacro *nexloadMacro
+
 	// debugHistory is the shared M1-fetch ring populated by the
 	// CPU pre-fetch hook. Both the telnet `history` / `prev`
 	// commands and the visual debugger's History tab read from it.
@@ -1219,6 +1225,15 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					}
 					if e.peripherals != nil {
 						e.peripherals.Frame()
+					}
+
+					// Advance the NextZXOS .nexload driver (File -> Open),
+					// one step per executed frame; keys it presses are seen
+					// by the next frame's keyboard scan.
+					if e.nexloadMacro != nil {
+						if e.nexloadMacro.tick(e) {
+							e.nexloadMacro = nil
+						}
 					}
 
 					// Render at 50Hz
@@ -2766,26 +2781,23 @@ func main() {
 			if currentModel != roms.ModelNext {
 				return "", fmt.Errorf(".nex requires Spectrum Next mode (Machine → ZX Spectrum Next, then restart)")
 			}
-			n, err := nex.ParseFile(path)
-			if err != nil {
+			if emu.sdImageSrc == nil {
+				return "", fmt.Errorf(".nex loading needs a Spectrum Next SD card (none is configured)")
+			}
+			// Validate the file before offering to copy it.
+			if _, err := nex.ParseFile(path); err != nil {
 				return "", fmt.Errorf("parse NEX: %w", err)
 			}
-			for bank, data := range n.Banks {
-				page := emu.mem.GetPage(bank)
-				if page == nil {
-					slog.Warn(".nex load: bank not allocated; skipping", "bank", bank)
-					continue
-				}
-				copy(page, data)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read NEX: %w", err)
 			}
-			emu.cpu.SP = n.Header.SP
-			emu.cpu.PC = n.Header.PC
-			if n.Header.EntryBank >= 8 {
-				slog.Warn(".nex load: entry bank > 7; file must self-page via NextReg $50..$57 before reaching its entry",
-					"entryBank", n.Header.EntryBank)
-			}
-			emu.mem.PageMemory(n.Header.EntryBank & 0x07)
-			return ".nex", nil
+			// .nex games are loaded through NextZXOS's own .nexload (so
+			// games that depend on the OS run exactly as on hardware),
+			// which requires the file on the SD card. Confirm the copy
+			// with the user, then import and launch.
+			emu.confirmImportNex(filepath.Base(path), data)
+			return "Loading " + filepath.Base(path) + " via NextZXOS…", nil
 		default:
 			return "", fmt.Errorf("unrecognised file extension %q (supported: .tap .tzx .z80 .sna .szx .rzx; .nex requires Next mode)", ext)
 		}

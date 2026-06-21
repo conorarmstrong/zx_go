@@ -149,6 +149,12 @@ type fat32Builder struct {
 
 	label    string
 	skipFile func(string, bool) bool
+
+	// scanAlloc selects free-cluster allocation by scanning the FAT
+	// (set when appending to an existing image, whose free space may be
+	// fragmented) rather than the linear bump used while building a
+	// fresh image.
+	scanAlloc bool
 }
 
 func (b *fat32Builder) writeMBR() {
@@ -224,6 +230,17 @@ func (b *fat32Builder) mirrorFAT() {
 }
 
 func (b *fat32Builder) allocCluster() uint32 {
+	if b.scanAlloc {
+		// Appending to an existing image: skip clusters already in use.
+		for c := b.nextFree; c < b.clusters+2; c++ {
+			if b.getFAT(c) == 0 {
+				b.nextFree = c + 1
+				b.setFAT(c, fat32EOC)
+				return c
+			}
+		}
+		return 0
+	}
 	if b.nextFree >= b.clusters+2 {
 		return 0
 	}
