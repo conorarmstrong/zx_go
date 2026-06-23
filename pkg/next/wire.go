@@ -643,7 +643,10 @@ func (p *LayerPriority) Get() byte { return p.raw }
 
 // Mode returns the low 2 bits decoded as compositor.PriorityMode.
 func (p *LayerPriority) Mode() compositor.PriorityMode {
-	return compositor.PriorityMode(p.raw & 0x03)
+	// The layer-priority selector is NR$15 bits 4:2 (zxnext.vhd:5230-5234),
+	// NOT bits 1:0 (which are sprite-enable and "sprites over border"). Values
+	// 0..3 of the 3-bit field map to our four pure modes SLU/LSU/SUL/LUS.
+	return compositor.PriorityMode((p.raw >> 2) & 0x07)
 }
 
 // setSpriteAttrByte applies sprite attribute byte idx (0..4) to the
@@ -658,32 +661,7 @@ func (p *LayerPriority) Mode() compositor.PriorityMode {
 //	byte 4: scale / N6 / 8bpp / Y-MSB — FPGA sprites.vhd:437, decoded in
 //	        RenderScanline when the sprite is Extended
 func setSpriteAttrByte(e *sprite.Engine, idx int, val byte) {
-	s := e.Sprite(int(e.SelectedSprite()))
-	if s == nil {
-		return
-	}
-	switch idx {
-	case 0:
-		s.X = (s.X & 0x100) | int16(val)
-	case 1:
-		s.Y = int16(val)
-	case 2:
-		s.Palette = (val >> 4) & 0x0F
-		if val&0x01 != 0 {
-			s.X |= 0x100
-		} else {
-			s.X &^= 0x100
-		}
-		s.XMirror = val&0x08 != 0
-		s.YMirror = val&0x04 != 0
-		s.Rotate = val&0x02 != 0
-	case 3:
-		s.Visible = val&0x80 != 0
-		s.Extended = val&0x40 != 0
-		s.Pattern = val & 0x3F
-	case 4:
-		s.Byte4 = val
-	}
+	e.ApplyAttrByte(idx, val)
 }
 
 // WireSprites installs the NextReg sprite-select (0x34), attribute-byte
@@ -719,9 +697,28 @@ func WireSprites(d *nextregs.Dispatcher, e *sprite.Engine) {
 // WireLayerPriority installs the NextReg 0x15 OnWrite/OnRead
 // handlers. Storage only — Sprint 7 reads p.Get() to drive the
 // 5-source ordering rules from the NextReg 0x15 documentation.
-func WireLayerPriority(d *nextregs.Dispatcher, p *LayerPriority) {
+func WireLayerPriority(d *nextregs.Dispatcher, p *LayerPriority, sprites *sprite.Engine) {
 	d.SetOnWrite(0x15, func(disp *nextregs.Dispatcher, val byte) {
 		p.Set(val)
+		// NR$15 bit 0 = "Enable sprites" (registers.txt 0x15). This is the
+		// sprite layer's master enable; without it the compositor's
+		// doSprites gate (c.sprites.Enabled()) stays false and no sprite
+		// renders. Sonic enables its sprites (sonic + HUD) via NR$15=$45.
+		if sprites != nil {
+			sprites.SetEnabled(val&0x01 != 0)
+			// NR$15 bit 6 = "sprite_priority" (zero-on-top, sprites.vhd:73):
+			// when set, sprite 0 is drawn in front of higher-numbered
+			// overlapping sprites. Sonic sets it (NR$15=$45) to layer its
+			// ring-counter HUD icons over the band sprites in the same cells.
+			sprites.SetZeroOnTop(val&0x40 != 0)
+			// NR$15 bit 1 = "sprites over border", bit 5 = "border clip enable"
+			// (sprites.vhd:1043-1066). With over-border off (Sonic's NR$15=$45)
+			// the clip window is shifted into the 256x192 paper area, hiding
+			// sprites parked in the top-border band (Y<32) — Sonic's stray HUD
+			// row at Y=1, the garbled top-right icons.
+			sprites.SetOverBorder(val&0x02 != 0)
+			sprites.SetBorderClip(val&0x20 != 0)
+		}
 		disp.Store(0x15, val)
 	})
 }
@@ -892,12 +889,17 @@ func Wire(opts WireOpts) {
 	}
 	if opts.Layer2 != nil {
 		WireLayer2(opts.Dispatcher, opts.Layer2)
+		// Let memory's Layer-2 write/read paging track the live NR$12/$13
+		// banks for its redirect into Layer-2 RAM.
+		if opts.Memory != nil {
+			opts.Memory.SetLayer2BankSource(opts.Layer2.ActiveBank, opts.Layer2.ShadowBank)
+		}
 	}
 	if opts.Palette != nil {
 		WirePalette(opts.Dispatcher, opts.Palette)
 	}
 	if opts.Priority != nil {
-		WireLayerPriority(opts.Dispatcher, opts.Priority)
+		WireLayerPriority(opts.Dispatcher, opts.Priority, opts.Sprites)
 	}
 	if opts.Sprites != nil {
 		WireSprites(opts.Dispatcher, opts.Sprites)
@@ -918,7 +920,7 @@ func Wire(opts WireOpts) {
 		WireTilemap(opts.Dispatcher, opts.Tilemap, opts.Palette)
 	}
 	WirePeripheralMasks(opts.Dispatcher)
-	WireClipWindows(opts.Dispatcher, opts.Tilemap)
+	WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites)
 	opts.Memory.SpeedMultiplier = opts.CPU.SpeedMultiplier
 	applyTBBLUEFWBootDefaults(opts.Dispatcher)
 }
@@ -951,7 +953,7 @@ func (c *clipWindow) reset() {
 // plus the NR$1C index reset/read-back, replacing the old single-byte
 // approximation. Reset defaults per zxnext.vhd 4959-4982: Layer2/sprite/ULA
 // = {00,FF,00,BF}; tilemap = {00,9F,00,FF}.
-func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap) {
+func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *sprite.Engine) {
 	l2 := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
 	spr := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
 	ula := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
@@ -968,12 +970,22 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap) {
 		}
 	}
 	pushTM()
+	// Push the sprite clip coords into the live sprite engine so NR$19
+	// actually clips the render (not just stores the register) — without this
+	// "parked"/off-window sprites the game expects hidden still draw.
+	pushSpr := func() {
+		if sprites != nil {
+			sprites.SetClip(spr.coord[0], spr.coord[1], spr.coord[2], spr.coord[3])
+		}
+	}
+	pushSpr()
 	wire := func(reg byte, c *clipWindow) {
 		d.SetOnWrite(reg, func(_ *nextregs.Dispatcher, v byte) { c.write(v) })
 		d.SetOnRead(reg, func(_ *nextregs.Dispatcher) byte { return c.read() })
 	}
 	wire(0x18, l2)
-	wire(0x19, spr)
+	d.SetOnWrite(0x19, func(_ *nextregs.Dispatcher, v byte) { spr.write(v); pushSpr() })
+	d.SetOnRead(0x19, func(_ *nextregs.Dispatcher) byte { return spr.read() })
 	wire(0x1A, ula)
 	d.SetOnWrite(0x1B, func(_ *nextregs.Dispatcher, v byte) { tm.write(v); pushTM() })
 	d.SetOnRead(0x1B, func(_ *nextregs.Dispatcher) byte { return tm.read() })
@@ -1339,7 +1351,16 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
 			return
 		}
 		target := uint16(nr23) | (uint16(nr22&0x01) << 8)
-		cpu.LineIntOffsetTstates = uint64(target) * tstatesPerScanLine * uint64(cpu.SpeedMultiplier())
+		// Faithful raster position: MAME (specnext.cpp line_irq_adjust) fires
+		// at vpos = cvc_to_vpos(target-1) = (target-1+min_vactive), i.e. the
+		// target line is relative to the 256x192 active area (min_vactive=64 =
+		// our top border), not the frame top. frameStart is absolute line 0.
+		const minVactive = 64
+		var lineAbs uint64
+		if target != 0 {
+			lineAbs = uint64(target-1) + minVactive
+		}
+		cpu.LineIntOffsetTstates = lineAbs * tstatesPerScanLine * uint64(cpu.SpeedMultiplier())
 	}
 	d.SetOnWrite(0x22, func(disp *nextregs.Dispatcher, v byte) {
 		// Per zxnext.vhd:5905 the NR$22 read shape is
@@ -1578,6 +1599,12 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		if val&0x04 != 0 { // bit 2 = Generate divmmc NMI
 			nr02NMISource |= 0x04
 			cpu.PendingNMI.Store(true)
+			// Latch button_nmi so the $0066 NMI-vector automap engages for
+			// the divMMC NMI (divmmc.vhd:110-120). Only the divMMC NMI does
+			// this — a Multiface NMI (bit 3) owns its own $0066 vector.
+			if q, ok := divmmcSPI.(interface{ AssertNMIButton() }); ok {
+				q.AssertNMIButton()
+			}
 		} else {
 			nr02NMISource &^= 0x04
 		}

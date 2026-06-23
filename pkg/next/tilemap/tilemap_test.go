@@ -579,3 +579,30 @@ func TestTextmode1bpp(t *testing.T) {
 		}
 	}
 }
+
+// TestTilemap512TileMode pins the 512-tile mode (NR$6B bit 1): the per-tile
+// attribute byte's bit 0 is the tile index's 9th bit, extending the map to 512
+// tiles. Sonic's options/text screen uses this (map cells are tile $00 / attr
+// $01 → tile 256, where the font glyphs live); ignoring the MSB rendered the
+// near-blank tile 0 everywhere and garbled the whole screen.
+func TestTilemap512TileMode(t *testing.T) {
+	bank := &fakeBank{data: make([]byte, 0x4000)}
+	// Map at $0000, 2-byte cells. Cell 0 = tile low $00, attr $01 (bit0 = MSB).
+	bank.data[0] = 0x00
+	bank.data[1] = 0x01
+	// Tile defs base $0800 (NR$6F = $08). Tile 256 at $0800 + 256*32 = $2800.
+	for col := 0; col < 4; col++ {
+		bank.data[0x800+256*32+col] = 0x99 // 4bpp nibble 9
+	}
+	tm := New(bank)
+	tm.SetTileMapBase(0x00)
+	tm.SetTilesBase(0x08)
+	tm.SetControl(0x02) // mode_512 (bit 1); 40-col, per-tile attrs
+	tm.SetEnabled(true)
+
+	dst := make([]byte, 256)
+	tm.RenderScanline(0, dst)
+	if dst[0] != 9 {
+		t.Errorf("512-tile mode pixel0 = %d, want 9 (tile 256 via attr bit 0)", dst[0])
+	}
+}

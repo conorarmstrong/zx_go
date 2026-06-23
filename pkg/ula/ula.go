@@ -77,6 +77,13 @@ type ULA struct {
 	KempstonEnabled bool
 	KempstonState   byte
 
+	// ulaOutputDisabled mirrors NextReg $68 bit 7 ("Disable ULA output").
+	// When set the ULA layer paints nothing — the screen area shows the
+	// lower layers (Layer 2 / Tilemap) or the NR$4A fallback colour, never
+	// stale screen RAM. Sonic disables the ULA for its Layer-2/tilemap
+	// title; without honouring this, stale screen RAM rendered as garbage.
+	ulaOutputDisabled bool
+
 	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
 	// Allows accurate rendering of border effects that change colour during the frame.
 	borderChanges []borderChange
@@ -217,6 +224,14 @@ type NextCompositor interface {
 	// pixels the border pass paints, leaving inner pixels
 	// untouched.
 	ComposeBorderRow(tilemapY int, dst []byte, isInBorderArea func(x int) bool)
+	// HasActiveSprites reports whether the sprite layer is wired AND
+	// enabled, so the ULA knows whether to run the sprite border pass.
+	HasActiveSprites() bool
+	// ComposeSpriteBorderRow paints sprite pixels over the border-area
+	// pixels of a 320-wide RGBA row. frameY is the sprite vcounter for
+	// this row (frame-relative); isInBorderArea(x) selects the pixels to
+	// paint, leaving inner-screen pixels to the main pass.
+	ComposeSpriteBorderRow(frameY int, dst []byte, isInBorderArea func(x int) bool)
 	// TilemapIs80Col reports whether the tilemap is in 80-column
 	// (640-pixel) mode. When true the ULA renders the wide path
 	// (renderWide) and the 320-pixel passes above skip the tilemap.
@@ -242,6 +257,15 @@ type NextCompositor interface {
 // pkg/next/sprite.Engine satisfies it.
 type NextSpritePort interface {
 	SelectSprite(v byte)
+	// SelectSlot applies a port $303B write: sets the current sprite and the
+	// pattern-RAM upload cursor (ports.txt 0x303B).
+	SelectSlot(v byte)
+	// WritePatternByte streams one byte to the current sprite-pattern cursor
+	// (port $005B, auto-incrementing).
+	WritePatternByte(v byte)
+	// WriteAttr streams one byte to the current sprite's attributes (port
+	// $0057); after a sprite's 4/5 bytes the current-sprite pointer advances.
+	WriteAttr(v byte)
 	ReadStatus() byte
 }
 
@@ -539,6 +563,21 @@ func (u *ULA) SetBorderTracer(fn func(port uint16, val byte, newBorder byte, sca
 	u.borderTracer = fn
 }
 
+// SetULAOutputDisabled mirrors NextReg $68 bit 7. When true the ULA layer is
+// not painted (see Render). Idempotent and safe to call every frame.
+func (u *ULA) SetULAOutputDisabled(disabled bool) { u.ulaOutputDisabled = disabled }
+
+// ulaDisabledFill is the colour painted across the frame when the ULA output
+// is disabled: the Next compositor's NR$4A fallback when one is wired, else
+// opaque black.
+func (u *ULA) ulaDisabledFill() color.RGBA {
+	if fb, ok := u.nextCompositor.(interface{ FallbackRGBA() [4]byte }); ok {
+		c := fb.FallbackRGBA()
+		return color.RGBA{R: c[0], G: c[1], B: c[2], A: 0xFF}
+	}
+	return color.RGBA{A: 0xFF}
+}
+
 func (u *ULA) Render() *image.RGBA {
 	// The tape EAR level is advanced per port-$FE read (tapeLevel), not here —
 	// a once-per-frame Update would freeze the level for the whole frame and
@@ -581,6 +620,32 @@ func (u *ULA) Render() *image.RGBA {
 		}
 	}
 	u.borderChanges = u.borderChanges[:0] // Clear for next frame
+
+	// NextReg $68 bit 7 ("Disable ULA output"): the ULA layer paints
+	// nothing. Fill the whole frame with the disabled fill (the NR$4A
+	// fallback colour when a Next compositor is wired, else black) so the
+	// border + screen passes are skipped and the lower layers / fallback
+	// show instead of stale screen RAM. This makes the ULA fully
+	// transparent regardless of NR$14 (which sonic sets >= 16, disabling
+	// the per-pixel transparency path).
+	if u.ulaOutputDisabled {
+		fill := u.ulaDisabledFill()
+		for y := 0; y < TotalHeight; y++ {
+			for x := 0; x < TotalWidth; x++ {
+				u.img.Set(x, y, fill)
+			}
+		}
+		if u.nextCompositor != nil {
+			u.applyNextCompositor()
+			if u.nextCompositor.HiResLayer2Active() {
+				return u.renderHiResLayer2()
+			}
+			if u.nextCompositor.TilemapIs80Col() {
+				return u.renderWide()
+			}
+		}
+		return u.img
+	}
 
 	// Draw borders with per-scanline colours
 	for y := 0; y < TotalHeight; y++ {
@@ -932,7 +997,14 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	}
 
 	// Kempston joystick: port 0x1F. Decoded as A7..A5 = 0 and A4..A0 = 0x1F.
-	if u.KempstonEnabled && (addr&0x00E0) == 0x0000 && (addr&0x001F) == 0x001F {
+	// On the Spectrum Next the FPGA ALWAYS decodes $1F as the Kempston joystick
+	// (the TBBLUE firmware polls it at boot; the joystick-mode NextReg only
+	// selects which physical input drives it), so an idle read returns $00 —
+	// not the floating bus. Games rely on this: Sonic reads $1F and complements
+	// it (IN A,($1F); XOR $FF; …) to derive an option-menu flag; a floating-bus
+	// $FF there inverted the flag and forced a blank-screen path.
+	isNext := u.mem != nil && u.mem.GetCurrentModel() == roms.ModelNext
+	if (u.KempstonEnabled || isNext) && (addr&0x00E0) == 0x0000 && (addr&0x001F) == 0x001F {
 		return u.KempstonState & 0x1F, true
 	}
 
@@ -1147,9 +1219,29 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		return
 	}
 
-	// Port $303B write: select the active sprite (mirror of NR$34).
+	// Port $303B write: select the active sprite AND pattern-upload cursor
+	// (ports.txt 0x303B — sets both quantities from the one value).
 	if u.nextSprite != nil && addr == 0x303B {
-		u.nextSprite.SelectSprite(val)
+		u.nextSprite.SelectSlot(val)
+		return
+	}
+
+	// Port $005B write: stream a byte into the sprite pattern RAM at the
+	// current cursor (ports.txt 0x5B). Decoded on the low 8 bits only because
+	// OTIR (the canonical pattern-upload loop) varies the high byte via B.
+	if u.nextSprite != nil && (addr&0xFF) == 0x5B {
+		u.nextSprite.WritePatternByte(val)
+		return
+	}
+
+	// Port $0057 write: stream a byte into the current sprite's attributes
+	// (ports.txt 0x57, "Sprite Attribute Upload"). Each sprite takes 4 or 5
+	// bytes, then the current-sprite pointer auto-advances. Decoded on the low
+	// 8 bits only because the OTIR upload loop varies the high byte via B — the
+	// same convention as the $5B pattern stream above. Nextoid uploads all its
+	// sprites (bat, ball, HUD) through this port each frame.
+	if u.nextSprite != nil && (addr&0xFF) == 0x57 {
+		u.nextSprite.WriteAttr(val)
 		return
 	}
 
@@ -1164,6 +1256,12 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	// the FPGA-canonical NextReg accurately reflects the state.
 	if u.nextRegs != nil && addr == 0x123B {
 		u.port123BVal = val // FPGA port_123b_dat — IN $123B reads this back
+		// Layer-2 write/read paging: route CPU accesses to Layer-2 RAM while
+		// enabled (bit 0/2) so a game's Layer-2 screen clear hits Layer-2 RAM,
+		// not normal RAM. (zxnext.vhd:3915-3933)
+		if u.mem != nil {
+			u.mem.SetLayer2MapControl(val)
+		}
 		nr69 := u.nextRegs.ReadReg(0x69)
 		if val&0x02 != 0 {
 			nr69 |= 0x80
@@ -1370,6 +1468,33 @@ func (u *ULA) applyNextCompositor() {
 				inBorder = func(int) bool { return true }
 			}
 			u.nextCompositor.ComposeBorderRow(y, rowFull, inBorder)
+			copy(u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4], rowFull)
+		}
+	}
+
+	// Sprite border pass. Sprites are frame-relative (320x256, paper at 32,32),
+	// so this image's row r maps to sprite vcounter r + spriteFrameYBias. The
+	// inner paper pass already drew sprites inside the 256x192 box; here we walk
+	// the full image and paint sprite pixels only in the border strips — the
+	// top/bottom borders (where games park HUD sprites, e.g. Nextoid's
+	// SHIPS/SCORE row at frame Y 224-225) and the 32-px L/R borders of screen
+	// rows. The sprite engine's over-border clip gates whether they show.
+	if u.nextCompositor.HasActiveSprites() {
+		// The image (TotalHeight=240, BorderTop) is the centre of the 256-line
+		// sprite frame (top border 32): image row r = frame vcounter r + bias.
+		const spriteFrameH = 256
+		bias := (spriteFrameH - TotalHeight) / 2 // 8 for a 240-line image
+		rowFull := make([]byte, TotalWidth*4)
+		for y := 0; y < TotalHeight; y++ {
+			imgRowStart := y * u.img.Stride
+			copy(rowFull, u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4])
+			inBorder := func(x int) bool {
+				return x < BorderLeft || x >= BorderLeft+ScreenWidth
+			}
+			if y < BorderTop || y >= BorderTop+ScreenHeight {
+				inBorder = func(int) bool { return true }
+			}
+			u.nextCompositor.ComposeSpriteBorderRow(y+bias, rowFull, inBorder)
 			copy(u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4], rowFull)
 		}
 	}

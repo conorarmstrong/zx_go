@@ -11,6 +11,10 @@
 | :---: | :---: | :---: |
 | ![Cybernoid running](cybernoid.png) | ![NextZXOS welcome](next_welcome.png) | ![NextZXOS menu](nextzxos_menu.png) |
 
+| Sonic the Hedgehog (Next) | Warhawk (Next) |
+| :---: | :---: |
+| ![Sonic the Hedgehog on the Spectrum Next](sonic.png) | ![Warhawk on the Spectrum Next](warhawk.png) |
+
 zx_go runs the whole family on one codebase, from the 1980 ZX80 to the 2017 Spectrum Next. Classic models are cycle-accurate with full memory and port contention; the **Spectrum Next cold-boots real NextZXOS through the authentic FPGA boot chain** — no snapshots, no shortcuts — to a fully interactive desktop, with its *entire* custom hardware stack emulated.
 
 The 48K was the author's first computer; this began as a Go learning exercise and turned into a serious emulator.
@@ -200,6 +204,8 @@ Everything classic just works — pick a model from **Machine**, and load softwa
 | Quick save / load | F2 / F4 |
 
 Pick a joystick scheme from **Peripherals → Joystick** (Kempston, Sinclair left/right, Cursor/Protek); enable **Peripherals → Kempston Mouse** for mouse support. Keymaps are editable and persist in `config.json`. The full menu reference and key tables are in the [manual](docs/manual.md).
+
+**Playing a joystick game** (e.g. a Spectrum Next `.nex` such as Sonic): move with the **arrow keys**, fire/jump with **Right‑Alt** or **Right‑Ctrl**. The Next always has a built‑in Kempston joystick, so on the Next the arrow keys drive it out of the box — you don't need to pick a scheme. (A game's own *title menu* may use its own keys; once in‑game, the arrows + Right‑Alt are your controls.)
 
 ---
 

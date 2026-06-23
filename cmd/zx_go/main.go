@@ -237,6 +237,14 @@ type emulator struct {
 	// cleared when finished.
 	nexloadMacro *nexloadMacro
 
+	// cpuSpeedForce is the user-facing "CPU Speed" override (ModelNext):
+	// 0 = Auto (follow the guest's NextReg $07), 1..4 = force 3.5/7/14/28 MHz.
+	// The zero value is Auto so no constructor init is needed. NextZXOS runs
+	// at 28 MHz by default, which makes some games (e.g. RustHawk) run too
+	// fast; forcing 3.5 MHz is the emulator equivalent of the Next's menu
+	// speed selector / F8 hotkey. Applied each frame via applyForcedCPUSpeed.
+	cpuSpeedForce int
+
 	// debugHistory is the shared M1-fetch ring populated by the
 	// CPU pre-fetch hook. Both the telnet `history` / `prev`
 	// commands and the visual debugger's History tab read from it.
@@ -368,11 +376,12 @@ func applyCRTFilterInto(dst, src *image.RGBA) {
 // the screen image underneath.
 type keyboardWidget struct {
 	widget.BaseWidget
-	onKeyDown   func(*fyne.KeyEvent)
-	onKeyUp     func(*fyne.KeyEvent)
-	onTypedRune func(rune)
-	onMouseMove func(dx, dy int)
-	onMouseBtn  func(btn int, pressed bool)
+	onKeyDown    func(*fyne.KeyEvent)
+	onKeyUp      func(*fyne.KeyEvent)
+	onTypedRune  func(rune)
+	onMouseMove  func(dx, dy int)
+	onMouseBtn   func(btn int, pressed bool)
+	onFocusLost  func()
 
 	// lastMousePos holds the last MouseMoved position so we can
 	// compute deltas. Reset on MouseIn so the first move after
@@ -415,7 +424,16 @@ func (kw *keyboardWidget) TypedRune(r rune) {
 }
 
 func (kw *keyboardWidget) FocusGained() {}
-func (kw *keyboardWidget) FocusLost()   {}
+
+// FocusLost fires when the emulator surface loses keyboard focus (window
+// switch, dialog, menu). The OS stops delivering key-up events for anything
+// currently held, so a held joystick direction or key would otherwise stick on
+// (e.g. Sonic kept running right after focus returned). Release everything.
+func (kw *keyboardWidget) FocusLost() {
+	if kw.onFocusLost != nil {
+		kw.onFocusLost()
+	}
+}
 
 // MouseIn is called when the cursor enters the widget. Reset the
 // last-position cache so the first MouseMoved afterwards doesn't
@@ -971,7 +989,7 @@ func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
 	// Joystick interception. The arrow keys / right modifiers are routed to
 	// whichever joystick interface is currently active and are NOT
 	// forwarded to the keyboard matrix in the usual way.
-	if e.joystickType != JoystickNone {
+	if e.effectiveJoystick() != JoystickNone {
 		idx := joystickKeyForArrow(ev.Name)
 		if idx >= 0 {
 			e.dispatchJoystick(idx, true)
@@ -987,12 +1005,75 @@ func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
 	}
 }
 
+// effectiveJoystickFor resolves the joystick scheme that should handle arrow
+// keys for a given configured choice and machine model. An unconfigured
+// (None) joystick on the Spectrum Next falls back to Kempston: the Next FPGA
+// always decodes the Kempston port ($1F) and nearly all Next software reads
+// it, so without this a fresh user's arrows drive nothing and Kempston-only
+// games (e.g. Sonic) are uncontrollable. Any explicit choice is preserved,
+// and every other model keeps None (the user opts in via Peripherals menu).
+func effectiveJoystickFor(configured JoystickType, model roms.SpectrumModel) JoystickType {
+	if configured == JoystickNone && model == roms.ModelNext {
+		return JoystickKempston
+	}
+	return configured
+}
+
+// effectiveJoystick is effectiveJoystickFor applied to the live model.
+func (e *emulator) effectiveJoystick() JoystickType {
+	model := roms.Model48K
+	if e.mem != nil {
+		model = e.mem.GetCurrentModel()
+	}
+	return effectiveJoystickFor(e.joystickType, model)
+}
+
+// applyForcedCPUSpeed enforces the user's "CPU Speed" override (cpuSpeedForce)
+// on the live CPU. Called once per executed frame:
+//   - Auto (0), no CPU, or a .nex still loading (macro active) -> release any
+//     lock so NextZXOS boots/loads at its own (28 MHz) speed and guest NR$07
+//     writes apply normally;
+//   - otherwise pin the CPU to the chosen speed (1..4 -> selector 0..3), so a
+//     game NextZXOS would run too fast at 28 MHz can be played at 3.5 MHz.
+// Idempotent, so it survives the reboot that File -> Open performs.
+func (e *emulator) applyForcedCPUSpeed() {
+	if e.cpu == nil {
+		return
+	}
+	if e.cpuSpeedForce <= 0 || e.nexloadMacro != nil {
+		e.cpu.UnlockSpeedSelect()
+		return
+	}
+	e.cpu.LockSpeedSelect(byte(e.cpuSpeedForce - 1))
+}
+
+// cpuSpeedMenuItem builds the Machine -> "CPU Speed" submenu. NextZXOS runs the
+// Next at 28 MHz by default, which makes some games (e.g. RustHawk) run far too
+// fast; these options pin the CPU speed — the emulator equivalent of the Next's
+// on-screen menu speed selector (left/right arrows) and F8 speed hotkey. "Auto"
+// follows whatever the guest/OS selects (NextReg $07). The choice is applied
+// once per frame by applyForcedCPUSpeed and survives the File->Open reboot.
+func cpuSpeedMenuItem(emu *emulator) *fyne.MenuItem {
+	set := func(force int) func() {
+		return func() { emu.cpuSpeedForce = force }
+	}
+	parent := fyne.NewMenuItem("CPU Speed (Next)", nil)
+	parent.ChildMenu = fyne.NewMenu("",
+		fyne.NewMenuItem("Auto (follow game/OS)", set(0)),
+		fyne.NewMenuItem("3.5 MHz", set(1)),
+		fyne.NewMenuItem("7 MHz", set(2)),
+		fyne.NewMenuItem("14 MHz", set(3)),
+		fyne.NewMenuItem("28 MHz", set(4)),
+	)
+	return parent
+}
+
 // dispatchJoystick translates a joystick direction (0=up..4=fire) into the
 // appropriate hardware action for the active joystick interface. For
 // Kempston this sets/clears a port bit; for Sinclair/Cursor it injects a
 // Spectrum key press into the keyboard matrix.
 func (e *emulator) dispatchJoystick(direction int, pressed bool) {
-	switch e.joystickType {
+	switch e.effectiveJoystick() {
 	case JoystickKempston:
 		var mask byte
 		switch direction {
@@ -1044,17 +1125,16 @@ func (e *emulator) handleTypedRune(r rune) {
 
 func (e *emulator) handleKeyUp(ev *fyne.KeyEvent) {
 	e.keyMutex.Lock()
-
-	// Check if key was actually pressed
-	if !e.physicalKeys[ev.Name] {
-		e.keyMutex.Unlock()
-		return
-	}
+	wasPressed := e.physicalKeys[ev.Name]
 	delete(e.physicalKeys, ev.Name)
 	e.keyMutex.Unlock()
 
-	// Joystick interception (release).
-	if e.joystickType != JoystickNone {
+	// Joystick interception (release). Always release the direction — even if
+	// the matching key-down was never recorded (a dropped event, or the
+	// key-down arrived while physicalKeys had been cleared). Releasing a
+	// direction that isn't held is harmless, and skipping it is exactly what
+	// left the Kempston "right" bit stuck (Sonic kept running rightward).
+	if e.effectiveJoystick() != JoystickNone {
 		idx := joystickKeyForArrow(ev.Name)
 		if idx >= 0 {
 			e.dispatchJoystick(idx, false)
@@ -1062,11 +1142,37 @@ func (e *emulator) handleKeyUp(ev *fyne.KeyEvent) {
 		}
 	}
 
+	// For ordinary matrix keys, only queue a release if we recorded the press
+	// (avoids spurious releases for keys we never saw go down).
+	if !wasPressed {
+		return
+	}
+
 	// Queue the key event (non-blocking)
 	select {
 	case e.keyQueue <- keyState{key: ev.Name, pressed: false}:
 	default:
 		// If queue is full, drop the event
+	}
+}
+
+// releaseAllInput lifts every held key and joystick direction. The OS stops
+// delivering key-up events when the surface loses focus (or on reboot), so
+// anything held would otherwise stick on — e.g. a held Kempston "right" left
+// Sonic running rightward after focus returned. Clears the host-key tracking,
+// the pending key queue, the Kempston joystick bits, and the keyboard matrix.
+func (e *emulator) releaseAllInput() {
+	e.keyMutex.Lock()
+	e.physicalKeys = make(map[fyne.KeyName]bool)
+	e.keyMutex.Unlock()
+	for len(e.keyQueue) > 0 {
+		<-e.keyQueue
+	}
+	if e.ula != nil {
+		e.ula.KempstonState = 0
+	}
+	if e.kbd != nil {
+		e.kbd.ReleaseAll()
 	}
 }
 
@@ -1236,6 +1342,10 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						}
 					}
 
+					// Enforce the user's CPU-speed override (no-op when Auto or
+					// still loading) — see applyForcedCPUSpeed.
+					e.applyForcedCPUSpeed()
+
 					// Render at 50Hz
 					now := time.Now()
 					if now.Sub(lastRender) >= 20*time.Millisecond {
@@ -1334,7 +1444,8 @@ func (e *emulator) reboot() {
 		}
 	}
 
-	// Clear key states on reboot
+	// Clear key states on reboot (host keys, queue, joystick, and matrix —
+	// see releaseAllInput: a held key/joystick must not survive the reset).
 	e.keyMutex.Lock()
 	e.physicalKeys = make(map[fyne.KeyName]bool)
 	e.keyMutex.Unlock()
@@ -1342,6 +1453,12 @@ func (e *emulator) reboot() {
 	// Drain key queue
 	for len(e.keyQueue) > 0 {
 		<-e.keyQueue
+	}
+	if e.ula != nil {
+		e.ula.KempstonState = 0
+	}
+	if e.kbd != nil {
+		e.kbd.ReleaseAll()
 	}
 
 	// Re-apply warm-boot on ModelNext if (and ONLY if) the user
@@ -2492,6 +2609,7 @@ func main() {
 		emu.handleKeyUp,
 	)
 	keyboardWidget.onTypedRune = emu.handleTypedRune
+	keyboardWidget.onFocusLost = emu.releaseAllInput
 	keyboardWidget.onMouseMove = func(dx, dy int) {
 		emu.peripherals.KempstonMouseMove(dx, dy)
 	}
@@ -3547,6 +3665,7 @@ func main() {
 			fyne.NewMenuItem("Sinclair ZX80", func() { switchModel(roms.ModelZX80) }),
 			fyne.NewMenuItemSeparator(),
 			nextMenuItem(switchModel),
+			cpuSpeedMenuItem(emu),
 		),
 		fyne.NewMenu("View",
 			fyne.NewMenuItem("100% (320x240)", func() {

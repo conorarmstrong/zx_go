@@ -209,6 +209,11 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 	// rather than 4bpp (32 bytes/tile). NextZXOS dot-command viewers
 	// (e.g. NextGuide) use it for text.
 	textmode := t.control&(1<<3) != 0
+	// 512-tile mode (NR$6B bit 1): the per-tile attribute byte's bit 0 is
+	// the tile index's 9th bit, extending the map from 256 to 512 tiles.
+	// Sonic's options/text screen relies on this (its font lives in tiles
+	// 256+, addressed via attr bit 0); ignoring it renders tile 0 everywhere.
+	mode512 := t.control&(1<<1) != 0
 
 	for x := 0; x < len(dst); x++ {
 		if x < clipXStart || x > clipXEnd {
@@ -218,12 +223,15 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 		tileX := (absX / TileWidth) % tilesPerRow
 		mapEntry := mapOffsetBase + (tileY*tilesPerRow+tileX)*bytesPerTile
 		mapEntry &= 0x3FFF
-		tileIdx := mapBuf[mapEntry]
 		// Per-tile attribute, or the global default_attr when
 		// strip_flags eliminates the attribute byte.
 		attr := t.defaultAttr
 		if !stripFlags {
 			attr = mapBuf[(mapEntry+1)&0x3FFF]
+		}
+		tileIdx := int(mapBuf[mapEntry])
+		if mode512 {
+			tileIdx |= int(attr&0x01) << 8
 		}
 		pixelInTile := absX % TileWidth
 

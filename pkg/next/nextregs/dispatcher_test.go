@@ -23,8 +23,8 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		0x05: 0x01,
 		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
-		0x0E: defaultBoardID,
-		0x0F: defaultCoreSubMinor,
+		0x0E: defaultCoreSubMinor, // NR$0E = core version sub-minor
+		0x0F: defaultBoardID,      // NR$0F = board ID
 		// 0x10 default: 0 (Core ID — generic, matches our reference
 		// emulator). Don't list it (zero default is the implicit case).
 		0x12: 0x08,
@@ -70,13 +70,21 @@ func TestRoundTripEveryRegister(t *testing.T) {
 	d := New()
 	// Write a distinct value to every register, then read all back.
 	// `reg ^ 0xA5` produces 256 distinct bytes; any pattern that
-	// covers the full byte range would do.
+	// covers the full byte range would do. The read-only hardware-identity
+	// registers (NR$00/$01/$0E/$0F) ignore writes by design — covered by
+	// TestReadOnlyIdentityRegisters — so skip them here.
 	for reg := 0; reg < 256; reg++ {
+		if readOnlyIdentity[reg] {
+			continue
+		}
 		want := byte(reg) ^ 0xA5
 		d.Select(byte(reg))
 		d.WriteData(want)
 	}
 	for reg := 0; reg < 256; reg++ {
+		if readOnlyIdentity[reg] {
+			continue
+		}
 		want := byte(reg) ^ 0xA5
 		d.Select(byte(reg))
 		if got := d.ReadData(); got != want {
@@ -273,8 +281,8 @@ func TestResetRestoresDefaults(t *testing.T) {
 		0x05: 0x01,
 		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
-		0x0E: defaultBoardID,
-		0x0F: defaultCoreSubMinor,
+		0x0E: defaultCoreSubMinor, // NR$0E = core version sub-minor
+		0x0F: defaultBoardID,      // NR$0F = board ID
 		// 0x10 default: 0 (Core ID — generic, matches our reference
 		// emulator). Don't list it (zero default is the implicit case).
 		0x12: 0x08,
@@ -344,5 +352,48 @@ func TestResetFiresOnWriteHandlers(t *testing.T) {
 	if got[len(got)-1] != 0 {
 		t.Errorf("final OnWrite value = %#x, want 0 (tilemap disable on reset)",
 			got[len(got)-1])
+	}
+}
+
+// TestReadOnlyIdentityRegisters pins that NR$00 (Machine ID), NR$01 (Core
+// Version), NR$0E (Core sub-minor) and NR$0F (Board ID) are READ-ONLY
+// (nextreg.txt marks them (R)): a guest write is ignored, so the value the
+// game later checks cannot be corrupted. Nextoid wrote $80 to NR$01 during
+// play; storing it made the core version read 8.00/garbage and games gate on
+// it ("Core 3.01.10 needed").
+func TestReadOnlyIdentityRegisters(t *testing.T) {
+	// Only the core-version registers are write-protected (see readOnlyIdentity).
+	for _, reg := range []byte{0x01, 0x0E} {
+		d := New()
+		want := d.ReadReg(reg)
+		d.Select(reg)
+		d.WriteReg(reg, 0x80) // guest poke via the Z80N NEXTREG opcode
+		d.WriteData(0x00)     // and via the $243B/$253B port path
+		if got := d.ReadReg(reg); got != want {
+			t.Errorf("NR$%02X is read-only: after writes it reads $%02X, want $%02X", reg, got, want)
+		}
+	}
+	// NR$00 (Machine ID) stays writable so games can use it as an
+	// emulator/hardware probe (Nextoid pokes it during boot).
+	d := New()
+	d.WriteReg(0x00, 0x55)
+	if got := d.ReadReg(0x00); got != 0x55 {
+		t.Errorf("NR$00 must remain writable (emulator probe): read $%02X, want $55", got)
+	}
+}
+
+// TestCoreVersionSatisfiesModernGames pins the reported core version is a real
+// recent core (>= 3.01.10), so games that gate on a minimum core version run.
+// NR$01 = major.minor (3.02), NR$0E = sub-minor.
+func TestCoreVersionSatisfiesModernGames(t *testing.T) {
+	d := New()
+	major := d.ReadReg(0x01) >> 4
+	minor := d.ReadReg(0x01) & 0x0F
+	sub := d.ReadReg(0x0E)
+	// Encode as a comparable integer major*10000 + minor*100 + sub.
+	got := int(major)*10000 + int(minor)*100 + int(sub)
+	const need = 3*10000 + 1*100 + 10 // 3.01.10
+	if got < need {
+		t.Errorf("core version %d.%02d.%02d < 3.01.10 — games will refuse to run", major, minor, sub)
 	}
 }

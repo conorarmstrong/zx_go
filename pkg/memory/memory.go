@@ -233,6 +233,25 @@ type Memory struct {
 	// the code is banked through a window (e.g. the divMMC $2000-$3FFF
 	// dot-command window).
 	allReadHook func(addr uint16, val byte)
+	// allWriteHook, when non-nil, fires on every successful Write that
+	// lands a byte in RAM, with the logical address + value (symmetric
+	// counterpart of allReadHook). Debug paths watch a logical address
+	// (e.g. a loader's ready flag) for the write that should set it,
+	// without reconstructing the physical bank at the destination.
+	allWriteHook func(addr uint16, val byte)
+	// Layer-2 write/read paging via the legacy port $123B (zxnext.vhd:
+	// 3915-3933). When l2WrEn (write-enable, $123B bit 0) is set, CPU writes
+	// to the mapped region ($0000-$3FFF, or all 48K when l2Segment==3) are
+	// redirected into Layer-2 RAM: 16K bank = (l2Shadow ? l2ShadowBank :
+	// l2ActiveBank) + segment-offset + l2Offset, at the same $3FFF offset.
+	// l2RdEn ($123B bit 2) does the same for reads. NR$12/$13 set the banks.
+	l2WrEn, l2RdEn, l2Shadow   bool
+	l2Segment, l2Offset        byte
+	l2ActiveBank, l2ShadowBank byte
+	// Live NR$12/$13 sources (the Layer-2 object), preferred over the stored
+	// banks when set so the redirect always sees the current active/shadow
+	// bank. nil in unit tests, which use SetLayer2ActiveBank/ShadowBank.
+	l2ActiveBankFn, l2ShadowBankFn func() byte
 	// divMMCRAM, when non-nil, routes config-mode reads/writes
 	// for NR$04 16K-bank values $08-$0B (RAMPAGE_RAMDIVMMC) into
 	// divMMC's 64 KB RAM. Wired from cmd/zx_go after the divMMC
@@ -398,7 +417,17 @@ func (m *Memory) altROMRedirectsWrites() bool {
 // This is THE menu-era $0038 IM1 automap gate: NextZXOS stages an
 // alt-rom configuration whose promote (NR$8C reset nibble latch) can
 // open the altrom arm even while ROM 0 is paged (the development log).
-func (m *Memory) DivMMCRom3Gate() bool {
+func (m *Memory) DivMMCRom3Gate(pc uint16) bool {
+	// sram_pre_override(0) term (zxnext.vhd:3037-3057): the rom3 automap
+	// can only engage when the 8K slot covering the trap fetch is showing
+	// the DEFAULT machine ROM. When the MMU maps a real RAM bank there
+	// (mmu_A21_A13(8)=0 → override <= "110"), override(0)=0 and the gate is
+	// dead — the trap address belongs to whatever program (e.g. a .nex game)
+	// paged its own code in, not to the ROM/esxDOS. Without this, a game's
+	// incidental fetch at $04D7/$0038/… derails into the divMMC esxDOS ROM.
+	if m.bottomSlotMapsRAM(pc) {
+		return false
+	}
 	if m.altROMRedirectsReads() {
 		if m.altROMReg&0x30 != 0 { // either lock bit set
 			return m.altROMReg&0x20 != 0 // alt_128_n = lock_rom1
@@ -406,6 +435,16 @@ func (m *Memory) DivMMCRom3Gate() bool {
 		return m.GetROMBank()&1 != 0 // alt_128_n = port_1ffd_rom(0)
 	}
 	return m.GetROMBank() == 3
+}
+
+// bottomSlotMapsRAM reports whether the 8K MMU slot covering addr has
+// been overridden to a real RAM bank (NextReg $50..$57 with a bank other
+// than the 0xFF "ROM" sentinel). This is the emulator's form of
+// mmu_A21_A13(8)=0 in zxnext.vhd:3037 — the condition that drops
+// sram_pre_override(0) and so kills the rom3 automap gate.
+func (m *Memory) bottomSlotMapsRAM(addr uint16) bool {
+	slot := addr >> 13
+	return m.mmuOverride[slot] && m.slotBank[slot] != 0xFF
 }
 
 // altROMBuffer returns the alt-rom 16K buffer for the currently-
@@ -1320,6 +1359,26 @@ func (m *Memory) Write(addr uint16, val byte) {
 		}
 	}
 
+	// Layer-2 write paging (legacy port $123B write-enable): a CPU write to
+	// the mapped region is redirected into Layer-2 RAM instead of the normal
+	// page — higher priority than the MMU/classic dispatch, lower than the
+	// divMMC overlay (offered above). zxnext.vhd:3077 sram_layer2_map_en.
+	if m.currentModel == roms.ModelNext && m.l2WrEn {
+		if bank16k, off, ok := m.layer2Redirect(addr); ok {
+			m.ram[bank16k][off] = val
+			if m.TrackUninit {
+				m.markRAMWritten(bank16k, off)
+			}
+			if m.ramWriteHook != nil {
+				m.ramWriteHook(bank16k, off, val)
+			}
+			if m.allWriteHook != nil {
+				m.allWriteHook(addr, val)
+			}
+			return
+		}
+	}
+
 	if m.currentModel == roms.ModelNext {
 		slot8k := addr >> 13
 		if m.mmuOverride[slot8k] {
@@ -1335,6 +1394,9 @@ func (m *Memory) Write(addr uint16, val byte) {
 			}
 			if m.ramWriteHook != nil {
 				m.ramWriteHook(bank16k, pageOffset, val)
+			}
+			if m.allWriteHook != nil {
+				m.allWriteHook(addr, val)
 			}
 			return
 		}
@@ -1352,6 +1414,9 @@ func (m *Memory) Write(addr uint16, val byte) {
 	}
 	if m.ramWriteHook != nil {
 		m.ramWriteHook(pageIndex, offset, val)
+	}
+	if m.allWriteHook != nil {
+		m.allWriteHook(addr, val)
 	}
 }
 
@@ -1392,6 +1457,72 @@ func (m *Memory) SetRAMReadHook(fn func(bank int, addr uint16, val byte)) {
 // divergent value is the bug even when code is banked through a window).
 func (m *Memory) SetAllReadHook(fn func(addr uint16, val byte)) {
 	m.allReadHook = fn
+}
+
+// SetAllWriteHook installs a callback fired on every successful Write
+// that lands a byte in RAM (logical address + value), regardless of
+// dispatch path. Pass nil to remove. Symmetric with SetAllReadHook;
+// used to watch a logical address for the write that should set it.
+func (m *Memory) SetAllWriteHook(fn func(addr uint16, val byte)) {
+	m.allWriteHook = fn
+}
+
+// SetLayer2MapControl applies a write to the legacy Layer-2 port $123B
+// (zxnext.vhd:3915-3922). Bit 4 clear configures the map (bit0=write-enable,
+// bit1=visible[handled by the ULA/NR$69 alias], bit2=read-enable, bit3=shadow,
+// bits7:6=segment); bit 4 set instead loads the 3-bit segment offset.
+func (m *Memory) SetLayer2MapControl(v byte) {
+	if v&0x10 == 0 {
+		m.l2WrEn = v&0x01 != 0
+		m.l2RdEn = v&0x04 != 0
+		m.l2Shadow = v&0x08 != 0
+		m.l2Segment = (v >> 6) & 0x03
+	} else {
+		m.l2Offset = v & 0x07
+	}
+}
+
+// SetLayer2ActiveBank / SetLayer2ShadowBank record NR$12 / NR$13 — the 16K RAM
+// bank holding the first segment of Layer-2 (and its shadow). Used by the
+// Layer-2 write/read paging redirect.
+func (m *Memory) SetLayer2ActiveBank(v byte) { m.l2ActiveBank = v & 0x7F }
+func (m *Memory) SetLayer2ShadowBank(v byte) { m.l2ShadowBank = v & 0x7F }
+
+// SetLayer2BankSource wires the live NR$12 (active) / NR$13 (shadow) bank
+// getters — typically the Layer-2 object's ActiveBank/ShadowBank — so the
+// write/read redirect always tracks the current banks. Pass nil to clear.
+func (m *Memory) SetLayer2BankSource(active, shadow func() byte) {
+	m.l2ActiveBankFn, m.l2ShadowBankFn = active, shadow
+}
+
+// layer2Redirect maps a logical address to the Layer-2 RAM 16K bank + offset
+// it should hit while Layer-2 paging is active, or ok=false when this address
+// is not Layer-2-mapped. The bottom 16K ($0000-$3FFF) is always mapped; the
+// upper 48K is mapped only when segment==3 (zxnext.vhd:3036-3065 override(1)).
+func (m *Memory) layer2Redirect(addr uint16) (bank16k int, off uint16, ok bool) {
+	region := byte(addr >> 14)
+	if region != 0 && m.l2Segment != 3 {
+		return 0, 0, false
+	}
+	offsetPre := m.l2Segment
+	if m.l2Segment == 3 {
+		offsetPre = region
+	}
+	bank, sh := m.l2ActiveBank, m.l2ShadowBank
+	if m.l2ActiveBankFn != nil {
+		bank = m.l2ActiveBankFn() & 0x7F
+	}
+	if m.l2ShadowBankFn != nil {
+		sh = m.l2ShadowBankFn() & 0x7F
+	}
+	if m.l2Shadow {
+		bank = sh
+	}
+	b := int(bank) + int(offsetPre) + int(m.l2Offset)
+	if b < 0 || b >= len(m.ram) || m.ram[b] == nil {
+		return 0, 0, false
+	}
+	return b, addr & 0x3FFF, true
 }
 
 // GetRAMReadHook returns the currently-installed RAM-read hook, or nil.

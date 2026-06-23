@@ -636,11 +636,23 @@ func (c *CPU) SetSpeedSelect(v byte) {
 }
 
 // LockSpeedSelect pins the speed selector to v and ignores all
-// subsequent SetSpeedSelect calls. Diagnostic only.
+// subsequent SetSpeedSelect (guest NR$07) writes. Used by the timing
+// diagnostic AND by the user-facing "CPU Speed" override, which lets a
+// game be run at a fixed speed (e.g. forcing 3.5 MHz for a game that
+// NextZXOS would otherwise run too fast at 28 MHz) — the emulator
+// equivalent of the Next's menu speed selector / F8 speed hotkey.
 func (c *CPU) LockSpeedSelect(v byte) {
 	c.speedSelect = v & 0x03
 	c.speedLocked = true
 }
+
+// UnlockSpeedSelect releases a LockSpeedSelect so guest NR$07 writes
+// take effect again ("Auto" CPU speed). Leaves the current selector
+// value in place until the next guest write.
+func (c *CPU) UnlockSpeedSelect() { c.speedLocked = false }
+
+// SpeedLocked reports whether the speed selector is pinned (LockSpeedSelect).
+func (c *CPU) SpeedLocked() bool { return c.speedLocked }
 
 // SpeedSelect returns the currently-installed NextReg 0x07 speed
 // selector (0..3). Useful for snapshot save and for the dispatcher

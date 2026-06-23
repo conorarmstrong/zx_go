@@ -24,20 +24,22 @@ func TestLayerPriority_NewIsZero(t *testing.T) {
 	}
 }
 
-// TestLayerPriority_ModeDecodes — each NR$15 low-2-bit pattern
-// maps to the matching PriorityMode.
+// TestLayerPriority_ModeDecodes — the layer-priority field is NR$15 bits 4:2
+// (zxnext.vhd:5230-5234), NOT bits 1:0. bit 0 is the sprite-enable, bit 1 is
+// "sprites over border" — decoding those as priority (the old bug) flipped
+// Nextoid (NR$15=$03) into Layer2-over-Sprites and hid its bat/ball.
 func TestLayerPriority_ModeDecodes(t *testing.T) {
 	cases := []struct {
 		raw  byte
 		want compositor.PriorityMode
 	}{
-		{0x00, compositor.ModeSLU},
-		{0x01, compositor.ModeLSU},
-		{0x02, compositor.ModeSUL},
-		{0x03, compositor.ModeLUS},
-		// High bits ignored.
-		{0xFC, compositor.ModeSLU},
-		{0xFD, compositor.ModeLSU},
+		{0x00, compositor.ModeSLU}, // bits4:2 = 000
+		{0x04, compositor.ModeLSU}, // bits4:2 = 001
+		{0x08, compositor.ModeSUL}, // bits4:2 = 010
+		{0x0C, compositor.ModeLUS}, // bits4:2 = 011
+		// Bits 1:0 (sprite-enable / over-border) must NOT affect the mode.
+		{0x03, compositor.ModeSLU}, // Nextoid: bits4:2 = 000 -> sprites on top
+		{0x47, compositor.ModeLSU}, // Sonic: bits4:2 = 001
 	}
 	for _, c := range cases {
 		p := NewLayerPriority()
@@ -64,13 +66,13 @@ func TestLayerPriority_GetRoundTrips(t *testing.T) {
 func TestWireLayerPriority_Routes(t *testing.T) {
 	disp := nextregs.New()
 	p := NewLayerPriority()
-	WireLayerPriority(disp, p)
+	WireLayerPriority(disp, p, nil)
 
-	disp.WriteReg(0x15, 0x03)
+	disp.WriteReg(0x15, 0x0C) // bits 4:2 = 011 -> LUS
 	if p.Mode() != compositor.ModeLUS {
-		t.Errorf("after NR$15=$03: Mode = %v, want ModeLUS", p.Mode())
+		t.Errorf("after NR$15=$0C: Mode = %v, want ModeLUS", p.Mode())
 	}
-	if got := disp.ReadReg(0x15); got != 0x03 {
-		t.Errorf("dispatcher storage: ReadReg($15) = $%02X, want $03", got)
+	if got := disp.ReadReg(0x15); got != 0x0C {
+		t.Errorf("dispatcher storage: ReadReg($15) = $%02X, want $0C", got)
 	}
 }

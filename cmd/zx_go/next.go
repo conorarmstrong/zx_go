@@ -1350,6 +1350,22 @@ func wireNextSubsystems(e *emulator) error {
 		comp.SetFallbackColour(expandRGB332(val))
 	})
 	comp.SetFallbackColour(expandRGB332(0xE3)) // power-on default
+	// NR$4B sprite transparency index (default $E3). A sprite pixel equal to
+	// this index is see-through — how 8bpp sprites (e.g. Nextoid's bat/HUD)
+	// mark their transparent cells. The compositor defaults to $E3 too, so a
+	// game that never writes NR$4B still gets the correct reset behaviour.
+	disp.SetOnWrite(0x4B, func(d *nextregs.Dispatcher, val byte) {
+		d.Store(0x4B, val)
+		comp.SetSpriteTransparency(val)
+	})
+	// NR$68 ("ULA Control") bit 7 = Disable ULA output. When set, the ULA
+	// layer paints nothing (lower layers / NR$4A fallback show). Sonic
+	// disables the ULA for its Layer-2/tilemap title; without this its stale
+	// screen RAM rendered as a garbled background.
+	disp.SetOnWrite(0x68, func(d *nextregs.Dispatcher, val byte) {
+		d.Store(0x68, val)
+		u.SetULAOutputDisabled(val&0x80 != 0)
+	})
 	u.SetNextDMA(dmaEngine)
 	// zxnDMA IO endpoints: a port configured as an IO endpoint (WR1/WR2 D3)
 	// transfers to/from a real port — sprite-image ($5B), Layer 2 ($253B),
@@ -1473,12 +1489,16 @@ func wireNextSubsystems(e *emulator) error {
 			slog.Warn("next: SD image file read failed", "path", imgPath, "err", err)
 		} else {
 			src, _ := sdcard.NewImageSource(raw, false)
+			// Expose the live in-memory SD image so File->Open .nex can
+			// import a copy into it (confirmImportNex) — the guest reads
+			// the same backing bytes. This is required for .nex loading to
+			// be allowed at all (the load path gates on sdImageSrc != nil).
+			e.sdImageSrc = src
 			// Opt-in cross-process persistence (--sd-writeback):
-			// remember the source + path so flushSDWriteback can
-			// persist guest writes at exit (with a .bak backup).
-			// Default OFF — in-session writes live in RAM only.
+			// remember the host path so flushSDWriteback can persist
+			// guest writes at exit (with a .bak backup). Default OFF —
+			// in-session writes (incl. imported .nex) live in RAM only.
 			if cliFlagsActive != nil && cliFlagsActive.sdWriteback {
-				e.sdImageSrc = src
 				e.sdImagePath = imgPath
 			}
 			card := sdcard.NewCard(src)
@@ -1536,6 +1556,14 @@ func wireNextSubsystems(e *emulator) error {
 			slog.Warn("next: SD card image build failed; booting without SD card", "root", root, "err", err)
 		} else {
 			src, _ := sdcard.NewImageSource(img, false)
+			// Expose the live in-memory FAT32 image (built from the host
+			// directory) so File->Open .nex can import into it — the guest
+			// reads the same backing bytes. Without this, folder mode (the
+			// default, roms/next/sd) left sdImageSrc nil and every GUI .nex
+			// load was wrongly blocked as "no SD card configured". Folder
+			// mode has no single host file to write back to, so sdImagePath
+			// stays empty (imports live in RAM for the session).
+			e.sdImageSrc = src
 			card := sdcard.NewCard(src)
 			sdDebug := os.Getenv("ZX_GO_SD_DEBUG") != "" || (cliFlagsActive != nil && cliFlagsActive.logSDCommands)
 			card.SetLogger(func(cmd byte, arg uint32, isACMD bool) {

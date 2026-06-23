@@ -19,7 +19,7 @@ import (
 
 func clipDisp() *nextregs.Dispatcher {
 	d := nextregs.New()
-	WireClipWindows(d, nil)
+	WireClipWindows(d, nil, nil)
 	return d
 }
 

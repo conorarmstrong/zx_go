@@ -1198,7 +1198,7 @@ func TestSpec_NR34_Bit7_ReadAsZero(t *testing.T) {
 // the old single-byte "read back masked $0F" approximation.)
 func TestSpec_NR1C_ClipIdxReset_ReadsPackedIndices(t *testing.T) {
 	disp := nextregs.New()
-	WireClipWindows(disp, nil)
+	WireClipWindows(disp, nil, nil)
 
 	// Advance the Layer2 and sprite clip indexes by one write each.
 	disp.WriteReg(0x18, 0x00)                   // l2 idx → 1

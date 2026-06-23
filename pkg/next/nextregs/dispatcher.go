@@ -56,13 +56,15 @@ const (
 	// re-boot retry loop ($1B04) — the Browser-ENTER welcome loop.
 	// The reference (id $0A) boots the same card straight to the Browser.
 	defaultMachineID = 0x0A
-	// CoreVersion at NextReg 0x01. Encoded as major*16 + minor.
-	// 0x32 = core 3.2.x — matches the reference Spectrum Next default.
+	// CoreVersion at NextReg 0x01 (R). Encoded as major<<4 | minor.
+	// 0x32 = core 3.02 — the current Spectrum Next core line (3.02.03 latest).
 	defaultCoreVersion = 0x32
-	// BoardID at NextReg 0x0E. Canonical reset value is 0x01.
+	// CoreSubMinor at NextReg 0x0E (R) — the third version number. 0x03 reports
+	// core 3.02.03 (the latest release), comfortably above any game's minimum.
+	// (Was mistakenly placed at NR$0F; NR$0E is the sub-minor, NR$0F the board.)
+	defaultCoreSubMinor = 0x03
+	// BoardID at NextReg 0x0F (R). bits 3:0 = board issue; 0x01 = ZXN Issue 3.
 	defaultBoardID = 0x01
-	// CoreSubMinor at NextReg 0x0F. Canonical reset value is 0x01.
-	defaultCoreSubMinor = 0x01
 )
 
 // New returns a fresh dispatcher with hardware-identity and
@@ -143,8 +145,8 @@ func applyResetDefaults(regs *[256]byte) {
 	// \$6F5B finds old=\$01 already and silently does nothing. The
 	// fire-on-every-write semantics in WireReset match the reference.
 	regs[0x02] = 0x01
-	regs[0x0E] = defaultBoardID
-	regs[0x0F] = defaultCoreSubMinor
+	regs[0x0E] = defaultCoreSubMinor // NR$0E = core version sub-minor
+	regs[0x0F] = defaultBoardID      // NR$0F = board ID
 	regs[0x05] = 0x01 // Peripheral 1: bit 0 = 50 Hz
 	// Peripheral 2: bit 7 = CPU-speed hotkey enable, bit 5 = 50/60 Hz hotkey
 	// enable. zxnext.vhd:5161-5165 resets both to 1 → read-back $A0 (the rest
@@ -275,7 +277,23 @@ func (d *Dispatcher) GetTracer() TraceFunc { return d.tracer }
 // SetTracer calls replace the prior callback.
 func (d *Dispatcher) SetTracer(fn TraceFunc) { d.tracer = fn }
 
+// readOnlyIdentity are the CORE-VERSION registers we protect from guest writes:
+// NR$01 (major.minor) and NR$0E (sub-minor). They are fixed in the FPGA
+// bitstream (nextreg.txt marks them (R)); Nextoid pokes NR$01 during play, and
+// storing the poke corrupted the version it then checks, tripping "Core x.xx.xx
+// needed". Internal seeding uses Store()/the init path, which bypass write().
+//
+// NB: NR$00 (Machine ID) and NR$0F (Board ID) are ALSO (R) on hardware, but we
+// deliberately leave them writable: games poke NR$00 as an emulator/hardware
+// probe (Nextoid writes it during boot) and branch on the read-back, and
+// forcing the hardware value flipped Nextoid onto a path that rebooted to the
+// NextZXOS welcome screen. Honouring the probe-write keeps such games running.
+var readOnlyIdentity = [256]bool{0x01: true, 0x0E: true}
+
 func (d *Dispatcher) write(reg, val byte) {
+	if readOnlyIdentity[reg] {
+		return
+	}
 	if fn := d.onWrite[reg]; fn != nil {
 		fn(d, val)
 	} else {

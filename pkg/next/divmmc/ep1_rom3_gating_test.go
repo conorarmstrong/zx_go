@@ -41,7 +41,7 @@ var ep1ROM3Traps = []struct {
 func TestEP1Traps_ROM3Gated_NoAutomapOutsideROM3(t *testing.T) {
 	for _, tc := range ep1ROM3Traps {
 		p := newGatedPager(0x00, tc.bit)
-		p.SetRom3Query(func() bool { return false }) // ROM2 (+3DOS) paged
+		p.SetRom3Query(func(uint16) bool { return false }) // ROM2 (+3DOS) paged
 		p.Step(tc.pc)
 		if p.IsPagedIn() {
 			t.Errorf("PC=$%04X with ROM3 not selected: paged in (must be a no-op)", tc.pc)
@@ -56,7 +56,7 @@ func TestEP1Traps_ROM3Gated_NoAutomapOutsideROM3(t *testing.T) {
 func TestEP1Traps_ROM3Delayed_TriggerM1RunsUnpaged(t *testing.T) {
 	for _, tc := range ep1ROM3Traps {
 		p := newGatedPager(0x00, tc.bit)
-		p.SetRom3Query(func() bool { return true }) // ROM3 (48K) paged
+		p.SetRom3Query(func(uint16) bool { return true }) // ROM3 (48K) paged
 		p.Step(tc.pc)
 		if p.IsPagedIn() {
 			t.Errorf("PC=$%04X rom3_delayed_on: paged in on the trigger M1 (must be delayed)", tc.pc)

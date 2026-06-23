@@ -108,12 +108,14 @@ type Pager struct {
 	// pendingRom3 carries the rom3 selection for a delayed_on page-in
 	// until pendingPageIn converts it to rom3 on the next M1.
 	pendingRom3 bool
-	// rom3Query reports whether ROM3 is the currently-selected machine
-	// ROM. Per zxnext.vhd:3138, a rom3 entry point (NR$B9 bit CLEAR)
-	// engages automap only when ROM3 is mapped (sram_pre_rom3). nil = no
-	// gate (treat as selected) — production wires it to the memory's ROM
-	// selection; unit tests that exercise rom3 gating set it explicitly.
-	rom3Query func() bool
+	// rom3Query reports whether a rom3 automap entry point at the given
+	// trap PC is allowed to engage. Per zxnext.vhd:3138 this is more than
+	// "ROM3 selected": it also requires sram_pre_override(0)/(2) — i.e. the
+	// 8K slot covering the trap PC must be showing the machine ROM, not a
+	// RAM bank the MMU mapped there. The PC is needed because that override
+	// is per-slot (slot = pc>>13). nil = no gate (treat as engaged) —
+	// production wires it to the memory's gate; unit tests set it explicitly.
+	rom3Query func(pc uint16) bool
 	// lastE3 stores the last byte written to port 0xE3 so IN A,(0xE3)
 	// (issued by the divMMC IRQ handler at offset 0x0045) reads back
 	// what was written, not floating-bus garbage.
@@ -124,6 +126,13 @@ type Pager struct {
 	// (the bank that's about to appear at 0x0000-0x1FFF, simulating
 	// ROM behaviour for any further trampoline code that runs there).
 	mapram bool
+	// nmiButton models divmmc.vhd's button_nmi latch: it is set when a
+	// divMMC NMI is asserted (i_divmmc_button → NR$02 bit 2) and cleared
+	// when the NMI automap engages, on RETN, or on reset. The $0066 NMI
+	// automap entry points (divmmc.vhd:120-121) fire ONLY while it is set —
+	// so a plain instruction fetch of $0066 (a program running its own
+	// code there) does NOT page the esxDOS NMI overlay in.
+	nmiButton bool
 	// card is the SD slot. Nil = no card inserted.
 	card CardSlot
 
@@ -416,7 +425,7 @@ func (p *Pager) Step(pc uint16) {
 		// currently-selected machine ROM (zxnext.vhd:3138 sram_pre_rom3).
 		// Otherwise the trigger is a no-op — the overlay stays out and the
 		// machine ROM shows. (nil query = ungated, for unit tests.)
-		if rom3 && p.rom3Query != nil && !p.rom3Query() {
+		if rom3 && p.rom3Query != nil && !p.rom3Query(pc) {
 			if p.pageLogger != nil {
 				p.pageLogger("DENY(rst)", pc)
 			}
@@ -444,14 +453,17 @@ func (p *Pager) Step(pc uint16) {
 		case pc == 0x0038 && rstGate&0x80 != 0:
 			armRST0(0x80)
 			return
-		case pc == 0x0066 && p.entryPoints1&0x03 != 0 && (p.mfActiveFn == nil || !p.mfActiveFn()):
-			// $0066 NMI-vector trap — but NOT when the Multiface is the active
-			// NMI master. The MF NMI (NR$02 bit 3) vectors to $0066 in the MF
-			// ROM; the divMMC must NOT steal that vector or the MF handler runs
-			// the wrong code. nextreg.txt:56 / changelog 3.01.07: MF + divMMC
-			// coexist — the MF owns $0066 here, while the divMMC still automaps
-			// for the handler's esxDOS RST-$08 calls ($0008 etc.). (the development log)
+		case pc == 0x0066 && p.entryPoints1&0x03 != 0 && p.nmiButton && (p.mfActiveFn == nil || !p.mfActiveFn()):
+			// $0066 NMI-vector trap. Per divmmc.vhd:120-121 the NMI automap
+			// entry points are ANDed with button_nmi, so this fires ONLY while
+			// a divMMC NMI is actually asserted (p.nmiButton) — never on a plain
+			// fetch of $0066 by a program running its own code there (e.g. a
+			// .nex game whose ISR spans $0066). Also NOT when the Multiface is
+			// the active NMI master: the MF NMI (NR$02 bit 3) vectors to $0066
+			// in the MF ROM and owns the vector; the divMMC still automaps for
+			// the handler's esxDOS RST-$08 calls ($0008 etc.). (the development log)
 			p.pagedIn = true
+			p.nmiButton = false // button_nmi clears once the automap engages (vhd:112)
 			if p.pageLogger != nil {
 				p.pageLogger("in(nmi)", pc)
 			}
@@ -471,7 +483,7 @@ func (p *Pager) Step(pc uint16) {
 			// mid-mount; trapping those fetches hijacked the DOS into
 			// the esxDOS tape loader → volume-label cluster-0 read
 			// ($1009) → NR$02 soft-reset loop (the development log).
-			if p.rom3Query == nil || p.rom3Query() {
+			if p.rom3Query == nil || p.rom3Query(pc) {
 				p.pendingPageIn = true
 				p.pendingRom3 = true
 			} else if p.pageLogger != nil {
@@ -487,7 +499,7 @@ func (p *Pager) Step(pc uint16) {
 			// machine ROM at $3Dxx shows — without this gate ours paged in
 			// the (empty) divMMC RAM window at $3D97 where the real machine
 			// runs the ROM code. instant: takes effect this M1.
-			if p.rom3Query == nil || p.rom3Query() {
+			if p.rom3Query == nil || p.rom3Query(pc) {
 				p.pagedIn = true
 				p.rom3 = true
 				if p.pageLogger != nil {
@@ -637,7 +649,14 @@ func (p *Pager) IsRom3() bool { return p.rom3 }
 // currently-selected machine ROM. rom3 entry points engage automap only
 // when it returns true (zxnext.vhd:3138). nil leaves rom3 entries
 // ungated (always engage) — the default for unit tests.
-func (p *Pager) SetRom3Query(fn func() bool) { p.rom3Query = fn }
+func (p *Pager) SetRom3Query(fn func(pc uint16) bool) { p.rom3Query = fn }
+
+// AssertNMIButton latches button_nmi (divmmc.vhd:110-111): a divMMC NMI has
+// been asserted (NR$02 bit 2 / the divMMC NMI button). It arms the $0066 NMI
+// automap entry point for the upcoming NMI vector fetch; the latch clears
+// once the automap engages, on RETN, or on reset. Call this when the divMMC
+// NMI fires, NOT for a Multiface NMI (the MF owns its own $0066 vector).
+func (p *Pager) AssertNMIButton() { p.nmiButton = true }
 
 // HandleRETN is the post-RETN unmap hook. divMMC pages itself out
 // when the CPU executes RETN from within the overlay — this is
@@ -646,6 +665,8 @@ func (p *Pager) SetRom3Query(fn func() bool) { p.rom3Query = fn }
 // RETN. No-op when automap is disabled or when CONMEM is forcing
 // the overlay in.
 func (p *Pager) HandleRETN() {
+	// button_nmi clears on RETN regardless of automap/CONMEM (divmmc.vhd:108).
+	p.nmiButton = false
 	if !p.automap {
 		return
 	}
@@ -895,6 +916,10 @@ func (p *Pager) SetWriteLogger(fn func(bank int, addr uint16, val byte)) {
 // (data). Passing nil detaches any existing slot, after which
 // IN A,(0xEB) returns 0xFF (no media) and OUT writes are dropped.
 func (p *Pager) SetCard(c CardSlot) { p.card = c }
+
+// Card returns the currently installed SD-card slot (nil if none). Exposed
+// for instrumentation/debugging (e.g. attaching an SPI command logger).
+func (p *Pager) Card() CardSlot { return p.card }
 
 // ResetSPI models the divMMC slave-select register being reset by a
 // core reset (hard or soft). On real hardware the FPGA does

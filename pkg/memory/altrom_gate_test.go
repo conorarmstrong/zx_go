@@ -43,10 +43,51 @@ func TestDivMMCRom3Gate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mem.SetAltROMReg(tc.altrom)
 			mem.SetROMBank(tc.rom)
-			if got := mem.DivMMCRom3Gate(); got != tc.want {
+			// PC $0008 is in MMU slot 0, left showing the default machine
+			// ROM (no MMU override) — sram_pre_override(0)=1, so the gate
+			// follows the rom3/altrom condition alone.
+			if got := mem.DivMMCRom3Gate(0x0008); got != tc.want {
 				t.Errorf("DivMMCRom3Gate() altrom=%#02x rom=%d = %v, want %v (zxnext.vhd:3138)", tc.altrom, tc.rom, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDivMMCRom3GateSuppressedByMMURAM locks in the sram_pre_override(0)
+// term of zxnext.vhd:3138 (override <= "110" at lines 3037-3043 when
+// mmu_A21_A13(8)=0, i.e. the 8K slot covering the trap address maps a real
+// RAM bank rather than the default machine ROM). A rom3-variant automap
+// entry point must NOT engage when a program (e.g. Sonic) has mapped its
+// own RAM over $0000-$3FFF via the MMU — the machine ROM isn't visible
+// there, so the trap address belongs to the program, not the ROM/esxDOS.
+func TestDivMMCRom3GateSuppressedByMMURAM(t *testing.T) {
+	mem := newNextTestMemory(t)
+	mem.SetAltROMReg(0x00)
+	mem.SetROMBank(3) // rom3 selected → gate would otherwise be true
+
+	// Default (no MMU override): slot 0 shows the machine ROM → gate true.
+	if !mem.DivMMCRom3Gate(0x04D7) {
+		t.Fatalf("baseline: gate should be true with rom3 selected and no MMU override")
+	}
+
+	// Map a RAM bank into MMU slot 0 ($0000-$1FFF) — sram_pre_override(0)=0.
+	mem.SetMMU(0, 10) // bank 10 (not 0xFF=ROM)
+	if mem.DivMMCRom3Gate(0x04D7) {
+		t.Errorf("gate must be FALSE when MMU slot 0 maps RAM bank 10 (override(0)=0)")
+	}
+	// A trap address in slot 1 ($2000-$3FFF) is unaffected by slot 0's RAM.
+	if !mem.DivMMCRom3Gate(0x2000) {
+		t.Errorf("gate for a slot-1 address must follow slot 1 (still ROM here)")
+	}
+	// Map RAM into slot 1 too → slot-1 trap also suppressed.
+	mem.SetMMU(1, 11)
+	if mem.DivMMCRom3Gate(0x2000) {
+		t.Errorf("gate must be FALSE when MMU slot 1 maps RAM bank 11")
+	}
+	// MMU set explicitly to ROM (0xFF) is the machine ROM → gate true again.
+	mem.SetMMU(0, 0xFF)
+	if !mem.DivMMCRom3Gate(0x04D7) {
+		t.Errorf("gate must be true when MMU slot 0 is set to ROM (0xFF)")
 	}
 }
 

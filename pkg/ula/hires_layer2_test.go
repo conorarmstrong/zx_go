@@ -18,7 +18,10 @@ type hiResL2Mock struct {
 func (m *hiResL2Mock) ComposeScanline(y int, ula, dst []byte)               {}
 func (m *hiResL2Mock) HasActiveTilemap() bool                               { return false }
 func (m *hiResL2Mock) ComposeBorderRow(y int, dst []byte, f func(int) bool) {}
-func (m *hiResL2Mock) TilemapIs80Col() bool                                 { return false }
+func (m *hiResL2Mock) HasActiveSprites() bool                               { return false }
+func (m *hiResL2Mock) ComposeSpriteBorderRow(y int, dst []byte, f func(int) bool) {
+}
+func (m *hiResL2Mock) TilemapIs80Col() bool { return false }
 func (m *hiResL2Mock) ComposeWideTilemapRow(y int, dst []byte)              {}
 func (m *hiResL2Mock) HiResLayer2Active() bool                              { return true }
 func (m *hiResL2Mock) Layer2Width() int                                     { return m.width }

@@ -13,7 +13,8 @@ func TestSpriteMirrorRotate(t *testing.T) {
 	s.X = 0
 	s.Y = 0
 	s.Pattern = 0
-	e.pattern[0] = 0x90 // pattern 0 row 0: pixel (0,0) = nibble 9
+	s.Extended, s.Byte4 = true, 0x80 // 4bpp (byte4 bit7), scale 1×
+	e.pattern[0] = 0x90              // pattern 0 row 0: pixel (0,0) = nibble 9
 
 	at := func(xm, ym, rot bool, x, y int) byte {
 		s.XMirror, s.YMirror, s.Rotate = xm, ym, rot
@@ -46,15 +47,16 @@ func TestSpriteScaleAndN6(t *testing.T) {
 	s.X = 0
 	s.Y = 0
 
-	// N6: byte-4 bit 6 selects pattern 64; bit 7 = 4bpp; scale 1× → 0xC0.
+	// N6: byte-4 bit 6 selects the upper 128-byte HALF of the 256-byte pattern
+	// slot; bit 7 = 4bpp; scale 1× → 0xC0. Slot 0 + N6 → addr 0*256+128 = 128.
 	s.Pattern = 0
 	s.Extended = true
 	s.Byte4 = 0xC0
-	e.pattern[64*128] = 0x90 // pattern 64, pixel (0,0) = 9
+	e.pattern[128] = 0x90 // slot 0 upper half, pixel (0,0) = 9
 	dst := make([]byte, 320)
 	e.RenderScanline(0, dst, 320)
 	if dst[0] != 9 {
-		t.Errorf("N6: pattern-64 pixel = %d, want 9", dst[0])
+		t.Errorf("N6: slot-0 upper-half pixel = %d, want 9", dst[0])
 	}
 
 	// 2× scale (bit 7 = 4bpp, bits 4:3 = 01 X, 2:1 = 01 Y → 0x8A):
@@ -161,7 +163,8 @@ func TestSprite4bppPaletteOffset(t *testing.T) {
 	s := e.Sprite(0)
 	s.Visible = true
 	s.Palette = 3
-	e.pattern[0] = 0x50 // pixel (0,0) = nibble 5
+	s.Extended, s.Byte4 = true, 0x80 // 4bpp (byte4 bit7), scale 1×
+	e.pattern[0] = 0x50              // pixel (0,0) = nibble 5
 	dst := make([]byte, 320)
 	e.RenderScanline(0, dst, 320)
 	if dst[0] != 0x35 { // (3<<4)|5

@@ -81,6 +81,11 @@ func TestComposeScanlineTransparencyPassesULA(t *testing.T) {
 	// index 5.
 	pal.Select(palette.PaletteLayer2First)
 	pal.Active().Set(5, 0b0_0011_1000) // pure green
+	// Hardware compares the palette-MAPPED colour to NR$14: the standard
+	// power-on palette is identity, so index 0xE3 maps to colour 0xE3 (9-bit
+	// 0xE3<<1). Set it so the transparent index resolves to the transparency
+	// colour, matching real hardware (and the l2Transparent rule).
+	pal.Active().Set(DefaultTransparency, uint16(DefaultTransparency)<<1)
 	pal.Select(0)
 	for i := 0; i < 256; i++ {
 		if i%2 == 0 {
@@ -152,9 +157,10 @@ func TestSpriteOverLayer2OverULA(t *testing.T) {
 	sp.SetEnabled(true)
 	for i := 0; i < 128; i++ {
 		sp.SetPatternAddr(uint16(i))
-		sp.WritePatternByte(0x11) // pattern of palette index 1
+		sp.WritePatternByte(0x01) // 8bpp: byte == palette index 1
 	}
-	sp.Set(0, sprite.Attr{X: 0, Y: 0, Pattern: 0, Visible: true})
+	// Frame (32,32) = paper top-left (sprites are frame-relative; paper at 32,32).
+	sp.Set(0, sprite.Attr{X: 32, Y: 32, Pattern: 0, Visible: true})
 
 	c := New(pal, l2)
 	c.SetSprites(sp)
@@ -255,9 +261,10 @@ func TestPriorityModeLSU(t *testing.T) {
 	sp.SetEnabled(true)
 	for i := 0; i < 128; i++ {
 		sp.SetPatternAddr(uint16(i))
-		sp.WritePatternByte(0x11)
+		sp.WritePatternByte(0x01) // 8bpp: byte == palette index 1
 	}
-	sp.Set(0, sprite.Attr{X: 0, Y: 0, Pattern: 0, Visible: true})
+	// Frame (32,32) = paper top-left (sprites are frame-relative; paper at 32,32).
+	sp.Set(0, sprite.Attr{X: 32, Y: 32, Pattern: 0, Visible: true})
 
 	c := New(pal, l2)
 	c.SetSprites(sp)
@@ -443,9 +450,10 @@ func sulLusFixture(t *testing.T, mode PriorityMode) []byte {
 	sp.SetEnabled(true)
 	for i := 0; i < 128; i++ {
 		sp.SetPatternAddr(uint16(i))
-		sp.WritePatternByte(0x11)
+		sp.WritePatternByte(0x01) // 8bpp: byte == palette index 1
 	}
-	sp.Set(0, sprite.Attr{X: 0, Y: 0, Pattern: 0, Visible: true})
+	// Frame (32,32) = paper top-left (sprites are frame-relative; paper at 32,32).
+	sp.Set(0, sprite.Attr{X: 32, Y: 32, Pattern: 0, Visible: true})
 
 	c := New(pal, l2)
 	c.SetSprites(sp)
@@ -519,5 +527,177 @@ func TestComposeWideLayer2Row320(t *testing.T) {
 	// Pixel 0 (col 0) = index 5 = red opaque.
 	if dst[0] == 0 || dst[1] != 0 || dst[2] != 0 || dst[3] != 0xFF {
 		t.Errorf("wide L2 px0: r=%d g=%d b=%d a=%d, want red opaque", dst[0], dst[1], dst[2], dst[3])
+	}
+}
+
+// TestComposeWideLayer2Row_PaletteMappedTransparency pins the hardware rule that
+// a Layer 2 pixel is transparent when its PALETTE-MAPPED 8-bit colour equals the
+// global transparency (NR$14), NOT when its raw index does. Confirmed on Sonic:
+// it clears Layer 2 to index 0 and loads pal[0]→$13 with NR$14=$13, so index-0
+// areas are transparent and the tilemap shows through. Ours previously compared
+// the raw index (0 != $13 → opaque blue covering the level).
+func TestComposeWideLayer2Row_PaletteMappedTransparency(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteLayer2First)
+	// index 0 maps to 8-bit colour $13 (9-bit $026) == NR$14 → transparent.
+	pal.Active().Set(0, 0x026)
+	// index 5 maps to a different colour (red) → opaque.
+	pal.Active().Set(5, 0b1_1100_0000)
+	pal.Select(0)
+
+	bank := make([]byte, 16384)
+	// 320×256 column-major: byte(col,y)=col*256+y.
+	bank[0] = 0   // col 0, y 0 → index 0 (transparent)
+	bank[256] = 5 // col 1, y 0 → index 5 (opaque red)
+	l2 := layer2.New(&fakeBanks{banks: map[int][]byte{0: bank}})
+	l2.SetActiveBank(0)
+	l2.SetEnabled(true)
+	l2.SetResolution(1) // 320×256
+
+	c := New(pal, l2)
+	c.SetTransparency(0x13) // NR$14 = $13
+
+	// Pre-fill dst with magenta so a transparent pixel leaves it untouched.
+	dst := make([]byte, 320*4)
+	for x := 0; x < 320; x++ {
+		dst[x*4+0] = 0xFF
+		dst[x*4+2] = 0xFF
+		dst[x*4+3] = 0xFF
+	}
+	c.ComposeWideLayer2Row(0, dst)
+
+	// Pixel 0 (index 0, maps to NR$14) must be transparent → still magenta.
+	if dst[0] != 0xFF || dst[1] != 0x00 || dst[2] != 0xFF {
+		t.Errorf("px0 (index 0 → $13 == NR$14) should be transparent (magenta), got rgb=%d/%d/%d",
+			dst[0], dst[1], dst[2])
+	}
+	// Pixel 1 (index 5, maps to red) must be opaque red.
+	if dst[4] == 0 || dst[5] != 0 || dst[6] != 0 {
+		t.Errorf("px1 (index 5 → red) should be opaque red, got rgb=%d/%d/%d",
+			dst[4], dst[5], dst[6])
+	}
+}
+
+// TestSpriteFrameCoordinates pins the FPGA sprite coordinate convention
+// (sprites.vhd: vcounter/hcounter span the full 320x256 frame, the central
+// 256x192 paper starting at 32,32). The compositor composes the paper, so a
+// sprite must be placed at frame (32,32) to appear at the paper's top-left
+// pixel (0,0) — NOT at (0,0), which is in the border. Nextoid positions its
+// bat/ball/HUD in frame coordinates (Y up to 225); the previous paper-relative
+// compositing (y=0..191, no 32px offset) rendered none of them.
+func TestSpriteFrameCoordinates(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteSpritesFirst)
+	pal.Active().Set(1, 0b1_1100_0000) // sprite index 1 = red
+	pal.Select(0)
+
+	newSpriteAt := func(x, y int16) *sprite.Engine {
+		sp := sprite.New()
+		sp.SetEnabled(true)
+		for i := 0; i < 128; i++ {
+			sp.SetPatternAddr(uint16(i))
+			sp.WritePatternByte(0x01) // 8bpp: byte == palette index 1
+		}
+		sp.Set(0, sprite.Attr{X: x, Y: y, Pattern: 0, Visible: true})
+		return sp
+	}
+
+	isRed := func(dst []byte, x int) bool {
+		return dst[x*4+0] != 0 && dst[x*4+1] == 0 && dst[x*4+2] == 0
+	}
+
+	// A sprite at frame (32,32) appears at paper pixel 0 when composing paper row 0.
+	c := New(pal, nil)
+	c.SetSprites(newSpriteAt(32, 32))
+	ula := make([]byte, Width*4)
+	dst := make([]byte, Width*4)
+	c.ComposeScanline(0, ula, dst)
+	if !isRed(dst, 0) {
+		t.Errorf("sprite at frame (32,32) must appear at paper pixel 0 on paper row 0")
+	}
+
+	// A sprite at frame (0,0) is in the border and must NOT appear in the paper.
+	c2 := New(pal, nil)
+	c2.SetSprites(newSpriteAt(0, 0))
+	dst2 := make([]byte, Width*4)
+	c2.ComposeScanline(0, ula, dst2)
+	if isRed(dst2, 0) {
+		t.Errorf("sprite at frame (0,0) is in the border, must not appear at paper pixel 0")
+	}
+}
+
+// TestSpriteTransparencyIndex pins that the sprite layer treats the NR$4B
+// transparency index (default $E3) as transparent, in addition to the
+// "uncovered" sentinel (0). Nextoid's bat/HUD sprites are 8bpp cells of $E3
+// (transparent) with the shape in other indices; without honouring $E3 the
+// whole 16x16 cell painted as a solid block (and a wrong colour).
+func TestSpriteTransparencyIndex(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteSpritesFirst)
+	pal.Active().Set(0xC4, 0b1_1100_0000) // shape colour = red
+	pal.Active().Set(0xE3, 0b0_0011_1000) // $E3 maps to green (but is transparent)
+	pal.Select(0)
+
+	sp := sprite.New()
+	sp.SetEnabled(true)
+	// 8bpp pattern: pixel 0 = $C4 (shape), pixel 1 = $E3 (transparent bg).
+	sp.SetPatternAddr(0)
+	sp.WritePatternByte(0xC4)
+	sp.WritePatternByte(0xE3)
+	sp.Set(0, sprite.Attr{X: 32, Y: 32, Pattern: 0, Visible: true})
+
+	c := New(pal, nil) // no Layer 2
+	c.SetSprites(sp)
+
+	// ULA = magenta, so transparent sprite pixels show magenta through.
+	ula := make([]byte, Width*4)
+	for i := 0; i < Width; i++ {
+		ula[i*4+0], ula[i*4+2], ula[i*4+3] = 0xFF, 0xFF, 0xFF
+	}
+	dst := make([]byte, Width*4)
+	c.ComposeScanline(0, ula, dst)
+
+	// Paper pixel 0 = shape ($C4) -> red.
+	if dst[0] == 0 || dst[1] != 0 || dst[2] != 0 {
+		t.Errorf("paper px0 (shape $C4): rgb=%d/%d/%d, want red", dst[0], dst[1], dst[2])
+	}
+	// Paper pixel 1 = $E3 (transparent) -> ULA magenta shows through.
+	if dst[4] != 0xFF || dst[5] != 0 || dst[6] != 0xFF {
+		t.Errorf("paper px1 ($E3 transparent): rgb=%d/%d/%d, want magenta (ULA)", dst[4], dst[5], dst[6])
+	}
+}
+
+// TestComposeSpriteBorderRow paints a sprite parked in the bottom border (the
+// way Nextoid puts its SHIPS/SCORE HUD at frame Y 224-225). The border pass
+// must render it (over-border is on by default in the engine here) while
+// leaving inner-screen pixels for the main pass.
+func TestComposeSpriteBorderRow(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteSpritesFirst)
+	pal.Active().Set(0x60, 0b0_0011_1000) // green HUD colour
+	pal.Select(0)
+
+	sp := sprite.New()
+	sp.SetEnabled(true)
+	sp.SetPatternAddr(0)
+	sp.WritePatternByte(0x60) // 8bpp opaque pixel
+	// A sprite at frame (40, 224) — in the bottom border.
+	sp.Set(0, sprite.Attr{X: 40, Y: 224, Pattern: 0, Visible: true})
+
+	c := New(pal, nil)
+	c.SetSprites(sp)
+
+	dst := make([]byte, FullWidth*4)
+	border := func(int) bool { return true } // a border row: whole width
+	c.ComposeSpriteBorderRow(224, dst, border)
+
+	// Frame X 40 should be green (the HUD pixel).
+	if dst[40*4+0] != 0 || dst[40*4+1] == 0 || dst[40*4+2] != 0 {
+		t.Errorf("border sprite px @ frame X40: rgb=%d/%d/%d, want green",
+			dst[40*4+0], dst[40*4+1], dst[40*4+2])
+	}
+	// A pixel the sprite does not cover stays untouched (0,0,0).
+	if dst[200*4+0] != 0 || dst[200*4+1] != 0 {
+		t.Errorf("uncovered border px @ X200 was painted")
 	}
 }

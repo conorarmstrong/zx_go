@@ -102,17 +102,41 @@ func TestGate_PC0066_RequiresEP1Bits01(t *testing.T) {
 	if p.IsPagedIn() {
 		t.Errorf("PC=$0066 with BB bits 1:0 both clear: paged in unexpectedly")
 	}
-	// bit 0 set: fires
+	// bit 0 set + divMMC NMI asserted: fires
 	p = newGatedPager(0x00, 0x01)
+	p.AssertNMIButton()
 	p.Step(0x0066)
 	if !p.IsPagedIn() {
 		t.Errorf("PC=$0066 with BB bit 0 set: not paged in")
 	}
-	// bit 1 set: fires
+	// bit 1 set + divMMC NMI asserted: fires
 	p = newGatedPager(0x00, 0x02)
+	p.AssertNMIButton()
 	p.Step(0x0066)
 	if !p.IsPagedIn() {
 		t.Errorf("PC=$0066 with BB bit 1 set: not paged in")
+	}
+}
+
+// TestGate_PC0066_RequiresNMIButton locks in divmmc.vhd:120-121 — the
+// $0066 NMI automap entry points are ANDed with button_nmi, so they fire
+// ONLY while an actual divMMC NMI is asserted (i_divmmc_button → NR$02
+// bit 2), not on a plain instruction fetch of $0066. A program that runs
+// its own code through $0066 (e.g. Sonic's ISR) must NOT page the esxDOS
+// NMI overlay in over it.
+func TestGate_PC0066_RequiresNMIButton(t *testing.T) {
+	// EP1 bit 1 set but no divMMC NMI asserted: $0066 must NOT page in.
+	p := newGatedPager(0x00, 0x02)
+	p.Step(0x0066)
+	if p.IsPagedIn() {
+		t.Errorf("$0066 fetched as regular code (no divMMC NMI): paged in (must require button_nmi)")
+	}
+	// With the divMMC NMI asserted (button_nmi), the trap fires.
+	p = newGatedPager(0x00, 0x02)
+	p.AssertNMIButton()
+	p.Step(0x0066)
+	if !p.IsPagedIn() {
+		t.Errorf("$0066 with divMMC NMI asserted + BB bit 1: not paged in")
 	}
 }
 
@@ -298,6 +322,9 @@ func TestGate_DefaultEntryPoints_StandardTriggersFire(t *testing.T) {
 		{0x056A, false, "$056A (BB bit 5 clear)"},
 	} {
 		p := newGatedPager(0x83, 0xCD)
+		if tc.pc == 0x0066 {
+			p.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
+		}
 		p.Step(tc.pc)
 		// $04C6/$0562 are rom3_delayed_on (zxnext.vhd:2901): the overlay
 		// appears on the M1 AFTER the trigger, so drive one more fetch.
@@ -422,6 +449,9 @@ func TestB9_DoesNotAffect_EntryPoints1(t *testing.T) {
 		p2.SetAutomap(true)
 		p2.SetEntryPoints1(0xFF)
 		p2.SetEntryPointsValid0(0x00)
+		if pc == 0x0066 {
+			p2.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
+		}
 		p2.Step(pc)
 		p2.Step(pc + 1) // $04C6/$0562/$04D7/$056A are delayed_on — overlay on next M1
 		if !p2.IsPagedIn() {

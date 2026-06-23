@@ -120,6 +120,9 @@ func TestPagerStartsOut(t *testing.T) {
 func TestPagerTriggersOnEachKnownPC(t *testing.T) {
 	for _, pc := range TriggerPCs {
 		p := newPagerAutomapped(makeROM())
+		if pc == 0x0066 {
+			p.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
+		}
 		p.Step(pc)
 		// The NR$BB code entry points ($04C6/$0562/$04D7/$056A) are
 		// rom3_delayed_on (zxnext.vhd:2901): the overlay appears on the
@@ -151,6 +154,7 @@ func TestPagerStaysInWhileInLowMemory(t *testing.T) {
 
 func TestPagerUnpagesAtOffArea(t *testing.T) {
 	p := newPagerAutomapped(makeROM())
+	p.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
 	p.Step(0x0066)
 	if !p.IsPagedIn() {
 		t.Fatalf("precondition: overlay should be in")
@@ -172,6 +176,7 @@ func TestPagerUnpagesAtOffArea(t *testing.T) {
 
 func TestPagerUnpagesOnRETN(t *testing.T) {
 	p := newPagerAutomapped(makeROM())
+	p.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
 	p.Step(0x0066)
 	if !p.IsPagedIn() {
 		t.Fatalf("precondition: overlay should be in")
@@ -381,6 +386,7 @@ func TestPagerAutomapDisableDropsOverlay(t *testing.T) {
 	}
 	// Re-enable and the next trigger re-activates.
 	p.SetAutomap(true)
+	p.AssertNMIButton() // $0066 NMI automap requires button_nmi (divmmc.vhd:120)
 	p.Step(0x0066)
 	if !p.IsPagedIn() {
 		t.Errorf("trigger after re-enable should page in")
@@ -529,7 +535,7 @@ func TestPagerRom3EngagedServesDivMMCWindows(t *testing.T) {
 	p.SetAutomap(true)
 	p.SetEntryPointsValid0(0x00)                // $0038 bit7 = 0 => rom3 entry
 	p.SetEntryPointsTiming0(0x80)               // bit7 = 1 => instant
-	p.SetRom3Query(func() bool { return true }) // ROM3 selected => engages
+	p.SetRom3Query(func(uint16) bool { return true }) // ROM3 selected => engages
 	p.Step(0x0038)
 	if !p.IsPagedIn() {
 		t.Fatal("precondition: rom3 trigger with ROM3 selected should page in")
@@ -598,7 +604,7 @@ func TestPagerRom3EngagesOnlyWhenROM3Selected(t *testing.T) {
 	p.SetAutomap(true)
 	p.SetEntryPointsValid0(0x00)  // $0038 bit7=0 => rom3 entry
 	p.SetEntryPointsTiming0(0x80) // bit7=1 => instant (isolate from delayed)
-	p.SetRom3Query(func() bool { return false })
+	p.SetRom3Query(func(uint16) bool { return false })
 	p.Step(0x0038)
 	if p.IsPagedIn() {
 		t.Errorf("rom3 entry, ROM3 not selected: overlay must NOT engage")
@@ -609,7 +615,7 @@ func TestPagerRom3EngagesOnlyWhenROM3Selected(t *testing.T) {
 	p.SetAutomap(true)
 	p.SetEntryPointsValid0(0x00)
 	p.SetEntryPointsTiming0(0x80)
-	p.SetRom3Query(func() bool { return true })
+	p.SetRom3Query(func(uint16) bool { return true })
 	p.Step(0x0038)
 	if !p.IsPagedIn() {
 		t.Fatalf("rom3 entry, ROM3 selected: overlay must engage")
@@ -633,7 +639,7 @@ func TestPager3DXXEntryGatedOnROM3(t *testing.T) {
 	p := New(makeROM())
 	p.SetAutomap(true)
 	p.SetEntryPoints1(0x80) // $3DXX trap enabled
-	p.SetRom3Query(func() bool { return false })
+	p.SetRom3Query(func(uint16) bool { return false })
 	p.Step(0x3D97)
 	if p.IsPagedIn() {
 		t.Errorf("$3DXX with ROM3 not selected: overlay must NOT engage")
@@ -642,7 +648,7 @@ func TestPager3DXXEntryGatedOnROM3(t *testing.T) {
 	p = New(makeROM())
 	p.SetAutomap(true)
 	p.SetEntryPoints1(0x80)
-	p.SetRom3Query(func() bool { return true })
+	p.SetRom3Query(func(uint16) bool { return true })
 	p.Step(0x3D97)
 	if !p.IsPagedIn() {
 		t.Errorf("$3DXX with ROM3 selected: overlay must engage")

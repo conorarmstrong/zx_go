@@ -35,8 +35,17 @@ const Width = 256
 const FullWidth = 320
 
 // BorderOffsetX is the X offset within FullWidth where the inner
-// 256-wide screen begins (matching ULA's BorderLeft).
+// 256-wide screen begins (matching ULA's BorderLeft). It is also the
+// frame X coordinate of the paper's left edge for the sprite layer.
 const BorderOffsetX = 32
+
+// SpriteFrameYTop is the frame Y coordinate (sprites.vhd vcounter) of the
+// paper's top edge: the central 256x192 paper sits at rows 32..223 of the
+// 320x256 sprite/Layer-frame, so paper row N is frame row N+32. The sprite
+// engine works in these frame coordinates (its X/Y attributes and its
+// over-border clip are frame-relative), so the compositor adds this offset
+// when it asks the sprite layer for a paper row.
+const SpriteFrameYTop = 32
 
 // DefaultTransparency is the Next-default 9-bit palette index that
 // passes ULA through underneath. NextReg 0x4A overrides at
@@ -97,7 +106,7 @@ type Compositor struct {
 	// allocator. Single goroutine assumption: the ULA's render
 	// loop is the only caller.
 	l2Scratch      [Width]byte
-	spriteScratch  [Width]byte
+	spriteScratch  [FullWidth]byte // full 320-wide row in FRAME coordinates (sprite X/Y are frame-relative; paper starts at 32,32)
 	tilemapScratch [FullWidth]byte // sized for full 320-wide row; ComposeScanline takes the centred 256 pixels
 }
 
@@ -163,6 +172,17 @@ func (c *Compositor) ComposeWideTilemapRow(tilemapY int, dst []byte) {
 	}
 }
 
+// l2Transparent reports whether a Layer 2 pixel at palette index idx is
+// transparent. Real hardware compares the PALETTE-MAPPED 8-bit colour (the 8
+// MSB of the 9-bit Layer-2 palette entry) against the global transparency
+// colour NR$14 — NOT the raw index. Sonic confirms this: it clears Layer 2 to
+// index 0 but loads pal[0] → $13 with NR$14 = $13, so cleared (index-0) areas
+// map to the transparency colour and let the tilemap show through. Comparing
+// the raw index (0 != $13) wrongly painted Layer 2 opaque over the level.
+func (c *Compositor) l2Transparent(l2Pal *palette.Palette, idx byte) bool {
+	return byte(l2Pal.Get(idx)>>1) == c.transparency
+}
+
 // ComposeWideLayer2Row overlays the Layer 2 hi-res row (320 or 640 px,
 // NR$70 resolution 1/2) onto dst as RGBA at the layer's native width —
 // used by the display path where Layer 2 spans the full Next display
@@ -185,7 +205,7 @@ func (c *Compositor) ComposeWideLayer2Row(y int, dst []byte) {
 	c.l2.RenderScanline(y, scan[:w])
 	for x := 0; x < w; x++ {
 		idx := scan[x]
-		if idx == c.transparency {
+		if c.l2Transparent(l2Pal, idx) {
 			continue
 		}
 		r, g, b := l2Pal.RGB(idx)
@@ -261,6 +281,44 @@ func (c *Compositor) ComposeBorderRow(tilemapY int, dst []byte, isInBorderArea f
 	}
 }
 
+// HasActiveSprites reports whether the sprite layer is wired and enabled, so
+// ULA.applyNextCompositor knows whether to run the sprite border pass.
+func (c *Compositor) HasActiveSprites() bool {
+	return c.sprites != nil && c.sprites.Enabled() && c.pal != nil
+}
+
+// ComposeSpriteBorderRow paints sprite pixels over the border-area pixels of a
+// full-screen row, the sprite counterpart to ComposeBorderRow. Sprites are
+// frame-relative (the 320x256 frame), so frameY is the sprite vcounter for this
+// image row and dst is indexed directly by frame X (= image column). Used AFTER
+// the inner paper pass to cover the top/bottom border strips (where games park
+// HUD sprites, e.g. Nextoid's SHIPS/SCORE row at Y=224-225) and the left/right
+// 32-px borders of screen rows. The sprite engine's own over-border clip
+// (NR$15 bit 1) decides whether border sprites are visible at all.
+func (c *Compositor) ComposeSpriteBorderRow(frameY int, dst []byte, isInBorderArea func(x int) bool) {
+	if !c.HasActiveSprites() {
+		return
+	}
+	spritePal := c.pal.PaletteForLayer(palette.LayerSprites)
+	if spritePal == nil {
+		return
+	}
+	var scan [FullWidth]byte
+	c.sprites.RenderScanline(frameY, scan[:], FullWidth)
+	for x := 0; x < FullWidth; x++ {
+		if !isInBorderArea(x) {
+			continue
+		}
+		idx := scan[x]
+		if idx == 0 || idx == c.spriteTrans {
+			continue // uncovered sentinel or transparency index
+		}
+		r, g, b := spritePal.RGB(idx)
+		off := x * 4
+		dst[off+0], dst[off+1], dst[off+2], dst[off+3] = r, g, b, 0xFF
+	}
+}
+
 // New returns a compositor that reads Layer 2 through the given
 // palette bank and Layer 2 reference. Transparency defaults to
 // DefaultTransparency. Any parameter may be nil for tests that
@@ -268,7 +326,7 @@ func (c *Compositor) ComposeBorderRow(tilemapY int, dst []byte, isInBorderArea f
 // is wired separately via SetSprites so existing callers don't
 // have to update on the Sprint-6 -> Sprint-7 transition.
 func New(pal *palette.Bank, l2 *layer2.Layer2) *Compositor {
-	return &Compositor{pal: pal, l2: l2, transparency: DefaultTransparency, tilemapTrans: 0x0F}
+	return &Compositor{pal: pal, l2: l2, transparency: DefaultTransparency, tilemapTrans: 0x0F, spriteTrans: DefaultTransparency}
 }
 
 // SetSprites attaches the sprite engine. nil unhooks (compositor
@@ -280,7 +338,8 @@ func (c *Compositor) SetSprites(s *sprite.Engine) { c.sprites = s }
 func (c *Compositor) SetPrioritySource(p PrioritySource) { c.prioritySource = p }
 
 // SetSpriteTransparency installs the palette index treated as
-// transparent for the sprite layer (NextReg 0x4B). Defaults to 0.
+// transparent for the sprite layer (NextReg 0x4B). Defaults to
+// DefaultTransparency ($E3, the FPGA reset value).
 func (c *Compositor) SetSpriteTransparency(idx byte) { c.spriteTrans = idx }
 
 // SetTilemapTransparency installs the tilemap transparency nibble
@@ -313,6 +372,11 @@ func (c *Compositor) SetULAPalette(pal [16]color.RGBA) {
 func (c *Compositor) SetFallbackColour(r, g, b byte) {
 	c.fallback = [4]byte{r, g, b, 0xFF}
 }
+
+// FallbackRGBA returns the NR$4A fallback colour. Used by the ULA when its
+// output is disabled (NR$68 bit 7) to fill the frame with the fallback so the
+// lower layers / fallback show instead of stale screen RAM.
+func (c *Compositor) FallbackRGBA() [4]byte { return c.fallback }
 
 // recomputeULATrans precomputes the ULA transparency RGBA from NR$14 and
 // the ULA palette. Inactive when the palette is unset or NR$14 >= 16 (no
@@ -422,7 +486,11 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			for i := range spriteScan {
 				spriteScan[i] = 0
 			}
-			c.sprites.RenderScanline(y, spriteScan, Width)
+			// Sprites live in FRAME coordinates (320x256, paper at 32,32).
+			// Compose the paper: paper row y is frame row y+SpriteFrameYTop,
+			// rendered full-width so frame X (incl. the 32px paper offset) is
+			// available; paintSprites reads [paperX+BorderOffsetX].
+			c.sprites.RenderScanline(y+SpriteFrameYTop, spriteScan, FullWidth)
 		}
 	}
 
@@ -473,7 +541,7 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 		if !doL2 {
 			return
 		}
-		if idx := l2Scanline[x]; idx != c.transparency {
+		if idx := l2Scanline[x]; !c.l2Transparent(l2Pal, idx) {
 			r, g, b := l2Pal.RGB(idx)
 			dst[off+0] = r
 			dst[off+1] = g
@@ -490,7 +558,7 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			return
 		}
 		idx := l2Scanline[x]
-		if idx == c.transparency || !l2Pal.HasPriority(idx) {
+		if c.l2Transparent(l2Pal, idx) || !l2Pal.HasPriority(idx) {
 			return
 		}
 		r, g, b := l2Pal.RGB(idx)
@@ -503,7 +571,12 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 		if !doSprites {
 			return
 		}
-		if idx := spriteScan[x]; idx != c.spriteTrans {
+		// x is the paper pixel (0..255); the sprite buffer is in frame
+		// coordinates, so the paper's left edge is at BorderOffsetX. A pixel
+		// is transparent when it is the 0 "uncovered" sentinel OR equals the
+		// sprite transparency index (NR$4B, default $E3) — the latter is how
+		// 8bpp sprites (e.g. Nextoid's bat/HUD) mark their see-through cells.
+		if idx := spriteScan[x+BorderOffsetX]; idx != 0 && idx != c.spriteTrans {
 			r, g, b := spritePal.RGB(idx)
 			dst[off+0] = r
 			dst[off+1] = g

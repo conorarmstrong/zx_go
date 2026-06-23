@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.0]
+
+**More Spectrum Next games run correctly** — hardware-sprite games, games that
+gate on the core version, and games that need a slower CPU.
+
+### Added
+
+- **CPU speed control** (Machine → CPU Speed: Auto / 3.5 / 7 / 14 / 28 MHz).
+  NextZXOS runs the Next at 28 MHz by default, which makes some games (e.g.
+  RustHawk) run far too fast; pinning a slower speed is the emulator equivalent
+  of the Next's on-screen speed selector / F8 hotkey. "Auto" follows the game/OS.
+- **Sprite Attribute Upload port `$57`** — the auto-incrementing attribute
+  stream many games (e.g. Nextoid) use to upload all their sprites each frame.
+
+### Fixed
+
+- **Hardware sprites now render for games like Nextoid** — the bat, ball and
+  HUD were invisible. Five fixes: the `$57` attribute-upload port (above);
+  4-byte sprites now default to 8bpp (per the FPGA); sprites composite in
+  frame coordinates (320×256, paper at 32,32) with a border pass so HUD
+  sprites in the border show; NextReg `$15` layer-priority decoded from bits
+  4:2 (not 1:0) — the bug that hid sprites behind Layer 2; and NextReg `$4B`
+  sprite transparency is honoured so 8bpp sprites' see-through cells work.
+- **"Core x.xx.xx needed" abort / reboot to the NextZXOS welcome screen** — the
+  read-only NextReg core-version registers (`$01`/`$0E`) are no longer
+  corruptible by guest pokes; reports a stable core 3.02.03. The Machine ID
+  (`$00`) stays writable so games' emulator/hardware probes still work.
+
 ## [v1.2.2]
 
 Fixes **AY music on the Spectrum Next** — 128K games (e.g. Renegade) run under

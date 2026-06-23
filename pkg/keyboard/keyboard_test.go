@@ -968,3 +968,24 @@ func TestConcurrentF11BreakKey(t *testing.T) {
 		t.Error("break should not be pressed after all goroutines release")
 	}
 }
+
+// TestReleaseAllLiftsHeldKeys verifies ReleaseAll lifts every held matrix key,
+// so a key held when the host window loses focus (or the machine reboots)
+// can't stick on after the OS stops sending key-up events.
+func TestReleaseAllLiftsHeldKeys(t *testing.T) {
+	kbd := New()
+	// Press a few keys across different rows (matrix bit 0 = pressed).
+	kbd.PressMatrixKey(0, 0x01, true) // CAPS SHIFT row, bit 0
+	kbd.PressMatrixKey(4, 0x10, true) // "0..6" row
+	kbd.PressMatrixKey(7, 0x01, true) // SPACE row
+	if kbd.Scan(0x0000) == 0xFF {
+		t.Fatal("expected some keys pressed before ReleaseAll")
+	}
+	kbd.ReleaseAll()
+	for row := 0; row < 8; row++ {
+		addr := uint16((^(1 << (row + 8))) & 0xFF00)
+		if got := kbd.Scan(addr); got&0x1F != 0x1F {
+			t.Errorf("row %d after ReleaseAll: Scan=%#02x, want low 5 bits set (all released)", row, got)
+		}
+	}
+}

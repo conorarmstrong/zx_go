@@ -19,6 +19,10 @@ func TestComposeScanlineSULStencilAndFallback(t *testing.T) {
 	pal := palette.NewBank()
 	pal.Select(palette.PaletteLayer2First)
 	pal.Active().Set(5, 0b1_1100_0000) // L2 entry 5 = red
+	// Transparency is compared against the palette-MAPPED colour: map index 7
+	// to colour 7 (identity, as the standard power-on palette does) so it
+	// resolves to NR$14 = 7 and is treated transparent.
+	pal.Active().Set(7, uint16(7)<<1)
 	pal.Select(0)
 
 	// L2 row 0 (256 mode = row-major, pixel x = bank[x]): col 0 = index 5

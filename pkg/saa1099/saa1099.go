@@ -206,7 +206,7 @@ func (s *SAA) GenerateStereo(buf []int16) {
 			g := c / 3
 			freqEn := s.regs[regFreqEn]&(1<<uint(c)) != 0
 			noiseEn := s.regs[regNoiseEn]&(1<<uint(c)) != 0
-			if !((freqEn && toneHigh) || (noiseEn && s.noiseHigh[g])) {
+			if (!freqEn || !toneHigh) && (!noiseEn || !s.noiseHigh[g]) {
 				continue
 			}
 			amp := s.regs[regAmp0+c]

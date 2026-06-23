@@ -64,6 +64,71 @@ type Engine struct {
 	// already painted in the current RenderScanline pass, to detect
 	// collisions. Reused across scanlines.
 	lineCovered []bool
+
+	// zeroOnTop mirrors NextReg $15 bit 6 ("sprite_priority", sprites.vhd:73).
+	// When set, the LOWEST-numbered sprite is drawn in front (sprite 0 on top);
+	// the painted pixel is locked in and higher-numbered sprites do not
+	// overwrite it. When clear (reset default), later (higher-numbered) sprites
+	// paint over earlier ones.
+	zeroOnTop bool
+
+	// Sprite clip window (NextReg $19 via the $1C index). clipSet gates the
+	// whole clip so an un-wired engine clips nothing. How the window maps to
+	// screen bounds depends on overBorder/borderClip (NextReg $15 bits 1/5),
+	// per sprites.vhd:1043-1066 — see effectiveClip.
+	clipX1, clipX2, clipY1, clipY2 byte
+	clipSet                        bool
+
+	// overBorder mirrors NextReg $15 bit 1 ("sprites over border") and
+	// borderClip bit 5 ("border clip enable"). With overBorder off the clip
+	// window is shifted into the central 256x192 paper area (so Y<32 / X<32 in
+	// the 320x256 frame is hidden); with it on, the window applies directly
+	// (in 2-px X units) only when borderClip is set, else there is no clip.
+	overBorder bool
+	borderClip bool
+
+	// attrCursor is the byte index (0..4) for the port-$57 "Sprite Attribute
+	// Upload" stream, and attrExtended records whether the current sprite needs
+	// a 5th byte (latched when byte 3 bit 6 is written). Selecting a sprite
+	// (SelectSprite / SelectSlot, i.e. port $303B) resets the cursor.
+	attrCursor   int
+	attrExtended bool
+}
+
+// SetOverBorder sets NextReg $15 bit 1 ("sprites over border").
+func (e *Engine) SetOverBorder(on bool) { e.overBorder = on }
+
+// SetBorderClip sets NextReg $15 bit 5 ("border clip enable").
+func (e *Engine) SetBorderClip(on bool) { e.borderClip = on }
+
+// effectiveClip resolves the active clip window to inclusive screen bounds
+// [xs..xe] x [ys..ye] in 320x256 frame coordinates, following sprites.vhd:
+//
+//	over_border=1, border_clip=0 -> 0..319 x 0..255 (no clip)
+//	over_border=1, border_clip=1 -> x1*2..x2*2+1, y1..y2
+//	over_border=0                -> window shifted +32 into the paper area
+func (e *Engine) effectiveClip() (xs, xe, ys, ye int) {
+	x1, x2, y1, y2 := int(e.clipX1), int(e.clipX2), int(e.clipY1), int(e.clipY2)
+	if e.overBorder {
+		if !e.borderClip {
+			return 0, 319, 0, 255
+		}
+		return x1 * 2, x2*2 + 1, y1, y2
+	}
+	shift := func(c int) int { return (((c>>5)+1)<<5 | (c & 0x1F)) }
+	return shift(x1), shift(x2), shift(y1), shift(y2)
+}
+
+// SetClip installs the sprite clip window (NextReg $19 coords X1,X2,Y1,Y2).
+// X is in 2-pixel units (matching the FPGA), Y in 1-pixel units.
+func (e *Engine) SetClip(x1, x2, y1, y2 byte) {
+	e.clipX1, e.clipX2, e.clipY1, e.clipY2 = x1, x2, y1, y2
+	e.clipSet = true
+}
+
+// Clip returns the current clip window (x1,x2,y1,y2) and whether it is set.
+func (e *Engine) Clip() (x1, x2, y1, y2 byte, set bool) {
+	return e.clipX1, e.clipX2, e.clipY1, e.clipY2, e.clipSet
 }
 
 // New returns a fresh Engine with all sprites invisible and the
@@ -73,16 +138,106 @@ func New() *Engine { return &Engine{} }
 // SetEnabled toggles the sprite layer.
 func (e *Engine) SetEnabled(on bool) { e.enabled = on }
 
+// SetZeroOnTop sets the NextReg $15 bit 6 "sprite_priority" mode: when true the
+// lowest-numbered sprite is drawn in front of higher-numbered overlapping ones.
+func (e *Engine) SetZeroOnTop(on bool) { e.zeroOnTop = on }
+
+// ZeroOnTop reports the NextReg $15 bit 6 "sprite_priority" mode.
+func (e *Engine) ZeroOnTop() bool { return e.zeroOnTop }
+
 // Enabled reports whether sprites render at all.
 func (e *Engine) Enabled() bool { return e.enabled }
 
 // SelectSprite installs the sprite index that subsequent
 // attribute writes (NextRegs 0x35–0x39) will target. Bit 7 is
 // masked off (real hardware uses 7 bits, slot range 0..127).
-func (e *Engine) SelectSprite(v byte) { e.selSprite = v & 0x7F }
+// Selecting also restarts the port-$57 attribute-byte cursor.
+func (e *Engine) SelectSprite(v byte) {
+	e.selSprite = v & 0x7F
+	e.attrCursor = 0
+	e.attrExtended = false
+}
+
+// ApplyAttrByte decodes attribute byte idx (0..4) into the currently-selected
+// sprite. Shared by the NextReg $35-$39/$75-$79 path and the port-$57 stream so
+// the byte layout lives in one place (see WriteAttr).
+//
+//	byte 0: X LSB
+//	byte 1: Y LSB
+//	byte 2: palette offset (7:4) + X/Y mirror + rotate (3:1) + X8 (0)
+//	byte 3: visible (7) + extended-5th-byte (6) + pattern[5:0]
+//	byte 4: scale / N6 / 8bpp / Y-MSB (decoded in RenderScanline when Extended)
+func (e *Engine) ApplyAttrByte(idx int, val byte) {
+	s := e.Sprite(int(e.selSprite))
+	if s == nil {
+		return
+	}
+	switch idx {
+	case 0:
+		s.X = (s.X & 0x100) | int16(val)
+	case 1:
+		s.Y = int16(val)
+	case 2:
+		s.Palette = (val >> 4) & 0x0F
+		if val&0x01 != 0 {
+			s.X |= 0x100
+		} else {
+			s.X &^= 0x100
+		}
+		s.XMirror = val&0x08 != 0
+		s.YMirror = val&0x04 != 0
+		s.Rotate = val&0x02 != 0
+	case 3:
+		s.Visible = val&0x80 != 0
+		s.Extended = val&0x40 != 0
+		s.Pattern = val & 0x3F
+	case 4:
+		s.Byte4 = val
+	}
+}
+
+// WriteAttr streams one attribute byte to the current sprite (port $57, "Sprite
+// Attribute Upload", ports.txt 0x57). Each sprite takes 4 bytes, or 5 when its
+// byte 3 bit 6 (the "5th byte present" flag) is set; once the sprite's bytes
+// are all written the current-sprite pointer auto-advances, wrapping 127->0,
+// and the byte cursor resets. This is how games (e.g. Nextoid) upload every
+// sprite each frame without re-selecting between them.
+func (e *Engine) WriteAttr(val byte) {
+	e.ApplyAttrByte(e.attrCursor, val)
+	if e.attrCursor == 3 {
+		e.attrExtended = val&0x40 != 0
+	}
+	e.attrCursor++
+	count := 4
+	if e.attrExtended {
+		count = 5
+	}
+	if e.attrCursor >= count {
+		e.selSprite = (e.selSprite + 1) & 0x7F
+		e.attrCursor = 0
+		e.attrExtended = false
+	}
+}
 
 // SelectedSprite returns the current attribute-write cursor.
 func (e *Engine) SelectedSprite() byte { return e.selSprite }
+
+// SelectSlot applies a port $303B write (ports.txt 0x303B): bits 6:0 select
+// the current sprite (attribute-write target), while bits 5:0 select the
+// pattern index — each pattern is 256 bytes, so the pattern-RAM upload cursor
+// is set to (index*256). Bit 7 adds a 128-byte half-offset, addressing the
+// second 4bpp pattern packed in the same 256-byte slot. The $5B pattern-write
+// port (WritePatternByte) streams from this cursor.
+func (e *Engine) SelectSlot(v byte) {
+	e.selSprite = v & 0x7F
+	e.attrCursor = 0
+	e.attrExtended = false
+	addr := uint16(v&0x3F) * 256
+	if v&0x80 != 0 {
+		addr += 128
+	}
+	e.selPattAddr = addr
+}
 
 // cover marks display pixel sx as painted by an opaque sprite in the
 // current line, latching the collision flag if another sprite already
@@ -298,6 +453,20 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 	if !e.enabled {
 		return
 	}
+	// Sprite clip window (NextReg $19), resolved through the over-border /
+	// border-clip mode (NR$15 bits 1/5; sprites.vhd:1043-1066). With
+	// over-border OFF the window is shifted into the paper area, so the whole
+	// top-border band (Y<32 of the 320x256 frame) is hidden — this is what
+	// suppresses Sonic's row of HUD sprites parked at Y=1. The extra
+	// "y<224" gate matches the FPGA's (over_border or vcounter<224) term.
+	clipXs, clipXe := 0, width-1
+	if e.clipSet {
+		xs, xe, ys, ye := e.effectiveClip()
+		if y < ys || y > ye || (!e.overBorder && y >= 224) {
+			return
+		}
+		clipXs, clipXe = xs, xe
+	}
 	// Reset the per-line coverage map (collision detection); the collided
 	// flag itself is sticky across the frame until the status port reads it.
 	if cap(e.lineCovered) < width {
@@ -329,16 +498,19 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 		// Effective byte-4 fields, used only when Extended (attribute
 		// byte 3 bit 6), per FPGA sprites.vhd:437.
 		scaleX, scaleY := 1, 1
-		pat := int(a.Pattern) & 0x3F
+		slot := int(a.Pattern) & 0x3F // 256-byte pattern slot (0-63)
 		sy := int(a.Y)
-		eightBit := false
+		// A sprite is 8bpp by default. 4bpp requires the 5th attribute byte
+		// (byte 3 bit 6 set) with byte 4 bit 7 set — FPGA sprites.vhd:437,931
+		// gate the 4-bit "H" on attr_4(7) AND attr_3(6). So a 4-byte
+		// (non-extended) sprite is always 8bpp.
+		eightBit := true
+		n6 := false
 		if a.Extended {
 			scaleX = 1 << ((a.Byte4 >> 3) & 0x03) // bits 4:3: 1/2/4/8×
 			scaleY = 1 << ((a.Byte4 >> 1) & 0x03) // bits 2:1
-			if a.Byte4&0x40 != 0 {                // bit 6: pattern N6
-				pat |= 0x40
-			}
-			if a.Byte4&0x01 != 0 { // bit 0: Y MSB
+			n6 = a.Byte4&0x40 != 0                // bit 6: selects the 128-byte half of a 4bpp slot
+			if a.Byte4&0x01 != 0 {                // bit 0: Y MSB
 				sy |= 0x100
 			}
 			eightBit = a.Byte4&0x80 == 0 // bit 7 clear → 8bpp pattern
@@ -349,14 +521,20 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 			continue
 		}
 		row := (y - sy) / scaleY
-		// 4bpp: 128 bytes per pattern (16 rows × 8 bytes, 2 px/byte).
-		// 8bpp: 256 bytes per pattern (16 rows × 16 bytes, 1 px/byte),
-		// the pattern number's bit 0 ignored (Next 8-bit-sprite spec).
-		base := pat * 128
-		span := 128
-		if eightBit {
-			base = (pat >> 1) * 256
-			span = 256
+		// Sprite pattern RAM is 64 slots × 256 bytes. An 8bpp sprite uses a
+		// full 256-byte slot (16 rows × 16 bytes, 1 px/byte). A 4bpp sprite
+		// uses one 128-byte half of the slot (16 rows × 8 bytes, 2 px/byte),
+		// selected by N6 (byte4 bit6). This matches the port $303B/$5B upload
+		// addressing: cursor = slot*256 + half*128. (Computing the address as
+		// (slot|N6<<6)*128 — the old code — read the wrong slot/half and made
+		// 4bpp sprites such as Sonic's character pull blank pattern data.)
+		base := slot * 256
+		span := 256
+		if !eightBit {
+			span = 128
+			if n6 {
+				base += 128
+			}
 		}
 		if base+span > PatternRAMSize {
 			continue
@@ -368,6 +546,11 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 		for dx := 0; dx < sizeX; dx++ {
 			sx := int(a.X) + dx
 			if sx < 0 || sx >= width {
+				continue
+			}
+			// Sprite clip window X bounds, resolved through the over-border
+			// mode (clipXs..clipXe computed once above).
+			if e.clipSet && (sx < clipXs || sx > clipXe) {
 				continue
 			}
 			col := dx / scaleX
@@ -391,8 +574,12 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 				if idx == 0 {
 					continue // transparent
 				}
+				// zero-on-top (NR$15 bit 6): a pixel already painted by a
+				// lower-numbered sprite this line is locked in (sprites.vhd:73).
+				if !e.zeroOnTop || !e.lineCovered[sx] {
+					dst[sx] = byte((int(idx) + (int(a.Palette) << 4)) & 0xFF)
+				}
 				e.cover(sx)
-				dst[sx] = byte((int(idx) + (int(a.Palette) << 4)) & 0xFF)
 			} else {
 				pix := e.pattern[base+tr*8+(tc>>1)]
 				var idx byte
@@ -404,8 +591,10 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 				if idx == 0 {
 					continue // transparent
 				}
+				if !e.zeroOnTop || !e.lineCovered[sx] {
+					dst[sx] = (a.Palette << 4) | idx
+				}
 				e.cover(sx)
-				dst[sx] = (a.Palette << 4) | idx
 			}
 		}
 	}

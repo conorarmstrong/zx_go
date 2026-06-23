@@ -154,6 +154,17 @@ func (k *Keyboard) PressMatrixKey(row int, mask byte, pressed bool) {
 	}
 }
 
+// ReleaseAll lifts every key in the matrix (all bits set = released). Used when
+// the host window loses focus or the machine reboots: the OS stops delivering
+// key-up events for anything held, so without this a held key would stick on.
+func (k *Keyboard) ReleaseAll() {
+	k.matrixMu.Lock()
+	for i := range k.matrix {
+		k.matrix[i] = 0xFF
+	}
+	k.matrixMu.Unlock()
+}
+
 // Scan reads the keyboard matrix for a given port address.
 // The high byte of the address determines which rows are being scanned.
 func (k *Keyboard) Scan(addr uint16) byte {

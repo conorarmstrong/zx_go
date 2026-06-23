@@ -9,8 +9,11 @@ import (
 
 // TestWireLineInterruptNR22EnableComputesOffset verifies the
 // NR$22/$23 → cpu.LineIntOffsetTstates pipeline. Per nextreg.txt 0x22
-// bit 1 enables line interrupt (NOT bit 7 — iter 191 corrected).
-// At default 3.5 MHz speed, target line 192 → 192 × 228 = 43776 T-states.
+// bit 1 enables line interrupt (NOT bit 7 — iter 191 corrected). The
+// target line is relative to the 256×192 active area (MAME line_irq_adjust:
+// vpos = cvc_to_vpos(target-1) = target-1+min_vactive, min_vactive=64 = the
+// top border), measured from frameStart (absolute line 0). So target 192 →
+// (192-1+64) × 228.
 func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -22,7 +25,7 @@ func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x02) // bit 1 = enable, bit 0 = 0
 
-	want := uint64(192) * 228
+	want := uint64(192-1+64) * 228
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
@@ -71,7 +74,7 @@ func TestWireLineInterruptNR22FrameDisable(t *testing.T) {
 
 // TestWireLineInterruptNR22MSBCombines verifies bit 0 of NR$22
 // concatenates with NR$23 to form the 9-bit target. Line 256
-// (MSB=1, LSB=0) with bit 1 enable → 256 × 228 = 58368 T-states.
+// (MSB=1, LSB=0) with bit 1 enable → (256-1+64) × 228 T-states.
 func TestWireLineInterruptNR22MSBCombines(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -83,14 +86,14 @@ func TestWireLineInterruptNR22MSBCombines(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x03) // bit 1 enable + bit 0 MSB
 
-	want := uint64(256) * 228
+	want := uint64(256-1+64) * 228
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
 }
 
 // TestWireLineInterruptScalesWithSpeed locks in NR$07 speed-multiplier
-// scaling. At 28 MHz (multiplier 8), line 100 → 100 × 228 × 8.
+// scaling. At 28 MHz (multiplier 8), line 100 → (100-1+64) × 228 × 8.
 func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -104,7 +107,7 @@ func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	disp.Select(0x07)
 	disp.WriteData(0x03) // 28 MHz, multiplier 8
 
-	want := uint64(100) * 228 * 8
+	want := uint64(100-1+64) * 228 * 8
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates @ 28MHz = %d, want %d", got, want)
 	}
