@@ -664,3 +664,47 @@ func BenchmarkULAPortIO(b *testing.B) {
 		ula.ReadPort(0xFE)
 	}
 }
+
+// TestTimexHiResRender pins the Timex 512x192 8x1 hi-res video mode (port $FF
+// mode 110), which NextZXOS's 64/85-column text modes — e.g. the .more text
+// viewer — use. Without it those screens rendered as garbled standard-ULA.
+func TestTimexHiResRender(t *testing.T) {
+	testDir := "test_roms_ula_timex"
+	createTestROMs(t, testDir)
+	defer cleanupTestROMs(testDir)
+
+	mem, _ := memory.New(testDir, roms.Model48K)
+	ula := New(mem, keyboard.New())
+
+	// Row 0, byte column 0: display file 1 = all ink (0xFF), file 2 = all paper.
+	screen := mem.GetPage(mem.ScreenPage)
+	screen[0] = 0xFF
+	screen[0x2000] = 0x00
+
+	// Before enabling hi-res, the frame is the normal width.
+	if img := ula.Render(); img.Bounds().Dx() != TotalWidth {
+		t.Fatalf("normal mode width = %d, want %d", img.Bounds().Dx(), TotalWidth)
+	}
+
+	ula.WritePort(0x00FF, 0x06) // Timex 512x192 hi-res, colour code 0
+	if !ula.timexHiResActive() {
+		t.Fatal("port $FF=$06 must enable Timex hi-res")
+	}
+	img := ula.Render()
+	if img.Bounds().Dx() != 2*TotalWidth {
+		t.Fatalf("hi-res width = %d, want %d (640)", img.Bounds().Dx(), 2*TotalWidth)
+	}
+	ink, paper := ula.timexHiResColours()
+	at := func(x int) color.RGBA {
+		o := BorderTop*img.Stride + x*4
+		return color.RGBA{img.Pix[o], img.Pix[o+1], img.Pix[o+2], img.Pix[o+3]}
+	}
+	// Display byte 0 comes from file 1 (all ink) at x=64..71; display byte 1
+	// from file 2 (all paper) at x=72..79 — proving the two-file interleave.
+	if at(64) != ink {
+		t.Errorf("x=64 (file 1, ink): got %v, want %v", at(64), ink)
+	}
+	if at(72) != paper {
+		t.Errorf("x=72 (file 2, paper): got %v, want %v", at(72), paper)
+	}
+}

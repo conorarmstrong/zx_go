@@ -51,6 +51,11 @@ type ULA struct {
 	flash        bool
 	flashCount   int
 
+	// timexVideoMode is the last value written to the Timex SCLD register
+	// (port $FF): bits 2:0 = display mode (110 = 512x192 8x1 hi-res), bits 5:3
+	// = hi-res ink/paper colour. 0 (the reset default) is the normal screen.
+	timexVideoMode byte
+
 	// Port 0xFE state
 	BorderColour byte
 	Mic          bool
@@ -715,6 +720,13 @@ func (u *ULA) Render() *image.RGBA {
 		}
 	}
 
+	// Timex 512x192 8x1 hi-res (port $FF mode 110): the NextZXOS 64/85-column
+	// text modes (e.g. the .more text viewer) use it. Rendered as a 640-wide
+	// frame, like the other wide modes.
+	if u.timexHiResActive() {
+		return u.renderTimexHiRes()
+	}
+
 	return u.img
 }
 
@@ -744,6 +756,74 @@ func (u *ULA) renderWide() *image.RGBA {
 		u.nextCompositor.ComposeWideTilemapRow(y, rowWide)
 		dstStart := y * wide.Stride
 		copy(wide.Pix[dstStart:dstStart+ww*4], rowWide)
+	}
+	return wide
+}
+
+// timexHiResActive reports whether the Timex SCLD register (port $FF) selects
+// the 512x192 8x1 hi-res display mode (bits 2:0 == 110).
+func (u *ULA) timexHiResActive() bool { return u.timexVideoMode&0x07 == 0x06 }
+
+// timexHiResColours decodes the hi-res ink/paper from port $FF bits 5:3. Hi-res
+// uses two bright, complementary colours: ink = colour code, paper = 7 - code
+// (so code 0 = black ink on white paper, the default text colours).
+func (u *ULA) timexHiResColours() (ink, paper color.RGBA) {
+	code := (u.timexVideoMode >> 3) & 0x07
+	return u.palette[code|0x08], u.palette[(7-code)|0x08]
+}
+
+// renderTimexHiRes builds a 640×TotalHeight frame for the Timex 512×192 8x1
+// hi-res mode. The pixel-doubled base frame supplies the (doubled) border; the
+// central 512px paper is drawn at native resolution from the two display files
+// — display file 1 (screen base) provides the even byte columns, display file 2
+// (base + $2000) the odd — interleaved, with the y-address scramble of the
+// standard screen. This is how the Next runs its 64/85-column text at double
+// the horizontal pixel clock.
+func (u *ULA) renderTimexHiRes() *image.RGBA {
+	const ww = 2 * TotalWidth // 640
+	if u.wideImg == nil {
+		u.wideImg = image.NewRGBA(image.Rect(0, 0, ww, TotalHeight))
+		u.wideRow = make([]byte, ww*4)
+	}
+	wide := u.wideImg
+	// Pixel-double the base frame (correct doubled border + a fallback paper).
+	for y := 0; y < TotalHeight; y++ {
+		srcStart := y * u.img.Stride
+		dstStart := y * wide.Stride
+		for x := 0; x < TotalWidth; x++ {
+			s := srcStart + x*4
+			r, g, b, a := u.img.Pix[s+0], u.img.Pix[s+1], u.img.Pix[s+2], u.img.Pix[s+3]
+			d := dstStart + x*8
+			wide.Pix[d+0], wide.Pix[d+1], wide.Pix[d+2], wide.Pix[d+3] = r, g, b, a
+			wide.Pix[d+4], wide.Pix[d+5], wide.Pix[d+6], wide.Pix[d+7] = r, g, b, a
+		}
+	}
+	screen := u.mem.GetPage(u.mem.ScreenPage)
+	if len(screen) < 0x2000+6144 {
+		return wide
+	}
+	ink, paper := u.timexHiResColours()
+	for sy := 0; sy < ScreenHeight; sy++ { // 192
+		py := BorderTop + sy
+		for fileIdx := 0; fileIdx < ScreenWidth/8; fileIdx++ { // 0..31
+			addr := ((sy & 0xC0) << 5) | ((sy & 0x07) << 8) | ((sy & 0x38) << 2) | fileIdx
+			for half := 0; half < 2; half++ {
+				bb := screen[addr] // display file 1 -> even display bytes
+				if half == 1 {
+					bb = screen[0x2000+addr] // display file 2 -> odd display bytes
+				}
+				dpByte := 2*fileIdx + half // 0..63
+				for bit := 0; bit < 8; bit++ {
+					px := 2*BorderLeft + dpByte*8 + bit // paper starts at x=64
+					col := paper
+					if bb&(0x80>>bit) != 0 {
+						col = ink
+					}
+					d := py*wide.Stride + px*4
+					wide.Pix[d+0], wide.Pix[d+1], wide.Pix[d+2], wide.Pix[d+3] = col.R, col.G, col.B, 0xFF
+				}
+			}
+		}
 	}
 	return wide
 }
@@ -1178,6 +1258,14 @@ func (u *ULA) WritePort(addr uint16, val byte) {
 // separate function so the public WritePort can wrap it with
 // tracing without disturbing the dispatch structure.
 func (u *ULA) writePortInternal(addr uint16, val byte) {
+	// Port $FF — the Timex SCLD video-mode register. bits 2:0 select the
+	// display mode (110 = 512x192 8x1 hi-res), bits 5:3 the hi-res colour.
+	// NextZXOS's 64/85-column text modes (e.g. the .more text viewer) use the
+	// hi-res mode. Stored here; rendered by renderTimexHiRes. Falls through so
+	// any other $FF semantics are unaffected.
+	if (addr & 0xFF) == 0xFF {
+		u.timexVideoMode = val
+	}
 	// Spectrum Next NextReg ports take priority over any other
 	// dispatch when wired. 0x243B is the select latch (write-only),
 	// 0x253B is the data port (read+write).

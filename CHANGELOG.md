@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.1]
+
+### Fixed
+
+- **Spectrum Next text viewer & 64/85-column modes** — viewing a text file in
+  the NextZXOS Browser (and the editor / `.bas`↔`.txt` views) rendered as
+  garbled noise. These use the Timex 512×192 8x1 hi-res display mode (port
+  `$FF` mode 110), which was unimplemented and fell through to a plain-ULA
+  render. Implemented it (two-display-file interleave + hi-res colour); 85-column
+  text now renders correctly.
+
 ## [v1.3.0]
 
 **More Spectrum Next games run correctly** — hardware-sprite games, games that
