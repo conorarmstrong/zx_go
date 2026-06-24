@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.2]
+
+### Fixed
+
+- **Spectrum Next divMMC overlay no longer leaks under CONMEM** — the divMMC
+  automap-held latch was kept paged-in across a page-out (the `$1FF8-$1FFF`
+  off-area or RETN) whenever CONMEM (port `$E3` bit 7) was set, contradicting
+  the FPGA core where the latch clears regardless of CONMEM (an orthogonal
+  force-in). The stale latch left the divMMC RAM overlay masking ROM after the
+  firmware cleared CONMEM, so the CPU ran divMMC RAM as code — a NextBASIC
+  program (e.g. NextBASIC Invaders) derailed and reset on start-up. The overlay
+  now stays mapped while CONMEM is held and drops once CONMEM clears.
+
 ## [v1.3.1]
 
 ### Fixed

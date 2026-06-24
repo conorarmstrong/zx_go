@@ -200,6 +200,56 @@ func TestPagerRETNRespectsConmem(t *testing.T) {
 	}
 }
 
+// TestPagerOffAreaPageOutClearsLatchUnderConmem locks in the fix for the
+// NextBASIC Invaders crash. The esxDOS IM1 handler pages the overlay out
+// via JP C,$1FFC — and that carry is the OLD CONMEM bit, so the page-out
+// fetch lands in the $1FF8-$1FFF off-area precisely WHILE CONMEM is set.
+// Per device/divmmc.vhd the automap_held latch is cleared by the off-area
+// (delayed_off) with NO CONMEM term (line 131) — CONMEM is an orthogonal
+// force-in (lines 94-95). So the off-area fetch must clear the automap
+// latch even under CONMEM; the overlay stays mapped via CONMEM until the
+// firmware clears CONMEM, at which point it must DROP (no stranded latch).
+func TestPagerOffAreaPageOutClearsLatchUnderConmem(t *testing.T) {
+	p := newPagerAutomapped(makeROM())
+	p.Step(0x0008) // genuine automap page-in (sets the automap latch)
+	if !p.IsPagedIn() {
+		t.Fatalf("precondition: overlay should be in via automap trigger")
+	}
+	p.WritePort(0xE3, 0x80) // CONMEM set — the firmware's page-out runs with CONMEM=1
+	p.Step(0x1FFC)          // off-area opcode fetch: overlay still mapped for the read
+	p.PostStep(0x1FFC)      // post-fetch: must clear the automap latch
+	if !p.IsPagedIn() {
+		t.Fatalf("during CONMEM hold the overlay must stay mapped (CONMEM force-in)")
+	}
+	p.WritePort(0xE3, 0x00) // firmware (trampoline) clears CONMEM
+	if p.IsPagedIn() {
+		t.Errorf("after off-area page-out then CONMEM clear: overlay must drop — automap latch leaked in")
+	}
+}
+
+// TestPagerRETNClearsLatchUnderConmem is the RETN dual of the off-area
+// test. device/divmmc.vhd:139 clears automap_held on i_retn_seen
+// unconditionally (no CONMEM term). So a RETN while CONMEM is set must
+// clear the automap latch; the overlay holds via CONMEM until cleared,
+// then drops. TestPagerRETNRespectsConmem above still holds (IsPagedIn
+// stays true under CONMEM); this adds that the latch itself is cleared.
+func TestPagerRETNClearsLatchUnderConmem(t *testing.T) {
+	p := newPagerAutomapped(makeROM())
+	p.Step(0x0008) // genuine automap page-in (sets the automap latch)
+	if !p.IsPagedIn() {
+		t.Fatalf("precondition: overlay should be in via automap trigger")
+	}
+	p.WritePort(0xE3, 0x80) // CONMEM set
+	p.HandleRETN()          // RETN clears automap_held unconditionally
+	if !p.IsPagedIn() {
+		t.Fatalf("during CONMEM hold the overlay must stay mapped after RETN")
+	}
+	p.WritePort(0xE3, 0x00) // CONMEM cleared
+	if p.IsPagedIn() {
+		t.Errorf("after RETN under CONMEM then CONMEM clear: overlay must drop — automap latch leaked in")
+	}
+}
+
 func TestPagerNonTriggerLowPCDoesNotPageIn(t *testing.T) {
 	// Real divMMC requires entering via a trigger. A jump that
 	// lands at a non-trigger low address must NOT page in.

@@ -558,16 +558,16 @@ func (p *Pager) Step(pc uint16) {
 // fetched from user ROM (e.g. $1F = RRA) and the IRQ tail unwinds
 // the wrong stack frames, drifting SP by 6 bytes per interrupt.
 func (p *Pager) PostStep(pc uint16) {
-	// CONMEM (port $E3 bit 7) is the manual-map override and has
-	// higher priority than the automap mechanism: while it is set the
-	// overlay is forced in, so the $1FF8-$1FFF automap-off area must
-	// NOT drop it (matches WritePort's CONMEM-priority handling and
-	// the FBLabs FPGA core). Without this guard a program that holds
-	// the overlay in via CONMEM and then executes in the $1FFx region
-	// would wrongly lose the overlay.
-	if p.lastE3&0x80 != 0 {
-		return
-	}
+	// The $1FF8-$1FFF off-area clears the automap-held latch (delayed_off),
+	// which per device/divmmc.vhd:131 has NO CONMEM term — CONMEM is an
+	// orthogonal force-in (lines 94-95), tracked separately in lastE3 and
+	// OR'd by IsPagedIn/HandleRead/HandleWrite. So the page-out must clear
+	// the latch even while CONMEM is set: the overlay stays mapped via the
+	// CONMEM OR until CONMEM itself is cleared, at which point it drops.
+	// (An earlier CONMEM guard here stranded the latch paged-in across a
+	// CONMEM-held page-out — the NextBASIC Invaders crash: the esxDOS IM1
+	// handler's JP C,$1FFC page-out runs with CONMEM set, then the
+	// trampoline clears CONMEM and the RET fell into divMMC RAM.)
 	if p.pagedIn && pc >= 0x1FF8 && pc <= 0x1FFF && p.entryPoints1&0x40 != 0 {
 		p.pageOut()
 		if p.pageLogger != nil {
@@ -670,10 +670,12 @@ func (p *Pager) HandleRETN() {
 	if !p.automap {
 		return
 	}
-	if p.lastE3&0x80 != 0 {
-		// CONMEM forces the overlay in regardless of RETN.
-		return
-	}
+	// RETN clears the automap-held latch unconditionally (divmmc.vhd:139,
+	// i_retn_seen — no CONMEM term). CONMEM is an orthogonal force-in
+	// (lines 94-95) carried separately in lastE3 and OR'd by IsPagedIn, so
+	// clearing the latch here is safe under CONMEM: the overlay stays mapped
+	// until CONMEM is cleared, then drops. (A former CONMEM guard here
+	// stranded the latch — see PostStep and the NextBASIC Invaders crash.)
 	if p.pageLogger != nil && p.pagedIn {
 		p.pageLogger("out(retn)", 0)
 	}
