@@ -205,14 +205,20 @@ type Pager struct {
 	entryPoints1 byte
 
 	// epValid0 mirrors NextReg $B9 (Divmmc Entry Points Validation 0).
-	// Per zxnext.vhd:2891-2895 the RST entry points (bits 0-7 of
-	// NR$B8) only fire when both B8[n] = 1 AND (B9[n] = 1 OR
-	// BA[n] = 1) — B9 enables the "instant/delayed onto ROM bank 0"
-	// path, BA enables the alternative "rom3 instant on" path. So
-	// effective gate per RST = B8[n] AND (B9[n] OR BA[n]).
+	// Per zxnext.vhd:2892-2901 the page-IN gate for an RST entry point
+	// is B8[n] ALONE; B9[n] and BA[n] select WHICH of the four automap
+	// variants fires, not WHETHER it fires:
 	//
-	// Default after soft reset: $01 (only bit 0 = RST $00 is
-	// validated). Per zxnext.vhd:5088.
+	//	B9=1,BA=1 -> instant_on       (divMMC ROM, this M1)
+	//	B9=1,BA=0 -> delayed_on       (divMMC ROM, next M1)
+	//	B9=0,BA=1 -> rom3_instant_on  (machine ROM3 path, this M1)
+	//	B9=0,BA=0 -> rom3_delayed_on  (machine ROM3 path, next M1)
+	//
+	// So B9 selects the divMMC-ROM (set) vs ROM3 (clear) path and BA the
+	// instant (set) vs delayed (clear) timing. (The earlier "B8 AND
+	// (B9 OR BA)" gate was a misread of the VHDL — see Step's armRST0.)
+	//
+	// Default after soft reset: $01 (RST $00 validated). Per zxnext.vhd:5088.
 	epValid0 byte
 
 	// epTiming0 mirrors NextReg $BA (Divmmc Entry Points Timing 0).
@@ -221,6 +227,23 @@ type Pager struct {
 	//
 	// Default after soft reset: $00. Per zxnext.vhd:5089.
 	epTiming0 byte
+
+	// enabled mirrors the FPGA divMMC global enable i_en
+	// (port_divmmc_io_en = internal_port_enable(8), the NR$82-85 port
+	// decode enable). When false, divmmc.vhd gates o_divmmc_rom_en /
+	// o_divmmc_ram_en to 0 regardless of CONMEM/automap. Defaults true
+	// (the divMMC is enabled in every NextZXOS configuration); exposed
+	// for faithfulness and golden-vector coverage via SetEnabled.
+	enabled bool
+}
+
+// Decode mirrors the FPGA device/divmmc.vhd paging outputs for one CPU address:
+// o_divmmc_rom_en / o_divmmc_ram_en / o_divmmc_rdonly / o_divmmc_ram_bank.
+type Decode struct {
+	ROMEn  bool // divMMC ROM mapped here ($0000-$1FFF, MAPRAM clear)
+	RAMEn  bool // a divMMC RAM bank mapped here
+	RDOnly bool // the mapped window is read-only
+	Bank   int  // the selected divMMC RAM bank (0-15)
 }
 
 // New returns a fresh pager backed by the supplied ROM image with
@@ -247,6 +270,7 @@ func New(rom []byte) *Pager {
 	p := &Pager{
 		rom:          rom,
 		automap:      false,
+		enabled:      true, // FPGA i_en — divMMC port/paging enabled by default
 		entryPoints0: 0x83, // NextReg $B8 soft-reset default (traps $0000, $0008, $0038)
 		entryPoints1: 0xCD, // NextReg $BB soft-reset default (traps $3DXX, $1FF8 page-out, $0562, $04C6, $0066-delayed)
 		epValid0:     0x01, // NextReg $B9 default — only RST $00 is validated
@@ -682,6 +706,45 @@ func (p *Pager) HandleRETN() {
 	p.pageOut()
 }
 
+// SetEnabled toggles the divMMC global enable (FPGA i_en). When false the
+// overlay never maps — o_divmmc_rom_en/ram_en are gated to 0 — regardless of
+// CONMEM or automap. Defaults true.
+func (p *Pager) SetEnabled(on bool) { p.enabled = on }
+
+// DisableNMI mirrors device/divmmc.vhd o_disable_nmi = automap OR button_nmi:
+// the divMMC suppresses the maskable NMI whenever its overlay is engaged or a
+// divMMC NMI is pending.
+func (p *Pager) DisableNMI() bool { return p.pagedIn || p.nmiButton }
+
+// DecodePaging reproduces device/divmmc.vhd's combinational paging decode for
+// addr, from the live overlay state (the automap-held latch OR the CONMEM
+// force-in), the MAPRAM latch, the $E3 bank and the divMMC enable. The result
+// matches the FPGA o_divmmc_rom_en/ram_en/rdonly/ram_bank exactly (see the
+// _tools/divmmc-vhdl-test golden). rdonly and bank are pure address+config
+// decode and are reported even when the overlay is not enabled, matching the
+// VHDL (only rom_en/ram_en are gated by i_en).
+func (p *Pager) DecodePaging(addr uint16) Decode {
+	conmem := p.lastE3&0x80 != 0
+	in := conmem || p.pagedIn // conmem | automap
+	page0 := addr < 0x2000
+	page1 := addr >= 0x2000 && addr < 0x4000
+	bank := int(p.lastE3) & (NumBanks - 1)
+	if page0 {
+		bank = MAPRAMBank // ram_bank <= X"3" when page0
+	}
+	romEn := page0 && in && !p.mapram
+	ramEn := (page0 && in && p.mapram) || (page1 && in)
+	if !p.enabled {
+		romEn, ramEn = false, false
+	}
+	return Decode{
+		ROMEn:  romEn,
+		RAMEn:  ramEn,
+		RDOnly: page0 || (p.mapram && bank == MAPRAMBank),
+		Bank:   bank,
+	}
+}
+
 // selectedBank returns the divMMC RAM bank index (0..NumBanks-1)
 // that should be visible at 0x2000-0x3FFF, based on the low bits
 // of port 0xE3.
@@ -811,9 +874,10 @@ func (p *Pager) HandleRead(addr uint16) (byte, bool) {
 	conmem := p.lastE3&0x80 != 0
 	// Effective overlay-mapped = automap-held latch OR CONMEM force-in.
 	// CONMEM is combinational (it never sets the latch — see WritePort)
-	// so reads consult it directly here.
+	// so reads consult it directly here. Gated by the divMMC enable (FPGA
+	// i_en): when disabled, o_divmmc_rom_en/ram_en are 0 regardless.
 	pagedIn := p.pagedIn || conmem
-	if !pagedIn {
+	if !pagedIn || !p.enabled {
 		return 0, false
 	}
 	if addr < 0x2000 {
@@ -870,9 +934,10 @@ func (p *Pager) HandleRead(addr uint16) (byte, bool) {
 func (p *Pager) HandleWrite(addr uint16, val byte) bool {
 	conmem := p.lastE3&0x80 != 0
 	// Effective overlay-mapped = automap-held latch OR CONMEM force-in
-	// (CONMEM is combinational — see WritePort).
+	// (CONMEM is combinational — see WritePort). Gated by the divMMC enable
+	// (FPGA i_en) like the read path.
 	pagedIn := p.pagedIn || conmem
-	if !pagedIn {
+	if !pagedIn || !p.enabled {
 		return false
 	}
 	if addr < 0x2000 {
