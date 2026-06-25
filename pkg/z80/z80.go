@@ -2117,8 +2117,14 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 		// Z80 spec: H ← old C; C ← !old C; N ← 0; S,Z,PV unchanged;
 		// F3,F5 from A. We were previously setting H from the NEW C.
 		oldC := c.F & FLAG_C
-		f := c.F & (FLAG_S | FLAG_Z | FLAG_PV)
-		if oldC != 0 {
+		keep := byte(FLAG_S | FLAG_Z | FLAG_PV)
+		if c.Variant == VariantZ80N {
+			// NMOS Z80 sets H ← old C; the Next's Z80N (T80 core) leaves H
+			// untouched (preserves it). See ccf_variant_test.go.
+			keep |= FLAG_H
+		}
+		f := c.F & keep
+		if oldC != 0 && c.Variant != VariantZ80N {
 			f |= FLAG_H
 		}
 		f |= oldC ^ FLAG_C
@@ -2540,8 +2546,12 @@ func (c *CPU) executeCBInstruction(opcode byte) {
 				addr := c.hl()
 				c.bit(bit, c.rd(addr))
 				c.exec(addr, 1)
-				// F3/F5 from MEMPTR high byte (undocumented).
-				c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(c.WZ>>8)&(FLAG_F3|FLAG_F5)
+				// NMOS Z80: F3/F5 from MEMPTR high byte (undocumented). The
+				// Next's Z80N (T80 core) keeps them from the value byte that
+				// c.bit() already applied. See bit_undoc_variant_test.go.
+				if c.Variant != VariantZ80N {
+					c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(c.WZ>>8)&(FLAG_F3|FLAG_F5)
+				}
 			} else {
 				c.bit(bit, c.getRegister8(reg))
 				c.tstates += 8
@@ -3333,9 +3343,13 @@ func (c *CPU) executeDDCBInstruction(opcode byte, addr uint16) {
 		if reg != 6 {
 			c.setRegister8(reg, val)
 		}
-	case 1: // BIT n,(IX+d) — F3/F5 from address high byte (MEMPTR)
+	case 1: // BIT n,(IX+d): NMOS Z80 takes F3/F5 from the address high byte
+		// (MEMPTR); the Next's Z80N (T80 core) keeps them from the value byte
+		// that c.bit() already applied. See bit_undoc_variant_test.go.
 		c.bit(bit, val)
-		c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		if c.Variant != VariantZ80N {
+			c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		}
 		// BIT n,(IX+d) is 20 t-states (no memory writeback) vs the
 		// 23 t-states of shift/RES/SET. Charge here and return so
 		// the post-switch +23 isn't applied to BIT.
@@ -3709,9 +3723,13 @@ func (c *CPU) executeFDCBInstruction(opcode byte, d int8) {
 		if reg != 6 { // Copy to register if not (HL)
 			c.setRegister8(reg, val)
 		}
-	case 1: // BIT n,(IY+d) — F3/F5 from address high byte (MEMPTR)
+	case 1: // BIT n,(IY+d): NMOS Z80 takes F3/F5 from the address high byte
+		// (MEMPTR); the Next's Z80N (T80 core) keeps them from the value byte
+		// that c.bit() already applied. See bit_undoc_variant_test.go.
 		c.bit(bit, val)
-		c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		if c.Variant != VariantZ80N {
+			c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		}
 		// BIT n,(IY+d) = 20 t (no memory writeback). Charge and
 		// return so post-switch +23 isn't applied.
 		c.tstates += 20
@@ -4186,6 +4204,20 @@ func (c *CPU) ldi() {
 	c.setDE(c.de() + 1)
 	c.setBC(c.bc() - 1)
 
+	if c.Variant == VariantZ80N {
+		// The Next's Z80N (T80 core) does not derive the undocumented F3/F5
+		// from n=A+value the way a real NMOS Z80 does — it leaves them
+		// untouched. NextBASIC's DEFPROC integer-parameter binding relies on
+		// this (a stale NMOS F3/F5 rode a later PUSH AF into the bound value,
+		// surfacing as "Integer out of range, 2550:1"). See
+		// block_undoc_variant_test.go.
+		c.F &= FLAG_S | FLAG_Z | FLAG_C | FLAG_F3 | FLAG_F5
+		if c.bc() != 0 {
+			c.F |= FLAG_PV
+		}
+		return
+	}
+
 	c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_C))
 	if c.bc() != 0 {
 		c.F |= FLAG_PV
@@ -4206,6 +4238,15 @@ func (c *CPU) ldd() {
 	c.setHL(c.hl() - 1)
 	c.setDE(c.de() - 1)
 	c.setBC(c.bc() - 1)
+
+	if c.Variant == VariantZ80N {
+		// Z80N preserves the undocumented F3/F5 across block loads — see ldi().
+		c.F &= FLAG_S | FLAG_Z | FLAG_C | FLAG_F3 | FLAG_F5
+		if c.bc() != 0 {
+			c.F |= FLAG_PV
+		}
+		return
+	}
 
 	c.F = (c.F & (FLAG_S | FLAG_Z | FLAG_C))
 	if c.bc() != 0 {
@@ -4273,6 +4314,14 @@ func (c *CPU) cpi() {
 		c.F |= FLAG_H
 	}
 
+	if c.Variant == VariantZ80N {
+		// The Next's Z80N takes F3/F5 from the operand byte read (bits 3,5),
+		// like a normal CP, rather than NMOS's n = A-(HL)-H result byte. See
+		// cpi_variant_test.go.
+		c.F |= val & (FLAG_F3 | FLAG_F5)
+		return
+	}
+
 	// F3 and F5 flags are set from (A - (HL) - H flag)
 	temp := result
 	if (c.F & FLAG_H) != 0 {
@@ -4307,6 +4356,14 @@ func (c *CPU) cpd() {
 	}
 	if ((c.A ^ val ^ result) & 0x10) != 0 {
 		c.F |= FLAG_H
+	}
+
+	if c.Variant == VariantZ80N {
+		// The Next's Z80N takes F3/F5 from the operand byte read (bits 3,5),
+		// like a normal CP, rather than NMOS's n = A-(HL)-H result byte. See
+		// cpi_variant_test.go.
+		c.F |= val & (FLAG_F3 | FLAG_F5)
+		return
 	}
 
 	// F3 and F5 flags are set from (A - (HL) - H flag)
