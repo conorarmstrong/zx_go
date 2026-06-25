@@ -99,6 +99,13 @@ type DMA struct {
 
 	autoRestart bool // WR5 D5: reload + repeat at end of block
 
+	// endOfBlock mirrors the chip's status_endofblock_n bit (inverted): the
+	// FPGA sets status_endofblock_n='0' when a block finishes (dma.vhd:471) and
+	// back to '1' on RESET / LOAD ($CF) / CONTINUE ($D3) / reinit-status ($8B)
+	// (dma.vhd:639/654/671/691). It surfaces in the status read-back register
+	// as bit 5 (active-low: 1 = not at end, 0 = end-of-block reached).
+	endOfBlock bool
+
 	// lastDuration is the T-state cost of the most recent transfer, derived
 	// from the per-byte cycle cost (read + write cycle lengths, or the
 	// prescaler if larger). The emulator charges it to the CPU clock.
@@ -313,10 +320,12 @@ func (d *DMA) command(val byte) {
 		d.curA = d.portAStart
 		d.curB = d.portBStart
 		d.counter = 0
+		d.endOfBlock = false // dma.vhd:654: LOAD clears status_endofblock_n='1'
 	case 0xD3: // CONTINUE — zero the byte counter; a following ENABLE repeats
 		// the block from the CURRENT pointers (not the start addresses).
 		d.loaded = true
 		d.counter = 0
+		d.endOfBlock = false // dma.vhd:671: Continue clears status_endofblock_n='1'
 	case 0x87: // ENABLE — run the configured transfer
 		if d.loaded {
 			d.Trigger()
@@ -328,6 +337,8 @@ func (d *DMA) command(val byte) {
 		}}
 	case 0xA7: // INITIATE READ SEQUENCE — reset the read cursor
 		d.readIdx = 0
+	case 0x8B: // REINITIALIZE STATUS BYTE (dma.vhd:690): endofblock_n='1'
+		d.endOfBlock = false
 	default:
 		// $C7/$CB reset-timing, $83 disable, status-reinit commands need no
 		// state change for the transfers the zxnDMA actually runs.
@@ -374,13 +385,16 @@ func (d *DMA) Trigger() {
 	if d.mode == modeContinuous && d.cycleSink != nil {
 		d.cycleSink(d.lastDuration)
 	}
-	d.endOfBlock()
+	d.finishBlock()
 }
 
-// endOfBlock applies the auto-restart-or-stop policy after a transfer's last
+// finishBlock applies the auto-restart-or-stop policy after a transfer's last
 // byte: auto-restart reloads the start addresses and stays armed; otherwise the
-// loaded flag clears.
-func (d *DMA) endOfBlock() {
+// loaded flag clears. Either way the end-of-block status bit latches (the FPGA
+// sets status_endofblock_n='0' at FINISH_DMA, dma.vhd:471, regardless of the
+// auto-restart branch).
+func (d *DMA) finishBlock() {
+	d.endOfBlock = true
 	if d.autoRestart {
 		d.curA = d.portAStart
 		d.curB = d.portBStart
@@ -410,7 +424,7 @@ func (d *DMA) Step(now uint64) {
 	}
 	if d.remaining == 0 {
 		d.activeBurst = false
-		d.endOfBlock()
+		d.finishBlock()
 	}
 }
 
@@ -554,7 +568,26 @@ func (d *DMA) regValue(reg int) byte {
 		return byte(d.curB)
 	case 6:
 		return byte(d.curB >> 8)
-	default: // 0 = status byte (not implemented on the zxnDMA per its docs)
-		return 0
+	default: // 0 = status byte
+		return d.statusByte()
 	}
+}
+
+// statusByte builds the read-mask status register exactly as the FPGA does
+// (dma.vhd:902): "00" & status_endofblock_n & "1101" & status_atleastone.
+//
+//	bits 7:6 = 00
+//	bit 5    = status_endofblock_n (1 = not at end, 0 = block finished)
+//	bits 4:1 = 1101 (fixed)
+//	bit 0    = status_atleastone — set while a transfer is mid-flight, but the
+//	           FPGA clears it once the FSM returns to IDLE (dma.vhd:265). Our
+//	           transfers complete synchronously, so a read always observes the
+//	           idle state: 0.
+func (d *DMA) statusByte() byte {
+	const fixed = 0x1A // bits 4:1 = 1101, bits 5/0 = 0
+	s := byte(fixed)
+	if !d.endOfBlock { // status_endofblock_n = 1
+		s |= 0x20
+	}
+	return s
 }
