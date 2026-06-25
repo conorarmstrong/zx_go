@@ -572,6 +572,11 @@ func (m *Memory) SetDFFD(val byte) {
 	if ramPage != old {
 		m.syncMMUFromPage(3)
 	}
+	// Like any classic paging-port write, a $DFFD write reveals the ROM in the
+	// bottom 16K — MMU0/MMU1 <= $FF (zxnext.vhd 4643-4644; ports.txt: "a write
+	// to 0x7ffd/0xdffd/0x1ffd/0xeff7 sets mmu0=0xff and mmu1=0xff"). selectROM
+	// re-establishes that, clearing any NextReg-MMU RAM override on slots 0/1.
+	m.selectROM("DFFD")
 }
 
 // IsMMUOverridden reports whether the given 8K slot was last
