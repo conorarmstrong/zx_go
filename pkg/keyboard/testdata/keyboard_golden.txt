@@ -1,0 +1,468 @@
+# Keyboard membrane golden (real FPGA membrane.vhd under GHDL)
+# R lines: rows=A15:A8 select (active-low), cols=D4:D0 read (low 5 bits)
+RELEASE
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=0
+R rows=FE cols=1E
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=1
+R rows=FE cols=1D
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=2
+R rows=FE cols=1B
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=3
+R rows=FE cols=17
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=4
+R rows=FE cols=0F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=1 c=0
+R rows=FE cols=1F
+R rows=FD cols=1E
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=1 c=1
+R rows=FE cols=1F
+R rows=FD cols=1D
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=1 c=2
+R rows=FE cols=1F
+R rows=FD cols=1B
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=1 c=3
+R rows=FE cols=1F
+R rows=FD cols=17
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=1 c=4
+R rows=FE cols=1F
+R rows=FD cols=0F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=2 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1E
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=2 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1D
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=2 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1B
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=2 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=17
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=2 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=0F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=3 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1E
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=3 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1D
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=3 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1B
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=3 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=17
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=3 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=0F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=4 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1E
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=4 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1D
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=4 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1B
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=4 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=17
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=4 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=0F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=5 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1E
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=5 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1D
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=5 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1B
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=5 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=17
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=5 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=0F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=6 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1E
+R rows=7F cols=1F
+RELEASE
+PRESS r=6 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1D
+R rows=7F cols=1F
+RELEASE
+PRESS r=6 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1B
+R rows=7F cols=1F
+RELEASE
+PRESS r=6 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=17
+R rows=7F cols=1F
+RELEASE
+PRESS r=6 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=0F
+R rows=7F cols=1F
+RELEASE
+PRESS r=7 c=0
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1E
+RELEASE
+PRESS r=7 c=1
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1D
+RELEASE
+PRESS r=7 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1B
+RELEASE
+PRESS r=7 c=3
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=17
+RELEASE
+PRESS r=7 c=4
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=0F
+RELEASE
+PRESS r=0 c=0
+PRESS r=0 c=1
+R rows=FE cols=1C
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=0 c=0
+PRESS r=3 c=4
+R rows=FE cols=1E
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=0F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
+RELEASE
+PRESS r=7 c=1
+PRESS r=7 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=19
+RELEASE
+PRESS r=1 c=0
+PRESS r=7 c=0
+R rows=FE cols=1F
+R rows=FD cols=1E
+R rows=FB cols=1F
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1E
+R rows=7D cols=1E
+RELEASE
+PRESS r=2 c=0
+PRESS r=2 c=1
+PRESS r=2 c=2
+R rows=FE cols=1F
+R rows=FD cols=1F
+R rows=FB cols=18
+R rows=F7 cols=1F
+R rows=EF cols=1F
+R rows=DF cols=1F
+R rows=BF cols=1F
+R rows=7F cols=1F
