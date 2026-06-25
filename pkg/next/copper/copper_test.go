@@ -89,14 +89,14 @@ func TestWaitParksUntilRasterReached(t *testing.T) {
 	c.SetRegWriter(rw)
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
-	// Step at scanline 50 — not yet past WAIT 100.
-	c.Step(50, 0, 4)
+	// Step at scanline 50, end-of-line hcount — not yet past WAIT 100.
+	c.Step(50, 511, 4)
 	if len(rw.writes) != 0 {
 		t.Errorf("MOVE fired before WAIT was satisfied: writes = %+v", rw.writes)
 	}
 
-	// Step at scanline 100 — WAIT released, MOVE executes.
-	c.Step(100, 0, 4)
+	// Step at scanline 100, end-of-line hcount — WAIT released, MOVE executes.
+	c.Step(100, 511, 4)
 	if len(rw.writes) != 1 || rw.writes[0].reg != 0x07 || rw.writes[0].val != 0x03 {
 		t.Errorf("MOVE not executed after WAIT released: writes = %+v", rw.writes)
 	}

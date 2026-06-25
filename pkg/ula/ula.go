@@ -299,7 +299,7 @@ type NextI2C interface {
 // so MOVEs that affect palette / Layer 2 state take effect before
 // the row composites.
 type NextCopper interface {
-	Step(scanline uint16, hpos byte, maxInstr int) int
+	Step(scanline uint16, hcount uint16, maxInstr int) int
 }
 
 // NextDAC is the contract for the four Spectrum Next DAC channels.
@@ -1523,15 +1523,14 @@ func (u *ULA) applyNextCompositor() {
 		// if the ULA honoured the copper-changeable Next ULA palette,
 		// which it does not yet — a separate feature, not a timing bug.)
 		if u.nextCopper != nil {
-			// Step the Copper for scanline y up to the end-of-line
-			// horizontal position (max hpos = 63) so WAITs targeting any
-			// hpos on scanline y release on y, not one scanline late (the
-			// previous hpos=0 only released hpos-0 WAITs). Identical for
-			// the common hpos-0 WAITs, so the verified render is
-			// unaffected; this is the achievable raster precision for a
-			// per-scanline renderer (per-pixel hpos precision would need
-			// per-pixel rendering).
-			u.nextCopper.Step(uint16(y), 63, copperInstrPerScanline)
+			// Step the Copper for scanline y at the end-of-line horizontal
+			// counter (>= 511) so every WAIT targeting any column on scanline
+			// y releases on y, not one scanline late. The Copper's WAIT
+			// release threshold is hcount >= (X<<3)+12 (device/copper.vhd:94);
+			// passing the max hcount clears it for all X. This is the
+			// achievable raster precision for a per-scanline renderer
+			// (per-pixel hcount precision would need per-pixel rendering).
+			u.nextCopper.Step(uint16(y), 511, copperInstrPerScanline)
 		}
 		rowStart := (BorderTop+y)*u.img.Stride + BorderLeft*4
 		copy(ulaScan, u.img.Pix[rowStart:rowStart+w*4])

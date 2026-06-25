@@ -150,14 +150,18 @@ func (c *Copper) Instruction(i uint16) Instruction {
 
 // Decode parses a raw 16-bit instruction word into Instruction.
 //
-// Per the wiki encoding:
+// Per the FPGA encoding (device/copper.vhd):
 //   - MOVE: bit 15 = 0; bits 14-8 = NextReg index (7 bits);
 //     bits 7-0 = value byte.
-//   - WAIT: bit 15 = 1; bits 14-9 = horizontal position (0..63);
-//     bits 8-0 = vertical scanline (0..511).
+//   - WAIT: bit 15 = 1; bits 14-9 = horizontal position (0..63, in
+//     8-pixel columns); bits 8-0 = vertical scanline (0..511).
 //   - HALT: special-case WAIT 0xFFFF (waits for line 511, hpos 63
 //     — never reached).
-//   - NOOP: MOVE NextReg 0, value 0 — a no-op write.
+//   - NOOP: a MOVE whose NextReg index (bits 14-8) is zero. The
+//     hardware suppresses the write pulse purely on the register
+//     field being zero (copper.vhd:104 — "MOVE 0,0" / NOP test is
+//     on copper_list_data_i(14 downto 8), the value byte is NOT
+//     considered), so MOVE reg 0 with any value is a NOOP.
 func Decode(w uint16) Instruction {
 	if w == 0xFFFF {
 		return Instruction{Op: OpHALT}
@@ -165,7 +169,7 @@ func Decode(w uint16) Instruction {
 	if w&0x8000 == 0 {
 		reg := byte((w >> 8) & 0x7F)
 		val := byte(w & 0xFF)
-		if reg == 0 && val == 0 {
+		if reg == 0 {
 			return Instruction{Op: OpNOOP}
 		}
 		return Instruction{Op: OpMOVE, Reg: reg, Val: val}
@@ -175,6 +179,13 @@ func Decode(w uint16) Instruction {
 	y := w & 0x01FF
 	return Instruction{Op: OpWAIT, X: x, Y: y}
 }
+
+// WaitHThreshold is the horizontal raster counter (hcount, 0..511 in
+// pixels) at or above which a WAIT with column field x releases on its
+// target scanline. The hardware compares hcount_i >= (x << 3) + 12, i.e.
+// the 6-bit column is taken as 8-pixel units with a fixed +12 pixel offset
+// (device/copper.vhd:94).
+func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 
 // Step advances the copper by at most maxInstr instructions
 // against the supplied raster position. Returns the number of
@@ -195,9 +206,12 @@ func Decode(w uint16) Instruction {
 // reload its own pc / writePtr fields mid-loop, so a re-entrant
 // mutation only takes effect on the NEXT Step call.
 //
-// scanline is 0..311 (full PAL frame). hpos is 0..63 (8-pixel
-// units across one scanline).
-func (c *Copper) Step(scanline uint16, hpos byte, maxInstr int) int {
+// scanline is the raster line (vcount, 0..511). hcount is the raster
+// horizontal counter (0..511 in pixels) — the same units the FPGA's
+// hcount_i carries; a WAIT releases at hcount >= (x<<3)+12 on its target
+// line (see WaitHThreshold). A per-scanline caller passes the end-of-line
+// hcount (>= 511) so every WAIT on the line releases on that line.
+func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 	// VBL auto-restart: in StartOnVBL the program counter resets to 0 at
 	// the start of each frame, i.e. when the raster wraps back to the top.
 	if c.mode == StartOnVBL && scanline < c.lastScanline {
@@ -218,8 +232,15 @@ func (c *Copper) Step(scanline uint16, hpos byte, maxInstr int) int {
 			c.pc++
 			executed++
 		case OpWAIT:
-			// Wait until raster reaches (Y, hpos>=X).
-			if scanline > inst.Y || (scanline == inst.Y && hpos >= inst.X) {
+			// Release when the raster reaches the target line and the
+			// horizontal threshold: hcount >= (X<<3)+12 on line Y
+			// (device/copper.vhd:94). The scanline > Y branch is the
+			// functional-model fallback for a per-scanline caller that has
+			// already advanced past the target line (the hardware, clocked
+			// every pixel, releases exactly on line Y; a caller stepping each
+			// line hits Y exactly, so this only matters if a line is skipped).
+			if scanline > inst.Y ||
+				(scanline == inst.Y && hcount >= WaitHThreshold(inst.X)) {
 				c.pc++
 				continue
 			}
