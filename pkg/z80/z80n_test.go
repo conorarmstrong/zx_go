@@ -365,14 +365,18 @@ func TestZ80N_BRLC(t *testing.T) {
 }
 
 func TestZ80N_SETAE(t *testing.T) {
+	// SETAE builds the per-pixel mask A = $80 >> (E & 7): the leftmost pixel
+	// (E&7==0) is bit 7. The previous expectations here encoded a reversed
+	// mask (1 << (E&7)) that matched a real CPU bug — see setae_test.go and
+	// the NextBASIC DEFPROC integer-parameter fix.
 	cases := []struct {
 		e, want byte
 	}{
-		{0, 0x01},
-		{1, 0x02},
-		{7, 0x80},
-		{8, 0x01}, // 8 & 7 = 0
-		{15, 0x80},
+		{0, 0x80},
+		{1, 0x40},
+		{7, 0x01},
+		{8, 0x80}, // 8 & 7 = 0
+		{15, 0x01},
 	}
 	for _, c := range cases {
 		cpu, _ := createZ80NTestCPU()

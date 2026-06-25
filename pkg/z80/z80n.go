@@ -92,8 +92,9 @@ func (c *CPU) executeZ80NEDInstruction(opcode byte) bool {
 		c.setDE(barrelRotateLeftCircular(c.de(), c.B))
 		c.tstates += 8
 		return true
-	case 0x95: // SETAE      A = 1 << (E & 7); per-pixel mask
-		c.A = 1 << (c.E & 7)
+	case 0x95: // SETAE      A = $80 >> (E & 7); per-pixel mask (leftmost
+		// pixel E&7==0 -> bit 7, rightmost E&7==7 -> bit 0). See setae_test.go.
+		c.A = 0x80 >> (c.E & 7)
 		c.tstates += 8
 		return true
 
