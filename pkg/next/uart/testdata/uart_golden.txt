@@ -1,0 +1,70 @@
+# FPGA UART golden (uart_tx.vhd / uart_rx.vhd / fifop.vhd under GHDL).
+; tx-presc4
+TX byte=65 presc=4 frame=24 n=60
+TXBITS 000011110000000000000000000011110000111111111111111111111111
+TX byte=0 presc=4 frame=24 n=60
+TXBITS 000000000000000000000000000000000000111111111111111111111111
+TX byte=255 presc=4 frame=24 n=60
+TXBITS 000011111111111111111111111111111111111111111111111111111111
+; tx-presc8
+TX byte=90 presc=8 frame=24 n=110
+TXBITS 00000000000000001111111100000000111111111111111100000000111111110000000011111111111111111111111111111111111111
+; tx-2stop
+TX byte=65 presc=4 frame=25 n=70
+TXBITS 0000111100000000000000000000111100001111111111111111111111111111111111
+; tx-parity-even
+TX byte=65 presc=4 frame=28 n=70
+TXBITS 0000111100000000000000000000111100000000111111111111111111111111111111
+; rx-presc8
+RX byte=65 presc=8 frame=24
+RXRESULT avail=1 byte=41 framing=0 parity=0
+RX byte=90 presc=8 frame=24
+RXRESULT avail=1 byte=5A framing=0 parity=0
+; rx-presc12
+RX byte=60 presc=12 frame=24
+RXRESULT avail=1 byte=3C framing=0 parity=0
+; rx-framing-error
+RX byte=85 presc=8 frame=24
+RXRESULT avail=0 byte=00 framing=1 parity=0
+; fifo-depth3
+FIFO init empty=1 near=0 almost=0 full=0 waddr=0 raddr=0
+FIFO w1 empty=0 near=0 almost=0 full=0 waddr=1 raddr=0
+FIFO w2 empty=0 near=0 almost=0 full=0 waddr=2 raddr=0
+FIFO w3 empty=0 near=0 almost=0 full=0 waddr=3 raddr=0
+FIFO w4 empty=0 near=0 almost=0 full=0 waddr=4 raddr=0
+FIFO w5 empty=0 near=0 almost=0 full=0 waddr=5 raddr=0
+FIFO w6 empty=0 near=1 almost=0 full=0 waddr=6 raddr=0
+FIFO w7 empty=0 near=1 almost=0 full=0 waddr=7 raddr=0
+FIFO w8 empty=0 near=1 almost=1 full=1 waddr=0 raddr=0
+FIFO w9-ovf empty=0 near=1 almost=1 full=1 waddr=0 raddr=0
+FIFO r1 empty=0 near=1 almost=0 full=0 waddr=0 raddr=1
+FIFO r2 empty=0 near=1 almost=0 full=0 waddr=0 raddr=2
+FIFO rdrain1 empty=0 near=0 almost=0 full=0 waddr=0 raddr=3
+FIFO rdrain2 empty=0 near=0 almost=0 full=0 waddr=0 raddr=4
+FIFO rdrain3 empty=0 near=0 almost=0 full=0 waddr=0 raddr=5
+FIFO rdrain4 empty=0 near=0 almost=0 full=0 waddr=0 raddr=6
+FIFO rdrain5 empty=0 near=0 almost=0 full=0 waddr=0 raddr=7
+FIFO rdrain6 empty=1 near=0 almost=0 full=0 waddr=0 raddr=0
+; fifo-depth4
+FIFO2 init empty=1 near=0 almost=0 full=0 waddr=0 raddr=0
+FIFO2 w1 empty=0 near=0 almost=0 full=0 waddr=1 raddr=0
+FIFO2 w2 empty=0 near=0 almost=0 full=0 waddr=2 raddr=0
+FIFO2 w3 empty=0 near=0 almost=0 full=0 waddr=3 raddr=0
+FIFO2 w4 empty=0 near=0 almost=0 full=0 waddr=4 raddr=0
+FIFO2 w5 empty=0 near=0 almost=0 full=0 waddr=5 raddr=0
+FIFO2 w6 empty=0 near=0 almost=0 full=0 waddr=6 raddr=0
+FIFO2 w7 empty=0 near=0 almost=0 full=0 waddr=7 raddr=0
+FIFO2 w8 empty=0 near=0 almost=0 full=0 waddr=8 raddr=0
+FIFO2 w9 empty=0 near=0 almost=0 full=0 waddr=9 raddr=0
+FIFO2 w10 empty=0 near=0 almost=0 full=0 waddr=10 raddr=0
+FIFO2 w11 empty=0 near=0 almost=0 full=0 waddr=11 raddr=0
+FIFO2 w12 empty=0 near=1 almost=0 full=0 waddr=12 raddr=0
+FIFO2 w13 empty=0 near=1 almost=0 full=0 waddr=13 raddr=0
+FIFO2 w14 empty=0 near=1 almost=0 full=0 waddr=14 raddr=0
+FIFO2 w15 empty=0 near=1 almost=0 full=0 waddr=15 raddr=0
+FIFO2 w16 empty=0 near=1 almost=1 full=1 waddr=0 raddr=0
+FIFO2 w17-ovf empty=0 near=1 almost=1 full=1 waddr=0 raddr=0
+FIFO2 r1 empty=0 near=1 almost=0 full=0 waddr=0 raddr=1
+FIFO2 r2 empty=0 near=1 almost=0 full=0 waddr=0 raddr=2
+FIFO2 r3 empty=0 near=1 almost=0 full=0 waddr=0 raddr=3
+FIFO2 r4 empty=0 near=1 almost=0 full=0 waddr=0 raddr=4
