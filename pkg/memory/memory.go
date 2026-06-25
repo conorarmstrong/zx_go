@@ -81,6 +81,7 @@ type Memory struct {
 	specialPaging bool
 	port7FFD      byte
 	port1FFD      byte
+	portDFFD      byte // $DFFD bits 3:0 = high RAM-bank extension for the $C000 slot
 
 	// ROM manager for handling multiple ROM types
 	romManager *roms.ROMManager
@@ -525,6 +526,54 @@ func (m *Memory) GetMMU(slot byte) byte {
 	return m.slotBank[slot]
 }
 
+// ResolvePage returns the physical 8K RAM page (0..) that a CPU read at addr
+// currently maps to through the MMU / classic paging, or -1 if addr maps to
+// ROM. It mirrors the bank resolution in Read (the NextReg-MMU override first,
+// else the classic 16K page map: RAM 16K bank N -> 8K pages 2N,2N+1; ROM ->
+// -1). Used by the FPGA paging golden suite to compare ours' bank decode to
+// the hardware. It does NOT model the divMMC / alt-ROM / config-mode / bootrom
+// overlays — those are separate layers above the core MMU.
+func (m *Memory) ResolvePage(addr uint16) int {
+	slot8k := int(addr >> 13)
+	if m.mmuOverride[slot8k] {
+		b := m.slotBank[slot8k]
+		if b == 0xFF {
+			return -1 // ROM half
+		}
+		return int(b)
+	}
+	slot16k := addr >> 14
+	rmap := m.memoryPageReadMap[slot16k]
+	if rmap >= 16 && slot16k == 0 {
+		return -1 // ROM (only ever mapped in the $0000-$3FFF slot)
+	}
+	return rmap*2 + slot8k&1
+}
+
+// SetDFFD applies a write to port $DFFD, the Spectrum Next high RAM-bank
+// extension. Bits 3:0 are the most-significant bits of the $C000-slot RAM bank
+// selected by $7FFD (zxnext.vhd: port_7ffd_bank = port_dffd_reg(3:0) &
+// port_7ffd_reg(2:0)); like a $7FFD write it re-maps the $C000 16K slot
+// (MMU6/7) to the combined 7-bit bank. portDFFD is 0 by default so classic
+// machines are unaffected. (Was previously unmodelled — see project memory.)
+func (m *Memory) SetDFFD(val byte) {
+	if !m.PagingEnabled || m.PagingFrozen {
+		m.portDFFD = val & 0x0F
+		return
+	}
+	m.portDFFD = val & 0x0F
+	if m.specialPaging {
+		return // special paging owns all four slots
+	}
+	ramPage := int(m.portDFFD)<<3 | int(m.port7FFD&0x07)
+	old := m.memoryPageReadMap[3]
+	m.memoryPageReadMap[3] = ramPage
+	m.memoryPageWriteMap[3] = ramPage
+	if ramPage != old {
+		m.syncMMUFromPage(3)
+	}
+}
+
 // IsMMUOverridden reports whether the given 8K slot was last
 // written through the MMU rather than through classic paging.
 // Exposed mainly for tests; production callers should not care.
@@ -551,7 +600,10 @@ func (m *Memory) syncMMUFromPage(page16k int) {
 	s := page16k * 2
 	rmap := m.memoryPageReadMap[page16k]
 	var lo, hi byte
-	if rmap >= 16 {
+	// ROM only ever lives in the $0000-$3FFF slot (page16k 0). For the other
+	// three 16K slots the value is always a RAM bank — which, with the $DFFD
+	// high-bank extension, can be 16..127, so it must NOT be misread as ROM.
+	if rmap >= 16 && page16k == 0 {
 		lo, hi = 0xFF, 0xFF
 	} else {
 		lo = byte(rmap * 2)
@@ -1743,8 +1795,11 @@ func (m *Memory) PageMemory(val byte) {
 
 	// Only modify memory mapping when NOT in special paging mode.
 	if !m.specialPaging {
-		// Bits 0-2: RAM page to map into 0xC000-0xFFFF
-		ramPage := int(val & 0x07)
+		// Bits 0-2: RAM bank into 0xC000-0xFFFF, extended by the $DFFD high
+		// bits to a 7-bit bank (zxnext.vhd: port_7ffd_bank =
+		// port_dffd_reg(3:0) & port_7ffd_reg(2:0)). portDFFD defaults to 0,
+		// so classic 128K machines are unaffected.
+		ramPage := int(m.portDFFD)<<3 | int(val&0x07)
 		m.memoryPageReadMap[3] = ramPage
 		m.memoryPageWriteMap[3] = ramPage
 		// zxnext.vhd:4677-4681: on a port write the 8K MMU6/7 are

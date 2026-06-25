@@ -1438,6 +1438,14 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		// selects are 0x00-0x0F, so there is no overlap. (NextReg 0x06 does
 		// NOT select the chip.)
 		u.nextAY.SelectChip(0xFF - val)
+	} else if u.mem.GetCurrentModel() == roms.ModelNext && (addr&0xF002) == 0xD000 {
+		// Port 0xDFFD (Spectrum Next high RAM-bank extension): bits 3:0 are the
+		// MSBs of the $C000-slot RAM bank. Decoded BEFORE the AY register-select
+		// port 0xFFFD, which shares the (addr&0xC002)==0xC000 decode — the Next
+		// gives 0xDFFD precedence over AY (ports.txt 0xdffd). Previously this
+		// fell through to the AY register select and the high-bank bits were
+		// lost (RAM banks >= 8 unreachable via the classic $C000 slot).
+		u.mem.SetDFFD(val)
 	} else if chip := u.activeAY(); chip != nil && (addr&0xC002) == 0xC000 {
 		// AY-3-8912 register select: port 0xFFFD on 128K+ models.
 		// Decoded as A15=1, A14=1, A1=0.
