@@ -255,6 +255,25 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			}
 			return b
 		}
+		type e9bctx struct {
+			frame      int
+			b          byte
+			hl, de, bc uint16
+		}
+		var e9bHits []e9bctx
+		emu.cpu.AddPreFetchHook("e9b", func(pc uint16) {
+			// $0E9B computes the SPRITE AT cache address FROM register B. MAME's
+			// game runs it with B=$00; capture ours' B to compare.
+			if pc == 0x0E9B && len(e9bHits) < 40 {
+				e9bHits = append(e9bHits, e9bctx{curFrame, byte(emu.cpu.BC() >> 8), emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC()})
+			}
+		})
+		defer func() {
+			t.Logf("=== ours' $0E9B (cache-addr-from-B) hits in the game: %d (MAME game had B=$00) ===", len(e9bHits))
+			for _, h := range e9bHits {
+				t.Logf("  $0E9B @f%d B=$%02X HL=$%04X DE=$%04X BC=$%04X", h.frame, h.b, h.hl, h.de, h.bc)
+			}
+		}()
 		emu.cpu.AddPreFetchHook("errtrap", func(pc uint16) {
 			pushRing(pc)
 			if pc == trapPC && curFrame >= 20 && len(raises) < 8 {
