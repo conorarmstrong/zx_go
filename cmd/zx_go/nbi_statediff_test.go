@@ -333,6 +333,28 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 				lastNR = nr
 			}
 		})
+		// Watch writes into bank-8 cache bytes for alien leader 21 (uvec $04DF +
+		// 21*16 = $062F..$0632): +0=X-low +2=X8/flags. Capture PC + value to find
+		// who sets X[8] (the +256 that makes SPRITE AT(21,0)=288 not 32).
+		type cwr struct {
+			frame int
+			pc    uint16
+			addr  uint16
+			val   byte
+		}
+		var cacheWr []cwr
+		emu.mem.SetRAMWriteHook(func(bank int, addr uint16, val byte) {
+			if bank == 8 && addr >= 0x062F && addr <= 0x0632 && len(cacheWr) < 40 {
+				cacheWr = append(cacheWr, cwr{curFrame, emu.cpu.PC, addr, val})
+			}
+		})
+		defer emu.mem.SetRAMWriteHook(nil)
+		defer func() {
+			t.Logf("=== bank-8 writes to leader-21 cache ($062F..$0632) ===")
+			for _, w := range cacheWr {
+				t.Logf("  @f%d PC=$%04X bank8[$%04X]=$%02X (%d)", w.frame, w.pc, w.addr, w.val, w.val)
+			}
+		}()
 		// Optional: force SEED ($5C76/77) + FRAMES ($5C78-7A) to a fixed value
 		// at frame 1, to test whether the throw is seed/RNG-dependent (changes)
 		// or deterministic-structural (unchanged). ZXFX_SEED=<decimal>.
@@ -346,13 +368,54 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			curFrame = i
 			step()
 			if i <= 30 {
-				t.Logf("  @f%d SEED=%d ($%02X%02X) FRAMES=$%02X%02X%02X", i,
+				dffe, _ := emu.ula.ReadPort(0xDFFE)  // P/O keys (NBI left/right)
+				p7ffe, _ := emu.ula.ReadPort(0x7FFE) // Space (NBI fire)
+				kemp, _ := emu.ula.ReadPort(0x001F)  // Kempston joystick
+				t.Logf("  @f%d SEED=%d ($%02X%02X) FRAMES=$%02X%02X%02X  IN$DFFE=%02X IN$7FFE=%02X IN$1F=%02X", i,
 					int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
 					emu.mem.Read(0x5C77), emu.mem.Read(0x5C76),
-					emu.mem.Read(0x5C7A), emu.mem.Read(0x5C79), emu.mem.Read(0x5C78))
+					emu.mem.Read(0x5C7A), emu.mem.Read(0x5C79), emu.mem.Read(0x5C78),
+					dffe, p7ffe, kemp)
 			}
 			if i == 23 && varsBuf == nil {
 				grabVars() // program context active (banking maps the vars)
+			}
+			if i >= 18 && i <= 27 {
+				p16, p17 := emu.mem.RAM8KPage(16), emu.mem.RAM8KPage(17)
+				ram8 := func(off int) byte {
+					if off < 0x2000 {
+						return p16[off&0x1FFF]
+					}
+					return p17[(off-0x2000)&0x1FFF]
+				}
+				uvec := int(ram8(0x1FFE)) | int(ram8(0x1FFF))<<8
+				catX := func(n int) int { // SPRITE AT(n,0): 9-bit X from cache
+					b0 := int(ram8(uvec + n*16 + 0))
+					b2 := int(ram8(uvec + n*16 + 2))
+					return b0 | (b2&1)<<8
+				}
+				var sb strings.Builder
+				for n := 0; n <= 35; n++ {
+					fmt.Fprintf(&sb, " %d:%d", n, catX(n))
+				}
+				t.Logf("  @f%d CACHE SPRITE-AT(n,0) uvec=$%04X:%s", i, uvec, sb.String())
+			}
+			if (i == 23 || i == 24 || i == 25) && emu.nextSprites != nil {
+				var sb strings.Builder
+				maxX := int16(-9999)
+				for s := 0; s < 80; s++ {
+					a := emu.nextSprites.Sprite(s)
+					if a == nil {
+						continue
+					}
+					if a.X > maxX {
+						maxX = a.X
+					}
+					if s < 48 {
+						fmt.Fprintf(&sb, " %d:%d", s, a.X)
+					}
+				}
+				t.Logf("  @f%d sprite X (0..47):%s  [maxX over 0..79 = %d]", i, sb.String(), maxX)
 			}
 			if seedOn && i == 23 {
 				emu.mem.Write(0x5C76, byte(forceSeed))
