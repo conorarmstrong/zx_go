@@ -268,7 +268,9 @@ func TestStepIn(t *testing.T) {
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
 	d.HandlePortWrite(portFDCCmdStatus, 0x00) // Restore
-	d.HandlePortWrite(portFDCCmdStatus, 0x40)
+	// Step-In with the update flag (u=1, bit 4) so the Track Register tracks the
+	// head — the WD1772 leaves the register unchanged when u=0.
+	d.HandlePortWrite(portFDCCmdStatus, 0x50)
 	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 1 {
 		t.Errorf("track = %d", track)
@@ -279,8 +281,11 @@ func TestStepOut(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
 	d, _ := NewDisciple(dir, mem)
-	d.HandlePortWrite(portFDCTrack, 5)
-	d.HandlePortWrite(portFDCCmdStatus, 0x60)
+	// Seek to track 5 so head and Track Register agree, then Step-Out with the
+	// update flag (u=1) so the Track Register follows the head down to 4.
+	d.HandlePortWrite(portFDCData, 5)
+	d.HandlePortWrite(portFDCCmdStatus, 0x10) // Seek track 5
+	d.HandlePortWrite(portFDCCmdStatus, 0x70) // Step-Out, u=1
 	track, _ := d.HandlePortRead(portFDCTrack)
 	if track != 4 {
 		t.Errorf("track = %d", track)
@@ -645,16 +650,18 @@ func TestDisciple_StepInOut(t *testing.T) {
 	d := newTestDiscipleWithDisk(t)
 	d.HandlePortWrite(portFDCData, 0)
 	d.HandlePortWrite(portFDCCmdStatus, 0x10) // seek track 0
-	d.HandlePortWrite(portFDCCmdStatus, 0x40) // Step-In → track 1
+	// Use the update flag (u=1, bit 4) so the Track Register follows the head;
+	// the WD1772 only updates the register when u=1.
+	d.HandlePortWrite(portFDCCmdStatus, 0x50) // Step-In u=1 → track 1
 	if d.trackReg != 1 {
 		t.Errorf("after Step-In trackReg=%d, want 1", d.trackReg)
 	}
-	d.HandlePortWrite(portFDCCmdStatus, 0x60) // Step-Out → track 0
+	d.HandlePortWrite(portFDCCmdStatus, 0x70) // Step-Out u=1 → track 0
 	if d.trackReg != 0 {
 		t.Errorf("after Step-Out trackReg=%d, want 0", d.trackReg)
 	}
-	// Step-Out at track 0 clamps (no underflow).
-	d.HandlePortWrite(portFDCCmdStatus, 0x60)
+	// Step-Out at track 0 clamps (no underflow); head and register stay at 0.
+	d.HandlePortWrite(portFDCCmdStatus, 0x70)
 	if d.trackReg != 0 {
 		t.Errorf("Step-Out at track0 should clamp, got %d", d.trackReg)
 	}
