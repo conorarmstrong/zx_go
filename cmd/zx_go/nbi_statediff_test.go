@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -46,6 +48,20 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		t.Skipf("Next ROMs not installed: %v", err)
 	}
 	emu.reboot()
+
+	// Trace every NR$8C (Alt-ROM control) write across boot+load+game to find
+	// where ours arms the Alt-ROM read redirect ($80) that MAME never sets
+	// (MAME's NR$8C stays $00 during NBI). PC isn't available here, so log the
+	// value sequence; a single $80 with no following $00 is the leak.
+	if os.Getenv("ZXFX_TRACE8C") != "" {
+		orig8C := emu.nextRegs.OnWriteFn(0x8C)
+		emu.nextRegs.SetOnWrite(0x8C, func(d *nextregs.Dispatcher, val byte) {
+			if orig8C != nil {
+				orig8C(d, val)
+			}
+			t.Logf("  NR$8C <- $%02X (PC=$%04X)", val, emu.cpu.PC)
+		})
+	}
 
 	step := func() {
 		emu.cpu.ExecuteFrame(frameTStatesForModel(roms.ModelNext))
@@ -275,23 +291,42 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			a, f           byte
 		}
 		var stepTrace []stepRec
+		var div925 string
 		capturing := false
 		// Anchor at the RND range-reduction helper $2A83 (reached during every
 		// % RND call); capture the next N instructions with AF/BC/DE/HL so we can
 		// diff ours' RND computation against MAME's $2A83 trace line-by-line. Arm
 		// in the fire frame so we catch the throwing RND.
 		emu.cpu.AddPreFetchHook("e9b", func(pc uint16) {
-			if pc == 0x2A83 && curFrame >= 23 && !capturing && len(stepTrace) == 0 {
+			// Anchor when the cache routine starts handling leader 21 (X-low write
+			// $0920 with HL in $262C..$2636 = the leader-21 16-byte struct in slot 1).
+			if pc == 0x0920 && emu.cpu.HL() >= 0x262C && emu.cpu.HL() <= 0x2636 &&
+				!capturing && len(stepTrace) == 0 {
 				capturing = true
 			}
-			if capturing && len(stepTrace) < 60 {
+			if capturing && len(stepTrace) < 90 {
 				stepTrace = append(stepTrace, stepRec{pc, emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC(), emu.cpu.A, emu.cpu.F})
 			} else if capturing {
 				capturing = false
 			}
+			if pc == 0x0925 && emu.cpu.HL() == 0x2631 && div925 == "" {
+				p16 := emu.mem.RAM8KPage(16)
+				nr8c := emu.nextRegs.ReadReg(0x8C)
+				dmInfo := "no-divmmc"
+				if pg, ok := emu.ula.NextDivMMC().(*divmmc.Pager); ok && pg != nil {
+					hv, hok := pg.HandleRead(0x2631)
+					dmInfo = fmt.Sprintf("divMMC pagedIn=%v mapram=%v HandleRead($2631)=($%02X,%v)",
+						pg.IsPagedIn(), pg.MAPRAM(), hv, hok)
+				}
+				div925 = fmt.Sprintf("slot1 bank=%d  Read($2631)=$%02X  bank8[$0631]=$%02X  NR$8C=$%02X  %s",
+					emu.mem.GetMMU(1), emu.mem.Read(0x2631), p16[0x0631], nr8c, dmInfo)
+			}
 		})
 		defer func() {
-			t.Logf("=== ours' single-step from $2A83 (RND) — diff vs MAME ===")
+			if div925 != "" {
+				t.Logf("  DIVERGENCE $0925: %s", div925)
+			}
+			t.Logf("=== ours' single-step from cache-routine $0920 (leader 21) ===")
 			for i, s := range stepTrace {
 				t.Logf("  [%2d] PC=$%04X af=%02X%02X bc=%04X de=%04X hl=%04X", i, s.pc, s.a, s.f, s.bc, s.de, s.hl)
 			}
@@ -353,7 +388,7 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 				if emu.cpu.PC == 0x0962 && disasm962 == nil {
 					disasm962 = make([]byte, 40)
 					for i := range disasm962 {
-						disasm962[i] = emu.mem.Read(0x0948 + uint16(i)) // window around $0962
+						disasm962[i] = emu.mem.Read(0x0920 + uint16(i)) // window $0920..$0947
 					}
 				}
 			}
@@ -366,7 +401,7 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 					w.frame, w.pc, w.addr, w.val, w.val, w.a, w.bc, w.de, w.hl, w.ix, w.iy)
 			}
 			if disasm962 != nil {
-				t.Logf("  code bytes $0948..$096F: % X", disasm962)
+				t.Logf("  code bytes $0920..$0947: % X", disasm962)
 			}
 		}()
 		// Optional: force SEED ($5C76/77) + FRAMES ($5C78-7A) to a fixed value
@@ -382,14 +417,10 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			curFrame = i
 			step()
 			if i <= 30 {
-				dffe, _ := emu.ula.ReadPort(0xDFFE)  // P/O keys (NBI left/right)
-				p7ffe, _ := emu.ula.ReadPort(0x7FFE) // Space (NBI fire)
-				kemp, _ := emu.ula.ReadPort(0x001F)  // Kempston joystick
-				t.Logf("  @f%d SEED=%d ($%02X%02X) FRAMES=$%02X%02X%02X  IN$DFFE=%02X IN$7FFE=%02X IN$1F=%02X", i,
-					int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
-					emu.mem.Read(0x5C77), emu.mem.Read(0x5C76),
-					emu.mem.Read(0x5C7A), emu.mem.Read(0x5C79), emu.mem.Read(0x5C78),
-					dffe, p7ffe, kemp)
+				p16 := emu.mem.RAM8KPage(16)
+				t.Logf("  @f%d SEED=%d  bank8[$0631](leader21 byte2)=$%02X bank8[$04DF](spr0 X)=$%02X",
+					i, int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
+					p16[0x0631], p16[0x04DF])
 			}
 			if i == 23 && varsBuf == nil {
 				grabVars() // program context active (banking maps the vars)

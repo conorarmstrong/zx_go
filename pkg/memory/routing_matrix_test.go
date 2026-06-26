@@ -177,9 +177,10 @@ func TestRouting_DivMMC_Read_BeatsConfigAndMMU(t *testing.T) {
 	}
 }
 
-// TestRouting_AltROMRead_BeatsConfigAndMMU verifies altROM read
-// redirect (NR$8C bit 7=1, 6=0) beats config-mode and MMU8 for reads.
-func TestRouting_AltROMRead_BeatsConfigAndMMU(t *testing.T) {
+// TestRouting_AltROMRead_BeatsConfig verifies the altROM read redirect
+// (NR$8C bit 7=1, 6=0) beats config-mode for reads of a ROM-region slot
+// (no MMU override) — altROM is a ROM-region overlay above config-mode.
+func TestRouting_AltROMRead_BeatsConfig(t *testing.T) {
 	mem := routingTestSetup(t)
 	// altROM read redirect = NR$8C = 1000_0000 (bit 7=1, bit 6=0).
 	// bits 5:4 control which alt bank; default 0 selects altROM0
@@ -187,10 +188,35 @@ func TestRouting_AltROMRead_BeatsConfigAndMMU(t *testing.T) {
 	mem.SetAltROMReg(0x80)
 	mem.EnterConfigMode()
 	mem.SetConfigModeRAMPage(0x10) // would route to m.ram[0]
-	mem.SetMMU(0, 0x0A)            // would override slot 0 to bank 5
+	// Slot 0 left as ROM (no MMU override) → altROM redirect applies.
 
 	if got := mem.Read(0x0000); got != 0xA2 {
-		t.Errorf("read at $0000 with alt-ROM active: $%02X, want $A2 (altROM0)", got)
+		t.Errorf("read at $0000 with alt-ROM active (slot=ROM): $%02X, want $A2 (altROM0)", got)
+	}
+}
+
+// TestRouting_MMURAM_BeatsAltROMRead locks in that an MMU8-mapped RAM bank
+// at $0000-$3FFF outranks the Alt-ROM READ redirect. On the FPGA
+// sram_altrom_en is gated by sram_pre_override(slot) (zxnext.vhd:3037-3043 /
+// 3138), which is 0 once the slot maps a real RAM bank — the same term
+// TestDivMMCRom3GateSuppressedByMMURAM verifies. This is the NextBASIC-
+// Invaders 590 fix: NextZXOS reads its bank-8 sprite-attribute cache via
+// NR$51=16 while the reveal ISR ($007x) has the Alt-ROM read redirect armed;
+// the read must serve the RAM bank (the cache), not Alt-ROM bytes (whose
+// stray X[8] made the missile X out of range -> "Integer out of range" 590).
+func TestRouting_MMURAM_BeatsAltROMRead(t *testing.T) {
+	mem := routingTestSetup(t)
+	mem.SetAltROMReg(0x80) // Alt-ROM read redirect armed (bit7=1, bit6=0)
+	mem.SetMMU(0, 0x0A)    // map RAM bank 5 into slot 0 ($0000-$1FFF)
+	mem.ram[5][0] = 0xA6   // sentinel distinct from altROM0 ($A2)
+
+	if got := mem.Read(0x0000); got != 0xA6 {
+		t.Errorf("read at $0000 with MMU RAM bank 5 + Alt-ROM read redirect: $%02X, want $A6 (RAM bank beats altROM; sram_pre_override)", got)
+	}
+	// With the slot returned to ROM the Alt-ROM redirect serves the read again.
+	mem.SetMMU(0, 0xFF)
+	if got := mem.Read(0x0000); got != 0xA2 {
+		t.Errorf("read at $0000 with slot=ROM: $%02X, want $A2 (altROM redirect applies when slot is ROM)", got)
 	}
 }
 

@@ -1233,14 +1233,28 @@ func (m *Memory) readValue(addr uint16) byte {
 			}
 			return m.mfRAM[addr&0x1FFF]
 		}
-		// Alt-ROM read redirect (NextReg $8C bit 7 set, bit 6
-		// clear): $0000-$3FFF reads come from the alt-rom 16K
-		// bank instead of the normal ROM. Below the divMMC overlay
-		// (zxnext.vhd mux order, the development log), above config-mode
-		// and the classic ROM dispatch.
+		// Alt-ROM read redirect (NextReg $8C bit 7 set, bit 6 clear):
+		// $0000-$3FFF reads come from the alt-rom 16K bank instead of the
+		// normal ROM — UNLESS NextReg $50-57 has mapped a real RAM bank
+		// (slotBank != 0xFF) into this 8K slot. zxnext.vhd gates sram_altrom_en
+		// on sram_pre_override(slot) (lines 3037-3043 / 3138), which is 0 once
+		// the slot maps RAM, so an MMU-mapped RAM bank outranks the redirect —
+		// the same sram_pre_override term TestDivMMCRom3GateSuppressedByMMURAM
+		// already locks in. Without this skip, NextZXOS's SPRITE AT read of its
+		// bank-8 sprite-attribute cache (mapped via NR$51=16) was shadowed by
+		// the redirect that the reveal ISR ($007x: NEXTREG $8C,$80) leaves
+		// armed while the sprite routine runs; the read returned Alt-ROM bytes
+		// whose stray bit 8 (X[8]) pushed the alien missile X past 319 ->
+		// "Integer out of range" 590 in NextBASIC Invaders. The WRITE path
+		// already lands in the MMU RAM bank (the write redirect needs NR$8C bit
+		// 6), so the read must match it. Below the divMMC overlay (zxnext.vhd
+		// mux order), above config-mode and the classic ROM dispatch.
 		if addr < 0x4000 && m.altROMRedirectsReads() {
-			bank, _ := m.altROMSelect()
-			return m.altROMBuffer(bank)[addr]
+			slot8k := addr >> 13
+			if !m.mmuOverride[slot8k] || m.slotBank[slot8k] == 0xFF {
+				bank, _ := m.altROMSelect()
+				return m.altROMBuffer(bank)[addr]
+			}
 		}
 		// Config-mode RAM-page window (NextReg $03 bits 2-0 = 0).
 		// When config mode is active and the FPGA bootrom isn't
