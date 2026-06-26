@@ -109,7 +109,18 @@ type Bank struct {
 	// nextRegs.Reset's Phase 1 zero-pass through NR$44.
 	pending9 byte
 	have9    bool
+
+	// autoIncDisable mirrors NextReg $43 bit 7 (nr_43_palette_autoinc_disable,
+	// zxnext.vhd:5389). When set, an NR$41/$44 palette write does NOT advance
+	// the index (zxnext.vhd:5379-5381 / 5399-5401 gate the increment on this
+	// bit) — the guest writes the same entry repeatedly. Ours previously always
+	// incremented, ignoring the bit.
+	autoIncDisable bool
 }
+
+// SetAutoIncDisable sets the NR$43 bit-7 palette auto-increment-disable latch.
+// When true, Write8/Write9 leave the index unchanged after a write.
+func (b *Bank) SetAutoIncDisable(on bool) { b.autoIncDisable = on }
 
 // Layer identifies one of the four NextReg-palette layers.
 type Layer int
@@ -229,7 +240,9 @@ func (b *Bank) Write8(val byte) {
 		v |= 1
 	}
 	b.palettes[b.selected].Set(b.index, v)
-	b.index++
+	if !b.autoIncDisable {
+		b.index++
+	}
 }
 
 // Read8 returns the NextReg $41 read-back: the 8 most-significant bits
@@ -265,7 +278,9 @@ func (b *Bank) Write9(hi, lo byte) {
 	b.palettes[b.selected].Set(b.index, v)
 	// lo bits 7:6 carry the 2-bit priority (NR$44 protocol, zxnext.vhd:4920).
 	b.palettes[b.selected].SetPriority(b.index, (lo>>6)&0x03)
-	b.index++
+	if !b.autoIncDisable {
+		b.index++
+	}
 }
 
 // WriteNR44 implements the NextReg 0x44 two-byte protocol against

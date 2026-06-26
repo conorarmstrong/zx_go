@@ -815,6 +815,9 @@ func WirePalette(d *nextregs.Dispatcher, b *palette.Bank) {
 			byte(palette.PaletteTilemapSecond),
 		}
 		b.Select(wselToZeus[wsel])
+		// bit 7 = palette auto-increment disable (zxnext.vhd:5389) — when set,
+		// NR$41/$44 writes do not advance the index.
+		b.SetAutoIncDisable(val&0x80 != 0)
 		b.SetActive(palette.LayerULA, (val>>1)&1)
 		b.SetActive(palette.LayerLayer2, (val>>2)&1)
 		b.SetActive(palette.LayerSprites, (val>>3)&1)

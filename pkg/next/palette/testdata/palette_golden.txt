@@ -1,0 +1,26 @@
+# FPGA palette golden (palette_extract from zxnext.vhd 4918-4920 + 5374-5402 under GHDL).
+OP reg=43 dat=00 we=0 tgt=0 idx=00 val=000 prio=0 nextidx=00
+OP reg=40 dat=00 we=0 tgt=0 idx=00 val=000 prio=0 nextidx=00
+; nr41-autoinc
+OP reg=41 dat=00 we=1 tgt=0 idx=00 val=000 prio=0 nextidx=01
+OP reg=41 dat=01 we=1 tgt=0 idx=01 val=003 prio=0 nextidx=02
+OP reg=41 dat=02 we=1 tgt=0 idx=02 val=005 prio=0 nextidx=03
+OP reg=41 dat=A5 we=1 tgt=0 idx=03 val=14B prio=0 nextidx=04
+OP reg=41 dat=FC we=1 tgt=0 idx=04 val=1F8 prio=0 nextidx=05
+; nr44-9bit
+OP reg=40 dat=10 we=0 tgt=0 idx=04 val=1F8 prio=0 nextidx=10
+OP reg=44 dat=C3 we=0 tgt=0 idx=04 val=1F8 prio=0 nextidx=10
+OP reg=44 dat=01 we=1 tgt=0 idx=10 val=187 prio=0 nextidx=11
+OP reg=44 dat=5A we=0 tgt=0 idx=10 val=187 prio=0 nextidx=11
+OP reg=44 dat=C0 we=1 tgt=0 idx=11 val=0B4 prio=3 nextidx=12
+; nr43-autoinc-disable
+OP reg=43 dat=80 we=0 tgt=0 idx=11 val=0B4 prio=3 nextidx=12
+OP reg=40 dat=20 we=0 tgt=0 idx=11 val=0B4 prio=3 nextidx=20
+OP reg=41 dat=11 we=1 tgt=0 idx=20 val=023 prio=0 nextidx=20
+OP reg=41 dat=22 we=1 tgt=0 idx=20 val=045 prio=0 nextidx=20
+OP reg=41 dat=33 we=1 tgt=0 idx=20 val=067 prio=0 nextidx=20
+; wsel5
+OP reg=43 dat=50 we=0 tgt=0 idx=20 val=067 prio=0 nextidx=20
+OP reg=40 dat=02 we=0 tgt=0 idx=20 val=067 prio=0 nextidx=02
+OP reg=41 dat=7E we=1 tgt=5 idx=02 val=0FD prio=0 nextidx=03
+OP reg=41 dat=81 we=1 tgt=5 idx=03 val=103 prio=0 nextidx=04
