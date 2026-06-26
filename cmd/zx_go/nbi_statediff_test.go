@@ -261,13 +261,35 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			hl, de, bc uint16
 		}
 		var e9bHits []e9bctx
+		// Single-step trace: starting at the FIRST $0E9B with B=$00 (the shared
+		// anchor MAME also reaches), record the next N instructions (PC + HL +
+		// regs) so we can diff against MAME's single-step from the same anchor.
+		type stepRec struct {
+			pc, hl, de, bc uint16
+			a              byte
+		}
+		var stepTrace []stepRec
+		capturing := false
 		emu.cpu.AddPreFetchHook("e9b", func(pc uint16) {
-			// $0E9B computes the SPRITE AT cache address FROM register B. MAME's
-			// game runs it with B=$00; capture ours' B to compare.
 			if pc == 0x0E9B && len(e9bHits) < 40 {
 				e9bHits = append(e9bHits, e9bctx{curFrame, byte(emu.cpu.BC() >> 8), emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC()})
 			}
+			// Arm on the first gameplay $0E9B with B=$00 (matches MAME's anchor).
+			if pc == 0x0E9B && byte(emu.cpu.BC()>>8) == 0x00 && curFrame >= 20 && !capturing && len(stepTrace) == 0 {
+				capturing = true
+			}
+			if capturing && len(stepTrace) < 80 {
+				stepTrace = append(stepTrace, stepRec{pc, emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC(), emu.cpu.A})
+			} else if capturing {
+				capturing = false
+			}
 		})
+		defer func() {
+			t.Logf("=== ours' single-step from $0E9B(B=$00) — diff vs MAME ===")
+			for i, s := range stepTrace {
+				t.Logf("  [%2d] PC=$%04X HL=$%04X DE=$%04X BC=$%04X A=$%02X", i, s.pc, s.hl, s.de, s.bc, s.a)
+			}
+		}()
 		defer func() {
 			t.Logf("=== ours' $0E9B (cache-addr-from-B) hits in the game: %d (MAME game had B=$00) ===", len(e9bHits))
 			for _, h := range e9bHits {
