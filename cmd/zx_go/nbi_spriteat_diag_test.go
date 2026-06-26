@@ -42,6 +42,36 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	}
 	emu.reboot()
 
+	// Trace EVERY NR$52 (MMU slot 2) write from boot — the SPRITE AT routine
+	// reads the cache through a hardcoded slot-2 base ($40xx in $0E9B), so slot
+	// 2 must hold the bank-8 cache; ours reads bank 5. This shows when slot 2 is
+	// set to bank 8 (16) and where it reverts to the default 5 (10).
+	type nr52e struct {
+		val, applied byte
+		pc           uint16
+	}
+	var nr52log []nr52e
+	nr52on := false
+	orig52 := emu.nextRegs.OnWriteFn(0x52)
+	emu.nextRegs.SetOnWrite(0x52, func(d *nextregs.Dispatcher, val byte) {
+		if orig52 != nil {
+			orig52(d, val)
+		}
+		if nr52on && len(nr52log) < 120 {
+			nr52log = append(nr52log, nr52e{val, emu.mem.GetMMU(2), emu.cpu.PC})
+		}
+	})
+	defer func() {
+		t.Logf("=== ALL NR$52 (slot 2) writes (16=bank8 cache, 10=default bank5) ===")
+		for _, w := range nr52log {
+			mark := ""
+			if w.val == 16 {
+				mark = "   <== maps bank 8 (cache) into slot 2"
+			}
+			t.Logf("  NR$52 <- %d (slot2 now=%d) @PC~$%04X%s", w.val, w.applied, w.pc, mark)
+		}
+	}()
+
 	step := func() {
 		emu.cpu.ExecuteFrame(frameTStatesForModel(roms.ModelNext))
 		if emu.peripherals != nil {
@@ -133,6 +163,8 @@ func TestNBISpriteAtReadback(t *testing.T) {
 			t.Logf("  WR bank=%d off=$%04X val=%d @PC~$%04X (NR$52=%d)%s", w.bank, w.off, w.val, w.pc, w.mmu2, mark)
 		}
 	}()
+
+	nr52on = true // capture NR$52 from the SPRITE placement onward
 
 	// Sentinel (30010=42) proves the line ran; static sprite 0 at X=200,Y=100.
 	// SPRITE MOVE flushes the NextZXOS RAM sprite-attribute cache that SPRITE
@@ -261,7 +293,23 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	}
 	ringPC := make([]uint16, 0, 80)
 	var e5eTrail []uint16
+	var e9b struct {
+		captured       bool
+		code           [24]byte
+		hl, de, bc, sp uint16
+		mmu            [8]byte
+	}
 	emu.cpu.AddPreFetchHook("e5e", func(pc uint16) {
+		if tracing && pc == 0x0E9B && !e9b.captured {
+			e9b.captured = true
+			for i := range e9b.code {
+				e9b.code[i] = emu.mem.Read(0x0E9B + uint16(i))
+			}
+			e9b.hl, e9b.de, e9b.bc, e9b.sp = emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC(), emu.cpu.SP
+			for s := byte(0); s < 8; s++ {
+				e9b.mmu[s] = emu.mem.GetMMU(s)
+			}
+		}
 		if tracing {
 			if len(ringPC) < 80 {
 				ringPC = append(ringPC, pc)
@@ -328,4 +376,6 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	t.Logf("AT PC=$0E5E (live): code[$0E5A..]=% X HL=$%04X DE=$%04X slot0-page=%d MMU=%v",
 		e5e.code, e5e.hl, e5e.de, e5e.slot0, e5e.mmu)
 	t.Logf("PC trail INTO the $0E5C cache LDIR: %X", e5eTrail)
+	t.Logf("AT $0E9B (cache-banking setup): code=% X HL=$%04X DE=$%04X BC=$%04X SP=$%04X MMU=%v",
+		e9b.code, e9b.hl, e9b.de, e9b.bc, e9b.sp, e9b.mmu)
 }
