@@ -413,6 +413,15 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 					fmt.Fprintf(&sb, " %d:%d", n, catX(n))
 				}
 				t.Logf("  @f%d CACHE SPRITE-AT(n,0) uvec=$%04X:%s", i, uvec, sb.String())
+				if i == 24 {
+					for _, n := range []int{0, 7, 14, 21, 28} {
+						var st strings.Builder
+						for b := 0; b < 16; b++ {
+							fmt.Fprintf(&st, " %02X", ram8(uvec+n*16+b))
+						}
+						t.Logf("  STRUCT sprite %d:%s", n, st.String())
+					}
+				}
 			}
 			if (i == 23 || i == 24 || i == 25) && emu.nextSprites != nil {
 				var sb strings.Builder
