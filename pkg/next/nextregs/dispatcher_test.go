@@ -54,6 +54,13 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		0x99: 0x01, // Pi GPIO output (zxnext.vhd:5071 nr_99_pi_gpio_o <= X"01")
 		0xB8: 0x83,
 		0xBB: 0xCD,
+		// NR$C4 = INT EN 0. nextreg.txt documents "soft reset = 0x81"
+		// (bit 7 = expansion-bus /INT enable, bit 0 = ULA interrupt enable;
+		// both default ON). NextZXOS/games read this back through $253B; a $00
+		// default mis-reports the interrupt-enable state. Surfaced by the
+		// post-load FX snapshot diff vs the FPGA-faithful oracle (ours=$00,
+		// oracle=$81). The WireInterruptEnable0 OnWrite masks to bits 7,1,0.
+		0xC4: 0x81,
 	}
 	for reg := 0; reg < 256; reg++ {
 		want, hasOverride := expectDefault[byte(reg)]
@@ -311,6 +318,7 @@ func TestResetRestoresDefaults(t *testing.T) {
 		0x99: 0x01, // Pi GPIO output (zxnext.vhd:5071)
 		0xB8: 0x83,
 		0xBB: 0xCD,
+		0xC4: 0x81, // INT EN 0 — nextreg.txt soft reset = 0x81
 	}
 	for reg := 0; reg < 256; reg++ {
 		want, has := expect[byte(reg)]

@@ -193,6 +193,14 @@ func applyResetDefaults(regs *[256]byte) {
 	// (the Pi accelerator port), but a read-back faithfulness fix.
 	regs[0x98] = 0xFF
 	regs[0x99] = 0x01
+	// NR$C4 = INT EN 0. nextreg.txt: "soft reset = 0x81" — bit 7 expansion-bus
+	// /INT enable, bit 0 ULA interrupt enable, both default ON (bit 1 line-int
+	// off). ours previously left it $00, mis-reporting the interrupt-enable
+	// state on read-back (surfaced by the post-load FX snapshot diff vs the
+	// FPGA-faithful oracle). WireInterruptEnable0's OnWrite masks to bits 7,1,0,
+	// so seeding $81 round-trips. Read-back faithfulness; the live frame
+	// interrupt is wired separately and already fires.
+	regs[0xC4] = 0x81
 }
 
 // Select latches the register number for subsequent reads and writes
