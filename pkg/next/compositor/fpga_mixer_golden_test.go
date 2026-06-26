@@ -19,7 +19,7 @@ func TestMixerMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	atoi := func(s string) int { n, _ := strconv.Atoi(s); return n }
 	hx := func(s string) uint16 { v, _ := strconv.ParseUint(s, 16, 16); return uint16(v) }

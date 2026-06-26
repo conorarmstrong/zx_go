@@ -130,6 +130,11 @@ func Mix(in MixerInputs) uint16 {
 	fb := uint16(in.Fallback)
 	out := fb<<1 | (fb>>1&1 | fb&1)
 
+	// ula_final wins over a sprite only when NOT in the border-with-tilemap-
+	// transparent-and-sprite-present case (zxnext.vhd LUS/USL/ULS guard):
+	// `not (ula_border and tm_transparent and not sprite_transparent)`.
+	ulaBorderSpriteMask := in.Border && tmTransparent && !spriteTransparent
+
 	switch in.Priority {
 	case 0: // SLU
 		switch {
@@ -166,7 +171,7 @@ func Mix(in MixerInputs) uint16 {
 		switch {
 		case !layer2Transparent:
 			out = layer2RGB
-		case !ulaFinalTransparent && !(in.Border && tmTransparent && !spriteTransparent):
+		case !ulaFinalTransparent && !ulaBorderSpriteMask:
 			out = ulaFinalRGB
 		case !spriteTransparent:
 			out = spriteRGB
@@ -175,7 +180,7 @@ func Mix(in MixerInputs) uint16 {
 		switch {
 		case layer2Priority:
 			out = layer2RGB
-		case !ulaFinalTransparent && !(in.Border && tmTransparent && !spriteTransparent):
+		case !ulaFinalTransparent && !ulaBorderSpriteMask:
 			out = ulaFinalRGB
 		case !spriteTransparent:
 			out = spriteRGB
@@ -186,7 +191,7 @@ func Mix(in MixerInputs) uint16 {
 		switch {
 		case layer2Priority:
 			out = layer2RGB
-		case !ulaFinalTransparent && !(in.Border && tmTransparent && !spriteTransparent):
+		case !ulaFinalTransparent && !ulaBorderSpriteMask:
 			out = ulaFinalRGB
 		case !layer2Transparent:
 			out = layer2RGB

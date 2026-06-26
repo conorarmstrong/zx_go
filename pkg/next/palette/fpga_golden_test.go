@@ -19,7 +19,7 @@ func TestPaletteMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// FPGA write_select (NR$43 bits 6:4) -> our Zeus palette-slot order
 	// (wire.go's wselToZeus).

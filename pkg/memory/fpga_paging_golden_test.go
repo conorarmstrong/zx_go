@@ -36,7 +36,7 @@ func TestPagingMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Skip("no paging golden (generate via _tools/paging-vhdl-test/)")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	newMem := func() *Memory {
 		m, err := New(mmuTestROMs(t), roms.ModelNext)

@@ -23,7 +23,7 @@ func TestZ80NMatchesCoreGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open golden: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h16 := func(s string) uint16 { v, _ := strconv.ParseUint(s, 16, 32); return uint16(v) }
 	fields := []string{"AF", "BC", "DE", "HL", "IX", "IY", "memHL", "memDE"}

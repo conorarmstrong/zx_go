@@ -39,7 +39,7 @@ func TestSPIMasterMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// mosiBitsMSBFirst is the byte→bit-stream contract the FPGA implements and
 	// our model assumes: the port byte is clocked out unchanged, MSB-first.

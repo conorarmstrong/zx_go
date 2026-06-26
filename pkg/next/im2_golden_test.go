@@ -20,7 +20,7 @@ func TestIM2DaisyChainMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	field := func(fields []string, key string) string {
 		for _, fld := range fields {

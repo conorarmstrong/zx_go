@@ -29,7 +29,7 @@ func loadLoResGolden(t *testing.T) []goldenVec {
 	if err != nil {
 		t.Fatalf("open golden: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var out []goldenVec
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

@@ -284,7 +284,7 @@ func (c *IM2DaisyChain) tailIEO(retiDecode bool) bool {
 	for i := range c.per {
 		switch c.per[i].state {
 		case im2S0:
-			prev = prev // ieo = iei
+			// ieo = iei: prev passes through unchanged
 		case im2REQ:
 			prev = prev && retiDecode
 		default:

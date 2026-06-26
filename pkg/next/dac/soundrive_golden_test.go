@@ -18,7 +18,7 @@ func TestSounDriveMatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	field := func(fl []string, k string) string {
 		for _, x := range fl {

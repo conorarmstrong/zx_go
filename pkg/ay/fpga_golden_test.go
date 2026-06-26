@@ -45,7 +45,7 @@ func TestYM2149MatchesFPGAGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// One continuously-running chip across all sequences (see the doc comment).
 	a := New()
