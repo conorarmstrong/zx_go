@@ -211,6 +211,12 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			atHL, atDE, calc, stkfp [12]byte
 		}
 		var raises []rgw
+		type seedRec struct {
+			frame    int
+			pc       uint16
+			old, new uint16
+		}
+		var seedLog []seedRec
 		// Read-ring: the last reads before the conversion. If ours pages the
 		// wrong bank for the a()/l() array element read, the garbage source
 		// shows here (bank + offset + value + PC at each read).
@@ -266,28 +272,28 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		// regs) so we can diff against MAME's single-step from the same anchor.
 		type stepRec struct {
 			pc, hl, de, bc uint16
-			a              byte
+			a, f           byte
 		}
 		var stepTrace []stepRec
 		capturing := false
+		// Anchor at the RND range-reduction helper $2A83 (reached during every
+		// % RND call); capture the next N instructions with AF/BC/DE/HL so we can
+		// diff ours' RND computation against MAME's $2A83 trace line-by-line. Arm
+		// in the fire frame so we catch the throwing RND.
 		emu.cpu.AddPreFetchHook("e9b", func(pc uint16) {
-			if pc == 0x0E9B && len(e9bHits) < 40 {
-				e9bHits = append(e9bHits, e9bctx{curFrame, byte(emu.cpu.BC() >> 8), emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC()})
-			}
-			// Arm on the first gameplay $0E9B with B=$00 (matches MAME's anchor).
-			if pc == 0x0E9B && byte(emu.cpu.BC()>>8) == 0x00 && curFrame >= 20 && !capturing && len(stepTrace) == 0 {
+			if pc == 0x2A83 && curFrame >= 23 && !capturing && len(stepTrace) == 0 {
 				capturing = true
 			}
-			if capturing && len(stepTrace) < 80 {
-				stepTrace = append(stepTrace, stepRec{pc, emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC(), emu.cpu.A})
+			if capturing && len(stepTrace) < 60 {
+				stepTrace = append(stepTrace, stepRec{pc, emu.cpu.HL(), emu.cpu.DE(), emu.cpu.BC(), emu.cpu.A, emu.cpu.F})
 			} else if capturing {
 				capturing = false
 			}
 		})
 		defer func() {
-			t.Logf("=== ours' single-step from $0E9B(B=$00) — diff vs MAME ===")
+			t.Logf("=== ours' single-step from $2A83 (RND) — diff vs MAME ===")
 			for i, s := range stepTrace {
-				t.Logf("  [%2d] PC=$%04X HL=$%04X DE=$%04X BC=$%04X A=$%02X", i, s.pc, s.hl, s.de, s.bc, s.a)
+				t.Logf("  [%2d] PC=$%04X af=%02X%02X bc=%04X de=%04X hl=%04X", i, s.pc, s.a, s.f, s.bc, s.de, s.hl)
 			}
 		}()
 		defer func() {
@@ -296,8 +302,15 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 				t.Logf("  $0E9B @f%d B=$%02X HL=$%04X DE=$%04X BC=$%04X", h.frame, h.b, h.hl, h.de, h.bc)
 			}
 		}()
+		var lastSeed uint16 = 0xFFFF
 		emu.cpu.AddPreFetchHook("errtrap", func(pc uint16) {
 			pushRing(pc)
+			if sd := uint16(emu.mem.Read(0x5C76)) | uint16(emu.mem.Read(0x5C77))<<8; sd != lastSeed {
+				if lastSeed != 0xFFFF && len(seedLog) < 64 {
+					seedLog = append(seedLog, seedRec{curFrame, pc, lastSeed, sd})
+				}
+				lastSeed = sd
+			}
 			if pc == trapPC && curFrame >= 20 && len(raises) < 8 {
 				sk := uint16(emu.mem.Read(0x5C65)) | uint16(emu.mem.Read(0x5C66))<<8
 				raises = append(raises, rgw{curFrame, pc, emu.cpu.A,
@@ -332,7 +345,7 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		for i := 0; i < gf; i++ {
 			curFrame = i
 			step()
-			if i == 2 || i == 5 || i == 10 {
+			if i <= 30 {
 				t.Logf("  @f%d SEED=%d ($%02X%02X) FRAMES=$%02X%02X%02X", i,
 					int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
 					emu.mem.Read(0x5C77), emu.mem.Read(0x5C76),
@@ -341,7 +354,7 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			if i == 23 && varsBuf == nil {
 				grabVars() // program context active (banking maps the vars)
 			}
-			if seedOn && i == 1 {
+			if seedOn && i == 23 {
 				emu.mem.Write(0x5C76, byte(forceSeed))
 				emu.mem.Write(0x5C77, byte(forceSeed>>8))
 			}
@@ -450,6 +463,10 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			if emu.mem.Read(uint16(a)) == 0x7B && emu.mem.Read(uint16(a+1)) == 0x01 {
 				t.Logf("  found 7B 01 (=379) @ logical $%04X bank=%d", a, emu.mem.GetMMU(byte(a>>13)))
 			}
+		}
+		t.Logf("=== SEED mutations (PC = the RND routine writing $5C76/77) ===")
+		for _, s := range seedLog {
+			t.Logf("  @f%d PC=$%04X SEED $%04X -> $%04X", s.frame, s.pc, s.old, s.new)
 		}
 		t.Logf("captured %d ERR_NR transitions, %d raise-site hits", len(events), len(raises))
 		for _, ev := range events {
