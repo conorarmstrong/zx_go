@@ -245,10 +245,27 @@ func (f *FDC) readAddress() {
 	f.statusReg = statusBusy | statusDRQ
 }
 
+// forceInterrupt implements the WD1793 Type IV command. Per the datasheet:
+// if a command is under execution the busy bit is reset and the remaining
+// status bits are left unchanged; if the controller is idle the busy bit is
+// reset and the status register is updated to reflect Type I status (head
+// loaded, Track 0, Not Ready). In both cases any in-flight data transfer is
+// aborted and INTRQ is raised.
 func (f *FDC) forceInterrupt(byte) {
+	busy := f.statusReg&statusBusy != 0
 	f.buf = nil
+	f.bufPos = 0
 	f.writing = false
-	f.statusReg &^= statusBusy | statusDRQ
+	f.commit = nil
+	if busy {
+		// Terminate the running command: clear Busy (and the data-request line
+		// that belonged to a Type II/III transfer); leave the rest unchanged.
+		f.statusReg &^= statusBusy | statusDRQ
+	} else {
+		// Idle: status now reflects the Type I command class.
+		f.cmdType1 = true
+		f.finishTypeI()
+	}
 	f.intrq = true
 }
 
