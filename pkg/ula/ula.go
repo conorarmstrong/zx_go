@@ -57,7 +57,13 @@ type ULA struct {
 	// ~600 KB image every frame in the GUI's 50 Hz render loop.
 	wideImg *image.RGBA
 	wideRow []byte
-	palette [16]color.RGBA
+	// nextFullImg is the 320×256 over-border frame for the Next: the standard
+	// 320×240 image plus the 8-px top/bottom strips of the sprite frame (Y 0-7
+	// and 248-255) that the classic 24-px border crops. Reused across frames.
+	// Built only when the Next sprite layer is active (NextBASIC Invaders parks
+	// its player ship at sprite Y=240, in the bottom over-border strip).
+	nextFullImg *image.RGBA
+	palette     [16]color.RGBA
 	// borderTracer, if non-nil, fires on every border-colour change
 	// caused by an even-port write. Used by the debugger to observe
 	// border modulation through any port that matches the ULA's
@@ -743,7 +749,53 @@ func (u *ULA) Render() *image.RGBA {
 		return u.renderTimexHiRes()
 	}
 
+	// Next over-border: the sprite frame is 320×256 (32-px top/bottom borders),
+	// but the classic frame is 320×240 (24-px). When the Next sprite layer is
+	// active, return the full 256-line frame so sprites in the top/bottom
+	// over-border strips (e.g. NBI's player ship at sprite Y=240) are visible
+	// instead of cropped. (Classic models have no compositor and are unaffected.)
+	if u.nextCompositor != nil && u.nextCompositor.HasActiveSprites() {
+		return u.renderNextFullHeight()
+	}
+
 	return u.img
+}
+
+// renderNextFullHeight returns the 320×256 over-border Next frame: the standard
+// 320×240 render copied into the centre (rows 8..247 = sprite frame Y 8..247)
+// plus the two 8-px strips the classic border crops — the top (frame Y 0..7)
+// and bottom (frame Y 248..255). Each strip is filled with the border colour
+// then has the over-border sprite pass run over it, so sprites parked in the
+// Next's extra border band render fully. In this 256-line image the row index
+// equals the sprite frame Y (bias 0), matching applyNextCompositor's y+8 map
+// for the copied middle.
+func (u *ULA) renderNextFullHeight() *image.RGBA {
+	const fullH = 256
+	const extra = (fullH - TotalHeight) / 2 // 8 px added top and bottom
+	if u.nextFullImg == nil {
+		u.nextFullImg = image.NewRGBA(image.Rect(0, 0, TotalWidth, fullH))
+	}
+	dst := u.nextFullImg
+	// Middle band: copy the 240-line render into rows extra..extra+TotalHeight-1.
+	copy(dst.Pix[extra*dst.Stride:(extra+TotalHeight)*dst.Stride], u.img.Pix[:TotalHeight*u.img.Stride])
+	// Over-border strips: border fill + the sprite border pass (whole row is
+	// border in these strips). frameY == dst row here (bias 0).
+	bc := u.palette[u.BorderColour&0x0F]
+	rowFull := make([]byte, TotalWidth*4)
+	allBorder := func(int) bool { return true }
+	paintStrip := func(rowStart, rowEnd int) {
+		for fy := rowStart; fy < rowEnd; fy++ {
+			for x := 0; x < TotalWidth; x++ {
+				o := x * 4
+				rowFull[o], rowFull[o+1], rowFull[o+2], rowFull[o+3] = bc.R, bc.G, bc.B, 0xFF
+			}
+			u.nextCompositor.ComposeSpriteBorderRow(fy, rowFull, allBorder)
+			copy(dst.Pix[fy*dst.Stride:fy*dst.Stride+TotalWidth*4], rowFull)
+		}
+	}
+	paintStrip(0, extra)           // top over-border: frame Y 0..7
+	paintStrip(fullH-extra, fullH) // bottom over-border: frame Y 248..255
+	return dst
 }
 
 // renderWide builds a 640×TotalHeight frame for 80-column tilemap mode.

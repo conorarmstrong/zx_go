@@ -23,6 +23,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
+	"image/png"
 )
 
 func TestNBIStateDumpAtMenu(t *testing.T) {
@@ -417,10 +418,19 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			curFrame = i
 			step()
 			if i <= 30 {
-				p16 := emu.mem.RAM8KPage(16)
-				t.Logf("  @f%d SEED=%d  bank8[$0631](leader21 byte2)=$%02X bank8[$04DF](spr0 X)=$%02X",
-					i, int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
-					p16[0x0631], p16[0x04DF])
+				nr15 := emu.nextRegs.ReadReg(0x15)
+				t.Logf("  @f%d NR$15=$%02X overBorder(bit1)=%d  shipCacheY=%d",
+					i, nr15, (nr15>>1)&1, func() int {
+						p16, p17 := emu.mem.RAM8KPage(16), emu.mem.RAM8KPage(17)
+						r8 := func(o int) byte {
+							if o < 0x2000 {
+								return p16[o&0x1FFF]
+							}
+							return p17[(o-0x2000)&0x1FFF]
+						}
+						uv := int(r8(0x1FFE)) | int(r8(0x1FFF))<<8
+						return int(r8(uv + 64*16 + 1))
+					}())
 			}
 			if i == 23 && varsBuf == nil {
 				grabVars() // program context active (banking maps the vars)
@@ -439,11 +449,48 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 					b2 := int(ram8(uvec + n*16 + 2))
 					return b0 | (b2&1)<<8
 				}
+				catY := func(n int) int { return int(ram8(uvec + n*16 + 1)) }
 				var sb strings.Builder
 				for n := 0; n <= 35; n++ {
 					fmt.Fprintf(&sb, " %d:%d", n, catX(n))
 				}
 				t.Logf("  @f%d CACHE SPRITE-AT(n,0) uvec=$%04X:%s", i, uvec, sb.String())
+				// Player ship = sprite 64: cache X/Y + live engine X/Y/visible.
+				if emu.nextSprites != nil {
+					a := emu.nextSprites.Sprite(64)
+					vis, ex, ey := false, int16(0), int16(0)
+					if a != nil {
+						vis, ex, ey = a.Visible, a.X, a.Y
+					}
+					t.Logf("  @f%d SHIP sprite64: cache X=%d Y=%d  | engine X=%d Y=%d vis=%v",
+						i, catX(64), catY(64), ex, ey, vis)
+					if i == 26 {
+						x1, x2, y1, y2, set := emu.nextSprites.Clip()
+						t.Logf("  sprite clip: x1=%d x2=%d y1=%d y2=%d set=%v", x1, x2, y1, y2, set)
+						scan := make([]byte, 320)
+						var rows []int
+						for fy := 0; fy < 256; fy++ {
+							for k := range scan {
+								scan[k] = 0
+							}
+							emu.nextSprites.RenderScanline(fy, scan, 320)
+							for x := 0; x < 16; x++ {
+								if scan[x] != 0 {
+									rows = append(rows, fy)
+									break
+								}
+							}
+						}
+						t.Logf("  ship-column (X=0..15) covered at frame-Y rows: %v (Y=240 => expect ~240-255)", rows)
+						for s := 0; s < 128; s++ {
+							a := emu.nextSprites.Sprite(s)
+							if a != nil && a.Visible && a.Y < 40 {
+								t.Logf("  TOP-AREA visible sprite %d: X=%d Y=%d pat=%d ext=%v byte4=$%02X",
+									s, a.X, a.Y, a.Pattern, a.Extended, a.Byte4)
+							}
+						}
+					}
+				}
 				if i == 24 {
 					for _, n := range []int{0, 7, 14, 21, 28} {
 						var st strings.Builder
@@ -487,6 +534,15 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			}
 		}
 		emu.cpu.RemovePreFetchHook("errtrap")
+		if os.Getenv("ZXFX_PNG") != "" {
+			img := emu.renderFrame()
+			if fp, err := os.Create(os.Getenv("ZXFX_PNG")); err == nil {
+				_ = png.Encode(fp, img)
+				_ = fp.Close()
+				b := img.Bounds()
+				t.Logf("wrote frame PNG %s (%dx%d)", os.Getenv("ZXFX_PNG"), b.Dx(), b.Dy())
+			}
+		}
 		// Walk the captured VARS buffer: dump number-array a()/l() elements +
 		// scalars, decoding the Sinclair small-integer FP form [00,sign,lo,hi,00].
 		if varsBuf != nil {
