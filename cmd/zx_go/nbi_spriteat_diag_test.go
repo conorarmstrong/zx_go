@@ -103,6 +103,37 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	hold([][2]int{{6, 0x01}}, 6)
 	stepN(120) // ENTER -> editor
 
+	// Capture every write of the X value (200=$C8) anywhere, + writes to the
+	// cache offset $04DF, BEFORE the placement runs — to see which physical
+	// bank ours writes the sprite-attribute shadow into (vs the bank 5 that
+	// SPRITE AT later reads via slot 2).
+	type wr struct {
+		bank int
+		pc   uint16
+		off  uint16
+		val  byte
+		mmu2 byte
+	}
+	var cacheWrites []wr
+	emu.mem.SetRAMWriteHook(func(bank int, addr uint16, val byte) {
+		hitOff := addr&0x1FFF == 0x04DF
+		hitVal := val == 200
+		if (hitOff || hitVal) && len(cacheWrites) < 80 {
+			cacheWrites = append(cacheWrites, wr{bank, emu.cpu.PC, addr, val, emu.mem.GetMMU(2)})
+		}
+	})
+	defer emu.mem.SetRAMWriteHook(nil)
+	defer func() {
+		t.Logf("=== writes of val=200 or to offset $04DF (where the shadow lands) ===")
+		for _, w := range cacheWrites {
+			mark := ""
+			if w.val == 200 {
+				mark = "   <== X=200"
+			}
+			t.Logf("  WR bank=%d off=$%04X val=%d @PC~$%04X (NR$52=%d)%s", w.bank, w.off, w.val, w.pc, w.mmu2, mark)
+		}
+	}()
+
 	// Sentinel (30010=42) proves the line ran; static sprite 0 at X=200,Y=100.
 	// SPRITE MOVE flushes the NextZXOS RAM sprite-attribute cache that SPRITE
 	// AT reads (nextzxos-changelog: attrs cached in RAM8 since v2.09).
@@ -228,7 +259,21 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		mmu      [8]byte
 		slot0    int
 	}
+	ringPC := make([]uint16, 0, 80)
+	var e5eTrail []uint16
 	emu.cpu.AddPreFetchHook("e5e", func(pc uint16) {
+		if tracing {
+			if len(ringPC) < 80 {
+				ringPC = append(ringPC, pc)
+			} else {
+				copy(ringPC, ringPC[1:])
+				ringPC[79] = pc
+			}
+			if pc == 0x0E5C && e5eTrail == nil {
+				e5eTrail = make([]uint16, len(ringPC))
+				copy(e5eTrail, ringPC)
+			}
+		}
 		if pc != 0x0E5E || e5e.captured || !tracing {
 			return
 		}
@@ -282,4 +327,5 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	emu.cpu.RemovePreFetchHook("e5e")
 	t.Logf("AT PC=$0E5E (live): code[$0E5A..]=% X HL=$%04X DE=$%04X slot0-page=%d MMU=%v",
 		e5e.code, e5e.hl, e5e.de, e5e.slot0, e5e.mmu)
+	t.Logf("PC trail INTO the $0E5C cache LDIR: %X", e5eTrail)
 }

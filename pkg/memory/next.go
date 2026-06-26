@@ -313,6 +313,16 @@ func (m *Memory) SetROMBankExtended(val byte) {
 		// classic-paging slot 3 only re-syncs when MMU8 is at its
 		// default $FF page.
 		m.port7FFD = (m.port7FFD &^ 0x07) | ((val >> 4) & 0x07)
+		// bit 7 → port_DFFD[0] (high RAM-bank bit). Per nextreg.txt $8E:
+		//   bit 7    = port 0xdffd bit 0  \  RAM bank 0-15
+		//   bits 6:4 = port 0x7ffd bits 2:0 /
+		// so the $C000 RAM bank is the combined 4-bit value. ours
+		// PREVIOUSLY routed bit 7 to port_1FFD[0] (the paging-MODE bit)
+		// and dropped it from the bank, so NEXTREG $8E,$88 mapped bank 0
+		// instead of bank 8 — breaking NextZXOS's inter-bank RST $00 calls
+		// into the high banks (e.g. the SPRITE AT sprite-attribute cache,
+		// the NBI "590 Integer out of range" root cause).
+		m.portDFFD = (m.portDFFD &^ 0x01) | ((val >> 7) & 0x01)
 		// Per zxnext.vhd: a NR$8E write with bit 3 set asserts
 		// port_memory_ram_change_dly (= NOT(nr_8e_we AND NOT bit3),
 		// line 3814), and the paging process then reloads MMU6/MMU7
@@ -321,15 +331,12 @@ func (m *Memory) SetROMBankExtended(val byte) {
 		// change clobbers any prior NR$50-$57 binding on slots 6/7.
 		// syncMMUFromPage(3) reproduces that — it rewrites slotBank[6/7]
 		// AND clears their mmuOverride flags. (Matches the classic
-		// PageMemory path; see TestMMUClassicClearsOverride.)
-		ramPage := int(m.port7FFD & 0x07)
+		// PageMemory path; see TestMMUClassicClearsOverride.) The bank is
+		// the full $DFFD-extended value so banks 8-15 map correctly.
+		ramPage := int(m.portDFFD)<<3 | int(m.port7FFD&0x07)
 		m.memoryPageReadMap[3] = ramPage
 		m.memoryPageWriteMap[3] = ramPage
 		m.syncMMUFromPage(3)
-		// bit 7 → port_DFFD[0] (high RAM-bank bit); also feeds
-		// port_1FFD[0] for compatibility with our existing model.
-		new1FFD := (m.port1FFD &^ 0x01) | ((val >> 7) & 0x01)
-		m.PageMemoryPlus3(new1FFD)
 	}
 	if val&0x04 == 0 {
 		// bit 2 clear → write bit 0 to port_7FFD[4] (ROM select
@@ -376,7 +383,8 @@ func (m *Memory) SetROMBankExtended(val byte) {
 // breaks any NextZXOS code that read-modify-writes $8E to preserve the
 // current map.
 func (m *Memory) ROMMappingNR8E() byte {
-	v := (m.port7FFD & 0x07) << 4        // bits 6:4 = port_7FFD[2:0]
+	v := (m.portDFFD & 0x01) << 7        // bit 7 = port_DFFD[0] (high RAM-bank bit)
+	v |= (m.port7FFD & 0x07) << 4        // bits 6:4 = port_7FFD[2:0]
 	v |= 0x08                            // bit 3 always reads 1
 	v |= (m.port1FFD & 0x01) << 2        // bit 2 = port_1FFD[0] (paging mode)
 	v |= ((m.port1FFD >> 2) & 0x01) << 1 // bit 1 = port_1FFD[2]
