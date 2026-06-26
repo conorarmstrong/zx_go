@@ -1,4 +1,9 @@
-//go:build oracle
+//go:build nbidiag
+
+// Standalone build tag (NOT `oracle`) so this self-contained NBI-590 probe
+// builds and runs without the foreign/lockstep oracle infrastructure:
+//   SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+//     go test -tags nbidiag ./cmd/zx_go/ -run TestNBISpriteAtReadback -v
 
 package main
 
@@ -11,7 +16,9 @@ import (
 
 // TestNBISpriteAtReadback probes the NextBASIC `% SPRITE AT (n,attr)` query —
 // the operation at the heart of NextBASIC Invaders line 590
-//   SPRITE %i, % SPRITE AT (a(y),0)+((x-l(y))*20), %o, ...
+//
+//	SPRITE %i, % SPRITE AT (a(y),0)+((x-l(y))*20), %o, ...
+//
 // which throws "Integer out of range, 590:1". If SPRITE AT returns a bad X for
 // a placed/moving sprite, the computed missile X goes out of range. This boots
 // NextZXOS, places sprite 0 at a known (X=200,Y=100,pat=5), then a moving
@@ -143,6 +150,7 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		val        byte
 		pc         uint16
 		hl, de, bc uint16
+		mmu        [8]byte
 	}
 	var hits []rdpc
 	var bank8reads int
@@ -150,11 +158,26 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	emu.mem.SetRAMReadHook(func(bank int, addr uint16, val byte) {
 		// Capture bank-8 reads in the sprite-cache region (uvec..uvec+$800),
 		// excluding the $1700 system-var compare loop that saturated earlier.
-		if tracing && bank == 8 && addr < 0x1000 && len(hits) < 40 {
-			hits = append(hits, rdpc{bank, val, emu.cpu.PC, emu.cpu.HL(), emu.cpu.DE(), addr})
+		if tracing && (addr == 0x04DF || addr == 0x04E0) && len(hits) < 80 {
+			var m [8]byte
+			for s := byte(0); s < 8; s++ {
+				m[s] = emu.mem.GetMMU(s)
+			}
+			hits = append(hits, rdpc{bank, val, emu.cpu.PC, emu.cpu.HL(), emu.cpu.DE(), addr, m})
 		}
 		if tracing && bank == 8 {
 			bank8reads++
+		}
+	})
+	type mw struct {
+		bank int
+		pc   uint16
+		src  string
+	}
+	var mmuWrites []mw
+	emu.mem.SetBankTracer(func(slot byte, bank int, src string) {
+		if slot == 2 && len(mmuWrites) < 40 {
+			mmuWrites = append(mmuWrites, mw{bank, emu.cpu.PC, src})
 		}
 	})
 	typeStr("20 poke 30005,% sprite at(0,0)")
@@ -164,10 +187,16 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	enter()
 	stepN(120)
 	tracing = false
+	emu.mem.SetBankTracer(nil)
+	for _, w := range mmuWrites {
+		t.Logf("  slot2 write: bank=%d @PC~$%04X src=%s", w.bank, w.pc, w.src)
+	}
 	emu.mem.SetRAMReadHook(nil)
 	t.Logf("SPRITE AT(0,0) re-read = %d (cache 16K bank8 offset $%04X = 200); bank8 reads during query = %d", emu.mem.Read(30005), uvec, bank8reads)
 	for _, h := range hits {
-		t.Logf("  bank8 read: off=$%04X val=%d @PC~$%04X  HL=$%04X DE=$%04X",
-			h.bc, h.val, h.pc, h.hl, h.de) // h.bc field reused to carry addr
+		t.Logf("  cache read: off=$%04X resolved-bank=%d val=%d @PC~$%04X HL=$%04X DE=$%04X MMU=%v",
+			h.bc, h.bank, h.val, h.pc, h.hl, h.de, h.mmu) // h.bc field reused to carry addr
 	}
+	t.Logf("MMU at end: slot0=%d slot1=%d slot2=%d slot3=%d slot6=%d slot7=%d",
+		emu.mem.GetMMU(0), emu.mem.GetMMU(1), emu.mem.GetMMU(2), emu.mem.GetMMU(3), emu.mem.GetMMU(6), emu.mem.GetMMU(7))
 }
