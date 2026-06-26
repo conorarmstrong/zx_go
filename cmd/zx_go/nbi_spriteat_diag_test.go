@@ -51,18 +51,27 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		pc           uint16
 	}
 	var nr52log []nr52e
-	nr52on := false
+	nr52on := true // capture from BOOT
+	var nr52count, nr52is16 int
 	orig52 := emu.nextRegs.OnWriteFn(0x52)
 	emu.nextRegs.SetOnWrite(0x52, func(d *nextregs.Dispatcher, val byte) {
 		if orig52 != nil {
 			orig52(d, val)
 		}
-		if nr52on && len(nr52log) < 120 {
-			nr52log = append(nr52log, nr52e{val, emu.mem.GetMMU(2), emu.cpu.PC})
+		if nr52on {
+			nr52count++
+			if val == 16 || val == 17 {
+				nr52is16++
+			}
+			// Log only the bank-8 mappings (val 16/17) + a sample, to find if
+			// ours EVER maps the cache bank into slot 2.
+			if (val == 16 || val == 17 || len(nr52log) < 10) && len(nr52log) < 120 {
+				nr52log = append(nr52log, nr52e{val, emu.mem.GetMMU(2), emu.cpu.PC})
+			}
 		}
 	})
 	defer func() {
-		t.Logf("=== ALL NR$52 (slot 2) writes (16=bank8 cache, 10=default bank5) ===")
+		t.Logf("=== NR$52 (slot 2) writes: %d total, %d that map bank 8 (val 16/17) ===", nr52count, nr52is16)
 		for _, w := range nr52log {
 			mark := ""
 			if w.val == 16 {
@@ -145,26 +154,34 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		mmu2 byte
 	}
 	var cacheWrites []wr
+	var cacheWriteMMU [][8]byte
 	emu.mem.SetRAMWriteHook(func(bank int, addr uint16, val byte) {
-		hitOff := addr&0x1FFF == 0x04DF
-		hitVal := val == 200
-		if (hitOff || hitVal) && len(cacheWrites) < 80 {
+		if bank == 8 && addr == 0x04DF && len(cacheWrites) < 20 {
 			cacheWrites = append(cacheWrites, wr{bank, emu.cpu.PC, addr, val, emu.mem.GetMMU(2)})
+			var m [8]byte
+			for s := byte(0); s < 8; s++ {
+				m[s] = emu.mem.GetMMU(s)
+			}
+			cacheWriteMMU = append(cacheWriteMMU, m)
 		}
 	})
 	defer emu.mem.SetRAMWriteHook(nil)
 	defer func() {
-		t.Logf("=== writes of val=200 or to offset $04DF (where the shadow lands) ===")
-		for _, w := range cacheWrites {
-			mark := ""
-			if w.val == 200 {
-				mark = "   <== X=200"
-			}
-			t.Logf("  WR bank=%d off=$%04X val=%d @PC~$%04X (NR$52=%d)%s", w.bank, w.off, w.val, w.pc, w.mmu2, mark)
+		t.Logf("=== cache X-byte writes to bank 8 $04DF (which slot maps bank 8 = pages 16/17?) ===")
+		for i, w := range cacheWrites {
+			t.Logf("  WR bank8 $04DF val=%d @PC~$%04X MMU=%v", w.val, w.pc, cacheWriteMMU[i])
 		}
 	}()
 
-	nr52on = true // capture NR$52 from the SPRITE placement onward
+	// Read the cache offset $04DF in bank 8 AND bank 5 BEFORE placing the
+	// sprite — to tell whether the "200" is the sprite cache (0 here, set by
+	// placement) or pre-existing OS data (already 200, a red herring).
+	{
+		pre16 := emu.mem.RAM8KPage(16)
+		pre10, pre11 := emu.mem.RAM8KPage(10), emu.mem.RAM8KPage(11)
+		_ = pre11
+		t.Logf("PRE-PLACEMENT: bank8[$04DF]=%d bank5(pg10)[$04DF]=%d", pre16[0x04DF], pre10[0x04DF])
+	}
 
 	// Sentinel (30010=42) proves the line ran; static sprite 0 at X=200,Y=100.
 	// SPRITE MOVE flushes the NextZXOS RAM sprite-attribute cache that SPRITE
@@ -299,6 +316,23 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		hl, de, bc, sp uint16
 		mmu            [8]byte
 	}
+	// Dump the read-routine code at $0D40-$0E48 (live) the first time we reach
+	// $0D6E during the query — to find the conditional branch that should lead
+	// to a NEXTREG $52,16 (ED 91 52 10) but which ours skips.
+	var rdcode struct {
+		captured bool
+		d        [0x110]byte
+		bc, hl   uint16
+	}
+	emu.cpu.AddPreFetchHook("rdcode", func(pc uint16) {
+		if tracing && pc == 0x0D6E && !rdcode.captured {
+			rdcode.captured = true
+			for i := range rdcode.d {
+				rdcode.d[i] = emu.mem.Read(0x0D40 + uint16(i))
+			}
+			rdcode.bc, rdcode.hl = emu.cpu.BC(), emu.cpu.HL()
+		}
+	})
 	emu.cpu.AddPreFetchHook("e5e", func(pc uint16) {
 		if tracing && pc == 0x0E9B && !e9b.captured {
 			e9b.captured = true
@@ -373,6 +407,13 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	t.Logf("MMU at end: slot0=%d slot1=%d slot2=%d slot3=%d slot6=%d slot7=%d",
 		emu.mem.GetMMU(0), emu.mem.GetMMU(1), emu.mem.GetMMU(2), emu.mem.GetMMU(3), emu.mem.GetMMU(6), emu.mem.GetMMU(7))
 	emu.cpu.RemovePreFetchHook("e5e")
+	emu.cpu.RemovePreFetchHook("rdcode")
+	if rdcode.captured {
+		t.Logf("read-routine BC=$%04X HL=$%04X; code $0D40-$0E4F (look for ED 91 52 = NEXTREG $52):", rdcode.bc, rdcode.hl)
+		for off := 0; off < 0x110; off += 16 {
+			t.Logf("  $%04X: % X", 0x0D40+off, rdcode.d[off:off+16])
+		}
+	}
 	t.Logf("AT PC=$0E5E (live): code[$0E5A..]=% X HL=$%04X DE=$%04X slot0-page=%d MMU=%v",
 		e5e.code, e5e.hl, e5e.de, e5e.slot0, e5e.mmu)
 	t.Logf("PC trail INTO the $0E5C cache LDIR: %X", e5eTrail)
