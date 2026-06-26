@@ -324,8 +324,23 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		d        [0x110]byte
 		bc, hl   uint16
 	}
+	// Capture every NextReg READ via the $0D6B helper (OUT $243B=reg @ $0D6E,
+	// IN $253B=value @ $0D73) during the query — if ours returns a wrong value
+	// for some reg, the routine branches to skip the cache→slot-2 mapping.
+	type nrread struct{ reg, val byte }
+	var nrReads []nrread
+	var pendingReg byte
 	emu.cpu.AddPreFetchHook("rdcode", func(pc uint16) {
-		if tracing && pc == 0x0D6E && !rdcode.captured {
+		if !tracing {
+			return
+		}
+		if pc == 0x0D6E {
+			pendingReg = emu.cpu.A // A = the NextReg being selected
+		}
+		if pc == 0x0D73 && len(nrReads) < 60 {
+			nrReads = append(nrReads, nrread{pendingReg, emu.cpu.A}) // A = value read
+		}
+		if pc == 0x0D6E && !rdcode.captured {
 			rdcode.captured = true
 			for i := range rdcode.d {
 				rdcode.d[i] = emu.mem.Read(0x0D40 + uint16(i))
@@ -333,6 +348,12 @@ func TestNBISpriteAtReadback(t *testing.T) {
 			rdcode.bc, rdcode.hl = emu.cpu.BC(), emu.cpu.HL()
 		}
 	})
+	defer func() {
+		t.Logf("=== NextReg READS by the SPRITE AT routine (reg -> value ours returns) ===")
+		for _, r := range nrReads {
+			t.Logf("  read NR$%02X = $%02X (%d)", r.reg, r.val, r.val)
+		}
+	}()
 	emu.cpu.AddPreFetchHook("e5e", func(pc uint16) {
 		if tracing && pc == 0x0E9B && !e9b.captured {
 			e9b.captured = true
