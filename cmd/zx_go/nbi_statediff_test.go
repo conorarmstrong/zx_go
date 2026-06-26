@@ -148,6 +148,111 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		t.Logf("game phase: %d frames; first return-to-menu($0C90) at frame %d", gf, threwAt)
 	}
 
+	// ZXFX_PHASE=errtrap: press difficulty '1', then per-instruction watch
+	// ERR_NR ($5C3A) — the Sinclair error-number sysvar. When it flips to an
+	// error code (the "Integer out of range" raise), capture the instruction
+	// trail (where it was raised = provenance), the CPU file, and the
+	// calculator-stack top (STKEND-5.. = the value being range-checked). This
+	// lands directly on the offending value + the routine that raised 590.
+	if os.Getenv("ZXFX_PHASE") == "errtrap" {
+		hold([][2]int{{3, 0x01}}, 6) // '1'
+		gf := 30
+		if v := os.Getenv("ZXFX_GAMEFRAMES"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				gf = n
+			}
+		}
+		const ringN = 48
+		ring := make([]uint16, 0, ringN)
+		pushRing := func(pc uint16) {
+			if len(ring) < ringN {
+				ring = append(ring, pc)
+			} else {
+				copy(ring, ring[1:])
+				ring[ringN-1] = pc
+			}
+		}
+		type errEvt struct {
+			frame              int
+			pc                 uint16
+			oldNR, newNR, a    byte
+			bc, de, hl, sp, sk uint16
+			calc               [10]byte
+			trail              []uint16
+		}
+		var events []errEvt
+		curFrame := 0
+		lastNR := emu.mem.Read(0x5C3A)
+		// Capture register + memory context at the raise site (the instruction
+		// just before RST 8 in the trail). Default $1FF9; override via env.
+		trapPC := uint16(0x1FF9)
+		if v := os.Getenv("ZXFX_TRAPPC"); v != "" {
+			if n, err := strconv.ParseUint(v, 16, 16); err == nil {
+				trapPC = uint16(n)
+			}
+		}
+		type rgw struct {
+			frame                   int
+			pc                      uint16
+			a                       byte
+			bc, de, hl, ix, iy, sp  uint16
+			atHL, atDE, calc, stkfp [12]byte
+		}
+		var raises []rgw
+		win := func(base uint16) [12]byte {
+			var b [12]byte
+			for i := range b {
+				b[i] = emu.mem.Read(base - 5 + uint16(i))
+			}
+			return b
+		}
+		emu.cpu.AddPreFetchHook("errtrap", func(pc uint16) {
+			pushRing(pc)
+			if pc == trapPC && curFrame >= 20 && len(raises) < 8 {
+				sk := uint16(emu.mem.Read(0x5C65)) | uint16(emu.mem.Read(0x5C66))<<8
+				raises = append(raises, rgw{curFrame, pc, emu.cpu.A,
+					emu.cpu.BC(), emu.cpu.DE(), emu.cpu.HL(), emu.cpu.IX, emu.cpu.IY, emu.cpu.SP,
+					win(emu.cpu.HL()), win(emu.cpu.DE()), win(sk), win(uint16(0x5C92 + 5))})
+			}
+			nr := emu.mem.Read(0x5C3A)
+			if nr != lastNR {
+				if nr != 0xFF && len(events) < 16 {
+					sk := uint16(emu.mem.Read(0x5C65)) | uint16(emu.mem.Read(0x5C66))<<8
+					var calc [10]byte
+					for i := range calc {
+						calc[i] = emu.mem.Read(sk - 5 + uint16(i))
+					}
+					tr := make([]uint16, len(ring))
+					copy(tr, ring)
+					events = append(events, errEvt{curFrame, pc, lastNR, nr, emu.cpu.A,
+						emu.cpu.BC(), emu.cpu.DE(), emu.cpu.HL(), emu.cpu.SP, sk, calc, tr})
+				}
+				lastNR = nr
+			}
+		})
+		for i := 0; i < gf; i++ {
+			curFrame = i
+			step()
+			if emu.cpu.PC == nextMenuLoopPC && i >= 1 {
+				break
+			}
+		}
+		emu.cpu.RemovePreFetchHook("errtrap")
+		t.Logf("captured %d ERR_NR transitions, %d raise-site hits", len(events), len(raises))
+		for _, ev := range events {
+			t.Logf("ERR_NR $%02X->$%02X @f%d PC=$%04X A=$%02X BC=$%04X DE=$%04X HL=$%04X SP=$%04X STKEND=$%04X calc(stkend-5..)=% X",
+				ev.oldNR, ev.newNR, ev.frame, ev.pc, ev.a, ev.bc, ev.de, ev.hl, ev.sp, ev.sk, ev.calc)
+			t.Logf("  trail(last %d PCs): %X", len(ev.trail), ev.trail)
+		}
+		for _, r := range raises {
+			t.Logf("RAISE @f%d PC=$%04X A=$%02X BC=$%04X DE=$%04X HL=$%04X IX=$%04X IY=$%04X SP=$%04X",
+				r.frame, r.pc, r.a, r.bc, r.de, r.hl, r.ix, r.iy, r.sp)
+			t.Logf("  (HL-5..)=% X  (DE-5..)=% X  calc(STKEND-5..)=% X  FP-MEM=% X",
+				r.atHL, r.atDE, r.calc, r.stkfp)
+		}
+		return
+	}
+
 	// ZXFX_PHASE=trace: press difficulty '1', then frame-by-frame watch the
 	// NextZXOS sprite-attribute cache (RAM bank 8) — the data SPRITE AT reads.
 	// Logs each frame's PC + the per-sprite X (uvec+s*16+0) for sprites 0..15,
