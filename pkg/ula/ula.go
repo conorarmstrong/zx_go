@@ -25,8 +25,24 @@ const (
 	FlashFrames  = 16                         // Number of frames between flash toggles
 )
 
-// TStatesPerLine is the number of T-states per scanline (228 for 48K/128K).
+// TStatesPerLine is the number of T-states per scanline. 228 is the 128K
+// family value (456 video columns / 2). The 48K ULA uses 224 (448 / 2); see
+// TStatesPerLineFor. This default is retained for the 128K-anchored callers
+// (BeamPosition / ActiveVideoLine on the Next, which boots in 128K timing).
 const TStatesPerLine = 228
+
+// TStatesPerLineFor returns the documented T-states-per-scanline for a machine
+// model: 224 for the 48K (312 lines * 224 = 69888 T-states/frame), 228 for the
+// 128K family and +2/+2A/+3 (311 lines * 228 = 70908). The Spectrum Next boots
+// in 128K/+3 timing. Matches video/zxula_timing.vhd c_max_hc: 48K=447 (448
+// columns → 224 T) and 128K=455 (456 columns → 228 T), and Sean Young's /
+// Chris Smith's classic timing references.
+func TStatesPerLineFor(model roms.SpectrumModel) int {
+	if model == roms.Model48K {
+		return 224
+	}
+	return 228
+}
 
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
 type ULA struct {
@@ -1116,22 +1132,29 @@ func (u *ULA) floatingBusByte() byte {
 	// Compute T-state offset within the current frame.
 	tstates := int(*u.mem.TStates - u.frameStartTstate)
 
+	// Per-model line length: the 48K ULA uses 224 T-states/line, the 128K
+	// family 228. Using the wrong length shifts the floating-bus origin by a
+	// full 256 T-states on 48K (the documented first paper fetch is 64*224 =
+	// 14336, not 64*228 = 14592 — Ramsoft "floating bus", Sean Young notes,
+	// video/zxula_timing.vhd c_max_hc 447 vs 455).
+	tPerLine := TStatesPerLineFor(model)
+
 	// Top border: before the first display line.
-	const topBorderTStates = 64 * TStatesPerLine
+	topBorderTStates := 64 * tPerLine
 	if tstates < topBorderTStates {
 		return 0xFF
 	}
 
-	line := (tstates - topBorderTStates) / TStatesPerLine
+	line := (tstates - topBorderTStates) / tPerLine
 	if line >= 192 { // bottom border
 		return 0xFF
 	}
 
 	// T-states into this line. The first 18 are the leftmost
-	// blanking/sync; FUSE counts from the first displayed pixel
-	// (T-state 14336 on 48K). Our frameStartTstate is the start
-	// of frame, so we subtract the per-line origin.
-	tInLine := tstates - topBorderTStates - line*TStatesPerLine
+	// blanking/sync; the first displayed pixel is at T-state 14336 on 48K.
+	// Our frameStartTstate is the start of frame, so we subtract the
+	// per-line origin.
+	tInLine := tstates - topBorderTStates - line*tPerLine
 
 	// Each line: 24 T-states left border, 128 T-states display,
 	// 24 right border, 52 retrace. Only the 128 display T-states

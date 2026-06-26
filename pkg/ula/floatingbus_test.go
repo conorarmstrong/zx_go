@@ -75,30 +75,34 @@ func newFloatingBusULA(t *testing.T) (*ULA, *memory.Memory) {
 func TestFloatingBusInBorderReturns0xFF(t *testing.T) {
 	u, mem := newFloatingBusULA(t)
 
+	// The 48K ULA uses 224 T-states/line (the documented value); the floating
+	// bus origin is 64*224 = 14336.
+	tpl := TStatesPerLineFor(roms.Model48K)
+
 	// Top border: any T-state before line 64 starts.
 	*mem.TStates = 0
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("top border (t=0): got %#x, want 0xFF", got)
 	}
-	*mem.TStates = uint64(63*TStatesPerLine + 100)
+	*mem.TStates = uint64(63*tpl + 100)
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("top border end: got %#x, want 0xFF", got)
 	}
 
 	// Bottom border: after line 256.
-	*mem.TStates = uint64(256 * TStatesPerLine)
+	*mem.TStates = uint64(256 * tpl)
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("bottom border: got %#x, want 0xFF", got)
 	}
 
 	// Left border within a display line.
-	*mem.TStates = uint64(64*TStatesPerLine + 5)
+	*mem.TStates = uint64(64*tpl + 5)
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("left border: got %#x, want 0xFF", got)
 	}
 
 	// Right border within a display line.
-	*mem.TStates = uint64(64*TStatesPerLine + 24 + 128 + 5)
+	*mem.TStates = uint64(64*tpl + 24 + 128 + 5)
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("right border: got %#x, want 0xFF", got)
 	}
@@ -110,11 +114,10 @@ func TestFloatingBusInBorderReturns0xFF(t *testing.T) {
 func TestFloatingBusInDisplayReturnsScreenData(t *testing.T) {
 	u, mem := newFloatingBusULA(t)
 
-	// First display line, first display column.
-	// T-state = 64 * TStatesPerLine + leftBorder = 14400 + 24 on
-	// our 228-T-state lines.
+	// First display line, first display column. The 48K floating-bus origin
+	// is 64*224 + leftBorder = 14336 + 24 (224-T-state lines).
 	const leftBorder = 24
-	base := uint64(64*TStatesPerLine + leftBorder)
+	base := uint64(64*TStatesPerLineFor(roms.Model48K) + leftBorder)
 
 	// t%8 = 0,1,6,7: idle 0xFF; 2,4: bitmap (0xA5); 3,5: attribute (0x5A).
 	for offset, want := range []byte{0xFF, 0xFF, 0xA5, 0x5A, 0xA5, 0x5A, 0xFF, 0xFF} {
