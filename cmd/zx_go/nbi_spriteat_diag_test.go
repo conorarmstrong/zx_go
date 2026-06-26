@@ -8,9 +8,11 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -175,21 +177,99 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		src  string
 	}
 	var mmuWrites []mw
+	var allSlotWrites []struct {
+		slot byte
+		bank int
+		pc   uint16
+		src  string
+	}
 	emu.mem.SetBankTracer(func(slot byte, bank int, src string) {
 		if slot == 2 && len(mmuWrites) < 40 {
 			mmuWrites = append(mmuWrites, mw{bank, emu.cpu.PC, src})
 		}
+		// Capture EVERY slot write — to see whether the SPRITE AT routine ever
+		// maps bank 8 (8K page 16/17) into any slot, and via what source.
+		if len(allSlotWrites) < 200 {
+			allSlotWrites = append(allSlotWrites, struct {
+				slot byte
+				bank int
+				pc   uint16
+				src  string
+			}{slot, bank, emu.cpu.PC, src})
+		}
+	})
+	// Wrap the raw NR$50-57 write handlers to log EVERY slot-register write
+	// (reg, value, PC) and whether ours actually applied it (GetMMU after) —
+	// to catch a NEXTREG $52=16 (map bank 8 into slot 2) that ours drops.
+	type nrw struct {
+		reg, val, applied byte
+		pc                uint16
+	}
+	var nrWrites []nrw
+	logNR := false
+	for reg := byte(0x50); reg <= 0x57; reg++ {
+		r := reg
+		orig := emu.nextRegs.OnWriteFn(r)
+		emu.nextRegs.SetOnWrite(r, func(d *nextregs.Dispatcher, val byte) {
+			if orig != nil {
+				orig(d, val)
+			}
+			if logNR && len(nrWrites) < 60 {
+				nrWrites = append(nrWrites, nrw{r, val, emu.mem.GetMMU(r - 0x50), emu.cpu.PC})
+			}
+		})
+	}
+	// Capture the executing instruction + live MMU + regs at PC=$0E5E (the
+	// SPRITE AT value-read) the FIRST time, from the live slot-0 bank.
+	var e5e struct {
+		captured bool
+		code     [10]byte
+		hl, de   uint16
+		mmu      [8]byte
+		slot0    int
+	}
+	emu.cpu.AddPreFetchHook("e5e", func(pc uint16) {
+		if pc != 0x0E5E || e5e.captured || !tracing {
+			return
+		}
+		e5e.captured = true
+		for i := range e5e.code {
+			e5e.code[i] = emu.mem.Read(0x0E5A + uint16(i))
+		}
+		e5e.hl, e5e.de = emu.cpu.HL(), emu.cpu.DE()
+		for s := byte(0); s < 8; s++ {
+			e5e.mmu[s] = emu.mem.GetMMU(s)
+		}
+		e5e.slot0 = emu.mem.ResolvePage(0x0E5E)
 	})
 	typeStr("20 poke 30005,% sprite at(0,0)")
 	enter()
+	logNR = true
 	tracing = true
 	typeStr("run 20")
 	enter()
 	stepN(120)
 	tracing = false
+	logNR = false
 	emu.mem.SetBankTracer(nil)
+	t.Logf("=== raw NR$50-57 writes during query (%d) ===", len(nrWrites))
+	for _, w := range nrWrites {
+		mark := ""
+		if (w.val == 16 || w.val == 17) && w.applied != w.val {
+			mark = "   <== bank 8 written but NOT APPLIED (MMU still " + fmt.Sprintf("%d", w.applied) + ")!"
+		}
+		t.Logf("  NR$%02X <- %d (MMU slot%d now=%d) @PC~$%04X%s", w.reg, w.val, w.reg-0x50, w.applied, w.pc, mark)
+	}
 	for _, w := range mmuWrites {
 		t.Logf("  slot2 write: bank=%d @PC~$%04X src=%s", w.bank, w.pc, w.src)
+	}
+	t.Logf("=== ALL slot writes during query (%d); looking for bank 16/17 = the cache (16K bank 8) ===", len(allSlotWrites))
+	for _, w := range allSlotWrites {
+		mark := ""
+		if w.bank == 16 || w.bank == 17 {
+			mark = "   <== BANK 8 (the cache!)"
+		}
+		t.Logf("  slot%d <- bank=%d @PC~$%04X src=%s%s", w.slot, w.bank, w.pc, w.src, mark)
 	}
 	emu.mem.SetRAMReadHook(nil)
 	t.Logf("SPRITE AT(0,0) re-read = %d (cache 16K bank8 offset $%04X = 200); bank8 reads during query = %d", emu.mem.Read(30005), uvec, bank8reads)
@@ -199,4 +279,7 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	}
 	t.Logf("MMU at end: slot0=%d slot1=%d slot2=%d slot3=%d slot6=%d slot7=%d",
 		emu.mem.GetMMU(0), emu.mem.GetMMU(1), emu.mem.GetMMU(2), emu.mem.GetMMU(3), emu.mem.GetMMU(6), emu.mem.GetMMU(7))
+	emu.cpu.RemovePreFetchHook("e5e")
+	t.Logf("AT PC=$0E5E (live): code[$0E5A..]=% X HL=$%04X DE=$%04X slot0-page=%d MMU=%v",
+		e5e.code, e5e.hl, e5e.de, e5e.slot0, e5e.mmu)
 }

@@ -183,6 +183,18 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		var events []errEvt
 		curFrame := 0
 		lastNR := emu.mem.Read(0x5C3A)
+		// At the ERR_NR flip, snapshot the NextBASIC variable area (VARS=$5C4B)
+		// so we can walk it offline and read array a()/l() + scalars — to see
+		// the corrupt element feeding the out-of-range sprite-number.
+		var varsBuf []byte
+		var varsAddr uint16
+		grabVars := func() {
+			varsAddr = uint16(emu.mem.Read(0x5C4B)) | uint16(emu.mem.Read(0x5C4C))<<8
+			varsBuf = make([]byte, 2048)
+			for i := range varsBuf {
+				varsBuf[i] = emu.mem.Read(varsAddr + uint16(i))
+			}
+		}
 		// Capture register + memory context at the raise site (the instruction
 		// just before RST 8 in the trail). Default $1FF9; override via env.
 		trapPC := uint16(0x1FF9)
@@ -199,6 +211,43 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 			atHL, atDE, calc, stkfp [12]byte
 		}
 		var raises []rgw
+		// Read-ring: the last reads before the conversion. If ours pages the
+		// wrong bank for the a()/l() array element read, the garbage source
+		// shows here (bank + offset + value + PC at each read).
+		type rdrec struct {
+			bank int
+			off  uint16
+			val  byte
+			pc   uint16
+		}
+		var rrDump []rdrec
+		_ = rdrec{}
+		// Capture reads to BANKS OTHER than the sysvar/calc banks (0,2,5) in the
+		// throw frame — i.e. the banked-variable/array (a(),l()) reads — until
+		// the conversion at $1EA0. These reveal the array element values feeding
+		// the out-of-range result.
+		emu.mem.SetRAMReadHook(func(bank int, addr uint16, val byte) {
+			if curFrame < 24 || len(rrDump) >= 400 {
+				return
+			}
+			if bank == 0 || bank == 2 || bank == 5 {
+				return
+			}
+			rrDump = append(rrDump, rdrec{bank, addr, val, emu.cpu.PC})
+		})
+		defer emu.mem.SetRAMReadHook(nil)
+		defer func() {
+			banks := map[int]int{}
+			for _, r := range rrDump {
+				banks[r.bank]++
+			}
+			t.Logf("  non-sysvar reads in throw frame: %d (by bank: %v)", len(rrDump), banks)
+			for i, r := range rrDump {
+				if i < 120 {
+					t.Logf("    rd PC=$%04X bank=%d off=$%04X val=%d($%02X)", r.pc, r.bank, r.off, r.val, r.val)
+				}
+			}
+		}()
 		win := func(base uint16) [12]byte {
 			var b [12]byte
 			for i := range b {
@@ -230,14 +279,137 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 				lastNR = nr
 			}
 		})
+		// Optional: force SEED ($5C76/77) + FRAMES ($5C78-7A) to a fixed value
+		// at frame 1, to test whether the throw is seed/RNG-dependent (changes)
+		// or deterministic-structural (unchanged). ZXFX_SEED=<decimal>.
+		forceSeed, seedOn := -1, false
+		if v := os.Getenv("ZXFX_SEED"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				forceSeed, seedOn = n, true
+			}
+		}
 		for i := 0; i < gf; i++ {
 			curFrame = i
 			step()
+			if i == 2 || i == 5 || i == 10 {
+				t.Logf("  @f%d SEED=%d ($%02X%02X) FRAMES=$%02X%02X%02X", i,
+					int(emu.mem.Read(0x5C76))|int(emu.mem.Read(0x5C77))<<8,
+					emu.mem.Read(0x5C77), emu.mem.Read(0x5C76),
+					emu.mem.Read(0x5C7A), emu.mem.Read(0x5C79), emu.mem.Read(0x5C78))
+			}
+			if i == 23 && varsBuf == nil {
+				grabVars() // program context active (banking maps the vars)
+			}
+			if seedOn && i == 1 {
+				emu.mem.Write(0x5C76, byte(forceSeed))
+				emu.mem.Write(0x5C77, byte(forceSeed>>8))
+			}
+			if fv := os.Getenv("ZXFX_FRAMES"); fv != "" && i == 1 {
+				if n, err := strconv.Atoi(fv); err == nil {
+					emu.mem.Write(0x5C78, byte(n))
+					emu.mem.Write(0x5C79, byte(n>>8))
+					emu.mem.Write(0x5C7A, byte(n>>16))
+				}
+			}
 			if emu.cpu.PC == nextMenuLoopPC && i >= 1 {
 				break
 			}
 		}
 		emu.cpu.RemovePreFetchHook("errtrap")
+		// Walk the captured VARS buffer: dump number-array a()/l() elements +
+		// scalars, decoding the Sinclair small-integer FP form [00,sign,lo,hi,00].
+		if varsBuf != nil {
+			decSI := func(b []byte) (int, bool) { // small-int FP -> value
+				if len(b) < 5 || b[0] != 0 || b[4] != 0 {
+					return 0, false
+				}
+				v := int(b[2]) | int(b[3])<<8
+				if b[1] == 0xFF {
+					v -= 65536
+				}
+				return v, true
+			}
+			t.Logf("VARS=$%04X (walking %d bytes)", varsAddr, len(varsBuf))
+			t.Logf("  raw[0:64]=% X", varsBuf[0:64])
+			t.Logf("  raw[64:128]=% X", varsBuf[64:128])
+			for i := 0; i < len(varsBuf); {
+				c := varsBuf[i]
+				if c == 0x80 {
+					break // end of vars
+				}
+				typ := c >> 5
+				name := rune(c&0x1F) + 0x60
+				switch typ {
+				case 0b100: // number array
+					if i+3 >= len(varsBuf) {
+						i = len(varsBuf)
+						break
+					}
+					total := int(varsBuf[i+1]) | int(varsBuf[i+2])<<8
+					ndim := int(varsBuf[i+3])
+					dims := []int{}
+					p := i + 4
+					for d := 0; d < ndim && p+1 < len(varsBuf); d++ {
+						dims = append(dims, int(varsBuf[p])|int(varsBuf[p+1])<<8)
+						p += 2
+					}
+					// elements start at p; dump first ~24, flag any > 255
+					var sb strings.Builder
+					n := 0
+					for e := p; e+4 < i+3+total && n < 30; e += 5 {
+						if v, ok := decSI(varsBuf[e : e+5]); ok {
+							flag := ""
+							if v > 255 || v < 0 {
+								flag = "!"
+							}
+							fmt.Fprintf(&sb, " [%d]=%d%s", n, v, flag)
+						} else {
+							fmt.Fprintf(&sb, " [%d]=<fp %X>", n, varsBuf[e:e+5])
+						}
+						n++
+					}
+					t.Logf("  array %c() dims=%v:%s", name, dims, sb.String())
+					i = i + 3 + total
+				case 0b101: // long-name number — skip name chars then 5 bytes
+					j := i + 1
+					for j < len(varsBuf) && varsBuf[j]&0x80 == 0 {
+						j++
+					}
+					i = j + 1 + 5
+				case 0b011: // single-char number scalar: name + 5 bytes
+					if v, ok := decSI(varsBuf[i+1 : i+6]); ok {
+						t.Logf("  scalar %c = %d", name, v)
+					}
+					i += 6
+				case 0b010: // string
+					if i+2 >= len(varsBuf) {
+						i = len(varsBuf)
+						break
+					}
+					ln := int(varsBuf[i+1]) | int(varsBuf[i+2])<<8
+					i += 3 + ln
+				case 0b111: // FOR control var: name + 18 bytes
+					i += 19
+				default:
+					i++
+				}
+			}
+		}
+		// Locate where the out-of-range value 379 ($017B) lives: scan the var
+		// region (logical $4000-$7FFF = banks 5/2, plus sysvars $5B00-$5FFF) for
+		// the raw 16-bit pair 7B 01 and the small-integer-FP form 00 00 7B 01 00.
+		// X-PTR ($5C5F) marks the tokenised error position (which SPRITE param).
+		xptr := uint16(emu.mem.Read(0x5C5F)) | uint16(emu.mem.Read(0x5C60))<<8
+		var ctx [24]byte
+		for i := range ctx {
+			ctx[i] = emu.mem.Read(xptr - 8 + uint16(i))
+		}
+		t.Logf("X-PTR=$%04X tokens(xptr-8..)=% X", xptr, ctx)
+		for a := 0x4000; a <= 0x7FFE; a++ {
+			if emu.mem.Read(uint16(a)) == 0x7B && emu.mem.Read(uint16(a+1)) == 0x01 {
+				t.Logf("  found 7B 01 (=379) @ logical $%04X bank=%d", a, emu.mem.GetMMU(byte(a>>13)))
+			}
+		}
 		t.Logf("captured %d ERR_NR transitions, %d raise-site hits", len(events), len(raises))
 		for _, ev := range events {
 			t.Logf("ERR_NR $%02X->$%02X @f%d PC=$%04X A=$%02X BC=$%04X DE=$%04X HL=$%04X SP=$%04X STKEND=$%04X calc(stkend-5..)=% X",
@@ -390,8 +562,17 @@ func dumpFXState(t *testing.T, emu *emulator, path string) {
 
 	hexbuf := make([]byte, 0, 16384)
 	const hexd = "0123456789ABCDEF"
-	for b := 0; b < 32; b++ {
+	nbanks := 32 // default covers banks 0-15 (16K); set ZXFX_BANKS=224 for high banks
+	if v := os.Getenv("ZXFX_BANKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			nbanks = n
+		}
+	}
+	for b := 0; b < nbanks; b++ {
 		page := emu.mem.RAM8KPage(b)
+		if page == nil {
+			continue
+		}
 		hexbuf = hexbuf[:0]
 		for _, by := range page {
 			hexbuf = append(hexbuf, hexd[by>>4], hexd[by&15])
