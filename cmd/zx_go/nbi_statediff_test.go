@@ -337,22 +337,36 @@ func TestNBIStateDumpAtMenu(t *testing.T) {
 		// 21*16 = $062F..$0632): +0=X-low +2=X8/flags. Capture PC + value to find
 		// who sets X[8] (the +256 that makes SPRITE AT(21,0)=288 not 32).
 		type cwr struct {
-			frame int
-			pc    uint16
-			addr  uint16
-			val   byte
+			frame              int
+			pc                 uint16
+			addr               uint16
+			val                byte
+			a                  byte
+			bc, de, hl, ix, iy uint16
 		}
 		var cacheWr []cwr
+		var disasm962 []byte
 		emu.mem.SetRAMWriteHook(func(bank int, addr uint16, val byte) {
 			if bank == 8 && addr >= 0x062F && addr <= 0x0632 && len(cacheWr) < 40 {
-				cacheWr = append(cacheWr, cwr{curFrame, emu.cpu.PC, addr, val})
+				cacheWr = append(cacheWr, cwr{curFrame, emu.cpu.PC, addr, val,
+					emu.cpu.A, emu.cpu.BC(), emu.cpu.DE(), emu.cpu.HL(), emu.cpu.IX, emu.cpu.IY})
+				if emu.cpu.PC == 0x0962 && disasm962 == nil {
+					disasm962 = make([]byte, 40)
+					for i := range disasm962 {
+						disasm962[i] = emu.mem.Read(0x0948 + uint16(i)) // window around $0962
+					}
+				}
 			}
 		})
 		defer emu.mem.SetRAMWriteHook(nil)
 		defer func() {
 			t.Logf("=== bank-8 writes to leader-21 cache ($062F..$0632) ===")
 			for _, w := range cacheWr {
-				t.Logf("  @f%d PC=$%04X bank8[$%04X]=$%02X (%d)", w.frame, w.pc, w.addr, w.val, w.val)
+				t.Logf("  @f%d PC=$%04X bank8[$%04X]=$%02X (%d)  A=%02X BC=%04X DE=%04X HL=%04X IX=%04X IY=%04X",
+					w.frame, w.pc, w.addr, w.val, w.val, w.a, w.bc, w.de, w.hl, w.ix, w.iy)
+			}
+			if disasm962 != nil {
+				t.Logf("  code bytes $0948..$096F: % X", disasm962)
 			}
 		}()
 		// Optional: force SEED ($5C76/77) + FRAMES ($5C78-7A) to a fixed value
