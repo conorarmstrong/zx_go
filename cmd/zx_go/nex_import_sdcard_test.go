@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/next/install"
+)
 
 // TestNexImportSDCardAvailableInFolderMode pins the fix for the File->Open
 // .nex flow being wrongly blocked with "needs a Spectrum Next SD card (none
@@ -16,6 +20,15 @@ import "testing"
 // default the test harness uses), the emulator exposes the importable SD
 // image so .nex loading is allowed.
 func TestNexImportSDCardAvailableInFolderMode(t *testing.T) {
+	// Premise: an SD card is configured. With neither a host .img
+	// (ZX_GO_NEXT_SD_IMG) nor a folder-mode SD tree (roms/next/sd) present —
+	// the case in CI, where the SD content is gitignored — there is nothing to
+	// import into, so the "sdImageSrc must be non-nil" assertion does not apply.
+	// Skip rather than fail; the regression is still guarded locally where the
+	// SD tree exists.
+	if install.SDCardImage() == "" && install.SDCardRoot() == "" {
+		t.Skip("no Spectrum Next SD card configured (folder/img absent) — nothing to import into")
+	}
 	emu, err := newNextEmulator()
 	if err != nil {
 		t.Skipf("Next ROMs / SD not installed: %v", err)
