@@ -260,6 +260,11 @@ type cliFlags struct {
 	readTapeFrom string // "$PC[:hit]" arming checkpoint (empty = from boot)
 	readTapeMax  int
 	readTapeAll  bool // log EVERY read (logical addr) not just RAM — bank-agnostic vs the reference emulator
+
+	// tape: when set with --headless, load this .tap/.tzx into the virtual
+	// deck at startup and start it playing (the headless equivalent of the
+	// GUI "Open .tap" path). Empty = no tape mounted.
+	tape string
 }
 
 // parseCLI reads os.Args once and returns a populated cliFlags.
@@ -282,6 +287,7 @@ func parseCLI() *cliFlags {
 		startInPentagon = flag.Bool("pentagon", false, "Boot directly into Pentagon 128 mode")
 		startInSAM      = flag.Bool("sam", false, "Boot directly into SAM Coupé mode")
 		trdPath         = flag.String("trd", "", "Mount a TR-DOS .TRD disk image in Beta drive A at startup (classic models, e.g. with --pentagon)")
+		tapePath        = flag.String("tape", "", "Load a .tap/.tzx tape into the deck at startup and start playing (works in --headless; on the 48K type LOAD\"\" or use the 128 Tape Loader to read it)")
 
 		snapshotEvery   = flag.Int("snapshot-every", 0, "Print a state snapshot (CPU, sysvars, paging, watched memory) every N frames in headless mode")
 		snapshotPrefix  = flag.String("snapshot-prefix", "", "When set, write per-snapshot screenshots to <prefix><frame-number>.png")
@@ -408,6 +414,7 @@ func parseCLI() *cliFlags {
 	f.startInPentagon = *startInPentagon
 	f.startInSAM = *startInSAM
 	f.trdPath = *trdPath
+	f.tape = *tapePath
 	f.snapshotEvery = *snapshotEvery
 	f.snapshotPrefix = *snapshotPrefix
 	f.snapshotScreens = *snapshotScreens

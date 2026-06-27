@@ -49,6 +49,16 @@ func runHeadless(f *cliFlags) {
 		}
 		slog.Info("headless: mounted TR-DOS disk in drive A", "path", f.trdPath)
 	}
+	if f.tape != "" {
+		if err := loadTapeFile(emu, f.tape); err != nil {
+			slog.Error("headless: failed to load --tape image", "path", f.tape, "err", err)
+			os.Exit(1)
+		}
+		// The fast-load trap synthesises LD-BYTES from the mounted blocks; the
+		// GUI installs it once at startup, so headless must install it here.
+		installTapeTrap(emu)
+		slog.Info("headless: tape ready — read it with LOAD\"\" (48K) or the 128 Tape Loader", "path", f.tape)
+	}
 
 	_, closeFn := installTraceHooks(emu, f)
 	defer closeFn()
