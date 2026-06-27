@@ -46,7 +46,17 @@ const (
 	portPatch        = 0xBB // Patch page (R=page in, W=page out)
 )
 
-// WD1770 status register bits.
+// WD1772 status-register bits. Per the WD1772 datasheet "Status Register
+// Summary", the meaning of bits 1,2,4,5 depends on the command class (Type I
+// head-movement vs Type II/III data-transfer); the aliases below name each
+// interpretation. Two bits differ from the WD1793 (the Beta Disk's chip):
+//
+//   - bit 7 is Motor On in EVERY command class (the WD1772 has no drive-ready
+//     input — pin 19 is the raw Read Data line), NOT "Not Ready".
+//   - Type I bit 5 is "Spin-Up complete", NOT "Head Loaded".
+//
+// An empty drive is detected by Record Not Found on a Type II/III command, not
+// by any bit-7 ready indicator.
 const (
 	stBusy         = 0x01
 	stDRQ          = 0x02 // Type II/III: data request
@@ -56,11 +66,32 @@ const (
 	stCRCError     = 0x08
 	stSeekError    = 0x10 // Type I: seek error
 	stRNF          = 0x10 // Type II/III: record not found
-	stHeadLoaded   = 0x20 // Type I
+	stSpinUp       = 0x20 // Type I: motor spin-up complete
 	stRecordType   = 0x20 // Type II/III: deleted data
 	stWriteProtect = 0x40
-	stNotReady     = 0x80
+	stMotorOn      = 0x80 // all command classes: Motor On output
 )
+
+// wd1772StepRateMs returns the head stepping-motor rate in milliseconds for the
+// Type I rate field r1r0, per the WD1772 datasheet "Flag Summary":
+//
+//	r1r0 = 00 -> 6 ms,  01 -> 12 ms,  10 -> 2 ms,  11 -> 3 ms
+//
+// These differ from the WD1793's 3/6/10/15 ms. The I/O-advanced controller
+// model performs head movement instantly, so this is supplied for faithfulness
+// and any future timing model rather than used to gate the current transfers.
+func wd1772StepRateMs(r1r0 byte) int {
+	switch r1r0 & 0x03 {
+	case 0b00:
+		return 6
+	case 0b01:
+		return 12
+	case 0b10:
+		return 2
+	default: // 0b11
+		return 3
+	}
+}
 
 // Disciple represents the DISCiPLE disk interface.
 type Disciple struct {
@@ -83,10 +114,20 @@ type Disciple struct {
 	drq          bool
 	intrq        bool
 	lastCmdType1 bool
+	motorOn      bool // WD1772 Motor On output (status bit 7); set when a command runs
+	stepDir      int  // last step direction: +1 (in) / -1 (out) / 0, used by a bare Step
+	multiSector  bool // m flag of the in-flight Type II Read/Write command
 
 	// Drive/head state
 	drive int // 0 or 1
 	head  int // 0 or 1
+
+	// Physical R/W head track position per drive. The WD1772 Track Register
+	// (trackReg) is a separate latch that the head movement only updates when
+	// the command's update flag (u) is set; the physical position below is what
+	// actually selects the cylinder the head is over. Restore/Seek always move
+	// the head and update the Track Register together.
+	headTrack [2]int
 
 	// Disk images
 	disks     [2]*plus3fdc.Disk
@@ -152,8 +193,10 @@ func (d *Disciple) reset() {
 	d.drq = false
 	d.intrq = false
 	d.lastCmdType1 = true
+	d.motorOn = false
 	d.drive = 0
 	d.head = 0
+	d.headTrack = [2]int{}
 	d.controlReg = 0
 	d.enabled = true
 	d.inhibited = false
@@ -241,29 +284,35 @@ func (d *Disciple) controlRead() byte {
 	return 0xFF
 }
 
-// readStatus builds the WD1770 status register.
+// readStatus builds the WD1772 status register per the datasheet "Status
+// Register Summary". The WD1772 has no drive-ready input, so bit 7 is the Motor
+// On output in every command class (never "Not Ready"); an empty drive is
+// reported via Record Not Found on Type II/III commands, not here. Type I bit 5
+// is "Spin-Up complete" (set once the motor is on), not the WD1793's Head
+// Loaded.
 func (d *Disciple) readStatus() byte {
 	var st byte
-	disk := d.disks[d.drive]
 
-	if disk == nil {
-		st |= stNotReady
+	if d.motorOn {
+		st |= stMotorOn
 	}
 	if d.busy {
 		st |= stBusy
 	}
 
 	if d.lastCmdType1 {
-		if disk != nil {
-			st |= stHeadLoaded
+		// Type I status: bit 5 = Spin-Up complete (motor up to speed), bit 2 =
+		// Track 0. Both the spin-up sequence and the motor are modelled by the
+		// motorOn flag, which the chip raises automatically when a command runs.
+		if d.motorOn {
+			st |= stSpinUp
 		}
 		if d.trackReg == 0 {
 			st |= stTrack0
 		}
-	} else {
-		if d.drq {
-			st |= stDRQ
-		}
+	} else if d.drq {
+		// Type II/III status: bit 1 = Data Request.
+		st |= stDRQ
 	}
 
 	st |= d.statusReg & (stCRCError | stRNF | stSeekError | stRecordType | stWriteProtect)
@@ -278,6 +327,7 @@ func (d *Disciple) readData() byte {
 			d.drq = false
 			d.busy = false
 			d.intrq = true
+			d.advanceMultiSector()
 		}
 		d.dataReg = val
 		return val
@@ -295,6 +345,7 @@ func (d *Disciple) writeData(val byte) {
 				d.commitWriteTrack()
 			} else {
 				d.commitWriteSector()
+				d.advanceMultiSector()
 			}
 			d.drq = false
 			d.busy = false
@@ -303,48 +354,72 @@ func (d *Disciple) writeData(val byte) {
 	}
 }
 
+// advanceMultiSector implements the WD1772 multi-record auto-increment: per the
+// datasheet "TYPE II COMMANDS" (m=1), "the Sector Register [is] internally
+// updated ... in numerical ascending sequence". After a multi-sector Read or
+// Write Sector transfer completes, the Sector Register advances to the next
+// sector. The one-shot flag is cleared so a subsequent single-sector command is
+// not affected.
+func (d *Disciple) advanceMultiSector() {
+	if d.multiSector {
+		d.sectorReg++
+		d.multiSector = false
+	}
+}
+
 func (d *Disciple) executeCommand(cmd byte) {
 	d.statusReg = 0
+	// WD1772 datasheet "TYPE I COMMANDS": when a command is received and the MO
+	// signal is low, the chip forces Motor On (running the spin-up sequence
+	// unless the h flag disables it). MO stays asserted until the device has
+	// been idle for several revolutions, which the I/O-advanced model never
+	// reaches, so once a command runs the motor is on.
+	d.motorOn = true
 
 	switch {
-	case cmd&0xF0 == 0x00: // Restore
+	case cmd&0xF0 == 0x00: // Restore (seek track 0)
 		d.lastCmdType1 = true
+		d.headTrack[d.drive] = 0
 		d.trackReg = 0
 		d.intrq = true
 
-	case cmd&0xF0 == 0x10: // Seek
+	case cmd&0xF0 == 0x10: // Seek (to the track in the Data Register)
 		d.lastCmdType1 = true
+		d.stepDir = stepDir(int(d.dataReg) - d.headTrack[d.drive])
+		d.headTrack[d.drive] = int(d.dataReg)
 		d.trackReg = d.dataReg
 		d.intrq = true
 
-	case cmd&0xE0 == 0x20: // Step
+	case cmd&0xE0 == 0x20: // Step (repeat the last step direction)
 		d.lastCmdType1 = true
+		d.stepHead(cmd, d.stepDir)
 		d.intrq = true
 
-	case cmd&0xE0 == 0x40: // Step-In
+	case cmd&0xE0 == 0x40: // Step-In (toward higher track numbers)
 		d.lastCmdType1 = true
-		if d.trackReg < 79 {
-			d.trackReg++
-		}
+		d.stepDir = +1
+		d.stepHead(cmd, +1)
 		d.intrq = true
 
-	case cmd&0xE0 == 0x60: // Step-Out
+	case cmd&0xE0 == 0x60: // Step-Out (toward track 0)
 		d.lastCmdType1 = true
-		if d.trackReg > 0 {
-			d.trackReg--
-		}
+		d.stepDir = -1
+		d.stepHead(cmd, -1)
 		d.intrq = true
 
 	case cmd&0xE0 == 0x80: // Read Sector
 		d.lastCmdType1 = false
+		d.multiSector = cmd&0x10 != 0 // m flag (bit 4)
 		d.cmdReadSector()
 
 	case cmd&0xE0 == 0xA0: // Write Sector
 		d.lastCmdType1 = false
+		d.multiSector = cmd&0x10 != 0 // m flag (bit 4)
 		d.cmdWriteSector()
 
 	case cmd&0xF0 == 0xC0: // Read Address
 		d.lastCmdType1 = false
+		d.multiSector = false
 		d.cmdReadAddress()
 
 	case cmd&0xF0 == 0xD0: // Force Interrupt
@@ -353,14 +428,44 @@ func (d *Disciple) executeCommand(cmd byte) {
 		d.xferBuf = nil
 		d.intrq = true
 		d.lastCmdType1 = true
+		d.multiSector = false
 
 	case cmd&0xF0 == 0xE0: // Read Track
 		d.lastCmdType1 = false
+		d.multiSector = false
 		d.cmdReadTrack()
 
 	case cmd&0xF0 == 0xF0: // Write Track (format)
 		d.lastCmdType1 = false
+		d.multiSector = false
 		d.cmdWriteTrack()
+	}
+}
+
+// stepHead moves the physical R/W head one track in the given direction,
+// clamping at track 0, and updates the Track Register only when the command's
+// update flag (u, bit 4) is set — per the WD1772 datasheet "Flag Summary"
+// (u = Update Track Register) and the STEP/STEP-IN/STEP-OUT descriptions.
+func (d *Disciple) stepHead(cmd byte, dir int) {
+	pos := d.headTrack[d.drive] + dir
+	if pos < 0 {
+		pos = 0
+	}
+	d.headTrack[d.drive] = pos
+	if cmd&0x10 != 0 { // u flag set → Track Register tracks the head
+		d.trackReg = byte(pos)
+	}
+}
+
+// stepDir clamps a track delta to a single step direction (+1 in, -1 out, or 0).
+func stepDir(delta int) int {
+	switch {
+	case delta > 0:
+		return +1
+	case delta < 0:
+		return -1
+	default:
+		return 0
 	}
 }
 
@@ -371,7 +476,7 @@ func (d *Disciple) cmdReadSector() {
 		d.intrq = true
 		return
 	}
-	tr := disk.Track(d.head, int(d.trackReg))
+	tr := disk.Track(d.head, d.headTrack[d.drive])
 	if tr == nil {
 		d.statusReg |= stRNF
 		d.intrq = true
@@ -401,7 +506,7 @@ func (d *Disciple) cmdReadTrack() {
 		d.intrq = true
 		return
 	}
-	tr := disk.Track(d.head, int(d.trackReg))
+	tr := disk.Track(d.head, d.headTrack[d.drive])
 	if tr == nil {
 		d.statusReg |= stRNF
 		d.intrq = true
@@ -445,7 +550,7 @@ func (d *Disciple) commitWriteTrack() {
 		d.statusReg |= stRNF
 		return
 	}
-	if err := disk.FormatTrack(d.head, int(d.trackReg), parseFormatStream(d.xferBuf)); err != nil {
+	if err := disk.FormatTrack(d.head, d.headTrack[d.drive], parseFormatStream(d.xferBuf)); err != nil {
 		d.statusReg |= stRNF
 	}
 }
@@ -496,7 +601,7 @@ func (d *Disciple) cmdWriteSector() {
 		d.intrq = true
 		return
 	}
-	tr := disk.Track(d.head, int(d.trackReg))
+	tr := disk.Track(d.head, d.headTrack[d.drive])
 	if tr == nil {
 		d.statusReg |= stRNF
 		d.intrq = true
@@ -521,7 +626,7 @@ func (d *Disciple) commitWriteSector() {
 	if disk == nil {
 		return
 	}
-	tr := disk.Track(d.head, int(d.trackReg))
+	tr := disk.Track(d.head, d.headTrack[d.drive])
 	if tr == nil {
 		return
 	}
@@ -549,7 +654,7 @@ func (d *Disciple) cmdReadAddress() {
 		d.intrq = true
 		return
 	}
-	tr := disk.Track(d.head, int(d.trackReg))
+	tr := disk.Track(d.head, d.headTrack[d.drive])
 	if tr == nil {
 		d.statusReg |= stRNF
 		d.intrq = true
@@ -567,7 +672,9 @@ func (d *Disciple) cmdReadAddress() {
 	d.xferWrite = false
 	d.busy = true
 	d.drq = true
-	d.trackReg = c
+	// WD1772 datasheet "Read Address": the Track Address of the ID field is
+	// written into the Sector Register so a comparison can be made by the user.
+	d.sectorReg = c
 }
 
 // LoadDisk loads a disk image into the specified drive.

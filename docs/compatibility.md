@@ -122,19 +122,33 @@ expose timing imperfections.
 
 ## Spectrum Next titles
 
-The Next boots NextZXOS end-to-end (v1.0 RC1) — see
-[docs/spectrum-next.md](spectrum-next.md). Layer 2, palette, .NEX
-loader and the NextZXOS menu/Browser/NextBASIC work; sprite polish,
-full DAC integration, and several video modes are deferred to v1.1.
+The Next cold-boots NextZXOS end-to-end — splash → firmware → welcome
+→ menu/Browser/NextBASIC — see [docs/spectrum-next.md](spectrum-next.md).
+The individual hardware blocks (Layer 2 incl. hi-res, the sprite
+engine, tilemap, Copper, the NextReg file, the 8K MMU) are tested
+against the FPGA VHDL.
+
+**Running arbitrary `.NEX` games is the newest and least-finished
+part of zx_go, and the most likely place to hit a bug.** `.nex`
+titles are launched through NextZXOS's own loader, so OS-dependent
+games run as on hardware — but per-title behaviour varies widely.
+The honest state, as verified by a contributor:
 
 | Title | Status | Notes |
 |---|---|---|
+| Sonic the Hedgehog | Works (caveat) | Renders level/scroll/sprite/HUD and is controllable (arrows + Right-Alt/Ctrl). Residual: a few HUD icons in the top-right diverge from hardware (a game-loop/interrupt-timing detail, not a render bug). |
+| Nextoid | Works (caveat) | Bat/ball/HUD render and the game is drivable ('S' then SPACE). A load-time reset-to-Welcome (Copper byte-pairing) is fixed. |
+| NextBASIC Invaders | Known issue | Boots and sprites render, but the game throws an `Integer out of range` during play — a NextBASIC `DEFPROC` parameter/local-var storage divergence. Tracked in [janko-jj's reports](https://github.com/conorarmstrong/zx_go/issues). |
 | Baggers in Space (Stonechat Games) | Untested | Public `.nex` distribution; uses Layer 2 + sprites; foundation: `TestModelNextLayer2VisibleEndToEnd` |
+| Warhawk | Untested | Shown booting in the README screenshot; not run to a confident "playable" verdict. |
 
-The Next title scene is small enough that any contributor running
-public `.nex` releases from specnext.com or itch.io should add their
-own rows below as they verify them. **No fabrications** — only list
-titles you've actually run.
+If a Next game fails for you, **that is expected at this stage** —
+please file it (with what you see vs. real hardware / a stable
+emulator) so it can be fixed. The Next title scene is small enough
+that any contributor running public `.nex` releases from specnext.com
+or itch.io should add their own rows above as they verify them.
+**No fabrications** — only list titles you've actually run, and
+mark anything unverified as Untested.
 
 ## Tape format edge cases
 

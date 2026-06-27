@@ -92,8 +92,9 @@ func (c *CPU) executeZ80NEDInstruction(opcode byte) bool {
 		c.setDE(barrelRotateLeftCircular(c.de(), c.B))
 		c.tstates += 8
 		return true
-	case 0x95: // SETAE      A = 1 << (E & 7); per-pixel mask
-		c.A = 1 << (c.E & 7)
+	case 0x95: // SETAE      A = $80 >> (E & 7); per-pixel mask (leftmost
+		// pixel E&7==0 -> bit 7, rightmost E&7==7 -> bit 0). See setae_test.go.
+		c.A = 0x80 >> (c.E & 7)
 		c.tstates += 8
 		return true
 
@@ -212,22 +213,15 @@ func (c *CPU) executeZ80NEDInstruction(opcode byte) bool {
 // 4-3 (row group). Incrementing Y is a three-stage cascade.
 func (c *CPU) pixeldn() {
 	h, l := c.H, c.L
-	h++
-	if h&0x07 != 0 {
-		c.H = h
-		return
-	}
-	// Pixel-within-char wrapped; undo the carry into bit 3, then
-	// advance the char-row.
-	h -= 8
-	l += 0x20
-	if l&0xE0 != 0 {
-		c.H, c.L = h, l
-		return
-	}
-	// Char-row wrapped; advance the row group (bits 4-3 of H).
-	h += 0x08
-	c.H, c.L = h, l
+	// The Z80N core (t80n.vhd PIXELDN) extracts the 8-bit Y coordinate from
+	// the ZX screen-address bitfields — Y = H[4:3] ++ L[7:5] ++ H[2:0] —
+	// increments it, and redistributes it, preserving H[7:5] and L[4:0].
+	// (For valid screen addresses this equals the classic inc-H algorithm;
+	// at the Y-wrap boundary only this bitfield form matches the FPGA.)
+	y := (uint16(h&0x18) << 3) | (uint16(l&0xE0) >> 2) | uint16(h&0x07)
+	y = (y + 1) & 0xFF
+	c.H = (h & 0xE0) | byte((y&0xC0)>>3) | byte(y&0x07)
+	c.L = byte((y&0x38)<<2) | (l & 0x1F)
 }
 
 // pixelad sets HL to the Spectrum screen address for pixel (D=Y,

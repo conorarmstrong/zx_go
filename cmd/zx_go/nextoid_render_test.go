@@ -73,8 +73,8 @@ func TestNextoidSpritesRender(t *testing.T) {
 			step()
 		}
 	}
-	press(1, 0x02) // 'S'
-	press(7, 0x01) // SPACE
+	press(1, 0x02)             // 'S'
+	press(7, 0x01)             // SPACE
 	for f := 0; f < 360; f++ { // let the level build + sprites upload
 		step()
 	}
@@ -91,9 +91,9 @@ func TestNextoidSpritesRender(t *testing.T) {
 
 	// Snapshot the composite, then disable the sprite layer and recompose: the
 	// bat/ball/HUD sprites must visibly change the frame (i.e. they ARE drawn).
-	clone := func(img *image.RGBA) []byte {
-		out := make([]byte, len(img.Pix))
-		copy(out, img.Pix)
+	clone := func(img *image.RGBA) *image.RGBA {
+		out := image.NewRGBA(img.Bounds())
+		copy(out.Pix, img.Pix)
 		return out
 	}
 	withSprites := clone(emu.renderFrame())
@@ -101,10 +101,17 @@ func TestNextoidSpritesRender(t *testing.T) {
 	withoutSprites := clone(emu.renderFrame())
 	emu.nextSprites.SetEnabled(true)
 
+	// With sprites active the Next frame is the full 320x256 over-border frame;
+	// without, it falls back to the classic 320x240. Align the common rows by
+	// the vertical offset ((256-240)/2 = 8) and compare the shared band.
 	diff := 0
-	for i := range withSprites {
-		if withSprites[i] != withoutSprites[i] {
-			diff++
+	off := (withSprites.Bounds().Dy() - withoutSprites.Bounds().Dy()) / 2
+	for r := 0; r < withoutSprites.Bounds().Dy(); r++ {
+		sr := r + off
+		for x := 0; x < withoutSprites.Stride; x++ {
+			if withSprites.Pix[sr*withSprites.Stride+x] != withoutSprites.Pix[r*withoutSprites.Stride+x] {
+				diff++
+			}
 		}
 	}
 	// A handful of sprite glyphs (bat + HUD digits) is hundreds of pixels.

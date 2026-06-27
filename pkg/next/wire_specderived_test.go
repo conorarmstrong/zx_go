@@ -1022,9 +1022,12 @@ func TestSpec_NR70_Layer2Resolution_ReservedBitsMasked(t *testing.T) {
 
 // TestSpec_NR71_Layer2ScrollX_OnlyBit0.
 // VHDL :5479-5480 / :6117 — bits 7:1 reserved, only bit 0 stored.
+// NR$71 (Layer 2 scrollX MSB) is owned by WireLayer2 now that it pushes the
+// 9-bit scroll into the live layer; wire a layer so the register responds.
 func TestSpec_NR71_Layer2ScrollX_OnlyBit0(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
+	WireLayer2(disp, layer2.New(nil))
 
 	disp.WriteReg(0x71, 0xFF)
 	if got := disp.ReadReg(0x71); got != 0x01 {

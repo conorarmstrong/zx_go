@@ -15,14 +15,14 @@ const (
 
 // Z80 hardware modes
 const (
-	Z80_HW_48K     = 0
-	Z80_HW_48K_IF1 = 1
-	Z80_HW_SAMRAM  = 2
-	Z80_HW_128K    = 4
+	Z80_HW_48K      = 0
+	Z80_HW_48K_IF1  = 1
+	Z80_HW_SAMRAM   = 2
+	Z80_HW_128K     = 4
 	Z80_HW_128K_IF1 = 5
-	Z80_HW_PLUS2   = 12
-	Z80_HW_PLUS2A  = 13
-	Z80_HW_PLUS3   = 14
+	Z80_HW_PLUS2    = 12
+	Z80_HW_PLUS2A   = 13
+	Z80_HW_PLUS3    = 14
 )
 
 // loadZ80 loads a .Z80 format snapshot
@@ -40,14 +40,14 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 	s.CPU.B = header[3]
 	s.CPU.L = header[4]
 	s.CPU.H = header[5]
-	
+
 	// PC is at bytes 6-7 (little endian)
 	pc := binary.LittleEndian.Uint16(header[6:8])
-	
+
 	s.CPU.SP = binary.LittleEndian.Uint16(header[8:10])
 	s.CPU.I = header[10]
 	s.CPU.R = header[11]
-	
+
 	// Flags byte at position 12
 	flagsByte := header[12]
 	if flagsByte == 255 {
@@ -55,7 +55,7 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 	}
 	s.CPU.R = (s.CPU.R & 0x7F) | ((flagsByte & 0x01) << 7)
 	s.CPU.BorderColor = (flagsByte >> 1) & 0x07
-	
+
 	// More CPU state
 	s.CPU.E = header[13]
 	s.CPU.D = header[14]
@@ -67,14 +67,14 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 	s.CPU.H_ = header[20]
 	s.CPU.A_ = header[21]
 	s.CPU.F_ = header[22]
-	
+
 	s.CPU.IY = binary.LittleEndian.Uint16(header[23:25])
 	s.CPU.IX = binary.LittleEndian.Uint16(header[25:27])
-	
+
 	// Interrupt state
 	s.CPU.IFF1 = (header[27] != 0)
 	s.CPU.IFF2 = (header[28] != 0)
-	
+
 	// Interrupt mode
 	s.CPU.IM = header[29] & 0x03
 
@@ -83,7 +83,7 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 		// Version 1 format
 		s.CPU.PC = pc
 		s.Memory.Is128K = false
-		
+
 		// Read compressed memory data
 		return s.readZ80V1Memory(file)
 	} else {
@@ -92,21 +92,21 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 		if _, err := io.ReadFull(file, additionalHeaderSize); err != nil {
 			return fmt.Errorf("failed to read additional header size: %w", err)
 		}
-		
+
 		headerLen := binary.LittleEndian.Uint16(additionalHeaderSize)
 		if headerLen < 23 {
 			return fmt.Errorf("invalid additional header length: %d", headerLen)
 		}
-		
+
 		// Read the rest of the header
 		extHeader := make([]byte, headerLen)
 		if _, err := io.ReadFull(file, extHeader); err != nil {
 			return fmt.Errorf("failed to read extended header: %w", err)
 		}
-		
+
 		// PC is in extended header
 		s.CPU.PC = binary.LittleEndian.Uint16(extHeader[0:2])
-		
+
 		// Hardware mode. Its meaning depends on the snapshot version, which
 		// the additional-header length distinguishes: 23 = v2, 54/55 = v3.
 		// In v2, mode 3 = 128K and 4 = 128K+IF1; in v3 mode 3 is 48K+MGT and
@@ -126,7 +126,7 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 			// Port 0x7FFD paging value for 128K machines.
 			s.Memory.Port7FFD = extHeader[3]
 		}
-		
+
 		// Read memory blocks
 		return s.readZ80V2V3Memory(file)
 	}
@@ -139,9 +139,9 @@ func (s *Snapshot) readZ80V1Memory(file io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("failed to read memory data: %w", err)
 	}
-	
+
 	var memData []byte
-	
+
 	// Check if data is compressed (last 4 bytes should be 0x00, 0xED, 0xED, 0x00)
 	if len(data) >= 4 {
 		lastFour := data[len(data)-4:]
@@ -159,17 +159,17 @@ func (s *Snapshot) readZ80V1Memory(file io.Reader) error {
 	} else {
 		memData = data
 	}
-	
+
 	// For 48K, we expect exactly 49152 bytes (0x4000 - 0xFFFF)
 	if len(memData) < 49152 {
 		return fmt.Errorf("insufficient memory data: got %d bytes, expected 49152", len(memData))
 	}
-	
+
 	// Load into RAM banks 5, 2, 0 (the 48K memory layout)
-	copy(s.Memory.RAM[5], memData[0:16384])    // 0x4000-0x7FFF
-	copy(s.Memory.RAM[2], memData[16384:32768]) // 0x8000-0xBFFF  
+	copy(s.Memory.RAM[5], memData[0:16384])     // 0x4000-0x7FFF
+	copy(s.Memory.RAM[2], memData[16384:32768]) // 0x8000-0xBFFF
 	copy(s.Memory.RAM[0], memData[32768:49152]) // 0xC000-0xFFFF
-	
+
 	return nil
 }
 
@@ -188,7 +188,7 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 		if n != 3 {
 			break // End of file
 		}
-		
+
 		blockLen := binary.LittleEndian.Uint16(blockHeader[0:2])
 		pageNum := blockHeader[2]
 
@@ -212,7 +212,7 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 			}
 			memData = decompressed
 		}
-		
+
 		// Map the .z80 page number to a RAM bank. The mapping differs by
 		// machine: in 128K mode the page number IS the physical bank + 3
 		// (page 3→bank 0 … page 10→bank 7), whereas in 48K mode only pages
@@ -237,7 +237,7 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 				continue // unknown / ROM page
 			}
 		}
-		
+
 		// Copy data to appropriate RAM bank
 		if len(memData) >= 16384 {
 			copy(s.Memory.RAM[bankNum], memData[:16384])
@@ -245,7 +245,7 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 			copy(s.Memory.RAM[bankNum][:len(memData)], memData)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -253,31 +253,31 @@ func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 func (s *Snapshot) decompressZ80(data []byte) ([]byte, error) {
 	var result []byte
 	i := 0
-	
+
 	for i < len(data) {
 		if i+3 < len(data) && data[i] == 0xED && data[i+1] == 0xED {
 			// RLE sequence: 0xED 0xED count value
 			count := data[i+2]
 			value := data[i+3]
-			
-			if count == 0 {
-				// Special case: count of 0 means literal 0xED 0xED
-				result = append(result, 0xED, 0xED)
-				i += 4
-			} else {
-				// Repeat 'value' 'count' times
-				for j := 0; j < int(count); j++ {
-					result = append(result, value)
-				}
-				i += 4
+
+			// Per the .Z80 spec the 4-byte code ED ED xx yy means "byte yy
+			// repeated xx times". A count of 0 is therefore "repeat 0
+			// times" — it emits nothing and consumes the whole 4-byte code.
+			// (A compliant compressor never emits this; it is handled only
+			// for robustness against odd inputs.) The end-of-data marker
+			// 00 ED ED 00 is NOT decoded here because it begins with a 00
+			// literal, so the ED ED never sits at the start of a code.
+			for j := 0; j < int(count); j++ {
+				result = append(result, value)
 			}
+			i += 4
 		} else {
 			// Literal byte
 			result = append(result, data[i])
 			i++
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -285,16 +285,16 @@ func (s *Snapshot) decompressZ80(data []byte) ([]byte, error) {
 func (s *Snapshot) compressZ80(data []byte) []byte {
 	var result []byte
 	i := 0
-	
+
 	for i < len(data) {
 		current := data[i]
 		count := 1
-		
+
 		// Count consecutive identical bytes
 		for i+count < len(data) && data[i+count] == current && count < 255 {
 			count++
 		}
-		
+
 		if count >= 5 || current == 0xED {
 			// Use RLE for runs of 5+ bytes or any ED bytes
 			result = append(result, 0xED, 0xED, byte(count), current)
@@ -304,10 +304,10 @@ func (s *Snapshot) compressZ80(data []byte) []byte {
 				result = append(result, current)
 			}
 		}
-		
+
 		i += count
 	}
-	
+
 	return result
 }
 
@@ -315,21 +315,21 @@ func (s *Snapshot) compressZ80(data []byte) []byte {
 func (s *Snapshot) saveZ80(file io.Writer) error {
 	// Create version 1 header (30 bytes)
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	
+
 	header[0] = s.CPU.A
 	header[1] = s.CPU.F
 	header[2] = s.CPU.C
 	header[3] = s.CPU.B
 	header[4] = s.CPU.L
 	header[5] = s.CPU.H
-	
+
 	// PC = 0 indicates version 2/3 format
 	binary.LittleEndian.PutUint16(header[6:8], 0)
-	
+
 	binary.LittleEndian.PutUint16(header[8:10], s.CPU.SP)
 	header[10] = s.CPU.I
 	header[11] = s.CPU.R & 0x7F
-	
+
 	// Flags byte
 	flagsByte := byte(0x01) // Bit 0 = bit 7 of R register
 	if s.CPU.R&0x80 != 0 {
@@ -337,7 +337,7 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	}
 	flagsByte |= (s.CPU.BorderColor & 0x07) << 1
 	header[12] = flagsByte
-	
+
 	header[13] = s.CPU.E
 	header[14] = s.CPU.D
 	header[15] = s.CPU.C_
@@ -348,33 +348,33 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	header[20] = s.CPU.H_
 	header[21] = s.CPU.A_
 	header[22] = s.CPU.F_
-	
+
 	binary.LittleEndian.PutUint16(header[23:25], s.CPU.IY)
 	binary.LittleEndian.PutUint16(header[25:27], s.CPU.IX)
-	
+
 	if s.CPU.IFF1 {
 		header[27] = 0xFF
 	}
 	if s.CPU.IFF2 {
 		header[28] = 0xFF
 	}
-	
+
 	header[29] = s.CPU.IM & 0x03
-	
+
 	// Write version 1 header
 	if _, err := file.Write(header); err != nil {
 		return fmt.Errorf("failed to write Z80 header: %w", err)
 	}
-	
+
 	// Create extended header for version 3
 	extHeaderLen := uint16(54) // Version 3 additional header length
 	if err := binary.Write(file, binary.LittleEndian, extHeaderLen); err != nil {
 		return fmt.Errorf("failed to write extended header length: %w", err)
 	}
-	
+
 	extHeader := make([]byte, extHeaderLen)
 	binary.LittleEndian.PutUint16(extHeader[0:2], s.CPU.PC)
-	
+
 	// Hardware mode
 	if s.Memory.Is128K {
 		extHeader[2] = Z80_HW_128K
@@ -382,12 +382,12 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	} else {
 		extHeader[2] = Z80_HW_48K
 	}
-	
+
 	// Write extended header
 	if _, err := file.Write(extHeader); err != nil {
 		return fmt.Errorf("failed to write extended header: %w", err)
 	}
-	
+
 	// Write memory blocks
 	if s.Memory.Is128K {
 		// Write all 128K RAM banks. Per the .z80 spec the page number for
@@ -409,7 +409,7 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -417,21 +417,21 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 func (s *Snapshot) writeZ80MemoryBlock(file io.Writer, data []byte, pageNum byte) error {
 	// Compress the data
 	compressed := s.compressZ80(data)
-	
+
 	// Write block header
 	blockLen := uint16(len(compressed))
 	if err := binary.Write(file, binary.LittleEndian, blockLen); err != nil {
 		return fmt.Errorf("failed to write block length: %w", err)
 	}
-	
+
 	if err := binary.Write(file, binary.LittleEndian, pageNum); err != nil {
 		return fmt.Errorf("failed to write page number: %w", err)
 	}
-	
+
 	// Write compressed data
 	if _, err := file.Write(compressed); err != nil {
 		return fmt.Errorf("failed to write block data: %w", err)
 	}
-	
+
 	return nil
 }

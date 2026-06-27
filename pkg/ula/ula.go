@@ -25,8 +25,24 @@ const (
 	FlashFrames  = 16                         // Number of frames between flash toggles
 )
 
-// TStatesPerLine is the number of T-states per scanline (228 for 48K/128K).
+// TStatesPerLine is the number of T-states per scanline. 228 is the 128K
+// family value (456 video columns / 2). The 48K ULA uses 224 (448 / 2); see
+// TStatesPerLineFor. This default is retained for the 128K-anchored callers
+// (BeamPosition / ActiveVideoLine on the Next, which boots in 128K timing).
 const TStatesPerLine = 228
+
+// TStatesPerLineFor returns the documented T-states-per-scanline for a machine
+// model: 224 for the 48K (312 lines * 224 = 69888 T-states/frame), 228 for the
+// 128K family and +2/+2A/+3 (311 lines * 228 = 70908). The Spectrum Next boots
+// in 128K/+3 timing. Matches video/zxula_timing.vhd c_max_hc: 48K=447 (448
+// columns → 224 T) and 128K=455 (456 columns → 228 T), and Sean Young's /
+// Chris Smith's classic timing references.
+func TStatesPerLineFor(model roms.SpectrumModel) int {
+	if model == roms.Model48K {
+		return 224
+	}
+	return 228
+}
 
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
 type ULA struct {
@@ -41,7 +57,13 @@ type ULA struct {
 	// ~600 KB image every frame in the GUI's 50 Hz render loop.
 	wideImg *image.RGBA
 	wideRow []byte
-	palette [16]color.RGBA
+	// nextFullImg is the 320×256 over-border frame for the Next: the standard
+	// 320×240 image plus the 8-px top/bottom strips of the sprite frame (Y 0-7
+	// and 248-255) that the classic 24-px border crops. Reused across frames.
+	// Built only when the Next sprite layer is active (NextBASIC Invaders parks
+	// its player ship at sprite Y=240, in the bottom over-border strip).
+	nextFullImg *image.RGBA
+	palette     [16]color.RGBA
 	// borderTracer, if non-nil, fires on every border-colour change
 	// caused by an even-port write. Used by the debugger to observe
 	// border modulation through any port that matches the ULA's
@@ -299,7 +321,7 @@ type NextI2C interface {
 // so MOVEs that affect palette / Layer 2 state take effect before
 // the row composites.
 type NextCopper interface {
-	Step(scanline uint16, hpos byte, maxInstr int) int
+	Step(scanline uint16, hcount uint16, maxInstr int) int
 }
 
 // NextDAC is the contract for the four Spectrum Next DAC channels.
@@ -727,7 +749,53 @@ func (u *ULA) Render() *image.RGBA {
 		return u.renderTimexHiRes()
 	}
 
+	// Next over-border: the sprite frame is 320×256 (32-px top/bottom borders),
+	// but the classic frame is 320×240 (24-px). When the Next sprite layer is
+	// active, return the full 256-line frame so sprites in the top/bottom
+	// over-border strips (e.g. NBI's player ship at sprite Y=240) are visible
+	// instead of cropped. (Classic models have no compositor and are unaffected.)
+	if u.nextCompositor != nil && u.nextCompositor.HasActiveSprites() {
+		return u.renderNextFullHeight()
+	}
+
 	return u.img
+}
+
+// renderNextFullHeight returns the 320×256 over-border Next frame: the standard
+// 320×240 render copied into the centre (rows 8..247 = sprite frame Y 8..247)
+// plus the two 8-px strips the classic border crops — the top (frame Y 0..7)
+// and bottom (frame Y 248..255). Each strip is filled with the border colour
+// then has the over-border sprite pass run over it, so sprites parked in the
+// Next's extra border band render fully. In this 256-line image the row index
+// equals the sprite frame Y (bias 0), matching applyNextCompositor's y+8 map
+// for the copied middle.
+func (u *ULA) renderNextFullHeight() *image.RGBA {
+	const fullH = 256
+	const extra = (fullH - TotalHeight) / 2 // 8 px added top and bottom
+	if u.nextFullImg == nil {
+		u.nextFullImg = image.NewRGBA(image.Rect(0, 0, TotalWidth, fullH))
+	}
+	dst := u.nextFullImg
+	// Middle band: copy the 240-line render into rows extra..extra+TotalHeight-1.
+	copy(dst.Pix[extra*dst.Stride:(extra+TotalHeight)*dst.Stride], u.img.Pix[:TotalHeight*u.img.Stride])
+	// Over-border strips: border fill + the sprite border pass (whole row is
+	// border in these strips). frameY == dst row here (bias 0).
+	bc := u.palette[u.BorderColour&0x0F]
+	rowFull := make([]byte, TotalWidth*4)
+	allBorder := func(int) bool { return true }
+	paintStrip := func(rowStart, rowEnd int) {
+		for fy := rowStart; fy < rowEnd; fy++ {
+			for x := 0; x < TotalWidth; x++ {
+				o := x * 4
+				rowFull[o], rowFull[o+1], rowFull[o+2], rowFull[o+3] = bc.R, bc.G, bc.B, 0xFF
+			}
+			u.nextCompositor.ComposeSpriteBorderRow(fy, rowFull, allBorder)
+			copy(dst.Pix[fy*dst.Stride:fy*dst.Stride+TotalWidth*4], rowFull)
+		}
+	}
+	paintStrip(0, extra)           // top over-border: frame Y 0..7
+	paintStrip(fullH-extra, fullH) // bottom over-border: frame Y 248..255
+	return dst
 }
 
 // renderWide builds a 640×TotalHeight frame for 80-column tilemap mode.
@@ -1116,22 +1184,29 @@ func (u *ULA) floatingBusByte() byte {
 	// Compute T-state offset within the current frame.
 	tstates := int(*u.mem.TStates - u.frameStartTstate)
 
+	// Per-model line length: the 48K ULA uses 224 T-states/line, the 128K
+	// family 228. Using the wrong length shifts the floating-bus origin by a
+	// full 256 T-states on 48K (the documented first paper fetch is 64*224 =
+	// 14336, not 64*228 = 14592 — Ramsoft "floating bus", Sean Young notes,
+	// video/zxula_timing.vhd c_max_hc 447 vs 455).
+	tPerLine := TStatesPerLineFor(model)
+
 	// Top border: before the first display line.
-	const topBorderTStates = 64 * TStatesPerLine
+	topBorderTStates := 64 * tPerLine
 	if tstates < topBorderTStates {
 		return 0xFF
 	}
 
-	line := (tstates - topBorderTStates) / TStatesPerLine
+	line := (tstates - topBorderTStates) / tPerLine
 	if line >= 192 { // bottom border
 		return 0xFF
 	}
 
 	// T-states into this line. The first 18 are the leftmost
-	// blanking/sync; FUSE counts from the first displayed pixel
-	// (T-state 14336 on 48K). Our frameStartTstate is the start
-	// of frame, so we subtract the per-line origin.
-	tInLine := tstates - topBorderTStates - line*TStatesPerLine
+	// blanking/sync; the first displayed pixel is at T-state 14336 on 48K.
+	// Our frameStartTstate is the start of frame, so we subtract the
+	// per-line origin.
+	tInLine := tstates - topBorderTStates - line*tPerLine
 
 	// Each line: 24 T-states left border, 128 T-states display,
 	// 24 right border, 52 retrace. Only the 128 display T-states
@@ -1438,6 +1513,14 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		// selects are 0x00-0x0F, so there is no overlap. (NextReg 0x06 does
 		// NOT select the chip.)
 		u.nextAY.SelectChip(0xFF - val)
+	} else if u.mem.GetCurrentModel() == roms.ModelNext && (addr&0xF002) == 0xD000 {
+		// Port 0xDFFD (Spectrum Next high RAM-bank extension): bits 3:0 are the
+		// MSBs of the $C000-slot RAM bank. Decoded BEFORE the AY register-select
+		// port 0xFFFD, which shares the (addr&0xC002)==0xC000 decode — the Next
+		// gives 0xDFFD precedence over AY (ports.txt 0xdffd). Previously this
+		// fell through to the AY register select and the high-bank bits were
+		// lost (RAM banks >= 8 unreachable via the classic $C000 slot).
+		u.mem.SetDFFD(val)
 	} else if chip := u.activeAY(); chip != nil && (addr&0xC002) == 0xC000 {
 		// AY-3-8912 register select: port 0xFFFD on 128K+ models.
 		// Decoded as A15=1, A14=1, A1=0.
@@ -1515,15 +1598,14 @@ func (u *ULA) applyNextCompositor() {
 		// if the ULA honoured the copper-changeable Next ULA palette,
 		// which it does not yet — a separate feature, not a timing bug.)
 		if u.nextCopper != nil {
-			// Step the Copper for scanline y up to the end-of-line
-			// horizontal position (max hpos = 63) so WAITs targeting any
-			// hpos on scanline y release on y, not one scanline late (the
-			// previous hpos=0 only released hpos-0 WAITs). Identical for
-			// the common hpos-0 WAITs, so the verified render is
-			// unaffected; this is the achievable raster precision for a
-			// per-scanline renderer (per-pixel hpos precision would need
-			// per-pixel rendering).
-			u.nextCopper.Step(uint16(y), 63, copperInstrPerScanline)
+			// Step the Copper for scanline y at the end-of-line horizontal
+			// counter (>= 511) so every WAIT targeting any column on scanline
+			// y releases on y, not one scanline late. The Copper's WAIT
+			// release threshold is hcount >= (X<<3)+12 (device/copper.vhd:94);
+			// passing the max hcount clears it for all X. This is the
+			// achievable raster precision for a per-scanline renderer
+			// (per-pixel hcount precision would need per-pixel rendering).
+			u.nextCopper.Step(uint16(y), 511, copperInstrPerScanline)
 		}
 		rowStart := (BorderTop+y)*u.img.Stride + BorderLeft*4
 		copy(ulaScan, u.img.Pix[rowStart:rowStart+w*4])

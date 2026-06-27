@@ -1,0 +1,94 @@
+# FPGA divMMC golden (device/divmmc.vhd + zxnext.vhd trigger decode under GHDL).
+; reset-idle
+RESET
+F 0000 rom=0 ram=0 rd=1 bank=3 nmi=0 held=0
+F 2000 rom=0 ram=0 rd=0 bank=0 nmi=0 held=0
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=0 held=0
+; conmem
+RESET
+E3 133
+F 0000 rom=1 ram=0 rd=1 bank=3 nmi=0 held=0
+F 2000 rom=0 ram=1 rd=0 bank=5 nmi=0 held=0
+F 8000 rom=0 ram=0 rd=0 bank=5 nmi=0 held=0
+; conmem+mapram
+RESET
+E3 197
+F 0000 rom=0 ram=1 rd=1 bank=3 nmi=0 held=0
+F 2000 rom=0 ram=1 rd=0 bank=5 nmi=0 held=0
+; rst0-instant
+RESET
+ACTIVE 1
+B8 1
+B9 1
+BA 1
+F 0000 rom=1 ram=0 rd=1 bank=3 nmi=1 held=0
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=1 held=1
+F 1000 rom=1 ram=0 rd=1 bank=3 nmi=1 held=1
+; rst0-delayed
+RESET
+ACTIVE 1
+B8 1
+B9 1
+BA 0
+F 0000 rom=0 ram=0 rd=1 bank=3 nmi=0 held=0
+F 0100 rom=1 ram=0 rd=1 bank=3 nmi=1 held=1
+; rst38-rom3-delayed
+RESET
+ACTIVE 1
+ROM3 1
+B8 128
+B9 0
+BA 0
+F 0038 rom=0 ram=0 rd=1 bank=3 nmi=0 held=0
+F 0039 rom=1 ram=0 rd=1 bank=3 nmi=1 held=1
+; nmi-0066
+RESET
+ACTIVE 1
+BB 2
+BUTTON
+F 0066 rom=1 ram=0 rd=1 bank=3 nmi=1 held=0
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=1 held=1
+; offarea-out
+RESET
+ACTIVE 1
+B8 1
+B9 1
+BA 1
+BB 64
+F 0000 rom=1 ram=0 rd=1 bank=3 nmi=1 held=0
+F 1FF8 rom=1 ram=0 rd=1 bank=3 nmi=1 held=1
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=0 held=0
+; retn-out
+RESET
+ACTIVE 1
+B8 1
+B9 1
+BA 1
+F 0000 rom=1 ram=0 rd=1 bank=3 nmi=1 held=0
+RETN
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=0 held=0
+; disabled
+RESET
+EN 0
+E3 133
+F 0000 rom=0 ram=0 rd=1 bank=3 nmi=0 held=0
+F 2000 rom=0 ram=0 rd=0 bank=5 nmi=0 held=0
+EN 1
+; 3dxx-rom3-instant
+RESET
+ACTIVE 1
+ROM3 1
+BB 128
+F 3D97 rom=0 ram=1 rd=0 bank=0 nmi=1 held=0
+F 8000 rom=0 ram=0 rd=0 bank=0 nmi=1 held=1
+; ep1-04c6
+RESET
+ACTIVE 1
+ROM3 1
+BB 4
+F 04C6 rom=0 ram=0 rd=1 bank=3 nmi=0 held=0
+F 04C7 rom=1 ram=0 rd=1 bank=3 nmi=1 held=1
+; bank-select
+RESET
+E3 138
+F 2000 rom=0 ram=1 rd=0 bank=10 nmi=0 held=0

@@ -623,6 +623,26 @@ func WireLayer2(d *nextregs.Dispatcher, l *layer2.Layer2) {
 		l.SetPaletteOffset(val & 0x0F)
 		disp.Store(0x70, val&0x3F)
 	})
+	// Layer 2 X scroll is a 9-bit value: NR$71 bit0 (MSB) || NR$16 (low 8).
+	// Per zxnext.vhd's layer2 instantiation (i_scroll_x => nr_71 & nr_16) and
+	// the address generator (layer2.vhd:152). NR$17 is the 8-bit Y scroll.
+	pushScrollX := func(disp *nextregs.Dispatcher) {
+		l.SetScrollX(uint16(disp.Raw(0x71)&0x01)<<8 | uint16(disp.Raw(0x16)))
+	}
+	d.SetOnWrite(0x16, func(disp *nextregs.Dispatcher, val byte) {
+		disp.Store(0x16, val)
+		pushScrollX(disp)
+	})
+	d.SetOnWrite(0x17, func(disp *nextregs.Dispatcher, val byte) {
+		disp.Store(0x17, val)
+		l.SetScrollY(val)
+	})
+	d.SetOnWrite(0x71, func(disp *nextregs.Dispatcher, val byte) {
+		// Per zxnext.vhd:5479-5480 + read at :6117 — only bit 0 (Layer 2
+		// scrollX MSB) is stored; bits 7:1 read as 0.
+		disp.Store(0x71, val&0x01)
+		pushScrollX(disp)
+	})
 }
 
 // LayerPriority stores the NextReg 0x15 "Sprite / layers priority"
@@ -795,6 +815,9 @@ func WirePalette(d *nextregs.Dispatcher, b *palette.Bank) {
 			byte(palette.PaletteTilemapSecond),
 		}
 		b.Select(wselToZeus[wsel])
+		// bit 7 = palette auto-increment disable (zxnext.vhd:5389) — when set,
+		// NR$41/$44 writes do not advance the index.
+		b.SetAutoIncDisable(val&0x80 != 0)
 		b.SetActive(palette.LayerULA, (val>>1)&1)
 		b.SetActive(palette.LayerLayer2, (val>>2)&1)
 		b.SetActive(palette.LayerSprites, (val>>3)&1)
@@ -1043,13 +1066,10 @@ func WirePeripheralMasks(d *nextregs.Dispatcher) {
 	d.SetOnWrite(0x4C, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0x4C, val&0x0F)
 	})
-	// NR$70 (Layer 2 resolution + palette offset) is wired in WireLayer2,
-	// which holds the *layer2.Layer2 it drives.
-	d.SetOnWrite(0x71, func(disp *nextregs.Dispatcher, val byte) {
-		// Per zxnext.vhd:5479-5480 + read at :6117 — only bit 0
-		// (layer2 scrollX MSB) is stored; bits 7:1 read as 0.
-		disp.Store(0x71, val&0x01)
-	})
+	// NR$70 (Layer 2 resolution + palette offset), NR$16/$17/$71 (Layer 2
+	// scroll) are wired in WireLayer2, which holds the *layer2.Layer2 it
+	// drives. WirePeripheralMasks runs after WireLayer2, so re-registering
+	// them here would clobber the scroll push.
 	d.SetOnWrite(0x81, func(disp *nextregs.Dispatcher, val byte) {
 		// Writable: bits 6:3 (ula_override/nmi_debounce/clken/fdc). The
 		// expansion-bus speed (bits 1:0) is forced to "00" by this FPGA

@@ -1,0 +1,42 @@
+RESET
+SD reset mode=0 dac_en=0 port=XX val=80 L=256 R=256
+RESET
+SD sd1_A mode=1 dac_en=1 port=1F val=FF L=383 R=256
+SD sd1_B mode=1 dac_en=1 port=0F val=40 L=319 R=256
+SD sd1_C mode=1 dac_en=1 port=4F val=00 L=319 R=128
+SD sd1_D mode=1 dac_en=1 port=5F val=FF L=319 R=255
+RESET
+SD sd2_A mode=2 dac_en=1 port=F1 val=FF L=383 R=256
+SD sd2_B mode=2 dac_en=1 port=F3 val=FF L=510 R=256
+SD sd2_C mode=2 dac_en=1 port=F9 val=20 L=510 R=160
+SD sd2_D mode=2 dac_en=1 port=FB val=60 L=510 R=128
+RESET
+SD stAD_A mode=3 dac_en=1 port=3F val=C0 L=320 R=256
+SD stAD_D mode=3 dac_en=1 port=5F val=40 L=320 R=192
+RESET
+SD stBC_B mode=4 dac_en=1 port=0F val=FF L=383 R=256
+SD stBC_C mode=4 dac_en=1 port=4F val=00 L=383 R=128
+RESET
+SD monoFB mode=5 dac_en=1 port=FB val=FF L=383 R=383
+RESET
+SD monoDF mode=7 dac_en=1 port=DF val=00 L=128 R=128
+RESET
+SD monoB3 mode=6 dac_en=1 port=B3 val=40 L=192 R=192
+RESET
+SD disabled mode=1 dac_en=0 port=1F val=FF L=256 R=256
+RESET
+SD nr_mono mode=9 dac_en=1 port=NR val=FF L=383 R=383
+SD nr_left mode=9 dac_en=1 port=NR val=20 L=287 R=383
+SD nr_right mode=9 dac_en=1 port=NR val=10 L=287 R=271
+MIX silence ear=0 mic=0 exc=0 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=0 pcmR=0
+MIX ear ear=1 mic=0 exc=0 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=512 pcmR=512
+MIX mic ear=0 mic=1 exc=0 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=128 pcmR=128
+MIX earmic ear=1 mic=1 exc=0 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=640 pcmR=640
+MIX exc ear=1 mic=1 exc=1 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=0 pcmR=0
+MIX ay_max ear=0 mic=0 exc=0 ay_L=4095 ay_R=4095 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=4095 pcmR=4095
+MIX ay_mid ear=0 mic=0 exc=0 ay_L=2295 ay_R=1000 dacL=0 dacR=0 i2sL=0 i2sR=0 pcmL=2295 pcmR=1000
+MIX dac_max ear=0 mic=0 exc=0 ay_L=0 ay_R=0 dacL=511 dacR=256 i2sL=0 i2sR=0 pcmL=2044 pcmR=1024
+MIX dac_mid ear=0 mic=0 exc=0 ay_L=0 ay_R=0 dacL=256 dacR=256 i2sL=0 i2sR=0 pcmL=1024 pcmR=1024
+MIX i2s ear=0 mic=0 exc=0 ay_L=0 ay_R=0 dacL=0 dacR=0 i2sL=1023 i2sR=512 pcmL=1023 pcmR=512
+MIX combined ear=1 mic=1 exc=0 ay_L=2295 ay_R=2295 dacL=510 dacR=510 i2sL=1023 i2sR=1023 pcmL=5998 pcmR=5998
+MIX maxall ear=1 mic=1 exc=0 ay_L=4095 ay_R=4095 dacL=511 dacR=511 i2sL=1023 i2sR=1023 pcmL=7802 pcmR=7802

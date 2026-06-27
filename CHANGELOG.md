@@ -4,6 +4,57 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.3]
+
+### Added
+
+- **`--tape` command-line flag** — load a `.tap`/`.tzx` into the deck at startup
+  and start it playing, in **headless** mode as well as GUI. Headless runs
+  previously had no way to feed a standard tape (only `--trd` disks); the guest
+  reads it with `LOAD ""` (48K) or the 128 Tape Loader, with the fast-load trap
+  installed automatically. (GitHub issue #5.)
+
+### Fixed
+
+- **Spectrum Next Nextoid no longer resets to the NextZXOS welcome on load** —
+  the Copper's two-byte (`NR$60`) instruction-write phase was not reset by the
+  `NR$61`/`NR$62` cursor writes, so a stray staged byte paired NextZXOS's Copper
+  list off-by-one and decoded as garbage `MOVE` writes across the whole NextReg
+  config every frame. The cursor writes now reset the byte phase, matching the
+  FPGA.
+- **Spectrum Next over-border sprites are visible** — the Next sprite frame is
+  320×256 (32px over-border) but the renderer cropped to the classic 320×240,
+  hiding sprites parked in the bottom strip (e.g. the NextBASIC Invaders player
+  ship at sprite Y=240). The full-height path now renders when the Next sprite
+  layer is active.
+- **Spectrum Next "Integer out of range" in NextBASIC sprite reads** — an
+  Alt-ROM read redirect (`NR$8C`) took precedence over an 8K MMU slot mapping a
+  real RAM bank, so `SPRITE AT` read Alt-ROM bytes (with a stray high bit) for
+  the sprite cache. The MMU RAM mapping now wins, matching the FPGA's
+  `sram_pre_override`.
+
+### Changed
+
+- **Honest project-status documentation** (GitHub issue #4) — the README now
+  carries an explicit status note distinguishing the mature classic line from
+  the young Spectrum-Next *game* compatibility, the absolute "`.NEX` games load
+  and run" claim is qualified, and the compatibility manifest's Next section
+  lists real per-title statuses (working, caveated, and known-broken) instead of
+  a single placeholder.
+
+## [v1.3.2]
+
+### Fixed
+
+- **Spectrum Next divMMC overlay no longer leaks under CONMEM** — the divMMC
+  automap-held latch was kept paged-in across a page-out (the `$1FF8-$1FFF`
+  off-area or RETN) whenever CONMEM (port `$E3` bit 7) was set, contradicting
+  the FPGA core where the latch clears regardless of CONMEM (an orthogonal
+  force-in). The stale latch left the divMMC RAM overlay masking ROM after the
+  firmware cleared CONMEM, so the CPU ran divMMC RAM as code — a NextBASIC
+  program (e.g. NextBASIC Invaders) derailed and reset on start-up. The overlay
+  now stays mapped while CONMEM is held and drops once CONMEM clears.
+
 ## [v1.3.1]
 
 ### Fixed

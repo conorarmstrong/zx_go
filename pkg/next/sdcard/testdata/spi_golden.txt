@@ -1,0 +1,21 @@
+# FPGA SPI-master golden (serial/spi_master.vhd under GHDL).
+# XFER wr=<byte out> miso=<byte the card presents> mosi_bits=<8 MOSI bits MSB-first>
+#      rdback=<o_spi_miso_dat> wait=<o_spi_wait_n per i_CLK, 1=ready 0=busy>
+; write 0xA5, miso 0x3C
+XFER wr=165 miso=60 mosi_bits=10100101 rdback=60 wait=0000000000000000111 
+; write 0xFF, miso 0x00
+XFER wr=255 miso=0 mosi_bits=11111111 rdback=0 wait=0000000000000000111 
+; write 0x00, miso 0xFF
+XFER wr=0 miso=255 mosi_bits=00000000 rdback=255 wait=0000000000000000111 
+; write 0x01, miso 0x80
+XFER wr=1 miso=128 mosi_bits=00000001 rdback=128 wait=0000000000000000111 
+; write 0x80, miso 0x01
+XFER wr=128 miso=1 mosi_bits=10000000 rdback=1 wait=0000000000000000111 
+; read (mosi=FF), miso 0x5A
+XFER wr=0 miso=90 mosi_bits=11111111 rdback=90 wait=0000000000000000111 
+; read (mosi=FF), miso 0xC3
+XFER wr=0 miso=195 mosi_bits=11111111 rdback=195 wait=0000000000000000111 
+; b2b first  0xDE, miso 0xAD
+XFER wr=222 miso=173 mosi_bits=11011110 rdback=173 wait=0000000000000000111 
+; b2b second 0xBE, miso 0xEF
+XFER wr=190 miso=239 mosi_bits=10111110 rdback=239 wait=0000000000000000111 

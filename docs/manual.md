@@ -96,6 +96,24 @@ are enabled automatically. To use the disk, enter TR-DOS from BASIC with
 `RANDOMIZE USR 15616` (or via the 128 menu), then the usual `CAT`, `LOAD "name"`,
 `RUN`, etc. You can also mount a disk at launch with `--trd path.trd`.
 
+### Loading a tape at launch (including headless)
+
+Pass `--tape path.tap` (or `.tzx`) to mount a tape into the deck at startup and
+start it playing. This works in both GUI and **headless** mode — the one way to
+feed a standard tape to a scripted/CI run without the window:
+
+```bash
+# Headless: boot 48K, mount a tape, run; then drive LOAD"" yourself
+zx_go --headless --tape game.tap --press-key 'l@60,...' --frames 3000
+
+# 128K clones auto-start most tapes via the boot menu's Tape Loader
+zx_go --headless --pentagon --tape game.tzx --frames 5000
+```
+
+On the 48K the guest still has to read the tape — type `LOAD ""` (or schedule it
+with `--press-key`); on the 128 choose *Tape Loader* from the boot menu. The
+fast-load trap is installed automatically so the load is near-instant.
+
 ---
 
 ## 4. Saving your place

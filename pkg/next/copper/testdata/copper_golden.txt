@@ -1,0 +1,291 @@
+# FPGA copper golden (device/copper.vhd + ram/dpram2.vhd under GHDL).
+; stopped
+RESET
+LOAD 0 1042
+LOAD 1 FFFF
+MODE 0
+POS v=0 h=0
+POS v=0 h=1
+POS v=0 h=2
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=0 h=13
+POS v=0 h=14
+POS v=0 h=15
+POS v=0 h=16
+POS v=0 h=17
+POS v=0 h=18
+POS v=0 h=19
+POS v=0 h=20
+; runonce-moves
+RESET
+LOAD 0 1042
+LOAD 1 2055
+LOAD 2 80FF
+MODE 1
+POS v=0 h=0
+POS v=0 h=1
+EMIT v=0 h=1 reg=16 val=66
+POS v=0 h=2
+POS v=0 h=3
+EMIT v=0 h=3 reg=32 val=85
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=0 h=13
+POS v=0 h=14
+POS v=0 h=15
+POS v=0 h=16
+POS v=0 h=17
+POS v=0 h=18
+POS v=0 h=19
+POS v=0 h=20
+POS v=0 h=21
+POS v=0 h=22
+POS v=0 h=23
+POS v=0 h=24
+POS v=0 h=25
+POS v=0 h=26
+POS v=0 h=27
+POS v=0 h=28
+POS v=0 h=29
+POS v=0 h=30
+; wait-then-move
+RESET
+LOAD 0 8403
+LOAD 1 3077
+LOAD 2 80FF
+MODE 1
+POS v=0 h=0
+POS v=0 h=1
+POS v=0 h=2
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=0 h=13
+POS v=0 h=14
+POS v=0 h=15
+POS v=0 h=16
+POS v=0 h=17
+POS v=0 h=18
+POS v=0 h=19
+POS v=0 h=20
+POS v=0 h=21
+POS v=0 h=22
+POS v=0 h=23
+POS v=0 h=24
+POS v=0 h=25
+POS v=0 h=26
+POS v=0 h=27
+POS v=0 h=28
+POS v=0 h=29
+POS v=0 h=30
+POS v=0 h=31
+POS v=0 h=32
+POS v=0 h=33
+POS v=0 h=34
+POS v=0 h=35
+POS v=0 h=36
+POS v=0 h=37
+POS v=0 h=38
+POS v=0 h=39
+POS v=0 h=40
+POS v=3 h=0
+POS v=3 h=1
+POS v=3 h=2
+POS v=3 h=3
+POS v=3 h=4
+POS v=3 h=5
+POS v=3 h=6
+POS v=3 h=7
+POS v=3 h=8
+POS v=3 h=9
+POS v=3 h=10
+POS v=3 h=11
+POS v=3 h=12
+POS v=3 h=13
+POS v=3 h=14
+POS v=3 h=15
+POS v=3 h=16
+POS v=3 h=17
+POS v=3 h=18
+POS v=3 h=19
+POS v=3 h=20
+POS v=3 h=21
+POS v=3 h=22
+POS v=3 h=23
+POS v=3 h=24
+POS v=3 h=25
+POS v=3 h=26
+POS v=3 h=27
+POS v=3 h=28
+POS v=3 h=29
+EMIT v=3 h=29 reg=48 val=119
+POS v=3 h=30
+POS v=3 h=31
+POS v=3 h=32
+POS v=3 h=33
+POS v=3 h=34
+POS v=3 h=35
+POS v=3 h=36
+POS v=3 h=37
+POS v=3 h=38
+POS v=3 h=39
+POS v=3 h=40
+; nop-move
+RESET
+LOAD 0 0099
+LOAD 1 4011
+LOAD 2 80FF
+MODE 1
+POS v=0 h=0
+POS v=0 h=1
+POS v=0 h=2
+EMIT v=0 h=2 reg=64 val=17
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=0 h=13
+POS v=0 h=14
+POS v=0 h=15
+POS v=0 h=16
+POS v=0 h=17
+POS v=0 h=18
+POS v=0 h=19
+POS v=0 h=20
+; vbl-restart
+RESET
+LOAD 0 50AA
+LOAD 1 81FF
+MODE 3
+POS v=0 h=0
+POS v=0 h=1
+EMIT v=0 h=1 reg=80 val=170
+POS v=0 h=2
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=5 h=0
+POS v=5 h=1
+POS v=5 h=2
+POS v=5 h=3
+POS v=5 h=4
+POS v=5 h=5
+POS v=5 h=6
+POS v=5 h=7
+POS v=5 h=8
+POS v=5 h=9
+POS v=5 h=10
+POS v=5 h=11
+POS v=5 h=12
+POS v=0 h=0
+POS v=0 h=0
+POS v=0 h=1
+EMIT v=0 h=1 reg=80 val=170
+POS v=0 h=2
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+; continue
+RESET
+LOAD 0 6033
+LOAD 1 80FF
+MODE 2
+POS v=0 h=0
+POS v=0 h=1
+EMIT v=0 h=1 reg=96 val=51
+POS v=0 h=2
+POS v=0 h=3
+POS v=0 h=4
+POS v=0 h=5
+POS v=0 h=6
+POS v=0 h=7
+POS v=0 h=8
+POS v=0 h=9
+POS v=0 h=10
+POS v=0 h=11
+POS v=0 h=12
+POS v=0 h=13
+POS v=0 h=14
+POS v=0 h=15
+POS v=0 h=16
+; wait-offset
+RESET
+LOAD 0 8207
+LOAD 1 7044
+LOAD 2 80FF
+MODE 1
+POS v=7 h=0
+POS v=7 h=1
+POS v=7 h=2
+POS v=7 h=3
+POS v=7 h=4
+POS v=7 h=5
+POS v=7 h=6
+POS v=7 h=7
+POS v=7 h=8
+POS v=7 h=9
+POS v=7 h=10
+POS v=7 h=11
+POS v=7 h=12
+POS v=7 h=13
+POS v=7 h=14
+POS v=7 h=15
+POS v=7 h=16
+POS v=7 h=17
+POS v=7 h=18
+POS v=7 h=19
+POS v=7 h=20
+POS v=7 h=21
+EMIT v=7 h=21 reg=112 val=68
+POS v=7 h=22
+POS v=7 h=23
+POS v=7 h=24
+POS v=7 h=25
+POS v=7 h=26
+POS v=7 h=27
+POS v=7 h=28
+POS v=7 h=29
+POS v=7 h=30

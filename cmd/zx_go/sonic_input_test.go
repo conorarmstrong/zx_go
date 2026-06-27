@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/roms"
@@ -10,9 +11,16 @@ import (
 // loaded and started, the character must NOT drift on its own when no input is
 // held (the user reported "sonic runs right on his own"), and it MUST respond
 // to a held Kempston direction. Sonic reads the Kempston joystick (port $1F);
-// in the GUI the arrow keys drive those bits. The test skips when the
-// (gitignored, copyrighted) ROM is absent, mirroring sonic_game_renders_test.go.
+// in the GUI the arrow keys drive those bits. Gated by SONIC_DIAG (like
+// sonic_game_renders_test.go) because it needs the gitignored, copyrighted
+// sonic.nex on the SD card — without it the Next emulator still constructs but
+// the game never loads, so the sprite-position assertions would fail in CI
+// rather than skip. The fixture-free joystick-routing check lives in
+// TestNextUnconfiguredJoystickRoutesToKempston so CI still covers it.
 func TestSonicControllableNoAutorun(t *testing.T) {
+	if os.Getenv("SONIC_DIAG") == "" {
+		t.Skip("set SONIC_DIAG=1 (requires the local, gitignored sonic.nex)")
+	}
 	const sdPath = "/games/Next/Sonic/sonic.nex"
 	prev := cliFlagsActive
 	nf := cliFlags{}
@@ -93,10 +101,27 @@ func TestSonicControllableNoAutorun(t *testing.T) {
 		t.Fatalf("Sonic did not respond to input: leftMove=%d rightMove=%d (want one >=16)", leftMove, rightMove)
 	}
 	t.Logf("controllable: idleDrift=%d leftMove=%d rightMove=%d", idleDrift, leftMove, rightMove)
+}
 
-	// 3) GUI path: with NO joystick configured, the Next must still route the
-	//    arrow keys to Kempston (the FPGA always decodes $1F) so the game is
-	//    controllable out of the box. Verify against the live model.
+// TestNextUnconfiguredJoystickRoutesToKempston is the fixture-free half of the
+// Sonic input lock-in: with NO joystick configured, the Next must still route
+// the arrow keys to Kempston (the FPGA always decodes port $1F) so a Kempston
+// game is controllable out of the box. Needs only the Next emulator, no .nex —
+// so it runs in CI (unlike the gameplay test, which needs sonic.nex).
+func TestNextUnconfiguredJoystickRoutesToKempston(t *testing.T) {
+	prev := cliFlagsActive
+	nf := cliFlags{}
+	if prev != nil {
+		nf = *prev
+	}
+	nf.noSound = true
+	cliFlagsActive = &nf
+	t.Cleanup(func() { cliFlagsActive = prev })
+
+	emu, err := newNextEmulator()
+	if err != nil {
+		t.Skipf("Next ROMs not installed: %v", err)
+	}
 	emu.joystickType = JoystickNone
 	if got := emu.effectiveJoystick(); got != JoystickKempston {
 		t.Fatalf("unconfigured Next: effectiveJoystick()=%v, want Kempston (arrows would drive nothing)", got)

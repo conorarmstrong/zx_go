@@ -89,14 +89,14 @@ func TestWaitParksUntilRasterReached(t *testing.T) {
 	c.SetRegWriter(rw)
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
-	// Step at scanline 50 — not yet past WAIT 100.
-	c.Step(50, 0, 4)
+	// Step at scanline 50, end-of-line hcount — not yet past WAIT 100.
+	c.Step(50, 511, 4)
 	if len(rw.writes) != 0 {
 		t.Errorf("MOVE fired before WAIT was satisfied: writes = %+v", rw.writes)
 	}
 
-	// Step at scanline 100 — WAIT released, MOVE executes.
-	c.Step(100, 0, 4)
+	// Step at scanline 100, end-of-line hcount — WAIT released, MOVE executes.
+	c.Step(100, 511, 4)
 	if len(rw.writes) != 1 || rw.writes[0].reg != 0x07 || rw.writes[0].val != 0x03 {
 		t.Errorf("MOVE not executed after WAIT released: writes = %+v", rw.writes)
 	}
@@ -283,5 +283,35 @@ func TestNewCopper_StartsStopped(t *testing.T) {
 	c := New()
 	if c.Mode() != StartStop {
 		t.Errorf("New Copper Mode = %v, want StartStop", c.Mode())
+	}
+}
+
+// TestCursorSetResetsBytePhase locks in that setting the NR$61/$62 write cursor
+// resets the NR$60 hi/lo byte-pairing phase. A stray odd byte staged before the
+// cursor move (e.g. the dispatcher reset writing NR$60=$00) must NOT pair
+// off-by-one with the following program stream — that turned NextZXOS's real
+// copper list into garbage "MOVE NR$01..,$16" writes that clobbered the whole
+// NextReg config and reset Nextoid to the Welcome screen.
+func TestCursorSetResetsBytePhase(t *testing.T) {
+	for _, via62 := range []bool{false, true} {
+		c := New()
+		c.WriteData(0x00) // stray staged hi byte (the reset write)
+		if via62 {
+			c.SetWritePtrHighAndMode(0x00) // cursor high + mode, must reset phase
+			c.SetWritePtrLow(0x00)
+		} else {
+			c.SetWritePtrLow(0x00) // cursor low, must reset phase
+		}
+		// Program: WAIT line 0 (0x8000) then MOVE NR$16,$00 (0x1600).
+		c.WriteData(0x80)
+		c.WriteData(0x00)
+		c.WriteData(0x16)
+		c.WriteData(0x00)
+		if got := c.Instruction(0); got.Op != OpWAIT || got.Y != 0 {
+			t.Errorf("via62=%v: instruction[0]=%+v, want WAIT y=0 (cursor set must reset byte phase)", via62, got)
+		}
+		if got := c.Instruction(1); got.Op != OpMOVE || got.Reg != 0x16 || got.Val != 0x00 {
+			t.Errorf("via62=%v: instruction[1]=%+v, want MOVE NR$16,$00", via62, got)
+		}
 	}
 }

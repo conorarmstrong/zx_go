@@ -108,11 +108,11 @@ func (s *SAA) ToneFrequency(c int) float64 {
 func (s *SAA) noiseRate(g int) float64 {
 	switch (s.regs[regNoise] >> (uint(g) * 4)) & 0x03 {
 	case 0:
-		return MasterClock / 256 // 31250 Hz
+		return MasterClock / 256.0 // 31250 Hz
 	case 1:
-		return MasterClock / 512 // 15625 Hz
+		return MasterClock / 512.0 // 15625 Hz
 	case 2:
-		return MasterClock / 1024 // 7812.5 Hz
+		return MasterClock / 1024.0 // 7812.5 Hz
 	default:
 		return s.ToneFrequency(g * 3) // clocked by the group's channel 0/3
 	}
@@ -132,27 +132,44 @@ func (s *SAA) stepNoise(g int) {
 
 func (s *SAA) envEnabled(g int) bool { return s.regs[regEnv0+g]&0x80 != 0 }
 
+// envExternalClock reports the envelope clock source (bit 5): set ⇒ the
+// envelope is advanced by the external clock pin, which the SAM does not feed,
+// so the internal tone-driven clock must not advance it.
+func (s *SAA) envExternalClock(g int) bool { return s.regs[regEnv0+g]&0x20 != 0 }
+
+// envResolution3bit reports the resolution bit (bit 4): set ⇒ 3-bit
+// resolution, achieved by masking the level's least-significant bit.
+func (s *SAA) envResolution3bit(g int) bool { return s.regs[regEnv0+g]&0x10 != 0 }
+
 // envLevel returns the current 0-15 envelope level for generator g.
 func (s *SAA) envLevel(g int) int {
 	shape := (s.regs[regEnv0+g] >> 1) & 0x07
 	step := s.envStep[g]
+	var level int
 	switch shape {
 	case 1: // maximum amplitude
-		return 15
+		level = 15
 	case 2, 3: // single / repetitive decay (15 → 0)
-		return 15 - (step & 0x0F)
+		level = 15 - (step & 0x0F)
 	case 4, 5: // single / repetitive triangle (0 → 15 → 0)
 		if step < 16 {
-			return step
+			level = step
+		} else {
+			level = 31 - step
 		}
-		return 31 - step
-	default: // 0, 6, 7 → off
-		return 0
+	case 6, 7: // single / repetitive attack (0 → 15, rising ramp)
+		level = step & 0x0F
+	default: // 0 → off
+		level = 0
 	}
+	if s.envResolution3bit(g) {
+		level &^= 1 // 3-bit resolution: mask the LSB
+	}
+	return level
 }
 
 func (s *SAA) stepEnv(g int) {
-	if !s.envEnabled(g) || s.envDone[g] {
+	if !s.envEnabled(g) || s.envDone[g] || s.envExternalClock(g) {
 		return
 	}
 	// Internal clock: the group's middle channel (1 / 4) tone generator.
@@ -167,12 +184,17 @@ func (s *SAA) stepEnv(g int) {
 				s.envStep[g] = 15
 				s.envDone[g] = true
 			}
+		case 6: // single attack
+			if s.envStep[g] >= 16 {
+				s.envStep[g] = 15
+				s.envDone[g] = true
+			}
 		case 4: // single triangle
 			if s.envStep[g] >= 31 {
 				s.envStep[g] = 31
 				s.envDone[g] = true
 			}
-		case 3: // repetitive decay
+		case 3, 7: // repetitive decay / attack
 			s.envStep[g] &= 0x0F
 		case 5: // repetitive triangle
 			if s.envStep[g] >= 32 {

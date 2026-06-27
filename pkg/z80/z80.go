@@ -2540,8 +2540,14 @@ func (c *CPU) executeCBInstruction(opcode byte) {
 				addr := c.hl()
 				c.bit(bit, c.rd(addr))
 				c.exec(addr, 1)
-				// F3/F5 from MEMPTR high byte (undocumented).
-				c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(c.WZ>>8)&(FLAG_F3|FLAG_F5)
+				if c.Variant == VariantZ80N {
+					// T80N core (t80n_alu.vhd "BIT"): the reg==6 form
+					// clears F3/F5 (it does not contaminate from MEMPTR).
+					c.F &^= FLAG_F3 | FLAG_F5
+				} else {
+					// NMOS: F3/F5 from MEMPTR high byte (undocumented).
+					c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(c.WZ>>8)&(FLAG_F3|FLAG_F5)
+				}
 			} else {
 				c.bit(bit, c.getRegister8(reg))
 				c.tstates += 8
@@ -3333,9 +3339,20 @@ func (c *CPU) executeDDCBInstruction(opcode byte, addr uint16) {
 		if reg != 6 {
 			c.setRegister8(reg, val)
 		}
-	case 1: // BIT n,(IX+d) — F3/F5 from address high byte (MEMPTR)
-		c.bit(bit, val)
-		c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+	case 1: // BIT n,(IX+d)
+		c.bit(bit, val) // bit() sets F3/F5 from the operand value
+		if c.Variant == VariantZ80N {
+			// T80N core (t80n_alu.vhd "BIT"): F3/F5 come from the operand
+			// value when the opcode's reg field != 6, and are cleared to 0
+			// when it is 6 (the canonical (IX+d) encoding). bit() already
+			// set the operand bits; clear them for the reg==6 form.
+			if reg == 6 {
+				c.F &^= FLAG_F3 | FLAG_F5
+			}
+		} else {
+			// NMOS: F3/F5 from the address-high byte (MEMPTR).
+			c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		}
 		// BIT n,(IX+d) is 20 t-states (no memory writeback) vs the
 		// 23 t-states of shift/RES/SET. Charge here and return so
 		// the post-switch +23 isn't applied to BIT.
@@ -3709,9 +3726,17 @@ func (c *CPU) executeFDCBInstruction(opcode byte, d int8) {
 		if reg != 6 { // Copy to register if not (HL)
 			c.setRegister8(reg, val)
 		}
-	case 1: // BIT n,(IY+d) — F3/F5 from address high byte (MEMPTR)
-		c.bit(bit, val)
-		c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+	case 1: // BIT n,(IY+d)
+		c.bit(bit, val) // bit() sets F3/F5 from the operand value
+		if c.Variant == VariantZ80N {
+			// Z80N core: F3/F5 from the operand value when reg field != 6,
+			// else cleared to 0 (see DDCB above; t80n_alu.vhd "BIT").
+			if reg == 6 {
+				c.F &^= FLAG_F3 | FLAG_F5
+			}
+		} else {
+			c.F = (c.F &^ (FLAG_F3 | FLAG_F5)) | byte(addr>>8)&(FLAG_F3|FLAG_F5)
+		}
 		// BIT n,(IY+d) = 20 t (no memory writeback). Charge and
 		// return so post-switch +23 isn't applied.
 		c.tstates += 20
@@ -4273,6 +4298,15 @@ func (c *CPU) cpi() {
 		c.F |= FLAG_H
 	}
 
+	if c.Variant == VariantZ80N {
+		// The Next's Z80N takes the undocumented F3/F5 of the block-compare
+		// from the operand byte read (bits 3,5), like a normal CP — NOT from
+		// NMOS's n = A-(HL)-H result byte. Verified bit-exact against the
+		// tbblue T80N core via GHDL golden vectors (testdata/z80n_golden.txt).
+		c.F |= val & (FLAG_F3 | FLAG_F5)
+		return
+	}
+
 	// F3 and F5 flags are set from (A - (HL) - H flag)
 	temp := result
 	if (c.F & FLAG_H) != 0 {
@@ -4307,6 +4341,15 @@ func (c *CPU) cpd() {
 	}
 	if ((c.A ^ val ^ result) & 0x10) != 0 {
 		c.F |= FLAG_H
+	}
+
+	if c.Variant == VariantZ80N {
+		// The Next's Z80N takes the undocumented F3/F5 of the block-compare
+		// from the operand byte read (bits 3,5), like a normal CP — NOT from
+		// NMOS's n = A-(HL)-H result byte. Verified bit-exact against the
+		// tbblue T80N core via GHDL golden vectors (testdata/z80n_golden.txt).
+		c.F |= val & (FLAG_F3 | FLAG_F5)
+		return
 	}
 
 	// F3 and F5 flags are set from (A - (HL) - H flag)

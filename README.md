@@ -15,9 +15,16 @@
 | :---: | :---: |
 | ![Sonic the Hedgehog on the Spectrum Next](sonic.png) | ![Warhawk on the Spectrum Next](warhawk.png) |
 
-zx_go runs the whole family on one codebase, from the 1980 ZX80 to the 2017 Spectrum Next. Classic models are cycle-accurate with full memory and port contention; the **Spectrum Next cold-boots real NextZXOS through the authentic FPGA boot chain** — no snapshots, no shortcuts — to a fully interactive desktop, with its *entire* custom hardware stack emulated.
+zx_go runs the whole family on one codebase, from the 1980 ZX80 to the 2017 Spectrum Next. Classic models are cycle-accurate with full memory and port contention; the **Spectrum Next cold-boots real NextZXOS through the authentic FPGA boot chain** — no snapshots, no shortcuts — to a fully interactive desktop, with a deep custom-hardware stack emulated.
 
 The 48K was the author's first computer; this began as a Go learning exercise and turned into a serious emulator.
+
+> ### Honest status
+>
+> - **Classic line (ZX80 → +3, Pentagon, SAM Coupé): mature and stable.** Cycle-accurate Z80 (passes both Cringle `zexdoc`/`zexall` exercisers), full contention, every documented format. These are the solid, day-to-day-usable part of zx_go.
+> - **Spectrum Next: faithful boot, young *game* compatibility.** NextZXOS cold-boots end-to-end and the individual hardware blocks are extensively tested against the FPGA VHDL, but **running arbitrary `.NEX` games is the newest and least-finished area.** A growing set of titles are playable (e.g. Sonic), several render but still have bugs, and many have not been verified at all. If a Next game misbehaves for you, that's expected at this stage — please [open an issue](https://github.com/conorarmstrong/zx_go/issues); a comparison against real hardware is exactly what moves it forward.
+>
+> The per-title manifest, with tested-on-hardware statuses and known issues, is in **[docs/compatibility.md](docs/compatibility.md)**. Feature claims below describe *implemented and tested hardware blocks*; they are not a promise that every title exercising them runs perfectly.
 
 ---
 
@@ -140,7 +147,7 @@ Most emulators treat the Next as a fast 128K with extra registers. **zx_go emula
 - **Tilemap + Copper** — 40×32 / 80×32 tilemap with text mode and per-tile scroll/clip/mirror/rotate; a raster-precise Copper co-processor.
 - **The full NextReg file** (audited against the FPGA core) + the **8K MMU** and **all four clocks (3.5 / 7 / 14 / 28 MHz)** with contention scaling.
 - **Storage** — DivMMC + esxDOS, SD-card / FAT image *or* a host-folder mount, plus zxnDMA, UART, Multiface 3, and a battery-backed i2c RTC.
-- **`.NEX` games** load and run straight from `File → Open File…`.
+- **`.NEX` games** load through NextZXOS's own loader from `File → Open File…`. Compatibility is **young**: some titles (e.g. Sonic) are playable, others render with bugs, and many are unverified — see the [status note](#honest-status) and the [compatibility manifest](docs/compatibility.md).
 
 ### Setup
 
@@ -224,6 +231,10 @@ A few examples:
 ```bash
 # Boot the Next headless and capture the framebuffer
 ./bin/zx_go --next --headless --frames=3000 --save-screen=/tmp/boot.png
+
+# Mount and play a tape headless (then drive LOAD"" with --press-key, or use
+# the 128 Tape Loader on a 128K model)
+./bin/zx_go --headless --tape game.tap --frames=5000 --save-screen=/tmp/tape.png
 
 # Open the scriptable telnet debugger, paused at reset
 ./bin/zx_go --next --headless --debugger-port=10000 --debugger-pause-at-start

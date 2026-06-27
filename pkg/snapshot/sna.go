@@ -11,7 +11,7 @@ import (
 // 128K SNA format is 131103 bytes total
 
 const (
-	SNA48K_SIZE = 49179
+	SNA48K_SIZE  = 49179
 	SNA128K_SIZE = 131103
 )
 
@@ -54,18 +54,27 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 	s.CPU.IM = header[25] & 0x03
 	s.CPU.BorderColor = header[26] & 0x07
 
-	// Read 48K of RAM data (banks 5, 2, 0 - the standard 48K layout)
+	// Read the 48K dump (per the SNA format spec): page 5 at 0x4000,
+	// page 2 at 0x8000, and the page currently mapped at 0xC000. On a
+	// 48K machine the 0xC000 page is always physical bank 0. On a 128K
+	// machine it is whichever bank port 0x7FFD selected — but the 7FFD
+	// value is stored in the extra header that follows the 48K dump, so
+	// we can't know which bank this third page belongs to until later.
+	// Buffer it and place it once the 7FFD byte is read; loading it
+	// straight into bank 0 would (a) lose the paged-in bank's data and
+	// (b) leave bank 0 to be overwritten by the remaining-pages loop.
 	// Bank 5 (0x4000-0x7FFF)
 	if _, err := io.ReadFull(file, s.Memory.RAM[5]); err != nil {
 		return fmt.Errorf("failed to read RAM bank 5: %w", err)
 	}
-	// Bank 2 (0x8000-0xBFFF) 
+	// Bank 2 (0x8000-0xBFFF)
 	if _, err := io.ReadFull(file, s.Memory.RAM[2]); err != nil {
 		return fmt.Errorf("failed to read RAM bank 2: %w", err)
 	}
-	// Bank 0 (0xC000-0xFFFF)
-	if _, err := io.ReadFull(file, s.Memory.RAM[0]); err != nil {
-		return fmt.Errorf("failed to read RAM bank 0: %w", err)
+	// The 0xC000 page — buffered until we know which bank it is.
+	pagedPage := make([]byte, 16384)
+	if _, err := io.ReadFull(file, pagedPage); err != nil {
+		return fmt.Errorf("failed to read RAM paged page: %w", err)
 	}
 
 	// Check if this is a 128K SNA file by trying to read more data
@@ -78,28 +87,35 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 	if n == 4 {
 		// This is a 128K SNA file
 		s.Memory.Is128K = true
-		
+
 		// Parse 128K specific data
 		s.CPU.PC = binary.LittleEndian.Uint16(extraHeader[0:2])
 		s.Memory.Port7FFD = extraHeader[2]
 		// extraHeader[3] contains TR-DOS ROM paged flag (usually 0)
 
-		// Read the remaining RAM banks (1, 3, 4, 6, 7)
-		// The order depends on which page is currently mapped at 0xC000
+		// The 48K dump's 0xC000 page belongs to the bank port 0x7FFD
+		// had selected. Place the buffered page into that bank now.
 		currentPage := int(s.Memory.Port7FFD & 0x07)
-		
-		// Read all remaining banks
+		copy(s.Memory.RAM[currentPage], pagedPage)
+
+		// Read the remaining RAM banks in ascending order, skipping the
+		// pages already present in the 48K dump (5, 2 and the paged-in
+		// page). Per the spec, when the paged page is itself 5 or 2 the
+		// remaining set is all of 0,1,3,4,6,7 (the paged page is not
+		// additionally subtracted), which falls out of this loop because
+		// 5/2 are already excluded.
 		for bankNum := 0; bankNum < 8; bankNum++ {
-			// Skip banks we already loaded (5, 2, and the current paged bank)
 			if bankNum == 5 || bankNum == 2 || bankNum == currentPage {
 				continue
 			}
-			
+
 			if _, err := io.ReadFull(file, s.Memory.RAM[bankNum]); err != nil {
 				return fmt.Errorf("failed to read RAM bank %d: %w", bankNum, err)
 			}
 		}
 	} else {
+		// 48K SNA: the 0xC000 page is physical bank 0.
+		copy(s.Memory.RAM[0], pagedPage)
 		// 48K SNA: PC is stored on the stack — pop it from RAM
 		s.Memory.Is128K = false
 		sp := s.CPU.SP
@@ -130,7 +146,7 @@ func (s *Snapshot) readRAM(addr uint16) byte {
 func (s *Snapshot) saveSNA(file io.Writer) error {
 	// Create header (27 bytes)
 	header := make([]byte, 27)
-	
+
 	header[0] = s.CPU.I
 	header[1] = s.CPU.L_
 	header[2] = s.CPU.H_
@@ -166,15 +182,23 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 		return fmt.Errorf("failed to write SNA header: %w", err)
 	}
 
-	// Write 48K of RAM (banks 5, 2, 0)
+	// Write the 48K dump (per the SNA format spec): page 5 at 0x4000,
+	// page 2 at 0x8000, then the page mapped at 0xC000. On 48K that is
+	// physical bank 0; on 128K it is the bank port 0x7FFD selected.
+	// Writing a hardcoded bank 0 here for a 128K snapshot would lose the
+	// paged-in bank's contents and duplicate bank 0.
+	pagedBank := 0
+	if s.Memory.Is128K {
+		pagedBank = int(s.Memory.Port7FFD & 0x07)
+	}
 	if _, err := file.Write(s.Memory.RAM[5]); err != nil {
 		return fmt.Errorf("failed to write RAM bank 5: %w", err)
 	}
 	if _, err := file.Write(s.Memory.RAM[2]); err != nil {
 		return fmt.Errorf("failed to write RAM bank 2: %w", err)
 	}
-	if _, err := file.Write(s.Memory.RAM[0]); err != nil {
-		return fmt.Errorf("failed to write RAM bank 0: %w", err)
+	if _, err := file.Write(s.Memory.RAM[pagedBank]); err != nil {
+		return fmt.Errorf("failed to write RAM paged bank %d: %w", pagedBank, err)
 	}
 
 	// If 128K, write additional data
@@ -196,7 +220,7 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 			if bankNum == 5 || bankNum == 2 || bankNum == currentPage {
 				continue
 			}
-			
+
 			if _, err := file.Write(s.Memory.RAM[bankNum]); err != nil {
 				return fmt.Errorf("failed to write RAM bank %d: %w", bankNum, err)
 			}
