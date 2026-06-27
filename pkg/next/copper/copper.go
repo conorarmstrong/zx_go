@@ -115,12 +115,20 @@ func (c *Copper) WriteData(b byte) {
 // bits.
 func (c *Copper) SetWritePtrLow(b byte) {
 	c.writePtr = (c.writePtr & 0x300) | uint16(b)
+	// Setting the write cursor starts a fresh 16-bit instruction write, so the
+	// two-byte (hi/lo) pairing phase resets. Without this a stray odd NR$60
+	// byte left staged before the cursor move — e.g. the dispatcher reset
+	// writing NR$60=$00 — pairs off-by-one with the following program stream,
+	// turning a real "WAIT y; MOVE r,v" list into garbage "MOVE NR$01..,$16"
+	// MOVEs that clobber the whole NextReg config (Nextoid reset-to-Welcome bug).
+	c.hiSet = false
 }
 
 // SetWritePtrHighAndMode sets the high 2 cursor bits (val bits 0-1)
 // AND the start-mode (val bits 6-7).
 func (c *Copper) SetWritePtrHighAndMode(b byte) {
 	c.writePtr = (c.writePtr & 0xFF) | (uint16(b&0x03) << 8)
+	c.hiSet = false // cursor move resets the two-byte write phase (see SetWritePtrLow)
 	c.mode = StartMode((b >> 6) & 0x03)
 	switch c.mode {
 	case StartStop:
