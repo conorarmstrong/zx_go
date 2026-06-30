@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
@@ -2289,20 +2290,31 @@ func configStringToMultifaceVariant(s string) multiface.MultifaceType {
 	return multiface.Multiface128
 }
 
-// scaleToWindowSize maps a percentage (100/125/150/200/300) to the
-// fyne window size. Unknown values fall back to 200%.
+// scaleToWindowSize maps a percentage (100/125/150/200/300) to the fyne window
+// size. The returned height is padded by the menu-bar height so the emulator
+// image keeps its intended scale rather than being squashed by the menu. Unknown
+// values fall back to 200%.
 func scaleToWindowSize(scale int) (float32, float32) {
+	w, h := float32(640), float32(480) // 200% — the existing default
 	switch scale {
 	case 100:
-		return 320, 240
+		w, h = 320, 240
 	case 125:
-		return 400, 300
+		w, h = 400, 300
 	case 150:
-		return 480, 360
+		w, h = 480, 360
 	case 300:
-		return 960, 720
+		w, h = 960, 720
 	}
-	return 640, 480 // 200% — the existing default
+	return w, h + menuBarHeight()
+}
+
+// menuBarHeight returns the vertical space the window's main menu bar occupies.
+// Derived from the theme so it stays correct across themes / DPI: Fyne sizes the
+// bar's items as text height plus inner padding above and below.
+func menuBarHeight() float32 {
+	th := fyne.CurrentApp().Settings().Theme()
+	return th.Size(theme.SizeNameText) + 2*th.Size(theme.SizeNameInnerPadding)
 }
 
 func main() {
@@ -3670,31 +3682,31 @@ func main() {
 		fyne.NewMenu("View",
 			fyne.NewMenuItem("100% (320x240)", func() {
 				w.SetFullScreen(false)
-				w.Resize(fyne.NewSize(320, 240))
+				w.Resize(fyne.NewSize(scaleToWindowSize(100)))
 				currentScale = 100
 				saveConfig()
 			}),
 			fyne.NewMenuItem("125% (400x300)", func() {
 				w.SetFullScreen(false)
-				w.Resize(fyne.NewSize(400, 300))
+				w.Resize(fyne.NewSize(scaleToWindowSize(125)))
 				currentScale = 125
 				saveConfig()
 			}),
 			fyne.NewMenuItem("150% (480x360)", func() {
 				w.SetFullScreen(false)
-				w.Resize(fyne.NewSize(480, 360))
+				w.Resize(fyne.NewSize(scaleToWindowSize(150)))
 				currentScale = 150
 				saveConfig()
 			}),
 			fyne.NewMenuItem("200% (640x480)", func() {
 				w.SetFullScreen(false)
-				w.Resize(fyne.NewSize(640, 480))
+				w.Resize(fyne.NewSize(scaleToWindowSize(200)))
 				currentScale = 200
 				saveConfig()
 			}),
 			fyne.NewMenuItem("300% (960x720)", func() {
 				w.SetFullScreen(false)
-				w.Resize(fyne.NewSize(960, 720))
+				w.Resize(fyne.NewSize(scaleToWindowSize(300)))
 				currentScale = 300
 				saveConfig()
 			}),
