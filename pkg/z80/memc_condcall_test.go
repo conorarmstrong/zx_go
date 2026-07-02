@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 353: conditional CALL cc / RET cc stack contention (taken path).
+// Conditional CALL cc / RET cc stack contention (taken path).
 // On the taken path these push/pop through pushC/popC, so a stack in
 // contended RAM incurs position-dependent ULA contention.
 func TestMemContention_CondCallRet(t *testing.T) {

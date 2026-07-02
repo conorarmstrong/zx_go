@@ -37,10 +37,10 @@ func FrameIntTiming(nr03MachineTiming byte, sixtyHz bool) (assertTstate, pulseTs
 		}
 	case 0x04: // Pentagon (always one timing)
 		pulseTstates = 36
-		assertTstate = (0*448 + 116) / 2 // 58
+		assertTstate = (319*448 + 439) / 2 // 71675
 	default: // 48K (00X)
 		pulseTstates = 32
-		assertTstate = (319*448 + 439) / 2 // 71675
+		assertTstate = (0*448 + 116) / 2 // 58
 	}
 	return assertTstate, pulseTstates
 }

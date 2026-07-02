@@ -7,10 +7,11 @@
 //
 // Disk images are loaded via LoadDisk and parsed using the plus3fdc
 // package's raw-sector parsers (ParseMGT, ParseIMG, ParseSAD). The
-// internal representation is FUSE's track byte stream model, which
-// lets the WD1770 emulation find sectors by walking IDAMs and DAMs.
+// internal representation is a track byte stream, which lets the
+// WD1770 emulation find sectors by walking IDAMs and DAMs exactly as
+// the chip would while reading a real disk.
 //
-// Port decode (low byte of address), matching FUSE's disciple.c:
+// Port decode (low byte of address):
 //
 //	0x1B — WD1770 Status (R) / Command (W)
 //	0x5B — WD1770 Track register (R/W)
@@ -35,7 +36,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// Port addresses matching FUSE's disciple.c.
+// Port addresses for the DISCiPLE's WD1770 and control registers.
 const (
 	portFDCCmdStatus = 0x1B // WD1770 Command (W) / Status (R)
 	portFDCTrack     = 0x5B // WD1770 Track register
@@ -262,8 +263,7 @@ func (d *Disciple) HandlePortWrite(port uint16, value byte) bool {
 	return false
 }
 
-// controlWrite handles a write to the DISCiPLE control register.
-// Matches FUSE's disciple_cn_write:
+// controlWrite handles a write to the DISCiPLE control register:
 //
 //	Bit 0: Drive select (1 = drive 0, 0 = drive 1)
 //	Bit 1: Side select (0 = side 0, 1 = side 1)
@@ -423,11 +423,18 @@ func (d *Disciple) executeCommand(cmd byte) {
 		d.cmdReadAddress()
 
 	case cmd&0xF0 == 0xD0: // Force Interrupt
+		// WD1772 datasheet "TYPE IV COMMANDS": if a command is under execution,
+		// only the Busy bit resets — the rest of the status bits, and so the
+		// interrupted command's Type I/Type II-III bit meanings, are left alone.
+		// Only an IDLE Force Interrupt switches the status to Type I.
+		wasBusy := d.busy
 		d.busy = false
 		d.drq = false
 		d.xferBuf = nil
 		d.intrq = true
-		d.lastCmdType1 = true
+		if !wasBusy {
+			d.lastCmdType1 = true
+		}
 		d.multiSector = false
 
 	case cmd&0xF0 == 0xE0: // Read Track
@@ -775,7 +782,7 @@ func (d *Disciple) DiskPath(drive int) string {
 }
 
 // PreFetchHook pages in the DISCiPLE when the CPU fetches from
-// specific trigger addresses, matching FUSE's z80_ops.c:
+// specific trigger addresses:
 //
 //	0x0001 — second byte of cold boot (re-page after reset)
 //	0x0008 — RST 8 (GDOS intercepts error/command handler)

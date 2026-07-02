@@ -1,8 +1,8 @@
 // Package plus3fdc implements the floppy disk controller for the Spectrum
-// +3 / +2A: a NEC µPD765A FDC plus disk image parsers for DSK / EDSK and
-// (eventually) other formats. The internal disk representation is a
-// FUSE-style track byte stream with parallel clock, FM, and weak-data
-// bitmaps — see track.go for the model.
+// +3 / +2A: a NEC µPD765A FDC plus disk image parsers for DSK / EDSK,
+// UDI, MGT / IMG, SAD, TRD, and D40 / D80. The internal disk
+// representation is a track byte stream with parallel clock, FM, and
+// weak-data bitmaps — see track.go for the model.
 package plus3fdc
 
 import (
@@ -92,13 +92,19 @@ func (d *Disk) FormatTrack(head, cylinder int, sectors []Sector) error {
 	}
 	tr := newTrack(bytesPerTrackDD, gapByteMFM, c, h, n)
 	b := newTrackBuilder(tr, gapMFM)
-	b.preindexAdd()
-	b.postindexAdd()
-	for _, s := range sectors {
+	if !b.preindexAdd() {
+		return fmt.Errorf("plus3fdc: FormatTrack: track too small for pre-index gap")
+	}
+	if !b.postindexAdd() {
+		return fmt.Errorf("plus3fdc: FormatTrack: track too small for post-index gap")
+	}
+	for j, s := range sectors {
 		if !b.idAdd(s.C, s.H, s.R, s.N, false) {
-			return fmt.Errorf("plus3fdc: FormatTrack: track full at %d sectors", len(sectors))
+			return fmt.Errorf("plus3fdc: FormatTrack: track full at sector %d of %d", j, len(sectors))
 		}
-		b.dataAdd(s.Data, false, false)
+		if _, ok := b.dataAdd(s.Data, false, false); !ok {
+			return fmt.Errorf("plus3fdc: FormatTrack: track full writing data for sector %d of %d", j, len(sectors))
+		}
 	}
 	b.gap4Add()
 	d.Tracks[head][cylinder] = tr
@@ -137,9 +143,9 @@ func ParseDiskImage(data []byte) (*Disk, error) {
 
 // ParseDSK parses a DSK image from a byte slice. Both the original
 // CPCEMU "MV - CPCEMU Disk-File" format and the EXTENDED CPC DSK
-// variant are supported. The bytes are parsed into the FUSE-style
-// track byte stream model — sector data is laid out as if read from
-// a spinning floppy, with sync fields, address marks, CRCs, and gaps.
+// variant are supported. The bytes are parsed into the track byte
+// stream model — sector data is laid out as if read from a spinning
+// floppy, with sync fields, address marks, CRCs, and gaps.
 func ParseDSK(data []byte) (*Disk, error) {
 	if len(data) < dskHeaderSize {
 		return nil, fmt.Errorf("DSK too short: %d bytes", len(data))
@@ -228,8 +234,8 @@ func ParseDSK(data []byte) (*Disk, error) {
 // buildTrackFromDSK reads one Track-Info block from a DSK file and
 // constructs a track-level Track byte stream from its sectors. trackData
 // must include the 256-byte Track-Info header. The output uses the
-// FUSE-equivalent IBM34 MFM gap layout, which matches what the +3
-// hardware emits when formatting a fresh disk.
+// IBM34 MFM gap layout, matching what the +3 hardware emits when
+// formatting a fresh disk.
 func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 	if len(trackData) < trackHeaderSize {
 		return nil, fmt.Errorf("track shorter than header")
@@ -297,9 +303,10 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 			continue
 		}
 		// EDSK can record more data bytes than the sector ID claims
-		// (e.g. for weak sectors that store multiple copies). Emit the
-		// ID-length-worth and mark it weak — matches FUSE's
-		// cpc_set_weak_range behaviour.
+		// (e.g. for weak sectors that store multiple copies). Emit only
+		// the ID-length-worth and mark that range weak, so each read
+		// returns different data the way a real weak/copy-protected
+		// sector does.
 		idLen := sectorLength(n)
 		emitLen := dataBytes
 		if emitLen > idLen {

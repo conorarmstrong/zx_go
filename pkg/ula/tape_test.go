@@ -155,9 +155,8 @@ func TestTapePlayerPulseGeneration(t *testing.T) {
 	}
 }
 
-// Tape accessor coverage (iter 252).
-// Covers SaveTAP round-trip, NextBlock advance + EOF, HasMoreBlocks
-// transitions, Blocks() metadata, SeekToBlock clamping.
+// Tape accessor coverage: SaveTAP round-trip, NextBlock advance + EOF,
+// HasMoreBlocks transitions, Blocks() metadata, SeekToBlock clamping.
 
 func TestSaveTAPRoundtrip(t *testing.T) {
 	dir := t.TempDir()

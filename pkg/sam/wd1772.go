@@ -3,9 +3,8 @@ package sam
 // WD1772 is the SAM Coupé's floppy disk controller (a WD179x-family part, MFM
 // only). It exposes four registers selected by the low two address bits —
 // status/command, track, sector, data — and serves sectors from a Disk image.
-// Modelled on the proven pkg/betadisk WD1793 structure with the SAM specifics
-// (instantaneous seek, side via the port address, LOST_DATA timeout). Plan
-// Appendix G, SimCoupe VL1772.h / Drive.cpp.
+// Modelled on the pkg/betadisk WD1793 structure with the SAM specifics
+// (instantaneous seek, side via the port address, LOST_DATA timeout).
 type WD1772 struct {
 	disk *Disk
 
@@ -117,10 +116,10 @@ func (f *WD1772) step(cmd byte, dir int) {
 	f.finishTypeI()
 }
 
-// finishTypeI completes a positioning command instantaneously (SimCoupe seeks
-// with no delay) and raises INTRQ. The live Type I status bits (TRACK00,
-// SPIN_UP, INDEX, NOT-READY) are applied in ReadStatus so they reflect the
-// current disk/head state at read time, as on the WD1772.
+// finishTypeI completes a positioning command with no seek delay and raises
+// INTRQ. The live Type I status bits (TRACK00, SPIN_UP, INDEX, NOT-READY) are
+// applied in ReadStatus so they reflect the current disk/head state at read
+// time, as on the WD1772.
 func (f *WD1772) finishTypeI() {
 	f.status = 0
 	f.intrq = true
@@ -227,7 +226,10 @@ func (f *WD1772) ReadData() byte {
 	return f.data
 }
 
-// WriteData feeds the next byte of a Type II write transfer.
+// WriteData feeds the next byte of a Type II write transfer. When the command
+// was issued with the multiple-record flag (WRITE SECTOR MULTIPLE), filling
+// the buffer commits the current sector and continues into the next one
+// instead of ending the command, mirroring ReadData's multi-sector read.
 func (f *WD1772) WriteData(val byte) {
 	f.data = val
 	if f.status&wdDRQ == 0 || !f.writing {
@@ -238,6 +240,13 @@ func (f *WD1772) WriteData(val byte) {
 	f.drqReads = 0
 	if f.bufPos >= len(f.buffer) {
 		f.disk.WriteSector(f.cyl, f.side, int(f.sector), f.buffer)
+		if f.multiSector {
+			f.sector++
+			if _, ok := f.disk.ReadSector(f.cyl, f.side, int(f.sector)); ok {
+				f.buffer, f.bufPos = make([]byte, f.sectorSize()), 0
+				return
+			}
+		}
 		f.endIO(0)
 	}
 }

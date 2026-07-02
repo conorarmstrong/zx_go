@@ -4,8 +4,7 @@ import "fmt"
 
 // Disk is a SAM Coupé floppy image: a flat sector store plus its geometry.
 // The standard SAM disk is 800K MGT (80 cylinders × 2 heads × 10 sectors × 512
-// bytes); SAD images carry their own geometry header. (SimCoupe Disk.cpp,
-// plan Appendix G.)
+// bytes); SAD images carry their own geometry header.
 type Disk struct {
 	data            []byte
 	cyls            int

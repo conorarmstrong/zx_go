@@ -1,13 +1,14 @@
 // Package sdcard backs the Spectrum Next's esxDOS file API with a
-// host filesystem mount. Sprint 4 ships a "directory-as-SD-card"
+// host filesystem mount. HostDir is a "directory-as-SD-card"
 // implementation: esxDOS paths like "/demos/test.nex" translate to
 // host paths under a mount root using filepath.Join. This avoids
 // implementing FAT16/32 parsing while remaining sufficient for
 // running NextZXOS dot commands and loading .NEX files.
 //
-// A FAT-image backend can be added later behind the same Mount
-// interface if a future sprint needs disk-image fidelity (sector
-// access, FAT idiosyncrasies, on-disk format compatibility).
+// A FAT-image backend can also be used behind the same Mount
+// interface when disk-image fidelity is needed (sector access, FAT
+// idiosyncrasies, on-disk format compatibility) — see fat16.go and
+// fat32.go.
 package sdcard
 
 import (
@@ -20,14 +21,13 @@ import (
 )
 
 // Mount is the file-system surface esxDOS handlers consume. The
-// interface intentionally mirrors the parts of esxDOS the Sprint 4
-// handler set will call into; concrete implementations include
-// HostDir (Sprint 4) and — in a future sprint — FATImage.
+// interface mirrors the parts of esxDOS the handler set calls into;
+// concrete implementations include HostDir.
 type Mount interface {
 	// Open opens a file at the given esxDOS-style path. The flags
 	// follow esxDOS conventions: bit 0 = read, bit 1 = write,
 	// bit 2 = create, bit 3 = exclusive, bit 4 = truncate, etc.
-	// Sprint 4 honours bits 0 (read) and 1 (write); the rest are
+	// HostDir honours bits 0 (read) and 1 (write); the rest are
 	// accepted and either implied or ignored.
 	Open(path string, flags byte) (Handle, error)
 
@@ -81,7 +81,7 @@ type Handle interface {
 
 // FileInfo is the subset of file metadata esxDOS handlers care
 // about. Times are unix-style seconds since epoch in the host
-// timezone — Sprint 4 doesn't model the Next's RTC, so dates come
+// timezone: HostDir doesn't model the Next's RTC, so dates come
 // from the host file's modification time.
 type FileInfo struct {
 	Name    string

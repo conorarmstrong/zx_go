@@ -20,7 +20,9 @@ package rzx
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/snapshot"
@@ -230,6 +232,72 @@ func TestReadRejectsPayloadPastEOF(t *testing.T) {
 	}
 }
 
+// TestReadRejectsImplausibleFrameCount pins that an input block's
+// declared frame count is sanity-checked against the actual size of the
+// (decompressed) frame stream before it is used to size the Frames
+// slice. Each frame needs at least 4 bytes (instruction count + IN
+// count), so a declared count far exceeding data-length/4 is rejected
+// up front rather than driving an oversized allocation for a tiny file.
+func TestReadRejectsImplausibleFrameCount(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write(magic)
+	buf.WriteByte(versionMajor)
+	buf.WriteByte(versionMinorPlay)
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(0))
+
+	var payload bytes.Buffer
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(1000000)) // frame count
+	payload.WriteByte(0)                                             // frame size byte
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(0))       // tstates
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(0))       // flags (uncompressed)
+	payload.Write([]byte{0x01, 0x02})                                // 2 stray bytes, nowhere near 4,000,000
+
+	buf.WriteByte(byte(BlockInput))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(5+payload.Len()))
+	buf.Write(payload.Bytes())
+
+	_, err := Read(buf.Bytes())
+	if err == nil {
+		t.Fatal("expected error for implausible frame count, got nil")
+	}
+	if !strings.Contains(err.Error(), "implausible") {
+		t.Errorf("error = %q, want it to mention the count was rejected as implausible", err.Error())
+	}
+}
+
+// TestReadBoundsSnapshotDecompressionByDeclaredLength pins that inflating
+// a compressed snapshot body stops just past the block's own declared
+// uncompressed-length field rather than fully materializing however much
+// the compressed stream claims to contain. Without this, a small,
+// highly-compressible ("bomb") stream paired with a small declared
+// length would still be inflated in full before the length mismatch is
+// detected.
+func TestReadBoundsSnapshotDecompressionByDeclaredLength(t *testing.T) {
+	bomb := bytes.Repeat([]byte{0}, 5*1024*1024)
+	var compressed bytes.Buffer
+	w := zlib.NewWriter(&compressed)
+	if _, err := w.Write(bomb); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload bytes.Buffer
+	_ = binary.Write(&payload, binary.LittleEndian, snapFlagCompressed)
+	payload.Write([]byte("SZX\x00"))
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(100)) // far below the real inflate size
+	payload.Write(compressed.Bytes())
+
+	_, err := readSnapshot(payload.Bytes())
+	if err == nil {
+		t.Fatal("expected a length-mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "inflated length 101") {
+		t.Errorf("error = %q, want inflation capped just above the declared length (101 bytes), not the full 5MB bomb", err.Error())
+	}
+}
+
 // TestCompressedSnapshotFlagAndInflate pins the compressed-snapshot path:
 // the compressed flag bit is set, the uncompressed-length field reflects
 // the ORIGINAL size, and the bytes inflate back to the original.
@@ -264,8 +332,7 @@ func TestCompressedSnapshotFlagAndInflate(t *testing.T) {
 // TestSnapshotEmbedRoundTripViaSnapshotPackage pins the bridge between the
 // snapshot package and an RZX snapshot block: encode a real snapshot,
 // embed it, write the RZX, read it back, decode, and confirm a CPU
-// register survives the whole round trip. This is the "snapshot-embed"
-// path the task calls out.
+// register survives the whole round trip.
 func TestSnapshotEmbedRoundTripViaSnapshotPackage(t *testing.T) {
 	snap := snapshot.New()
 	snap.CPU.PC = 0x1234

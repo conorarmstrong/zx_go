@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
@@ -45,7 +46,6 @@ func installTraceHooks(emu *emulator, f *cliFlags) (trace.Emitter, func()) {
 	if f.traceChannels.PC {
 		cpu := emu.cpu
 		mem := emu.mem
-		frameCounter := 0
 		// Pre-fetch hook fires on every M1. Filter cheaply.
 		filterStart, filterEnd := f.tracePCStart, f.tracePCEnd
 		filterOn := f.tracePCRange
@@ -59,14 +59,9 @@ func installTraceHooks(emu *emulator, f *cliFlags) (trace.Emitter, func()) {
 				PC:    pc,
 				Bank:  bank,
 				Insn:  cpu.InstructionCount(),
-				Frame: frameCounter,
+				Frame: int(atomic.LoadInt32(&emu.frameCounter)),
 			})
 		})
-		// We don't have a per-frame callback on the emulator; the
-		// Frame field stays at 0 unless updated. Headless mode
-		// updates it explicitly. The GUI path could later add a
-		// post-frame hook if frame correlation becomes important.
-		_ = frameCounter
 	}
 
 	// NextReg channel: install a tracer on the dispatcher if one

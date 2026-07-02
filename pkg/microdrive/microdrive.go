@@ -133,17 +133,17 @@ func (c *Cartridge) RawBytes() []byte {
 // Block is the parsed view of one cartridge block. The fields exactly
 // mirror libspectrum_microdrive_block (microdrive.c:40-57).
 type Block struct {
-	HdFlag byte    // bit 0 = 1 → header block, 0 → data block
-	HdBNum byte    // block number 1..254
-	HdBLen uint16  // unused
+	HdFlag byte     // bit 0 = 1 → header block, 0 → data block
+	HdBNum byte     // block number 1..254
+	HdBLen uint16   // unused
 	HdBNam [10]byte // cartridge label, NUL-padded
-	HdChks byte    // header checksum
+	HdChks byte     // header checksum
 
-	RecFlg byte    // bit 0 = 0 → data, plus other flags
-	RecNum byte    // data block number
-	RecLen uint16  // record length 0..512
-	RecNam [10]byte // record / file name, NUL-padded
-	RecChks byte   // record header checksum
+	RecFlg  byte     // bit 0 = 0 → data, plus other flags
+	RecNum  byte     // data block number
+	RecLen  uint16   // record length 0..512
+	RecNam  [10]byte // record / file name, NUL-padded
+	RecChks byte     // record header checksum
 
 	Data    [DataLen]byte
 	DatChks byte
@@ -205,11 +205,11 @@ func (c *Cartridge) SetBlock(which int, b Block) {
 type ChecksumStatus int
 
 const (
-	ChecksumOK         ChecksumStatus = 0  // all three sums match
-	ChecksumPresetBad  ChecksumStatus = -1 // block flagged as bad at format time
-	ChecksumBlockBad   ChecksumStatus = 1  // block-header sum mismatch
-	ChecksumRecordBad  ChecksumStatus = 2  // record-header sum mismatch
-	ChecksumDataBad    ChecksumStatus = 3  // data-area sum mismatch
+	ChecksumOK        ChecksumStatus = 0  // all three sums match
+	ChecksumPresetBad ChecksumStatus = -1 // block flagged as bad at format time
+	ChecksumBlockBad  ChecksumStatus = 1  // block-header sum mismatch
+	ChecksumRecordBad ChecksumStatus = 2  // record-header sum mismatch
+	ChecksumDataBad   ChecksumStatus = 3  // data-area sum mismatch
 )
 
 // Checksum verifies the three checksum fields of block N against the

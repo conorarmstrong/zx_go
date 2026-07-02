@@ -139,12 +139,10 @@ func WireJoystickIOMode(d *nextregs.Dispatcher) {
 // line interrupts INSTEAD of NR$22. Per VHDL line 5610 the write
 // directly updates the same nr_22_line_interrupt_en signal.
 //
-// We can't directly modify NR$22's stored byte (that breaks layering)
-// but we CAN set the line-int enable in cpu.LineIntOffsetTstates by
-// touching the underlying state via a re-write of NR$22. Practical
-// alternative: directly modify the dispatcher's NR$22 storage to set
-// bit 1 (= the canonical line-int-enable position post-iter-191) and
-// trigger a recompute via the existing NR$22 OnWrite handler.
+// We drive this by computing NR$22's new byte with bit 1 set/cleared
+// to match and writing it through disp.WriteReg(0x22, ...), which
+// triggers the existing NR$22 OnWrite handler to recompute
+// cpu.LineIntOffsetTstates.
 func WireInterruptEnable0(d *nextregs.Dispatcher) {
 	d.SetOnWrite(0xC4, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0xC4, val&0x83) // bits 7, 1, 0 retained
@@ -560,9 +558,9 @@ func WirePeripheral1(d *nextregs.Dispatcher, pager AutomapSetter, mem ConfigMode
 // WireContentionDisable installs the NextReg 0x08 OnWrite handler.
 // NextReg 0x08 is officially "Peripheral 3" and exposes multiple
 // behaviour bits (port-FF disable, RAM contention disable, lock
-// 7FFD, etc.); Sprint 5 honours bit 1 only — writing 1 to that
-// bit suppresses RAM contention. Other bits are stored verbatim
-// but have no observable effect yet.
+// 7FFD, etc.); we honour bit 6 (RAM contention disable) and bit 7
+// (7FFD paging-lock clear). Other bits are stored verbatim but have
+// no observable effect yet.
 func WireContentionDisable(d *nextregs.Dispatcher, mem *memory.Memory) {
 	d.SetOnWrite(0x08, func(disp *nextregs.Dispatcher, val byte) {
 		// Per zxnext.vhd:5176, contention disable is BIT 6 ($40),
@@ -571,7 +569,7 @@ func WireContentionDisable(d *nextregs.Dispatcher, mem *memory.Memory) {
 		// Bit 7 = 1 clears the $7FFD paging lock (zxnext.vhd:
 		// 3654-3656: nr_08_we and dat(7) → port_7ffd_reg(5) <= '0').
 		// Bit 7 = 0 leaves the lock untouched — NextZXOS's staging
-		// RMW relies on both directions (the development log).
+		// read-modify-write of this register relies on both directions.
 		if val&0x80 != 0 {
 			mem.PagingEnabled = true
 		}
@@ -595,7 +593,7 @@ func WireContentionDisable(d *nextregs.Dispatcher, mem *memory.Memory) {
 // pipeline would be unreachable.
 //
 // Other bits of 0x69 carry Display-Control state (timing, etc.)
-// that Sprint 6 stores but doesn't yet act on.
+// that we store but don't yet act on.
 func WireLayer2(d *nextregs.Dispatcher, l *layer2.Layer2) {
 	d.SetOnWrite(0x12, func(disp *nextregs.Dispatcher, val byte) {
 		l.SetActiveBank(val)
@@ -715,8 +713,8 @@ func WireSprites(d *nextregs.Dispatcher, e *sprite.Engine) {
 }
 
 // WireLayerPriority installs the NextReg 0x15 OnWrite/OnRead
-// handlers. Storage only — Sprint 7 reads p.Get() to drive the
-// 5-source ordering rules from the NextReg 0x15 documentation.
+// handlers. The compositor reads p.Get() to drive the 5-source
+// ordering rules from the NextReg 0x15 documentation.
 func WireLayerPriority(d *nextregs.Dispatcher, p *LayerPriority, sprites *sprite.Engine) {
 	d.SetOnWrite(0x15, func(disp *nextregs.Dispatcher, val byte) {
 		p.Set(val)
@@ -745,7 +743,7 @@ func WireLayerPriority(d *nextregs.Dispatcher, p *LayerPriority, sprites *sprite
 
 // WirePalette installs the NextReg 0x40 (index), 0x41 (8-bit
 // value with auto-increment), 0x43 (palette select) and 0x44
-// (9-bit value, two-byte sequence) handlers. Sprint 6.1.
+// (9-bit value, two-byte sequence) handlers.
 //
 // NextReg 0x44 is two-byte: the first write captures the high
 // byte and the second write applies both bytes to the active
@@ -772,16 +770,7 @@ func WirePalette(d *nextregs.Dispatcher, b *palette.Bank) {
 	d.SetOnWrite(0x43, func(disp *nextregs.Dispatcher, val byte) {
 		// Per FPGA zxnext.vhd:5388-5394 + 6952:
 		// bit 7 = palette autoinc disable
-		// bits 6:4 = write-target palette select; the FPGA palette
-		// SRAM address uses ONLY bits (1) and (2) of
-		// write_select to choose one of 4 banks:
-		// wsel(1) wsel(2) | bank
-		// 0 0 | 00 = ULA First
-		// 1 0 | 10 = Tilemap First
-		// 0 1 | 01 = ULA Second
-		// 1 1 | 11 = Tilemap Second
-		// (so wsel=0 and wsel=1 alias the same bank,
-		// etc. Bit 0 of wsel is unused for storage.)
+		// bits 6:4 = write-target palette select (wsel, 3 bits)
 		// bit 3 = active sprite palette
 		// bit 2 = active layer 2 palette
 		// bit 1 = active ULA palette
@@ -848,9 +837,6 @@ func WirePalette(d *nextregs.Dispatcher, b *palette.Bank) {
 // - Pi accelerator — the dispatcher's default storage already
 // makes NextReg 0x90+ safe no-ops, so no consumer needs a
 // dedicated handler.
-//
-// Sprint 7+ extensions add Sprites / Tilemap / Copper / RTC /
-// UART fields here as they land.
 type WireOpts struct {
 	Dispatcher *nextregs.Dispatcher
 	Memory     *memory.Memory
@@ -875,11 +861,9 @@ type WireOpts struct {
 	DivMMCPager AutomapSetter
 }
 
-// Wire is the umbrella that installs every Sprint-5 + Sprint-6
-// NextReg handler in one call. Sprint 7+ will extend WireOpts with
-// sprite-attribute (0x35–0x39, 0x75–0x79) and Copper (0x60–0x62)
-// handlers as they land. Callers who want finer-grained control
-// can still call the individual Wire* helpers directly.
+// Wire is the umbrella that installs every NextReg handler in one
+// call. Callers who want finer-grained control can still call the
+// individual Wire* helpers directly.
 //
 // Wire also installs the memory.SpeedMultiplier hook so RAM
 // contention scales with the CPU's current speed.
@@ -1259,8 +1243,8 @@ func WireCopper(d *nextregs.Dispatcher, c *copper.Copper) {
 }
 
 // WireRTC installs NextReg 0x10 / 0x11 storage handlers for the
-// real-time-clock SCL / SDA i2c lines. Sprint 8 does NOT implement
-// full i2c packet decoding — the bytes are stored verbatim so guest
+// real-time-clock SCL / SDA i2c lines. We do NOT implement full i2c
+// packet decoding — the bytes are stored verbatim so guest
 // software that probes the registers gets stable behaviour, but
 // software that bit-bangs a real i2c read of the DS1307 register
 // set will not see RTC data through these registers.
@@ -1275,8 +1259,7 @@ func WireRTC(d *nextregs.Dispatcher, _ *rtc.RTC) {
 	// version-dependent; we don't model either, just store).
 	//
 	// NR$11 is NOT i2c — it's the video-timing register per
-	// zxnext.vhd:5208-5217 (iter 190 correction). It's wired by
-	// WireVideoTiming, NOT here.
+	// zxnext.vhd:5208-5217. It's wired by WireVideoTiming, NOT here.
 	d.SetOnWrite(0x10, func(disp *nextregs.Dispatcher, val byte) { disp.Store(0x10, val) })
 }
 
@@ -1294,20 +1277,14 @@ func WireUART(d *nextregs.Dispatcher, u *uart.UART) {
 }
 
 // WireCPUSpeed installs the NextReg 0x07 OnWrite handler that
-// drives CPU.SetSpeedSelect from guest writes. Reads of 0x07 see
-// whatever was last written (low 2 bits) — Sprint 5 doesn't yet
-// model the "currently-executing speed" mirror in the upper bits.
-//
-// Sprint 5.1 ships storage only; the CPU's SpeedMultiplier method
-// returns 1/2/4/8 based on the stored value, but ExecuteFrame
-// hasn't been taught to consume it yet. Sprint 5.2 wires the
-// budget scaling.
+// drives CPU.SetSpeedSelect from guest writes. The CPU's
+// SpeedMultiplier method returns 1/2/4/8 based on the stored value
+// and ExecuteFrame scales its T-state budget accordingly, so turbo
+// modes (NR$07 = 14/28 MHz) take effect immediately on write.
 func WireCPUSpeed(d *nextregs.Dispatcher, cpu *z80.CPU) {
 	// ZX_GO_FORCE_SPEED=N locks the CPU speed selector to N (0=3.5,
-	// 1=7, 2=14, 3=28 MHz), ignoring guest NR$07 writes — a DIAGNOSTIC
-	// to test whether the 128K-launch divergence is timing-driven (the reference
-	// runs the menu at 3.5 MHz while we apply the guest's 28 MHz request
-	// immediately).
+	// 1=7, 2=14, 3=28 MHz), ignoring guest NR$07 writes — a diagnostic
+	// for isolating whether a given emulation issue is CPU-speed-related.
 	forced := -1
 	if fs := os.Getenv("ZX_GO_FORCE_SPEED"); fs != "" {
 		if len(fs) == 1 && fs[0] >= '0' && fs[0] <= '3' {
@@ -1328,9 +1305,7 @@ func WireCPUSpeed(d *nextregs.Dispatcher, cpu *z80.CPU) {
 		//   "00" & cpu_speed & "00" & nr_07_cpu_speed
 		// MSB-first: bits 7:6 = 00, bits 5:4 = CURRENT speed
 		// (dynamic on real HW; static for us — equals the target),
-		// bits 3:2 = 00, bits 1:0 = configured target. (Iter 223
-		// put current in bits 7:6 — wrong per the concatenation
-		// order; the development log.)
+		// bits 3:2 = 00, bits 1:0 = configured target.
 		sel := cpu.SpeedSelect() & 0x03
 		return (sel << 4) | sel
 	})
@@ -1371,10 +1346,10 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
 			return
 		}
 		target := uint16(nr23) | (uint16(nr22&0x01) << 8)
-		// Faithful raster position: MAME (specnext.cpp line_irq_adjust) fires
-		// at vpos = cvc_to_vpos(target-1) = (target-1+min_vactive), i.e. the
-		// target line is relative to the 256x192 active area (min_vactive=64 =
-		// our top border), not the frame top. frameStart is absolute line 0.
+		// Raster position: the target line interrupt fires at
+		// vpos = target-1+min_vactive, i.e. the target line is relative
+		// to the 256x192 active area (min_vactive=64 = our top border),
+		// not the frame top. frameStart is absolute line 0.
 		const minVactive = 64
 		var lineAbs uint64
 		if target != 0 {
@@ -1433,10 +1408,9 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
 //
 // OnRead reconstructs the value LIVE from the paging ports
 // (port_DFFD / port_7FFD / port_1FFD) per nextreg.txt:870-885 — the
-// read is NOT the last byte written. Returning the stored byte gave a
-// stale $00 whenever paging was last driven through the legacy ports,
-// diverging from real hardware and the reference emulator (which
-// reports $78 at the 128K-menu idle state). See memory.ROMMappingNR8E.
+// read is NOT the last byte written. Returning the stored byte would
+// give a stale value whenever paging was last driven through the
+// legacy ports instead of NR$8E itself. See memory.ROMMappingNR8E.
 func WireROMBank(d *nextregs.Dispatcher, mem *memory.Memory) {
 	d.SetOnWrite(0x8E, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0x8E, val)
@@ -1504,13 +1478,10 @@ func WireAltROM(d *nextregs.Dispatcher, mem *memory.Memory) {
 // re-enters from $0000 with the sticky reset-reason bits set so
 // configuration-aware code can distinguish soft from cold reset.
 //
-// Earlier versions of this comment claimed the bank-0 boot ROM
-// reads NextReg $02 to take an "autoexec" path on chained resets.
-// That claim was wrong — a full byte-level search of enNextZX.rom
-// (May 2026) found exactly ONE read of $02 in the entire 64 KiB
-// distro: the read at $3BE8 itself (which preserves bit 7 across
-// the write). NO code in any bank consults the sticky bit. So
-// the soft-reset is a clean re-entry of the same boot path with
+// No code in the NextZXOS boot ROM reads NextReg $02 to alter the
+// post-reset path — the only read of $02 anywhere in the distro is
+// the one at $3BE8 itself (which preserves bit 7 across the write).
+// So the soft-reset is a clean re-entry of the same boot path with
 // NextReg state preserved — nothing is "remembered" to alter the
 // post-reset code path.
 //
@@ -1550,7 +1521,7 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	// issue the $6D31 staging soft-reset) from the post-staging pass
 	// (read $01 → continue into the engine-backed menu). Bit 7 of
 	// every write latches nr_02_bus_reset (vhd:5119) and reads back
-	// in bit 7 (the expansion-bus reset line). the development log.
+	// in bit 7 (the expansion-bus reset line).
 	//
 	// Seed: with the FPGA bootrom armed, the bootrom itself issues
 	// the first soft reset (start at power-on "100"); the direct-boot
@@ -1585,14 +1556,13 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 			e3 := q.LastE3()
 			divInfo = fmt.Sprintf("paged=%v E3=$%02X bank=%d conmem=%v", q.IsPagedIn(), e3, e3&0x0F, e3&0x80 != 0)
 		}
-		// Fire on every write that has the trigger bit set. Iter-131
-		// lockstep against the reference confirmed at PC=$0171 (FPGA bootrom
-		// reading NR$02) that the reference's NR$02 reads back \$01 on
-		// cold boot — consistent with the shift-history after TWO soft
-		// resets — and the bootrom subsequently writes \$01 to
-		// re-trigger a soft reset, so the FPGA does NOT use a
-		// bit-0→1-edge gate. Spec-faithful: every OUT is a separate
-		// trigger pulse on the bus.
+		// Fire on every write that has the trigger bit set — the FPGA
+		// does NOT use a bit-0→1-edge gate. The FPGA bootrom itself
+		// relies on this: it reads NR$02 back as $01 on cold boot
+		// (consistent with the shift-history after two soft resets)
+		// and then writes $01 again to re-trigger a soft reset. Every
+		// OUT is a separate trigger pulse on the bus, regardless of
+		// the previously-stored value.
 		softFire := val&0x01 != 0
 		hardFire := val&0x02 != 0
 		// NR$02 bits 3/2 generate the Multiface / divMMC NMI
@@ -1604,11 +1574,11 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		// enter its editor-snapshot loader: the FPGA pages the Multiface in
 		// over $0000-$3FFF so the $0066 handler (enNextMF.rom: JP $006D; LD
 		// ($3FB1),SP; LD SP,$3FC4; …) runs. Without paging the MF in, $0066
-		// read the normal-ROM stub F5F1ED45 (PUSH AF;POP AF;RETN) → RETN to
-		// $0AB8 → $0AC0→$0ACD RET-NZ→$FF00 NOP-slide hang → black (D62-D67;
-		// reference $0066-bytes lockstep). Paged out on RETN (changelog 3.01.09).
-		// nextreg.txt:56: the MF NMI is ignored if an NMI master is already
-		// active — so only arm/fire when the MF isn't already paged in.
+		// would read the normal ROM's stub (PUSH AF; POP AF; RETN) instead
+		// and the launch would derail. The Multiface pages back out on
+		// RETN (see CPU.RETN). nextreg.txt:56: the MF NMI is ignored if an
+		// NMI master is already active — so only arm/fire when the MF
+		// isn't already paged in.
 		if val&0x08 != 0 && !mem.MultifaceActive() { // bit 3 = Generate multiface NMI
 			nr02NMISource |= 0x08
 			mem.SetMultifaceActive(true) // page MF ROM in so the NMI vectors into it
@@ -1646,8 +1616,8 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 				val, softFire, hardFire, prevRT, resetType, resetType&0x03, triggerPC)
 		}
 		// Read composition (vhd:5891): bus_reset(b7, latched from this
-		// write's bit 7 per vhd:5119) + reset_type(1:0). The NMI/iotrap
-		// mid bits are owned elsewhere and read as 0 here.
+		// write's bit 7 per vhd:5119) + iotrap(b4, not modelled, reads 0)
+		// + mf_nmi(b3)/divmmc_nmi(b2) from nr02NMISource + reset_type(1:0).
 		disp.Store(0x02, val&0x80|nr02NMISource|resetType&0x03)
 		if suppressOn && softFire && !hardFire && triggerPC == suppressPC {
 			// Diagnostic: latch NR$02 but skip the actual reset, to see if the
@@ -1672,7 +1642,7 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 			// its one legitimate boot soft-reset ($6D31); without the
 			// promote the active nibble goes stale and the altrom arm of
 			// the divMMC rom3-automap gate (zxnext.vhd:3138) never opens
-			// at menu time (the development log).
+			// at menu time.
 			promoted := mem.AltROMReg()&0x0F | mem.AltROMReg()<<4
 			slog.Debug("nr8c-promote", "pre", fmt.Sprintf("$%02X", mem.AltROMReg()),
 				"post", fmt.Sprintf("$%02X", promoted))
@@ -1712,22 +1682,14 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 			//      that block — it is preserved across reset. This is
 			//      load-bearing: the configured personality must survive,
 			//      else the boot re-enters config mode, re-applies the
-			//      personality, and soft-resets again forever (the old
-			//      disp.Reset() wipe hit exactly this infinite loop).
+			//      personality, and soft-resets again forever.
 			//   2. The few NR$82-$89 port-enable regs are reset-type
 			//      conditional (nr_85/nr_89_*_reset_type).
 			// We don't yet model the full per-register reset, so we keep
 			// the rest of the NR file as-is (preserving nr_03 for free)
 			// and re-arm the divMMC entry points, which the FPGA resets
 			// unconditionally (zxnext.vhd:5087-5090, NR$B8/$B9/$BA/$BB ←
-			// $83/$01/$00/$CD). This is hardware-faithful; note it is
-			// NOT by itself the cure for the bank-2 $0000 trap (#229):
-			// the post-reset NextZXOS init re-writes NR$B8 to $82
-			// (clearing the $0000 trap) before the offending RST $00, so
-			// real hardware reaches that RST $00 with the same NR$B8 we
-			// do — the trap is an upstream paging / control-flow
-			// divergence (real HW must not have ROM bank 2 mapped there),
-			// still under investigation via lockstep vs the reference.
+			// $83/$01/$00/$CD).
 			cpu.SoftReset()
 			mem.ResetPaging()
 			mem.SetROMBank(0)
@@ -1769,9 +1731,9 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	})
 }
 
-// Subsystem-specific wiring like CPU speed (NextReg 0x07) and palette
-// (0x40–0x44) is added in later sprints; this function is intentionally
-// scoped to the MMU because that is the only Sprint 2 consumer.
+// Other subsystems (CPU speed at NextReg 0x07, palette at 0x40–0x44,
+// etc.) have their own Wire* functions below; this one is scoped to
+// just the MMU registers.
 func WireMMU(d *nextregs.Dispatcher, mem *memory.Memory) {
 	for slot := byte(0); slot < 8; slot++ {
 		reg := 0x50 + slot

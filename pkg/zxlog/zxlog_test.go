@@ -134,8 +134,8 @@ func TestStdLogBridgeStripsNewline(t *testing.T) {
 	}
 }
 
-// iter 363: exercise the banner-rendering body directly (Banner()
-// itself no-ops under `go test` because stderr isn't a TTY).
+// TestRenderBannerContainsMetadata exercises the banner-rendering body
+// directly since Banner() itself no-ops under `go test` (stderr isn't a TTY).
 func TestRenderBannerContainsMetadata(t *testing.T) {
 	var buf bytes.Buffer
 	renderBanner(&buf)

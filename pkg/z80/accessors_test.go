@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// Z80 register accessor + SoftReset coverage (iter 246).
+// Z80 register accessor + SoftReset coverage.
 //
 // Establishes contract guarantees for the public 16-bit pair accessors
 // (HL/BC/DE + setters), the soft-reset semantics (Z80 /RESET-faithful:

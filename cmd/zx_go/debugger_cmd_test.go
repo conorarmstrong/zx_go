@@ -5,10 +5,30 @@ import (
 	"testing"
 )
 
-// iter 334: cover the remoteDebugger memory/register/breakpoint
-// command handlers and the fmt* state formatters. All operate on a
-// wired cpu+mem fixture (newRemoteWithCPU) and return protocol
-// strings, so they unit-test without the TCP loop.
+// Covers the remoteDebugger memory/register/breakpoint command
+// handlers and the fmt* state formatters. All operate on a wired
+// cpu+mem fixture (newRemoteWithCPU) and return protocol strings, so
+// they unit-test without the TCP loop.
+
+// TestCommandsNeedingPause_HookInstallers checks that commands which
+// install a live callback on state the CPU-execution goroutine reads
+// without synchronization (prefetch hooks, write loggers) require an
+// implicit pause before running, matching their structurally
+// identical siblings (watch-mem, watch-read, catch).
+func TestCommandsNeedingPause_HookInstallers(t *testing.T) {
+	// trace-writes installs mem.WriteObserver; trace-nextreg-deltas (and
+	// its nr-deltas alias) installs the NextReg tracer — the same
+	// SetTracer mechanism as nr-trace. All are read by the CPU-execution
+	// goroutine without synchronization, so each must implicitly pause.
+	for _, cmd := range []string{
+		"crash-detect", "trace-divmmc-ram",
+		"trace-writes", "trace-nextreg-deltas", "nr-deltas",
+	} {
+		if !commandsNeedingPause[cmd] {
+			t.Errorf("commandsNeedingPause[%q] = false, want true (installs a hook the CPU goroutine reads unsynchronized)", cmd)
+		}
+	}
+}
 
 func TestCpuState_RegReadMem(t *testing.T) {
 	d := newRemoteWithCPU(t)

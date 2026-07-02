@@ -23,46 +23,43 @@ const (
 type Multiface struct {
 	// ROM data (8KB)
 	rom []byte
-	
-	// RAM data (8KB) 
+
+	// RAM data (8KB)
 	ram []byte
-	
+
 	// Current variant
 	variant MultifaceType
-	
-	// Control state
-	enabled     bool
-	romPaged    bool
-	redButton   bool
-	invisible   bool // Stealth mode
 
-	// Video page store (for Multiface 128/3)
-	videoPageStore byte
+	// Control state
+	enabled   bool
+	romPaged  bool
+	redButton bool
+	invisible bool // Stealth mode
 
 	// Memory reference for paging
 	memory *memory.Memory
 
-	// Saved paging state — captured when the MF ROM pages in and restored
-	// when it pages out, so that port writes the MF ROM code makes to
-	// 0x7FFD/0x1FFD don't corrupt the host machine's paging configuration.
-	
 	// ROM filename for loading
 	romFile string
 
 	// Session state: active from NMI until OUT re-arms the hardware
-	sessionActive   bool
+	sessionActive bool
+
+	// savedPagingState is captured when the MF ROM pages in and restored when
+	// it pages out, so that port writes the MF ROM code makes to
+	// 0x7FFD/0x1FFD don't corrupt the host machine's paging configuration.
 	savedPagingState *memory.PagingState
 }
 
-// Port ranges for Multiface I/O decoding (from FUSE emulator source).
+// Port ranges for Multiface I/O decoding.
 // MF1:   port & 0x0072 == 0x0012  (xxxx xxxx x001 xx1x)
 // MF128: port & 0x0072 == 0x0032  (xxxx xxxx x011 xx1x)
 // MF3:   port & 0x0072 == 0x0032  (xxxx xxxx x011 xx1x)
 // Page-in/out is controlled by A7 of the port address on IN instructions.
 const (
-	PortMask1   = 0x0072 // MF1 port mask
-	PortValue1  = 0x0012 // MF1 port value
-	PortMask128 = 0x0072 // MF128/MF3 port mask
+	PortMask1    = 0x0072 // MF1 port mask
+	PortValue1   = 0x0012 // MF1 port value
+	PortMask128  = 0x0072 // MF128/MF3 port mask
 	PortValue128 = 0x0032 // MF128/MF3 port value
 )
 
@@ -79,7 +76,7 @@ func NewMultiface(variant MultifaceType, romPath string, memory *memory.Memory) 
 		variant: variant,
 		memory:  memory,
 	}
-	
+
 	// Set ROM filename based on variant
 	switch variant {
 	case Multiface1:
@@ -91,12 +88,12 @@ func NewMultiface(variant MultifaceType, romPath string, memory *memory.Memory) 
 	default:
 		mf.romFile = "mf1_official.rom"
 	}
-	
+
 	// Load ROM
 	if err := mf.loadROM(romPath); err != nil {
 		return nil, fmt.Errorf("failed to load Multiface ROM: %w", err)
 	}
-	
+
 	mf.reset()
 	return mf, nil
 }
@@ -141,7 +138,7 @@ func (mf *Multiface) loadROM(romPath string) error {
 	mf.rom = make([]byte, 0x2000)
 	// Add basic Multiface signature - jump to main code
 	copy(mf.rom[0:], []byte{0xF3, 0xC3, 0x10, 0x00}) // DI, JP 0x0010
-	
+
 	// Add some basic Multiface functionality at 0x0010
 	mf.rom[0x0010] = 0x3E // LD A, version
 	switch mf.variant {
@@ -153,9 +150,9 @@ func (mf *Multiface) loadROM(romPath string) error {
 		mf.rom[0x0011] = 0x01 // Version 1 for MF1
 	}
 	mf.rom[0x0012] = 0xC9 // RET
-	
+
 	log.Printf("Warning: Using placeholder %s ROM - functionality will be limited\n", mf.romFile)
-	
+
 	return nil
 }
 
@@ -165,7 +162,6 @@ func (mf *Multiface) reset() {
 	mf.romPaged = false
 	mf.redButton = false
 	mf.invisible = false
-	mf.videoPageStore = 0
 }
 
 // HandleNMI handles Non-Maskable Interrupt (red button press)
@@ -173,10 +169,10 @@ func (mf *Multiface) HandleNMI() bool {
 	if !mf.enabled || mf.invisible {
 		return false
 	}
-	
+
 	mf.redButton = true
 	mf.pageInROM()
-	
+
 	// Return true to indicate NMI was handled by Multiface
 	return true
 }
@@ -186,13 +182,13 @@ func (mf *Multiface) HandleOpcodeRead(addr uint16) bool {
 	if !mf.enabled || mf.invisible || !mf.redButton {
 		return false
 	}
-	
+
 	// Check if PC is at NMI vector (0x0066 or 0x0067)
 	if addr == NMIVector1 || addr == NMIVector2 {
 		mf.pageInROM()
 		return true
 	}
-	
+
 	return false
 }
 
@@ -223,15 +219,7 @@ func (mf *Multiface) HandlePortRead(port uint16) (byte, bool) {
 	a7 := (port & 0x0080) != 0
 
 	switch mf.variant {
-	case Multiface1:
-		if a7 {
-			if !mf.invisible {
-				mf.pageInROM()
-			}
-		} else {
-			mf.pageOutROM()
-		}
-	case Multiface128:
+	case Multiface1, Multiface128:
 		if a7 {
 			if !mf.invisible {
 				mf.pageInROM()
@@ -267,7 +255,7 @@ func (mf *Multiface) HandlePortWrite(port uint16, value byte) bool {
 		mf.invisible = (port & 0x0080) == 0
 	}
 
-	// OUT re-arms the hardware (IC8b_Q = 1 in FUSE).
+	// OUT re-arms the hardware (IC8b_Q = 1).
 	// This ends the MF session and restores the host paging state.
 	if mf.sessionActive {
 		mf.endSession()

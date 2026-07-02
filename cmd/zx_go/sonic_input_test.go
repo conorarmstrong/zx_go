@@ -9,14 +9,14 @@ import (
 
 // TestSonicControllableNoAutorun is a behaviour lock-in: once Sonic.nex is
 // loaded and started, the character must NOT drift on its own when no input is
-// held (the user reported "sonic runs right on his own"), and it MUST respond
-// to a held Kempston direction. Sonic reads the Kempston joystick (port $1F);
-// in the GUI the arrow keys drive those bits. Gated by SONIC_DIAG (like
-// sonic_game_renders_test.go) because it needs the gitignored, copyrighted
-// sonic.nex on the SD card — without it the Next emulator still constructs but
-// the game never loads, so the sprite-position assertions would fail in CI
-// rather than skip. The fixture-free joystick-routing check lives in
-// TestNextUnconfiguredJoystickRoutesToKempston so CI still covers it.
+// held, and it MUST respond to a held Kempston direction. Sonic reads the
+// Kempston joystick (port $1F); in the GUI the arrow keys drive those bits.
+// Gated by SONIC_DIAG (like sonic_game_renders_test.go) because it needs the
+// gitignored, copyrighted sonic.nex on the SD card — without it the Next
+// emulator still constructs but the game never loads, so the sprite-position
+// assertions would fail in CI rather than skip. The fixture-free
+// joystick-routing check lives in TestNextUnconfiguredJoystickRoutesToKempston
+// so CI still covers it.
 func TestSonicControllableNoAutorun(t *testing.T) {
 	if os.Getenv("SONIC_DIAG") == "" {
 		t.Skip("set SONIC_DIAG=1 (requires the local, gitignored sonic.nex)")

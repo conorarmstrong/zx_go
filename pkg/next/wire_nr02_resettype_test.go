@@ -36,7 +36,7 @@ func nr02Harness(t *testing.T) *nextregs.Dispatcher {
 // mf_nmi & divmmc_nmi & reset_type(1:0). Bit 7 = nr_02_bus_reset,
 // latched from bit 7 of EVERY NR$02 write (vhd:5119).
 // NextZXOS distinguishes its first staging soft-reset from later
-// ones via these low bits (the development log/D31br).
+// ones via these low bits.
 func TestNR02ResetTypeHistory(t *testing.T) {
 	d := nr02Harness(t)
 
@@ -73,12 +73,12 @@ func TestNR02ResetTypeHistory(t *testing.T) {
 // the FPGA bootrom is active at WireReset time, NR$02 must read $00 cold
 // (reset_type "100") and $02 after the first soft reset ("100"->"010").
 //
-// This guards the seed-ordering fix (the development log / cmd/zx_go/next.go loads
-// the bootrom BEFORE next.Wire): NextZXOS's 128K-BASIC launch reads NR$02 and
-// branches on $02 (first staging pass) vs $01 (post-staging). With the buggy
-// "010" seed, the lone $6D31 staging soft reset shifted to $01, so the OS
-// skipped staging and the editor derailed to a black screen. With the correct
-// "100" seed it shifts to $02 and staging runs.
+// This guards the call-order requirement that the FPGA bootrom must be
+// loaded before next.Wire runs: NextZXOS's 128K-BASIC launch reads NR$02
+// and branches on $02 (first staging pass) vs $01 (post-staging). With
+// the wrong "010" seed, the lone $6D31 staging soft reset would shift to
+// $01, so the OS would skip staging and the editor would derail. With
+// the correct "100" seed it shifts to $02 and staging runs.
 func TestNR02ResetTypeSeed_FPGABootROM(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// Entry-point gating tests (iter 189 — task #109).
+// Entry-point gating tests.
 //
 // Verifies that the NR$B8 (entryPoints0) and NR$BB (entryPoints1)
 // register bits correctly gate which PC values trigger the divMMC
@@ -29,8 +29,8 @@ import (
 
 // newGatedPager builds a Pager with automap ON and explicit
 // entryPoints values for gating tests. Sets NR$B9 (epValid0) to
-// $FF so the B8/B9-AND gate (iter 196) passes through — gating
-// tests for B8 only should not have to think about B9.
+// $FF (rom3 variant off) so gating tests for B8 only don't also
+// have to account for B9.
 //
 // Tests that specifically exercise B9/BA gating set those fields
 // directly after constructing.
@@ -336,7 +336,7 @@ func TestGate_DefaultEntryPoints_StandardTriggersFire(t *testing.T) {
 }
 
 // ===========================================================================
-// NR$B9 (epValid0) + NR$BA (epTiming0) gating tests (iter 196 — task #111).
+// NR$B9 (epValid0) + NR$BA (epTiming0) gating tests.
 //
 // VHDL zxnext.vhd:2891-2895:
 //   divmmc_automap_instant_on    <= ep AND ep_valid AND ep_timing
@@ -355,9 +355,7 @@ func TestGate_DefaultEntryPoints_StandardTriggersFire(t *testing.T) {
 // the construction defaults (B8=$83, B9=$01, BA=$00), ALL of RST $00,
 // $08 and $38 page the overlay in — B9 only selects normal-ROM vs ROM3
 // (here $0000 takes the normal path, $0008/$0038 take rom3_delayed_on),
-// it does not gate the page-in. This corrects the iter-196 misread that
-// claimed only RST $00 fired by default; that bug left the IM1 ($0038)
-// handler unable to page in and the direct-core boot hung.
+// it does not gate the page-in.
 //
 // With the defaults BA=$00 every one of these is a *delayed_on* variant,
 // so the page-in is effective on the NEXT M1 (not the trigger fetch) —
@@ -416,8 +414,7 @@ func TestBAGate_AlternatePath_BAEnablesRSTWithoutB9(t *testing.T) {
 // TestB8Set_B9BAClear_PagesInViaROM3 locks in the rom3_delayed_on case:
 // B8[n]=1 with B9[n]=0 and BA[n]=0 still pages the overlay in, via the
 // ROM3 delayed path (zxnext.vhd:2901). This is exactly NextZXOS's IM1
-// configuration (B8 bit 7 set, B9=BA=0). The earlier test asserted the
-// opposite ("blocked") under the iter-196 misread.
+// configuration (B8 bit 7 set, B9=BA=0).
 func TestB8Set_B9BAClear_PagesInViaROM3(t *testing.T) {
 	for _, pc := range []uint16{0x0000, 0x0008, 0x0038} {
 		p := New(makeROM())

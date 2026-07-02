@@ -24,13 +24,13 @@ func TestFrameIntTiming(t *testing.T) {
 		wantPulse  int
 	}{
 		// A3 / B1
-		{"48K 50Hz", mt48K, false, 71675, 32}, // (319·448+439)/2, pulse 32
+		{"48K 50Hz", mt48K, false, 58, 32}, // (0·448+116)/2, pulse 32
 		// A2 / B2
 		{"128K 50Hz", mt128K, false, 292, 36}, // (1·456+128)/2, pulse 36
 		// A1 / B1  (NextZXOS boots in +3 timing)
 		{"+3 50Hz", mtP3, false, 291, 32}, // (1·456+126)/2, pulse 32
 		// A4 / B2
-		{"Pentagon", mtPent, false, 58, 36}, // (0·448+116)/2, pulse 36
+		{"Pentagon", mtPent, false, 71675, 36}, // (319·448+439)/2, pulse 36
 		// 60 Hz variants: c_int_v=0 → assert = c_int_h/2
 		{"128K 60Hz", mt128K, true, 64, 36}, // 128/2
 		{"+3 60Hz", mtP3, true, 63, 32},     // 126/2

@@ -30,7 +30,7 @@ func TestSpritePatternWriteRoundTrip(t *testing.T) {
 	}
 }
 
-// Sprite engine OOB + auto-wrap coverage (iter 264).
+// Sprite engine out-of-bounds + pattern-cursor auto-wrap coverage.
 
 func TestSetPatternAddr_ClampsToMax(t *testing.T) {
 	e := New()
@@ -229,7 +229,7 @@ func TestSpriteOutOfRange(t *testing.T) {
 }
 
 // ========================================================================
-// Sprite render edge tests (iter 209).
+// Sprite render edge tests.
 // ========================================================================
 
 // TestRenderScanline_X9HighBit verifies that a sprite at X >= 256
@@ -330,10 +330,8 @@ func TestRenderScanline_MultipleSpritesOverlap(t *testing.T) {
 // and bit 5 ("border clip enable"), per sprites.vhd:1043-1066. When
 // over-border is OFF, the FPGA shifts the sprite clip window into the central
 // paper area (clip_y1=0 -> y_s=32), so a sprite at Y<32 (the top-border band of
-// the 320x256 frame) is NOT drawn. Sonic runs with NR$15=$45 (over-border off)
-// and stashes a row of HUD sprites at Y=1 that must therefore be hidden — they
-// were the garbled icons in the top-right. A sprite at Y=205 (inside [32,223])
-// stays visible — which is also Sonic's lives indicator.
+// the 320x256 frame) is NOT drawn, while a sprite at Y=205 (inside [32,223])
+// stays visible.
 func TestSpriteOverBorderClip(t *testing.T) {
 	mk := func() *Engine {
 		e := New()
@@ -381,9 +379,7 @@ func TestSpriteOverBorderClip(t *testing.T) {
 // TestRenderScanline_ZeroOnTopPriority covers NextReg $15 bit 6
 // ("sprite_priority" / zero-on-top, sprites.vhd:73). When enabled, the
 // LOWEST-numbered sprite is drawn in front (sprite 0 on top) instead of the
-// default highest-numbered. Sonic enables this (NR$15=$45, bit6=1) to layer
-// its ring-counter icons over the band sprites that share the same screen
-// cells; without it the bands cover the rings and the HUD garbles.
+// default highest-numbered.
 func TestRenderScanline_ZeroOnTopPriority(t *testing.T) {
 	e := New()
 	e.SetEnabled(true)
@@ -461,8 +457,7 @@ func TestRenderScanline_InvisibleSpriteSkipped(t *testing.T) {
 // TestSelectSlotSetsPatternUploadCursor pins the port $303B semantics: a write
 // sets the current sprite (bits 6:0) AND the pattern-RAM upload cursor
 // (bits 5:0 × 256, +128 when bit 7 set). The $5B pattern-load port then streams
-// from this cursor. Sonic uploads all its sprite patterns this way; without it
-// the pattern RAM stayed empty and every sprite (sonic, HUD, rings) was blank.
+// from this cursor.
 func TestSelectSlotSetsPatternUploadCursor(t *testing.T) {
 	e := New()
 
@@ -487,10 +482,7 @@ func TestSelectSlotSetsPatternUploadCursor(t *testing.T) {
 // TestSprite4bppPatternAddressing pins the Next sprite pattern addressing: the
 // pattern RAM is 64 slots of 256 bytes; a 4bpp sprite uses ONE 128-byte half of
 // slot (byte3 bits5:0), selected by N6 (byte4 bit6). So addr = slot*256 +
-// N6*128 — the SAME scheme port $303B/$5B upload uses. (Confirmed on Sonic: its
-// sprites with pattern=45,N6=0 read addr 45*256=11520, exactly where its $6D
-// animation uploads.) Ours previously computed (slot|N6<<6)*128, reading the
-// wrong half/slot, so sonic + HUD pulled blank data and rendered garbage.
+// N6*128 — the same scheme port $303B/$5B upload uses.
 func TestSprite4bppPatternAddressing(t *testing.T) {
 	e := New()
 	e.SetEnabled(true)
@@ -516,9 +508,7 @@ func TestSprite4bppPatternAddressing(t *testing.T) {
 
 // TestSpriteClipWindow pins the NextReg $19 sprite clip window: a sprite pixel
 // on a scanline outside [clipY1..clipY2] (or X outside [clipX1*2..clipX2*2+1])
-// is suppressed. Sonic clips to Y 0..191, which hides its 31 "parked" sprites
-// stashed at Y=224 — ours drew them (a stray cluster) because the clip wasn't
-// applied to the engine.
+// is suppressed.
 func TestSpriteClipWindow(t *testing.T) {
 	mk := func() *Engine {
 		e := New()
@@ -552,13 +542,12 @@ func TestSpriteClipWindow(t *testing.T) {
 // TestWriteAttr_FourByteStreamAdvances pins the port-$57 "Sprite Attribute
 // Upload" behaviour (ports.txt 0x57): the current sprite (set via SelectSlot,
 // i.e. port $303B) receives 4 attribute bytes, then the current-sprite pointer
-// auto-advances to the next slot. Nextoid uploads all its sprites this way each
-// frame; without it the bat/ball/HUD sprites never appear.
+// auto-advances to the next slot.
 func TestWriteAttr_FourByteStreamAdvances(t *testing.T) {
 	e := New()
-	e.SelectSlot(5) // port $303B selects sprite 5
-	e.WriteAttr(40) // byte 0: X LSB
-	e.WriteAttr(50) // byte 1: Y
+	e.SelectSlot(5)   // port $303B selects sprite 5
+	e.WriteAttr(40)   // byte 0: X LSB
+	e.WriteAttr(50)   // byte 1: Y
 	e.WriteAttr(0x10) // byte 2: palette offset 1, no mirror/rotate, X8=0
 	e.WriteAttr(0x83) // byte 3: visible (0x80) + pattern 3, not extended
 	s := e.Sprite(5)
@@ -575,10 +564,10 @@ func TestWriteAttr_FourByteStreamAdvances(t *testing.T) {
 func TestWriteAttr_FiveByteWhenExtended(t *testing.T) {
 	e := New()
 	e.SelectSlot(0)
-	e.WriteAttr(10)        // X
-	e.WriteAttr(20)        // Y
-	e.WriteAttr(0)         // attr2
-	e.WriteAttr(0xC0 | 7)  // byte3: visible + extended (bit6) + pattern 7
+	e.WriteAttr(10)       // X
+	e.WriteAttr(20)       // Y
+	e.WriteAttr(0)        // attr2
+	e.WriteAttr(0xC0 | 7) // byte3: visible + extended (bit6) + pattern 7
 	if e.SelectedSprite() != 0 {
 		t.Fatalf("must NOT advance before the 5th byte; got %d", e.SelectedSprite())
 	}
@@ -607,9 +596,7 @@ func TestWriteAttr_WrapsAt127(t *testing.T) {
 // TestNonExtendedSpriteIs8bpp pins that a sprite WITHOUT a 5th attribute byte
 // (byte 3 bit 6 clear) renders as 8bpp — one palette index per pattern byte —
 // per the FPGA (sprites.vhd:931: the 4bpp "H" bit requires attr_4(7) AND the
-// 5th byte present). Nextoid uploads 4-byte 8bpp sprites whose cells are $E3
-// (the transparency index) with the shape in other indices; treating them as
-// 4bpp mangled the index and the bat/ball/HUD never showed.
+// 5th byte present).
 func TestNonExtendedSpriteIs8bpp(t *testing.T) {
 	e := New()
 	e.SetEnabled(true)

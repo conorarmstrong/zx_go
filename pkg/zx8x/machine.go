@@ -58,17 +58,17 @@ func NewMachine(model roms.SpectrumModel, romPath string) (*Machine, error) {
 		return nil, err
 	}
 	m := &Machine{
-		Mem:       mem,
-		KB:        keyboard.New(),
+		Mem:    mem,
+		KB:     keyboard.New(),
 		Screen: NewScreen(NewCharGen(nil)), // live path reads bitmaps via the I register
 		model:  model,
 	}
 	m.KB.UseZX8xLayout()
 
 	cpu := z80.New(mem, m)
-	cpu.FrameIntDisabled = true   // the ZX8x drives its own INT, not a frame INT
-	cpu.HaltWakeOnInt = true      // INT pulse wakes the display loop's HALT
-	cpu.RefreshDuringHalt = true  // R counts during HALT so /INT (R bit 6) fires
+	cpu.FrameIntDisabled = true  // the ZX8x drives its own INT, not a frame INT
+	cpu.HaltWakeOnInt = true     // INT pulse wakes the display loop's HALT
+	cpu.RefreshDuringHalt = true // R counts during HALT so /INT (R bit 6) fires
 	cpu.M1FetchHook = m.onM1Fetch
 	m.CPU = cpu
 	return m, nil

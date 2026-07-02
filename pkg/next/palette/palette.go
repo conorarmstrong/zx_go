@@ -2,11 +2,8 @@
 // 256-entry colour palette.
 //
 // The Next exposes two 256-entry palettes (default and shadow) for
-// each of ULA, Layer 2, Sprites and Tilemap. Sprint 6 ships the
-// data structures and the NextReg 0x40 / 0x41 / 0x44 access path;
-// per-layer palette selection (0x43) is also wired but the layers
-// it routes between mostly don't exist yet — Layer 2 lands in this
-// sprint, Sprites + Tilemap follow.
+// each of ULA, Layer 2, Sprites and Tilemap, plus the NextReg 0x40 /
+// 0x41 / 0x44 access path and the per-layer palette selection (0x43).
 //
 // 9-bit format on the wire:
 //   - NextReg 0x41 — write the high 8 bits (RRRGGGBB) of the 9-bit
@@ -62,11 +59,9 @@ func (p *Palette) HasPriority(index byte) bool { return p.priority[index]&0x02 !
 // The 9-bit storage format packs RRR|GGG|BBB into bits 8..0; only
 // 8 of those bits arrive via NextReg 0x41 (the low blue bit is
 // forced to 0 there). The two-byte NextReg 0x44 sequence delivers
-// all 9 bits, but Sprint 6's RGB expansion uses the 3-bit blue
-// directly — the low blue bit only matters for the very darkest
-// values where 8-bit replication and 9-bit-plus-half-step diverge
-// by one unit. Sprint 6 ships the simpler form; refining to use
-// the full 9 bits is a Sprint 7+ video polish.
+// all 9 bits, but RGB expansion here uses the 3-bit blue directly —
+// the low blue bit only matters for the very darkest values where
+// 8-bit replication and 9-bit-plus-half-step diverge by one unit.
 func (p *Palette) RGB(index byte) (r, g, b byte) {
 	v := p.entries[index]
 	r3 := byte((v >> 6) & 0x07)
@@ -98,23 +93,17 @@ type Bank struct {
 	activeSprites byte
 	activeTilemap byte
 
-	// Two-byte latch for the NR$44 9-bit palette write protocol:
-	// pending9 holds the high byte (first write) until the second
-	// write arrives and commits both. Stored here rather than in
-	// the wire-layer closure so Reset clears it — otherwise a half-
-	// pair latch survives a reboot and corrupts the first NR$44
-	// write of the next session into "high byte = 0, low byte =
-	// guest's high byte", which is what produced the all-blue
-	// testcard reported after the Emulator → Reboot menu fired
-	// nextRegs.Reset's Phase 1 zero-pass through NR$44.
+	// Two-byte latch for the NR$44 9-bit palette write protocol: pending9
+	// holds the high byte (first write) until the second write arrives and
+	// commits both. Stored here (not in the wire-layer closure) so
+	// ResetWriteLatches can clear a half-completed pair across a reboot.
 	pending9 byte
 	have9    bool
 
 	// autoIncDisable mirrors NextReg $43 bit 7 (nr_43_palette_autoinc_disable,
 	// zxnext.vhd:5389). When set, an NR$41/$44 palette write does NOT advance
 	// the index (zxnext.vhd:5379-5381 / 5399-5401 gate the increment on this
-	// bit) — the guest writes the same entry repeatedly. Ours previously always
-	// incremented, ignoring the bit.
+	// bit) — the guest writes the same entry repeatedly.
 	autoIncDisable bool
 }
 
@@ -155,9 +144,8 @@ func NewBank() *Bank {
 	return b
 }
 
-// Select sets the active palette per the NextReg 0x43 layout.
-// Sprint 6 honours bits 0-2 (layer + first/second) and ignores
-// the rest; bit 0 toggles first/second, bits 1-2 select layer.
+// Select sets the active palette per the NextReg 0x43 layout: bit 0
+// toggles first/second, bits 1-2 select layer.
 func (b *Bank) Select(val byte) {
 	b.selected = val & 0x07
 }
@@ -187,8 +175,8 @@ func (b *Bank) Palette(i int) *Palette {
 
 // SetActive selects which palette (first=0, second=1) the given
 // layer uses for rendering. Only the low bit of which is honoured.
-// Sprint 7 cleanup uses these so the compositor doesn't have to
-// peek at the write-target selector.
+// This lets render code use the per-layer active selection without
+// peeking at the write-target selector.
 func (b *Bank) SetActive(layer Layer, which byte) {
 	switch layer {
 	case LayerULA:

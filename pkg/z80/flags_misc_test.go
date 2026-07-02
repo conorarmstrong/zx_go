@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// Miscellaneous flag-edge tests (iter 274) for SCF / CCF / CPL.
+// Miscellaneous flag-edge tests for SCF / CCF / CPL.
 // Sean Young's "Undocumented Z80 Documented" pins F5/F3 behaviour
 // on these instructions; getting them wrong is invisible to most
 // software but breaks the standard z80flags test suite.
@@ -153,7 +153,7 @@ func TestCPL_FlagShape(t *testing.T) {
 // every (F5, F3) combination.
 func TestSCF_CCF_F5F3VariousA(t *testing.T) {
 	cases := []struct {
-		a            byte
+		a              byte
 		wantF5, wantF3 bool
 	}{
 		{0x00, false, false},

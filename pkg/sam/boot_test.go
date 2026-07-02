@@ -2,11 +2,10 @@ package sam
 
 import "testing"
 
-// TestSamBootsToBasic is the Sprint 2 milestone: the genuine SAM ROM 3.0 runs
-// its power-on sequence, enables interrupts, and reaches its interrupt-driven
-// main loop — i.e. it boots to the SAM BASIC prompt. We can't render yet
-// (Sprint 3), so we detect boot by evidence: the frame interrupt (IM1 → $0038)
-// is serviced repeatedly and interrupts end up enabled.
+// TestSamBootsToBasic drives the genuine SAM ROM 3.0 through its power-on
+// sequence and confirms it reaches its interrupt-driven main loop — i.e. it
+// boots to the SAM BASIC prompt — by evidence: the frame interrupt
+// (IM1 → $0038) is serviced repeatedly and interrupts end up enabled.
 func TestSamBootsToBasic(t *testing.T) {
 	m, err := NewDefault()
 	if err != nil {

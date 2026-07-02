@@ -90,7 +90,7 @@ func (d *remoteDebugger) cmdNRTrace(args []string) string {
 		d.nrTraces.add(byte(v & 0xFF))
 	}
 	d.ensureNRTraceHook()
-	return "OK nr-trace=" + strings.Join(strings.Split(strings.Join(args, ","), ","), ",")
+	return "OK nr-trace=" + strings.Join(args, ",")
 }
 
 // ensureNRTraceHook installs the chained tracer on the first

@@ -8,7 +8,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 )
 
-// iter 320: cover WireDivMMCEntryPoints — installs NR$B8 / $BB
+// Covers WireDivMMCEntryPoints — installs NR$B8 / $BB
 // OnWrite/OnRead handlers that forward to the pager's
 // EntryPoints0/1 accessors.
 
@@ -42,7 +42,7 @@ func TestWireDivMMCEntryPoints_RoutesBB(t *testing.T) {
 	}
 }
 
-// iter 324: cover WireMultiAY (legacy alias for the AY-only path
+// Covers WireMultiAY (legacy alias for the AY-only path
 // of WirePeripheral2).
 func TestWireMultiAY_DelegatesToPeripheral2(t *testing.T) {
 	disp := nextregs.New()

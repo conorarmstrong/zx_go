@@ -13,34 +13,24 @@ import (
 //
 // The Spectrum Next is hardware-compatible with the 128K Spectrum
 // and exposes a "Machine Type" personality switch (NextReg $03)
-// that lets it boot as a 48K, 128K, +2A/+3, or Next. Three boot
-// strategies are supported:
+// that lets it boot as a 48K, 128K, +2A/+3, or Next.
 //
-// 1. **Fast-boot** (default): boot directly to the 48K ROM with
-// all Next hardware enabled and divMMC automap disabled. This
-// matches the standard fast-boot mode end state. The user gets
-// the "© 1982 Sinclair Research Ltd" prompt instantly, with
-// Z80N opcodes, NextRegs, MMU, Layer 2, sprites, Copper,
-// zxnDMA, DAC and RTC all wired and available from BASIC.
-// .NEX games load via the menu as usual.
+// Bank 0 starts as the 48K BASIC ROM and bank 1 as the 128K editor
+// ROM, so the CPU resets straight into the classic "© 1982 Sinclair
+// Research Ltd" prompt with all Next hardware (Z80N opcodes,
+// NextRegs, MMU, Layer 2, sprites, Copper, zxnDMA, DAC, RTC) wired
+// and available from BASIC. If the user has installed the NextZXOS
+// distro ROM (`enNextZX.rom`), its four 16K banks overwrite
+// m.rom[0..3] below so the real NextZXOS shell boots instead; this
+// is gated purely on the file's presence (ZX_GO_SKIP_DISTRO_PRELOAD=1
+// disables the overlay even when the file is present).
+// SetFPGABootROM separately arms the FPGA loader ROM at $0000, which
+// reads TBBLUE.FW from the SD card instead of using either embedded
+// image.
 //
-// 2. **NextZXOS distro boot** (opt-in via `$ZX_GO_USE_NEXTZXOS`):
-// load the user-installed `enNextZX.rom` into all four ROM
-// banks. This attempts to boot the real NextZXOS shell. As
-// of 2026-05-18 this path stalls in the bank-2 wait loop
-// because we don't model NextReg $8C (Alt ROM mapping) yet;
-// kept opt-in so the env var is the way to experiment with
-// it.
-//
-// 3. **FPGA bootrom** (opt-in via `$ZX_GO_USE_FPGA_BOOTROM`):
-// load `tbblue_loader.rom` at $0000 and have it read
-// `TBBLUE.FW` from the SD card. Stalls at the same point as
-// the standard distro boot.
-//
-// The 128K editor ROM and 48K BASIC ROM are loaded into m.rom[0]
-// and m.rom[1] regardless, so software that uses NextReg $8E or
-// the legacy 7FFD/1FFD port writes to swap ROM banks works in all
-// three modes.
+// NextReg $8E and the legacy 7FFD/1FFD port writes swap among
+// whichever four 16K banks ended up in m.rom[0..3] regardless of
+// which of the above populated them.
 func (m *Memory) setupNext() error {
 	// Load the 128K editor / 48K BASIC ROMs through the ROM manager.
 	// These are the canonical fallback ROMs; software that does
@@ -56,70 +46,30 @@ func (m *Memory) setupNext() error {
 		return fmt.Errorf("ZX Spectrum Next: load 48K BASIC ROM: %w", err)
 	}
 	rom0, _ := m.romManager.GetROM(roms.ROM128K_0)
-	rom1, _ := m.romManager.GetROM(roms.ROM128K_1)
 	rom48, _ := m.romManager.GetROM(roms.ROM48K)
 
-	// Fast-boot default: load the 48K BASIC ROM at bank 0 so the
-	// CPU resets straight into the "© 1982 Sinclair Research Ltd"
-	// prompt. The 128K editor stays at bank 1 for software that
-	// pages it in via NextReg $8E or legacy port 7FFD bit 4.
-	// Matches the standard Spectrum Next fast-boot end state.
-	//
-	// When `$ZX_GO_USE_NEXTZXOS=1` is set, the distro path below
-	// overwrites bank 0 (and the rest) with the NextZXOS image.
+	// Bank 0 = 48K BASIC ROM, bank 1 = 128K editor ROM: the CPU resets
+	// straight into the classic "© 1982 Sinclair Research Ltd" prompt.
+	// If the NextZXOS distro ROM is installed, the load below
+	// overwrites all four banks with it.
 	copy(m.rom[0], rom48)
 	copy(m.rom[1], rom0) // 128K editor — page 1
-	// Bank 2 / bank 3 stay zero-filled in fast-boot mode; the
-	// NextZXOS distro fills them when opted-in.
-	_ = rom1 // retained as a constant in case future code wants it
+	// Bank 2 / bank 3 stay zero-filled until the distro load (if any)
+	// populates them.
 
-	// Boot strategy selection.
+	// NextZXOS distro ROM overlay: if `roms/next/enNextZX.rom` is
+	// installed, populate m.rom[0..3] with it so the CPU boots the
+	// real NextZXOS shell instead of the embedded 128K BASIC ROMs.
+	// This is a scaffold needed because this emulator treats m.rom[]
+	// (legacy ROM banks 0-3) and m.ram[] (MMU8-paged main RAM) as
+	// separate arrays, whereas real Spectrum Next hardware has them
+	// in a single SRAM: the FPGA bootrom's INIR writes that load
+	// enNextZX.rom from SD land only in m.ram[], so without this
+	// overlay the post-soft-reset switch to legacy ROM-bank mapping
+	// would read from an empty m.rom[].
 	//
-	// `$ZX_GO_USE_NEXTZXOS=1` requests the NextZXOS distro boot.
-	// If selected and `enNextZX.rom` is installed, copy all four
-	// 16K banks into m.rom[0..3] overriding the 128K defaults. The
-	// CPU starts at bank-0 reset entry and runs the NextZXOS init
-	// chain (which currently stalls — see ROADMAP.md Sprint Z).
-	//
-	// Otherwise (fast-boot, the default): m.rom[0] stays as the
-	// 48K BASIC ROM. With warm-boot snapshot RAM applied, the
-	// welcome banner renders from RAM (iter 117 fix) even though
-	// the running CPU is in 48K BASIC's idle loop — visually the
-	// user sees NextZXOS Welcome, just can't navigate past it
-	// because the NextZXOS welcome-key scanner code isn't in
-	// classic 48K BASIC ROM.
-	//
-	// Loading NextZXOS ROM by default WITHOUT also fixing the
-	// boot-flow (RAM/ROM phasing, IM 1 entry path divergence)
-	// regresses to a black screen: the NextZXOS init ISR clears
-	// the screen and the warm-boot RAM pre-population becomes
-	// inconsistent with the in-progress NextZXOS init state.
-	// Keep classic 48K as the default ROM until cold-boot path
-	// fixes land.
-	// Distro ROM load (iter 137):
-	//
-	// If `roms/next/enNextZX.rom` is installed, populate m.rom[0..3]
-	// with it. This is a scaffold needed because our emulator
-	// currently treats m.rom[] (= legacy ROM banks 0-3) and m.ram[]
-	// (= MMU8-paged 256 KB main RAM) as separate arrays — they live
-	// in a single SRAM on real Spectrum Next hardware.
-	//
-	// Without this scaffold, the FPGA bootrom's INIR writes (which
-	// load enNextZX.rom from SD to "FPGA-internal ROM banks") land
-	// only in m.ram[], so the post-soft-reset switch to legacy ROM
-	// bank mapping reads from empty m.rom[]. The proper fix is task
-	// #145 (SRAM unification); until then this pre-load gets the
-	// boot far enough to reach NextZXOS code.
-	//
-	// Triggered ONLY by file presence (the standard install action
-	// puts enNextZX.rom there) — no hidden coupling to the warm-boot
-	// snapshot. The previous gating used `WarmBootRAM` existence as
-	// the trigger, which conflated distro-installation with
-	// warm-boot opt-in and surprised the user (iter 132/136).
-	// ZX_GO_SKIP_DISTRO_PRELOAD=1 disables the scaffold pre-load
-	// (iter 181 SRAM-unification experiment — verify whether the
-	// FPGA bootrom's INIR-via-config-mode authoritatively populates
-	// m.rom[0..3]; if so, the scaffold can be retired).
+	// Gated purely on file presence (the standard install action
+	// puts enNextZX.rom there); ZX_GO_SKIP_DISTRO_PRELOAD=1 disables it.
 	if os.Getenv("ZX_GO_SKIP_DISTRO_PRELOAD") == "" {
 		if distro, err := install.LoadROM(install.DistroROM); err == nil {
 			if len(distro) >= 4*PageSize {
@@ -133,63 +83,6 @@ func (m *Memory) setupNext() error {
 			}
 		} else if !errors.Is(err, install.ErrROMNotInstalled) {
 			return fmt.Errorf("ZX Spectrum Next: distro ROM load: %w", err)
-		}
-	}
-	// $ZX_GO_USE_NEXTZXOS=1 is now obsolete (the load is triggered
-	// purely by file presence) but is honoured by suppressing the
-	// load if explicitly set to "0".
-	_ = os.Getenv
-
-	// DIAGNOSTIC ONLY (iters 64-68 of nextzxos-boot-flow.md):
-	// pre-populate 16K RAM banks 0-3 with the 64K of enNextZX.rom
-	// (full distro), per ZX_GO_HACK_LOAD_BANK_DE=1.
-	//
-	// Iter 68: byte-dump of bank 0 from the reference (`F3 C3 25 01 45...`)
-	// is patched ROM0 content. Combined with the reference's NR$8E=$08
-	// (= all-RAM mode via port_1FFD[0]=1), this means NextZXOS runs
-	// from RAM banks 0-3 with patched ROM contents, not from m.rom[].
-	// Our boot stays in ROM mode and never reaches the ROM-to-RAM copy
-	// step. Pre-populating banks 0-3 with raw ROM lets us test
-	// downstream paths.
-	//
-	// Iter 67 reference comparison: at NEXTBASIC time the reference has
-	// NR$56=$00 / NR$57=$01 (slot 6 = bank 0). Hexdump $C3F0 shows
-	// REAL NEXTBASIC code. So slot 6 should map to bank 0, not bank
-	// $DE. The reference's bank 0 ≈ ROM0 with NextZXOS patches applied (about
-	// 13% match to ROM0, 22% to ROM2 — a derivative of the firmware
-	// ROMs, not a direct copy of any one).
-	//
-	// Our boot writes ~484K bytes to bank 0 first half during init,
-	// but produces DIFFERENT content than the reference. Root cause likely
-	// in our config-mode NR$04 routing or our INIR memory destination
-	// logic.
-	//
-	// This hack pre-loads ROM2 into bank 0 to test downstream paths.
-	// Our subsequent boot writes will overwrite, so this hack alone
-	// doesn't reach idle loop — needs combination with init-skip or
-	// other intervention.
-	if os.Getenv("ZX_GO_HACK_LOAD_BANK_DE") != "" {
-		if distro, err := install.LoadROM(install.DistroROM); err == nil {
-			// Load all 4 ROM banks (64K total) into RAM banks 0-3.
-			// This is what NextZXOS would do after copy + patches.
-			for bnk := 0; bnk < 4 && (bnk+1)*PageSize <= len(distro); bnk++ {
-				if m.ram[bnk] == nil {
-					m.ram[bnk] = make([]byte, PageSize)
-				}
-				copy(m.ram[bnk], distro[bnk*PageSize:(bnk+1)*PageSize])
-			}
-		}
-	}
-	// DIAGNOSTIC: if /tmp/zes_bank0.bin exists and
-	// ZX_GO_HACK_LOAD_ZES_BANK0=1, use the reference's dumped bank 0 as
-	// "ground truth" for bank 0. Tests whether the rest of boot
-	// progresses given correct bank-0 content.
-	if os.Getenv("ZX_GO_HACK_LOAD_ZES_BANK0") != "" {
-		if data, err := os.ReadFile("/tmp/zes_bank0.bin"); err == nil && len(data) == PageSize {
-			if m.ram[0] == nil {
-				m.ram[0] = make([]byte, PageSize)
-			}
-			copy(m.ram[0], data)
 		}
 	}
 
@@ -396,21 +289,23 @@ func (m *Memory) ROMMappingNR8E() byte {
 	return v
 }
 
-// ResetPaging zeroes the classic paging shadows (port_7FFD and
-// port_1FFD). Mirrors the FPGA reset block at zxnext.vhd:3647-3648
-// (`port_7ffd_reg <= (others => '0')`) and :3715
-// (`port_1ffd_reg <= (others => '0')`), which fires whenever the
-// global `reset` signal is asserted — including via NR$02 bit 0
-// soft reset. Without this, RAM-bank-in-slot-3 / shadow-screen /
-// ROM-high-bit state would survive a soft reset and let the post-
-// reset path resume with a non-default classic page map.
+// ResetPaging zeroes the classic paging shadows (port_7FFD,
+// port_1FFD and port_DFFD). Mirrors the FPGA reset block at
+// zxnext.vhd:3647-3648 (`port_7ffd_reg <= (others => '0')`), :3715
+// (`port_1ffd_reg <= (others => '0')`), and the matching
+// port_dffd_reg clear, all driven by the same `reset` signal —
+// which fires via NR$02 bit 0 soft reset as well as a hard reset.
+// Without this, RAM-bank-in-slot-3 / shadow-screen / ROM-high-bit
+// state would survive a soft reset and let the post-reset path
+// resume with a non-default classic page map.
 func (m *Memory) ResetPaging() {
 	m.port7FFD = 0
 	m.port1FFD = 0
+	m.portDFFD = 0
 	// The FPGA clears port_7ffd_reg on EVERY reset (zxnext.vhd:
 	// 3646-3648; reset = hard OR soft), which clears bit 5 and so
 	// unlocks 128K paging. NextZXOS's staging soft-reset depends on
-	// coming back up unlocked (the development log).
+	// coming back up unlocked.
 	m.PagingEnabled = true
 	// Default 128K read/write map for 7FFD = 1FFD = 0 and no special
 	// paging: RAM5 @ $4000, RAM2 @ $8000, RAM0 @ $C000. Pages 1/2 are
@@ -421,13 +316,10 @@ func (m *Memory) ResetPaging() {
 	// zxnext.vhd:4610-4618: a reset — hard OR soft — resets the 8K
 	// MMU to FF FF 0A 0B 04 05 00 01 with NO overrides. syncAllMMU
 	// re-derives every slot from the (now-default) classic page map
-	// and clears mmuOverride. Without this, a soft reset kept the
-	// prior program's MMU overrides — e.g. a dot command's high RAM
-	// banks in slots 4-6 — so the post-reset NextZXOS init ran over
-	// the wrong memory map and crashed into a NOP slide. That was the
-	// "Guide" NextZXOS menu item (the 18 KB NextGuide dot-command):
-	// it sets MMU slots, errors out, and soft-resets, and our stale
-	// MMU left the reboot derailing.
+	// and clears mmuOverride. Without this, a soft reset would leave a
+	// prior program's MMU overrides in place — e.g. a dot command's
+	// high RAM banks in slots 4-6 — so NextZXOS's post-reset init would
+	// run over the wrong memory map.
 	m.syncAllMMU()
 }
 
@@ -531,9 +423,10 @@ func (m *Memory) EnterConfigMode() { m.configModeActive = true }
 
 // DivMMCAccessor lets pkg/memory route config-mode writes into the
 // divMMC RAM that lives in pkg/next/divmmc, without taking a direct
-// dependency on that package. divMMC has 64 KB of RAM (8 × 8 KB
-// banks), so idx ranges 0..65535. The four 16 KB banks visible
-// through NR$04 = $08..$0B map directly onto this flat space.
+// dependency on that package. divMMC has 128 KB of RAM (16 × 8 KB
+// banks), so idx ranges 0..0x1FFFF. The eight 16 KB banks visible
+// through NR$04 = $08..$0F (RAMPAGE_RAMDIVMMC per FPGA hardware.h)
+// map directly onto this flat space.
 // ReadROMByte / WriteROMByte address the divMMC ROM image
 // (RAMPAGE_DIVMMC_ROM = NR$04 = $04 per FPGA hardware.h); without
 // this hook NextZXOS reads the install-time enNxtmmc.rom and the
@@ -547,7 +440,7 @@ type DivMMCAccessor interface {
 }
 
 // SetDivMMCRAM wires a divMMC RAM accessor. Without this, NR$04
-// values $08..$0B (the divMMC RAM 16 KB banks per FPGA nextreg.txt)
+// values $08..$0F (the divMMC RAM 16 KB banks per FPGA nextreg.txt)
 // behave as if the bank were unbacked: writes are silently dropped,
 // reads return 0. boot.bin streams its firmware modules (boot.bin
 // itself, editor.bin, etc.) into divMMC RAM via this path, so the
@@ -565,10 +458,10 @@ func (m *Memory) ConfigModeRAMPage() byte { return m.configModeRAMPage }
 
 // configModeReadByte returns one byte from the config-mode window
 // at $0000-$3FFF. ok=false when no backing is wired for the current
-// REG_RAMPAGE value (caller falls through to normal paging — same
-// behaviour as before this method existed, but consolidates the
-// per-page dispatch so divMMC RAM ($08..$0B per FPGA nextreg.txt)
-// can be routed without needing a contiguous 16 KB slice.
+// REG_RAMPAGE value (caller falls through to normal paging). This
+// consolidates the per-page dispatch so divMMC RAM ($08..$0F per
+// FPGA nextreg.txt) can be routed without needing a contiguous
+// 16 KB slice.
 func (m *Memory) configModeReadByte(addr uint16) (byte, bool) {
 	p := m.configModeRAMPage
 	if p == 0x04 && m.divMMCRAM != nil {
@@ -645,24 +538,23 @@ func (m *Memory) SetConfigWriteHook(fn func(page byte, addr uint16, val byte)) {
 }
 
 // configModePageBacking returns the 16 KB backing slice that
-// REG_RAMPAGE page `p` maps to when config mode is active.
-// Returns nil when the page is unhandled (e.g. divMMC ROM / RAM,
-// which lives in a separate package and isn't reachable through
-// this path) — the caller treats nil as "drop write / return 0".
+// REG_RAMPAGE page `p` maps to when config mode is active. Returns
+// nil when the page isn't backed by this dispatch — the caller
+// treats nil as "drop write / return 0".
 //
 // Mapping per TBBlue `src/firmware/hardware.h`:
 //
-//	$00..$03 RAMPAGE_ROMSPECCY → m.rom[0..3]
-//	$10..$7F RAMPAGE_RAMSPECCY → m.ram[p-$10] (banks 0..111)
-//	$04..$0F divMMC ROM / Alt-ROM / divMMC RAM (handled elsewhere)
+//	$00..$03 RAMPAGE_ROMSPECCY -> m.rom[0..3]
+//	$06      RAMPAGE_ALTROM0   -> m.altROM0
+//	$07      RAMPAGE_ALTROM1   -> m.altROM1
+//	$10..$7F RAMPAGE_RAMSPECCY -> m.ram[p-$10] (banks 0..111)
 //
-// boot.bin only writes pages it can act on: $00..$03 for Spectrum
-// ROMs, $04 for esxmmc.bin (divMMC ROM), $05 for the MF ROM, and
-// the various RAM ranges for live-loaded data. The divMMC / Alt-
-// ROM pages are loaded into their own packages (pkg/next/divmmc,
-// pkg/memory altROM) which already have their own setters; this
-// dispatch is intentionally narrow to keep the Memory type from
-// reaching into them.
+// $04 (RAMPAGE_ROMDIVMMC) and $08..$0F (RAMPAGE_RAMDIVMMC) are handled
+// by the caller (configModeReadByte/configModeWriteByte) before
+// reaching this function, since they route through the divMMCRAM
+// accessor rather than a contiguous slice. $05 (RAMPAGE_ROMMF, the
+// Multiface ROM) is not routed through config mode at all — the
+// Multiface ROM is installed directly via SetMultifaceROM.
 func (m *Memory) configModePageBacking(p byte) []byte {
 	switch {
 	case p <= 0x03:

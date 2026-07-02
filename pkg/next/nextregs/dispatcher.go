@@ -42,33 +42,24 @@ type Dispatcher struct {
 const (
 	// MachineID at NextReg 0x00. The FPGA publishes its g_machine_id
 	// generic verbatim (zxnext.vhd:5885); the board default is $0A =
-	// "ZX Spectrum Next" (zxnext_top_issue2.vhd:35). We match the
-	// hardware — zx_go is a reference emulator of the FPGA, so it
-	// reports what the FPGA reports.
-	//
-	// HISTORY: this was $0A originally, switched to $08 ("Emulators")
-	// when the $0A path stalled — but that stall predated the divMMC
-	// rom3/delayed fixes (D24-D25) and the SD fixes (D27-D29). The $08
-	// value then became the LAST cold-boot divergence vs the
-	// reference emulator (the development log): NextZXOS checks NR$00 right after the FW
-	// handoff reset (ROM1 $1E69 `cp $08`) and the emulator-compat
-	// branch skips the core-version check and ends in the +3DOS
-	// re-boot retry loop ($1B04) — the Browser-ENTER welcome loop.
-	// The reference (id $0A) boots the same card straight to the Browser.
+	// "ZX Spectrum Next" (zxnext_top_issue2.vhd:35). NextZXOS checks
+	// this right after the firmware handoff reset (ROM1 $1E69 `cp
+	// $08`): $0A takes it straight to the Browser, while $08
+	// ("Emulators") takes the emulator-compat branch into the +3DOS
+	// re-boot retry loop ($1B04). Must stay $0A to match real hardware.
 	defaultMachineID = 0x0A
 	// CoreVersion at NextReg 0x01 (R). Encoded as major<<4 | minor.
 	// 0x32 = core 3.02 — the current Spectrum Next core line (3.02.03 latest).
 	defaultCoreVersion = 0x32
 	// CoreSubMinor at NextReg 0x0E (R) — the third version number. 0x03 reports
 	// core 3.02.03 (the latest release), comfortably above any game's minimum.
-	// (Was mistakenly placed at NR$0F; NR$0E is the sub-minor, NR$0F the board.)
 	defaultCoreSubMinor = 0x03
 	// BoardID at NextReg 0x0F (R). bits 3:0 = board issue; 0x01 = ZXN Issue 3.
 	defaultBoardID = 0x01
 )
 
 // New returns a fresh dispatcher with hardware-identity and
-// reset-default registers seeded to the values the reference Spectrum Next emulator's
+// reset-default registers seeded to the values the FPGA's
 // `tbblue_reset_common` publishes at cold reset. NextZXOS reads
 // several of these (e.g. $42 palette index, $4B transparent
 // fallback, $4C clip-window, $B8/$BB stack-trap defaults) before
@@ -121,8 +112,8 @@ func (d *Dispatcher) Reset() {
 	}
 }
 
-// applyResetDefaults seeds the reference Spectrum Next emulator tbblue_reset_common power-
-// on values. Shared between New() and Reset() so they cannot drift.
+// applyResetDefaults seeds the FPGA's tbblue_reset_common power-on
+// values. Shared between New() and Reset() so they cannot drift.
 func applyResetDefaults(regs *[256]byte) {
 	regs[0x00] = defaultMachineID
 	regs[0x01] = defaultCoreVersion
@@ -130,24 +121,20 @@ func applyResetDefaults(regs *[256]byte) {
 	//   bit 0 = soft reset (read: last was soft; write 1: trigger soft)
 	//   bit 1 = hard reset (read: last was hard; write 1: trigger hard)
 	//
-	// Default $01: matches the reference emulator byte-for-byte at
-	// cold boot. The FPGA bootrom reads NR$02 at $0171 and expects
-	// A=$01 — see the iter 131 lockstep diff which captured zes
-	// returning $01 here. The reading is intentionally "last reset
-	// was a soft reset" even on cold boot: the FPGA's reset cascade
-	// makes the initial cold reset look like a soft reset to the
-	// bootrom (the bootrom's first action is to issue ITS soft
-	// reset to hand off to NextZXOS, which is consistent with the
-	// status read-back).
+	// Default $01: the FPGA bootrom reads NR$02 at $0171 and expects
+	// A=$01, reading "last reset was soft" even on cold boot — the
+	// FPGA's reset cascade makes the initial cold reset look like a
+	// soft reset to the bootrom, whose first action is to issue its
+	// own soft reset to hand off to NextZXOS.
 	//
-	// Required pair: WireReset OnWrite must NOT use edge-detection
-	// on bit 0 — otherwise the bootrom's NR$02=\$01 trigger at
-	// \$6F5B finds old=\$01 already and silently does nothing. The
-	// fire-on-every-write semantics in WireReset match the reference.
+	// WireReset's OnWrite must NOT use edge-detection on bit 0:
+	// otherwise the bootrom's NR$02=$01 trigger at $6F5B finds old=$01
+	// already set and silently does nothing. Fire-on-every-write is
+	// required.
 	regs[0x02] = 0x01
 	regs[0x0E] = defaultCoreSubMinor // NR$0E = core version sub-minor
 	regs[0x0F] = defaultBoardID      // NR$0F = board ID
-	regs[0x05] = 0x01 // Peripheral 1: bit 0 = 50 Hz
+	regs[0x05] = 0x01                // Peripheral 1: bit 0 = 50 Hz
 	// Peripheral 2: bit 7 = CPU-speed hotkey enable, bit 5 = 50/60 Hz hotkey
 	// enable. zxnext.vhd:5161-5165 resets both to 1 → read-back $A0 (the rest
 	// of NR$06's read mux composes from bits that reset to 0).
@@ -155,14 +142,11 @@ func applyResetDefaults(regs *[256]byte) {
 	regs[0x08] = 0x10 // Peripheral 3: bit 4 = AY3-8910 enabled
 	regs[0x12] = 0x08 // Layer 2 RAM base bank
 	regs[0x13] = 0x0B // Layer 2 shadow RAM base bank
-	// NR$10 = Core ID (read-only). Per zxnext.vhd `nr_10_coreid`
-	// the FPGA default is "00001" = $01 (Issue 2 board). The reference
-	// uses $00 (= "generic / unspecified board"). The FPGA bootrom
-	// AND's this with $03 at $017E during boot to derive its
-	// core-class decision; the resulting boot paths differ between
-	// $00 ↔ $01. Use $00 to match our lockstep reference emulator;
-	// boot proceeds on both paths but staying on the reference's keeps
-	// the instruction-level diff productive.
+	// NR$10 = Core ID (read-only). Per zxnext.vhd `nr_10_coreid` the
+	// FPGA default is "00001" = $01 (Issue 2 board); we use $00
+	// (generic/unspecified). The FPGA bootrom ANDs this with $03 at
+	// $017E to derive its core-class decision; boot proceeds correctly
+	// on either value.
 	regs[0x10] = 0x00
 	regs[0x14] = 0xE3 // Global transparent colour
 	regs[0x42] = 0x07 // ULANext attribute byte format (zxnext.vhd:5002 = X"07")
@@ -171,11 +155,10 @@ func applyResetDefaults(regs *[256]byte) {
 	regs[0x4C] = 0x0F // Tilemap transparency colour
 	// Tilemap base ($2C) + tile-definitions base ($0C). zxnext.vhd:5041-5045
 	// resets nr_6e_tilemap_base="101100" ($2C), nr_6f_tilemap_tiles="001100"
-	// ($0C). NextZXOS reads these at boot WITHOUT writing them first, so a $00
-	// default (Go zero value) made it derive a wrong tilemap address — the
-	// first NextReg divergence vs the reference (=VHDL) at $3F1B. Reference-standard
-	// fix: seed the FPGA reset defaults. (bit 6 masked off on write per the
-	// WireTilemapBase handler; $2C/$0C have bit 6 clear so they round-trip.)
+	// ($0C). NextZXOS reads these at boot without writing them first, so they
+	// must be seeded to the FPGA reset values rather than left at zero. (bit 6
+	// is masked off on write per the WireTilemapBase handler; $2C/$0C have bit
+	// 6 clear so they round-trip.)
 	regs[0x6E] = 0x2C
 	regs[0x6F] = 0x0C
 	regs[0x50] = 0xFF // MMU slot 0 = legacy ROM

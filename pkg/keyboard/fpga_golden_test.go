@@ -32,8 +32,8 @@ import (
 // (arrows, EDIT, DELETE, GRAPH, CAPS/TRUE/INV VIDEO, BREAK, ; " , .) which the
 // hardware folds into composite CAPS/SYM presses (membrane.vhd 232-240). Our
 // model expresses those at the host-key-mapping layer (initKeyMap composites),
-// not inside the matrix scan, so the golden exercises only the standard 8x5
-// matrix (columns 0..4) — see the package report for the documented gap.
+// not inside the matrix scan, so this golden exercises only the standard 8x5
+// matrix (columns 0..4); the extended-column fold-in is untested here.
 func TestKeyboardMatchesFPGAGolden(t *testing.T) {
 	f, err := os.Open("testdata/keyboard_golden.txt")
 	if err != nil {

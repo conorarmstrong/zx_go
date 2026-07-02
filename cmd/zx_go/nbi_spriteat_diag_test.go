@@ -1,7 +1,8 @@
 //go:build nbidiag
 
-// Standalone build tag (NOT `oracle`) so this self-contained NBI-590 probe
-// builds and runs without the foreign/lockstep oracle infrastructure:
+// Standalone build tag (NOT `oracle`) so this self-contained SPRITE AT
+// diagnostic probe builds and runs without the foreign/lockstep oracle
+// infrastructure:
 //   SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
 //     go test -tags nbidiag ./cmd/zx_go/ -run TestNBISpriteAtReadback -v
 
@@ -185,7 +186,7 @@ func TestNBISpriteAtReadback(t *testing.T) {
 
 	// Sentinel (30010=42) proves the line ran; static sprite 0 at X=200,Y=100.
 	// SPRITE MOVE flushes the NextZXOS RAM sprite-attribute cache that SPRITE
-	// AT reads (nextzxos-changelog: attrs cached in RAM8 since v2.09).
+	// AT reads (NextZXOS caches sprite attrs in RAM8 since v2.09).
 	typeStr("10 poke 30010,42: sprite 0,200,100,5,1: sprite move : poke 30000,% sprite at(0,0): poke 30001,% sprite at(0,1)")
 	enter()
 	typeStr("run")
@@ -194,11 +195,11 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	t.Logf("[ran=%d/42] static+MOVE sprite0: SPRITE AT X=%d (want 200), Y=%d (want 100)",
 		emu.mem.Read(30010), emu.mem.Read(30000), emu.mem.Read(30001))
 
-	// Read the NextZXOS sprite-attribute cache DIRECTLY out of 16K RAM bank 8
-	// (8K pages 16,17). uvec8_sprite_data lives at RAM8 offset $1FFE; sprite N
-	// is a 16-byte struct at uvec+N*16, +0=X +1=Y. If the cache holds 200 but
-	// SPRITE AT returned 0, the bug is in the read path / banking during the
-	// query; if the cache itself is 0, the SPRITE write never reached it.
+	// Read the NextZXOS sprite-attribute cache directly out of 16K RAM
+	// bank 8 (8K pages 16,17). uvec8_sprite_data lives at RAM8 offset
+	// $1FFE; sprite N is a 16-byte struct at uvec+N*16, +0=X +1=Y — an
+	// independent readback of the cache to compare against SPRITE AT's
+	// own return value.
 	p16, p17 := emu.mem.RAM8KPage(16), emu.mem.RAM8KPage(17)
 	ram8 := func(off int) byte {
 		if off < 0x2000 {
@@ -210,23 +211,11 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	t.Logf("RAM8 uvec8_sprite_data=$%04X; cache sprite0 X=%d Y=%d (want 200,100)",
 		uvec, ram8(uvec+0), ram8(uvec+1))
 
-	// TRACE the read path: capture every RAM read at the cache's X/Y offsets
-	// (uvec, uvec+1) across ALL 16K banks during a SPRITE AT query. If the
-	// guest reads bank != 8 (or bank 8 but value 0) the MMU paged the wrong
-	// bank for the read; the cache (bank 8) is known-correct (200,100).
-	type rd struct {
-		bank int
-		val  byte
-	}
-	_ = rd{}
-	// CORRELATED trace in one run: interleave NextReg MMU writes to slot 1
-	// (NextReg $51 = $2000-$3FFF, where bank 8 page 16 gets mapped) with reads
-	// at the cache offset ($04DF within any 8K slot). This shows whether the
-	// override is live when the cache read happens.
-	// Find the PC of the SPRITE AT cache read: the value SPRITE AT returns (0)
-	// comes from a read at the cache offset. Capture every read at the
-	// 8K-relative cache offset, with the CPU PC + the instruction bytes, so we
-	// can arm a read-tape lockstep there.
+	// Trace the read path: capture every RAM read at the cache's X/Y
+	// offsets (uvec, uvec+1) across all 16K banks during a SPRITE AT
+	// query, with the resolved bank, PC, and MMU slot table — enough to
+	// tell whether the query is reading bank 8 (the cache) or an MMU
+	// mis-mapping is serving a different bank.
 	type rdpc struct {
 		bank       int
 		val        byte
@@ -238,8 +227,8 @@ func TestNBISpriteAtReadback(t *testing.T) {
 	var bank8reads int
 	tracing := false
 	emu.mem.SetRAMReadHook(func(bank int, addr uint16, val byte) {
-		// Capture bank-8 reads in the sprite-cache region (uvec..uvec+$800),
-		// excluding the $1700 system-var compare loop that saturated earlier.
+		// Only the cache's X/Y offsets matter here ($04DF/$04E0); every
+		// other read (e.g. the system-var compare loop) is noise.
 		if tracing && (addr == 0x04DF || addr == 0x04E0) && len(hits) < 80 {
 			var m [8]byte
 			for s := byte(0); s < 8; s++ {
@@ -264,6 +253,9 @@ func TestNBISpriteAtReadback(t *testing.T) {
 		src  string
 	}
 	emu.mem.SetBankTracer(func(slot byte, bank int, src string) {
+		// Slot 2's MMU writes are what map bank 8 in for a SPRITE AT
+		// query; correlating them against the cache reads above shows
+		// whether the mapping is live when the read happens.
 		if slot == 2 && len(mmuWrites) < 40 {
 			mmuWrites = append(mmuWrites, mw{bank, emu.cpu.PC, src})
 		}

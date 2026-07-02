@@ -8,13 +8,13 @@ import "sync/atomic"
 // time-travel ring (which only answers "what was the state at time
 // T?") cannot provide on its own.
 //
-// The dominant boot-failure shape in this emulator is a bad control
-// transfer / corrupt stack that lands PC somewhere fatal (e.g. the
-// bank-2 $0000 NOP;JR trap, task #229). Reconstructing the cause by
-// hand — rewind, single-step, eyeball every RET/JP, guess — has eaten
-// dozens of iterations. Provenance turns that into a direct query:
-// at the trap, read the return word off the stack and ask who pushed
-// it, then who computed that value.
+// A common boot-failure shape in this emulator is a bad control
+// transfer / corrupt stack that lands PC somewhere fatal (e.g. a
+// bank-2 $0000 NOP;JR trap). Reconstructing the cause by hand —
+// rewind, single-step, eyeball every RET/JP, guess — is slow.
+// Provenance turns that into a direct query: at the trap, read the
+// return word off the stack and ask who pushed it, then who computed
+// that value.
 //
 // Design: a flat last-writer table indexed by the 16-bit LOGICAL
 // address (what the CPU's SP/stack operate on). Each successful CPU

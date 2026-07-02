@@ -77,14 +77,16 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 		return fmt.Errorf("failed to read RAM paged page: %w", err)
 	}
 
-	// Check if this is a 128K SNA file by trying to read more data
+	// Check if this is a 128K SNA file by trying to read the 4-byte
+	// PC/port7FFD/TR-DOS trailer that follows the 48K dump. io.ReadFull
+	// distinguishes a clean 48K file (zero bytes left, io.EOF) from a
+	// 128K file cut short mid-trailer (1-3 bytes read,
+	// io.ErrUnexpectedEOF) — the latter must be reported as an error
+	// rather than silently misread as a 48K snapshot.
 	extraHeader := make([]byte, 4)
-	n, err := file.Read(extraHeader)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("error checking for 128K data: %w", err)
-	}
-
-	if n == 4 {
+	_, err := io.ReadFull(file, extraHeader)
+	switch err {
+	case nil:
 		// This is a 128K SNA file
 		s.Memory.Is128K = true
 
@@ -113,7 +115,7 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 				return fmt.Errorf("failed to read RAM bank %d: %w", bankNum, err)
 			}
 		}
-	} else {
+	case io.EOF:
 		// 48K SNA: the 0xC000 page is physical bank 0.
 		copy(s.Memory.RAM[0], pagedPage)
 		// 48K SNA: PC is stored on the stack — pop it from RAM
@@ -123,6 +125,8 @@ func (s *Snapshot) loadSNA(file io.Reader) error {
 		hi := s.readRAM(sp + 1)
 		s.CPU.PC = uint16(hi)<<8 | uint16(lo)
 		s.CPU.SP += 2
+	default:
+		return fmt.Errorf("error checking for 128K data: %w", err)
 	}
 
 	return nil

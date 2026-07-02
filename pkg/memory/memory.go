@@ -13,16 +13,10 @@ const (
 	PageSize = 0x4000
 	// BankSize is the size of one 8K bank — half a classic 16K page.
 	// The Spectrum Next's MMU pages at this granularity (NextRegs
-	// 0x50–0x57, eight 8K slots covering the full 64K Z80 address
-	// space). Pre-Next models keep using PageSize; BankSize is a
-	// scaffolding constant Sprint 2 will build the real 8K MMU on
-	// top of, so callers that need to enumerate banks in 8K units
-	// (e.g. the upcoming Layer 2 paging or.NEX loader) don't have
-	// to litter `PageSize/2` magic numbers.
+	// 0x50-0x57, eight 8K slots covering the full 64K Z80 address
+	// space). Pre-Next models keep using PageSize.
 	BankSize = 0x2000
-	// BanksPer16KPage is two — kept as a named constant so the
-	// Sprint 2 MMU code can express "this 16K page is two adjacent
-	// 8K banks" without a bare integer.
+	// BanksPer16KPage is two: a 16K page is two adjacent 8K banks.
 	BanksPer16KPage = PageSize / BankSize
 	// RAMSize48K is the total RAM for a 48K Spectrum (48KB).
 	RAMSize48K = 0xC000
@@ -242,10 +236,11 @@ type Memory struct {
 	allWriteHook func(addr uint16, val byte)
 	// Layer-2 write/read paging via the legacy port $123B (zxnext.vhd:
 	// 3915-3933). When l2WrEn (write-enable, $123B bit 0) is set, CPU writes
-	// to the mapped region ($0000-$3FFF, or all 48K when l2Segment==3) are
-	// redirected into Layer-2 RAM: 16K bank = (l2Shadow ? l2ShadowBank :
-	// l2ActiveBank) + segment-offset + l2Offset, at the same $3FFF offset.
-	// l2RdEn ($123B bit 2) does the same for reads. NR$12/$13 set the banks.
+	// to the mapped region ($0000-$3FFF, or $0000-$BFFF when l2Segment==3 —
+	// $C000-$FFFF is never mapped this way) are redirected into Layer-2 RAM:
+	// 16K bank = (l2Shadow ? l2ShadowBank : l2ActiveBank) + segment-offset +
+	// l2Offset, at the same $3FFF offset. l2RdEn ($123B bit 2) does the same
+	// for reads. NR$12/$13 set the banks.
 	l2WrEn, l2RdEn, l2Shadow   bool
 	l2Segment, l2Offset        byte
 	l2ActiveBank, l2ShadowBank byte
@@ -555,15 +550,17 @@ func (m *Memory) ResolvePage(addr uint16) int {
 // selected by $7FFD (zxnext.vhd: port_7ffd_bank = port_dffd_reg(3:0) &
 // port_7ffd_reg(2:0)); like a $7FFD write it re-maps the $C000 16K slot
 // (MMU6/7) to the combined 7-bit bank. portDFFD is 0 by default so classic
-// machines are unaffected. (Was previously unmodelled — see project memory.)
+// machines are unaffected.
 func (m *Memory) SetDFFD(val byte) {
-	if !m.PagingEnabled || m.PagingFrozen {
-		m.portDFFD = val & 0x0F
+	if !m.PagingEnabled {
+		// zxnext.vhd: port_dffd_reg only latches a new value while
+		// port_7ffd_locked='0' (7FFD bit 5 paging-disable) — once
+		// locked, DFFD writes are dropped just like 7FFD/1FFD writes.
 		return
 	}
 	m.portDFFD = val & 0x0F
-	if m.specialPaging {
-		return // special paging owns all four slots
+	if m.PagingFrozen || m.specialPaging {
+		return // frozen (Multiface) or special paging owns all four slots
 	}
 	ramPage := int(m.portDFFD)<<3 | int(m.port7FFD&0x07)
 	old := m.memoryPageReadMap[3]
@@ -578,6 +575,11 @@ func (m *Memory) SetDFFD(val byte) {
 	// re-establishes that, clearing any NextReg-MMU RAM override on slots 0/1.
 	m.selectROM("DFFD")
 }
+
+// DFFDValue returns the current $DFFD high RAM-bank extension value
+// (bits 3:0). Exposed mainly for tests; production callers should
+// derive bank mappings through ResolvePage/GetMMU instead.
+func (m *Memory) DFFDValue() byte { return m.portDFFD }
 
 // IsMMUOverridden reports whether the given 8K slot was last
 // written through the MMU rather than through classic paging.
@@ -1089,14 +1091,15 @@ func (m *Memory) GetROMManager() *roms.ROMManager {
 }
 
 // Reset restores the paging state to the model's power-on defaults:
-// port 7FFD = 0, port 1FFD = 0, special paging disabled, page map back to
-// the standard ROM/screen/bank layout. Equivalent to the /RESET pulse on
-// real hardware. RAM contents are NOT cleared (real hardware preserves
-// them across reset too); the BIOS / BASIC ROM is responsible for
-// reinitialising system variables.
+// port 7FFD = 0, port 1FFD = 0, port DFFD = 0, special paging disabled,
+// page map back to the standard ROM/screen/bank layout. Equivalent to
+// the /RESET pulse on real hardware. RAM contents are NOT cleared
+// (real hardware preserves them across reset too); the BIOS / BASIC
+// ROM is responsible for reinitialising system variables.
 func (m *Memory) Reset() error {
 	m.port7FFD = 0
 	m.port1FFD = 0
+	m.portDFFD = 0
 	m.specialPaging = false
 	m.PagingFrozen = false
 	for i := range m.slotBank {
@@ -1269,6 +1272,22 @@ func (m *Memory) readValue(addr uint16) byte {
 		if m.configModeActive && addr < 0x4000 {
 			if val, ok := m.configModeReadByte(addr); ok {
 				return val
+			}
+		}
+		// Layer-2 read paging (legacy port $123B read-enable): mirrors the
+		// write redirect in Write — higher priority than the MMU/classic
+		// dispatch below, lower than the divMMC/Multiface/Alt-ROM/config-mode
+		// overlays already checked above.
+		if m.l2RdEn {
+			if bank16k, off, ok := m.layer2Redirect(addr); ok {
+				v := m.ram[bank16k][off]
+				if m.TrackUninit {
+					m.checkRAMUninit(addr, bank16k, off)
+				}
+				if m.ramReadHook != nil {
+					m.ramReadHook(bank16k, off, v)
+				}
+				return v
 			}
 		}
 		slot8k := addr >> 13
@@ -1568,11 +1587,15 @@ func (m *Memory) SetLayer2BankSource(active, shadow func() byte) {
 
 // layer2Redirect maps a logical address to the Layer-2 RAM 16K bank + offset
 // it should hit while Layer-2 paging is active, or ok=false when this address
-// is not Layer-2-mapped. The bottom 16K ($0000-$3FFF) is always mapped; the
-// upper 48K is mapped only when segment==3 (zxnext.vhd:3036-3065 override(1)).
+// is not Layer-2-mapped. Per zxnext.vhd:3036-3065 override(1): $0000-$3FFF is
+// always mapped; $4000-$BFFF (segments 1/2) is mapped only when segment==3;
+// $C000-$FFFF is NEVER mapped through this legacy port regardless of segment
+// — the address term `(not cpu_a(15)) or (not cpu_a(14))` is forced to 0
+// whenever both top address bits are set, so the top 16K always falls
+// through to the normal classic/MMU page.
 func (m *Memory) layer2Redirect(addr uint16) (bank16k int, off uint16, ok bool) {
 	region := byte(addr >> 14)
-	if region != 0 && m.l2Segment != 3 {
+	if region == 3 || (region != 0 && m.l2Segment != 3) {
 		return 0, 0, false
 	}
 	offsetPre := m.l2Segment

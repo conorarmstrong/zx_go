@@ -40,6 +40,7 @@ func applySnapshotFile(h *Harness, path string) error {
 	c.I = s.CPU.I
 	c.R = s.CPU.R
 	c.IFF1 = s.CPU.IFF1
+	c.Halted = s.CPU.Halted
 	c.IFF2 = s.CPU.IFF2
 	c.IM = s.CPU.IM
 

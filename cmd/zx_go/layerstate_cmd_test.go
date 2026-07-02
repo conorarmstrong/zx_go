@@ -8,9 +8,8 @@ import (
 // TestFormatLayerState verifies the decoded video-layer panel: the
 // SLU layer-priority order from NR$15 bits 4-2, sprite enable/over-
 // border/priority, ULA enable (NR$68), Layer2 resolution (NR$70) and
-// tilemap enable (NR$6B). jnext's GUI has a per-layer state view; this
-// is the scriptable, decoded equivalent. Reader injected so it
-// unit-tests without an emulator.
+// tilemap enable (NR$6B). Reader injected so it unit-tests without an
+// emulator.
 func TestFormatLayerState(t *testing.T) {
 	regs := map[byte]byte{
 		0x15: 0x03, // prio bits 4-2 = 000 (S L U); bit1 over-border, bit0 sprites on
@@ -46,5 +45,25 @@ func TestFormatLayerState_ULADisabled(t *testing.T) {
 	}
 	if !strings.Contains(out, "disabled") {
 		t.Errorf("expected ULA disabled:\n%s", out)
+	}
+}
+
+// TestFormatLayerState_SpriteZeroOnTop checks NR$15 bit 6 decodes with
+// the correct polarity: bit set means sprite 0 renders in front of
+// higher-numbered overlapping sprites (sprite.Engine.SetZeroOnTop).
+func TestFormatLayerState_SpriteZeroOnTop(t *testing.T) {
+	out := formatLayerState(func(r byte) byte {
+		if r == 0x15 {
+			return 0x40 // bit 6 set
+		}
+		return 0
+	})
+	if !strings.Contains(out, "sprite0-on-top: yes") {
+		t.Errorf("bit6 set should report sprite0-on-top: yes:\n%s", out)
+	}
+
+	out = formatLayerState(func(r byte) byte { return 0 }) // bit 6 clear
+	if !strings.Contains(out, "sprite0-on-top: no") {
+		t.Errorf("bit6 clear should report sprite0-on-top: no:\n%s", out)
 	}
 }

@@ -10,7 +10,7 @@
 //   - microdrive.go: per-drive state and the tape-loop simulation
 //   - ula.go:        the IF1 ULA's three I/O port handlers
 //   - if1.go:        the top-level Interface 1 type, ROM paging,
-//                    integration with the existing peripheral manager
+//     integration with the existing peripheral manager
 package if1
 
 import (
@@ -50,6 +50,13 @@ type Drive struct {
 	maxBytes    int  // size of the current "window" — 15 (header) or 528 (record + data)
 	gap         byte // GAP countdown (read by CTR port)
 	sync        byte // SYNC countdown (read by CTR port)
+
+	// lastByte is the MDR data port's read latch: the last byte
+	// actually shifted in from the tape. It is only updated while
+	// transferred < maxBytes; reads past the end of the window keep
+	// returning this latched value instead of going idle, since the
+	// real ULA's parallel latch isn't cleared between transfers.
+	lastByte byte
 
 	// pream tracks formatting state for each of the 512 possible
 	// (header + record) slots in the cartridge. Index 0..255 covers
@@ -168,21 +175,21 @@ func (d *Drive) reset() {
 // readByte reads one byte from the tape head and advances the head.
 // Returns the byte; the controller's port_mdr_in code combines this
 // with the bytes from any other motor-on drives via AND (negative
-// logic on the bus). Returns 0xFF when no data is available
-// (uninserted, motor off, or past the end of the current window —
-// 0xFF is the active-low bus idle value, the AND identity).
+// logic on the bus). Returns 0xFF when the drive isn't streaming at
+// all (uninserted or motor off — the idle bus value, the AND
+// identity). Once the current window's maxBytes have been
+// transferred, further reads return the latched lastByte rather than
+// going idle — see the lastByte field comment.
 func (d *Drive) readByte() byte {
 	if !d.Inserted || !d.MotorOn || d.Cartridge == nil {
 		return 0xFF
 	}
-	if d.transferred >= d.maxBytes {
-		d.transferred++
-		return 0xFF
+	if d.transferred < d.maxBytes {
+		d.lastByte = d.Cartridge.DataAt(d.headPos)
+		d.incrementHead()
 	}
-	b := d.Cartridge.DataAt(d.headPos)
-	d.incrementHead()
 	d.transferred++
-	return b
+	return d.lastByte
 }
 
 // writeByte processes one byte coming in from the CPU. The IF1 ROM

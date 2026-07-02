@@ -72,8 +72,7 @@ func TestReadTapeImmediateArmWhenNoTrigger(t *testing.T) {
 // TestReadTapePortWriteRecords — the tape logs guest OUT instructions
 // as `SEQ W pPPPP =VV @PC` records. Port-level visibility is what
 // disambiguates multi-occupant RAM code in oracle diffs: the value
-// stream alone cannot prove WHICH register/port a staging write hit
-// (the development log).
+// stream alone cannot prove WHICH register/port a staging write hit.
 func TestReadTapePortWriteRecords(t *testing.T) {
 	var buf bytes.Buffer
 	rt := newReadTape(&buf, 0, 0, 10) // no trigger = armed immediately

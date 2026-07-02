@@ -304,6 +304,9 @@ func TestGetROMTypeName(t *testing.T) {
 		{ROMDISCIPLE, "Disciple/GDOS"},
 		{ROMTRDOS, "TR-DOS"},
 		{ROMPENTAGON, "Pentagon"},
+		{ROMINTERFACE1, "Interface 1"},
+		{ROMZX81, "ZX81 ROM"},
+		{ROMZX80, "ZX80 ROM"},
 		{ROMType(99), "Unknown ROM"},
 	}
 	for _, tc := range tests {

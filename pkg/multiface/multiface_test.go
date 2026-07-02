@@ -347,8 +347,7 @@ func TestHandleOpcodeRead_Invisible(t *testing.T) {
 
 // ---------- HandlePortRead ----------
 
-// MF variant port-decode coverage (iter 282).
-// Each variant decodes a different port pattern. Pin the
+// Each Multiface variant decodes a different port pattern; pin the
 // isMultifacePort lookup against the documented patterns.
 
 func TestIsMultifacePort_MF1Pattern(t *testing.T) {
@@ -818,8 +817,6 @@ func TestGetCompatibleModel(t *testing.T) {
 	}
 }
 
-// ---------- Paging state save/restore ----------
-
 // ---------- Integration: full NMI cycle ----------
 
 func TestNMICycle_Full(t *testing.T) {
@@ -901,8 +898,8 @@ func TestStealthModeCycle(t *testing.T) {
 	}
 }
 
-// iter 345: cover loadROM filesystem-load branch (valid 0x2000 file
-// at romPath wins over embedded) + wrong-size-file fall-through.
+// loadROM filesystem-load branch: a valid 0x2000 file at romPath wins
+// over the embedded ROM, and a wrong-size file falls through to it.
 
 func TestLoadROM_FilesystemWins(t *testing.T) {
 	mem, _ := newTestMemory(t)

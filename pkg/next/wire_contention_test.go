@@ -36,8 +36,7 @@ func TestWireContentionDisableBitSetDisablesContention(t *testing.T) {
 	}
 
 	// Per zxnext.vhd:5176, contention disable is bit 6 ($40), not
-	// bit 1. Bit 1 ($02) is PSG TurboSound enable. (Iter 187
-	// corrected this and updated the test.)
+	// bit 1. Bit 1 ($02) is PSG TurboSound enable.
 	disp.Select(0x08)
 	disp.WriteData(0x40) // bit 6 = disable contention
 	if !mem.RAMContentionDisabled {

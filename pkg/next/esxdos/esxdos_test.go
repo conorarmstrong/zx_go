@@ -56,7 +56,7 @@ func TestDispatcherMGetHandleClearsCFAndReturnsHandle(t *testing.T) {
 	if cpu.F&z80.FLAG_C != 0 {
 		t.Errorf("M_GETHANDLE: CF should be cleared")
 	}
-	// Sprint 3 returns handle 0.
+	// handleMGetHandle returns handle 0.
 	if cpu.A != 0 {
 		t.Errorf("M_GETHANDLE: A = %#x, want 0", cpu.A)
 	}
@@ -209,8 +209,8 @@ func TestDispatcherRegisterNilRemoves(t *testing.T) {
 	}
 }
 
-// iter 344: cover SetTrace (callback fires on dispatch) + the Error
-// type wrapper.
+// Covers SetTrace (callback fires on dispatch) + the Error type
+// wrapper.
 
 func TestSetTrace_FiresOnDispatch(t *testing.T) {
 	cpu, mem := setupRST8(t, M_GETHANDLE, 0x4000)

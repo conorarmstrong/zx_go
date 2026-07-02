@@ -11,8 +11,8 @@ import (
 // PreFetchHook / BreakpointCheck) gates the actual halt on the
 // result.
 //
-// Grammar (small enough to write by hand, big enough for the
-// #149-class compound guards `pc == $6010 && iff1 == 0`):
+// Grammar (small enough to write by hand, big enough for
+// compound guards like `pc == $6010 && iff1 == 0`):
 //
 //	expr  := term  ( "||" term )*
 //	term  := cmp   ( "&&" cmp  )*

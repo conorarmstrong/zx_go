@@ -6,11 +6,10 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/ay"
 )
 
-// TestPort0xFFFDRoutesToEngineActiveChip pins the Sprint 5 fix:
-// when an Engine is wired via SetNextAY, port 0xFFFD register
-// selects + reads go to engine.Active(), not the singleton u.ay.
-// Selecting a different chip changes which AY services the next
-// port write.
+// TestPort0xFFFDRoutesToEngineActiveChip pins that when an Engine is wired
+// via SetNextAY, port 0xFFFD register selects + reads go to
+// engine.Active(), not the singleton u.ay. Selecting a different chip
+// changes which AY services the next port write.
 func TestPort0xFFFDRoutesToEngineActiveChip(t *testing.T) {
 	u := newTestULA(t)
 	engine := ay.NewEngine()

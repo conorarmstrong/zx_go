@@ -715,11 +715,10 @@ func installWriteWatchers(emu *emulator, spec string, onBreak func(e watchWriteE
 			if addr != e.addr {
 				continue
 			}
-			// Routing context: a bare addr/val/pc line cannot say WHERE a
-			// $0000-$3FFF write actually routed (altROM buffer, divMMC
-			// window, MMU RAM, or dropped on ROM) — that ambiguity cost a
-			// whole diagnostic iteration in the Browser-entry chase
-			// (the development log+). Log the paging state alongside.
+			// A bare addr/val/pc line can't say WHERE a $0000-$3FFF
+			// write actually routed (altROM buffer, divMMC window,
+			// MMU RAM, or dropped on ROM), so log the paging state
+			// alongside.
 			divInfo := "n/a"
 			if emu.ula != nil {
 				if q, ok := emu.ula.NextDivMMC().(interface {
@@ -740,7 +739,6 @@ func installWriteWatchers(emu *emulator, spec string, onBreak func(e watchWriteE
 				"mmu1", fmt.Sprintf("$%02X", emu.mem.GetMMU(1)),
 				// the slot routing the WATCHED address — a $C000-area
 				// watch can't otherwise say which bank got the byte
-				// (the development log)
 				"mmuW", fmt.Sprintf("$%02X", emu.mem.GetMMU(byte(addr>>13))),
 				"div", divInfo,
 			)
@@ -761,7 +759,3 @@ func formatHexBytes(b []byte) string {
 	}
 	return strings.Join(parts, " ")
 }
-
-// strconvForFlags is a tiny shim that strconv.Itoa wraps; pulled
-// out so the import stays in scope even if the helper is unused.
-var _ = strconv.Itoa

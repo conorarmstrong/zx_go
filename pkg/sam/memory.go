@@ -1,9 +1,8 @@
 package sam
 
-// Memory is the SAM Coupé memory map (SimCoupe SAMIO.cpp UpdatePaging 231-255,
-// Memory.{h,cpp}). Four 16 KB sections — A=$0000, B=$4000, C=$8000, D=$C000 —
-// are paged from a 32 KB ROM (ROM0/ROM1), up to 512 KB internal RAM and up to
-// 4 MB external RAM, via five registers:
+// Memory is the SAM Coupé memory map. Four 16 KB sections — A=$0000, B=$4000,
+// C=$8000, D=$C000 — are paged from a 32 KB ROM (ROM0/ROM1), up to 512 KB
+// internal RAM and up to 4 MB external RAM, via five registers:
 //
 //	LMPR (0xFA): page (sec A; B=page+1), bit5 ROM0-off, bit6 ROM1→D, bit7 WPROT-A
 //	HMPR (0xFB): page (sec C; D=page+1), bit7 MCNTRL → external RAM in C/D
@@ -45,7 +44,7 @@ type Memory struct {
 	// video memory — the hook the renderer uses for line-accurate updates.
 	onVideoWrite func()
 
-	// ASIC contention (Sprint 7). tstatePtr is the CPU's frame-relative T-state
+	// ASIC contention. tstatePtr is the CPU's frame-relative T-state
 	// counter (shared via SetTStatePtr); activeContention is the per-T-state
 	// delay table for the current screen mode; contentionEnabled gates it all
 	// (ZX_GO_SAM_NO_CONTENTION opt-out); screenOff mirrors BORDER bit 7.
@@ -189,8 +188,8 @@ func (m *Memory) Write(addr uint16, val byte) {
 	}
 }
 
-// Paging-register writes (called by the I/O port dispatch in Sprint 2). LMPR,
-// HMPR, LEPR and HEPR change the CPU map; VMPR only selects the displayed page.
+// Paging-register writes (called by the I/O port dispatch). LMPR, HMPR, LEPR
+// and HEPR change the CPU map; VMPR only selects the displayed page.
 func (m *Memory) SetLMPR(v byte) { m.lmpr = v; m.updatePaging() }
 func (m *Memory) SetHMPR(v byte) { m.hmpr = v; m.updatePaging() }
 func (m *Memory) SetLEPR(v byte) { m.lepr = v; m.updatePaging() }
@@ -214,8 +213,8 @@ func (m *Memory) Reset() {
 	m.updateContention()
 }
 
-// Register read-backs. VMPR reads OR in the RXMIDI status bit (SimCoupe
-// SAMIO.cpp:476-477); the others read back the stored value.
+// Register read-backs. VMPR reads OR in the RXMIDI status bit; the others read
+// back the stored value.
 func (m *Memory) LMPR() byte { return m.lmpr }
 func (m *Memory) HMPR() byte { return m.hmpr }
 func (m *Memory) VMPR() byte { return vmprRXMIDI | m.vmpr }

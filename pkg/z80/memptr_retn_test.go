@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR on RETI / RETN (iter 314).
+// WZ/MEMPTR on RETI / RETN.
 //
 // Per Sean Young §3.4: ED $4D (RETI) and ED $45 (RETN), plus all
 // their mirror encodings, behave like RET for MEMPTR purposes —

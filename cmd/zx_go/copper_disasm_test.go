@@ -10,8 +10,7 @@ import (
 // TestFormatCopperDisasm verifies the Copper program disassembler:
 // a header with cursor + decoded start-mode, then one line per
 // instruction (MOVE NR$rr,$vv / WAIT line=Y hpos=X / HALT), stopping
-// at the first HALT so we don't dump 1024 trailing NOOPs. jnext's GUI
-// has a Copper disassembler; this is the scriptable equivalent.
+// at the first HALT so we don't dump 1024 trailing NOOPs.
 func TestFormatCopperDisasm(t *testing.T) {
 	prog := []copper.Instruction{
 		{Op: copper.OpMOVE, Reg: 0x40, Val: 0x07},

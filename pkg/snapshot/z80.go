@@ -13,16 +13,21 @@ const (
 	Z80_V3_HEADER_SIZE = 86
 )
 
-// Z80 hardware modes
+// Z80 hardware modes (v3 header values; v2 uses a different, smaller
+// set — see the version-2 branch in loadZ80). Per the .z80 v3
+// specification: 7 and 8 both denote a Spectrum +3 (8 is a "bugged"
+// variant some old tools wrote); 14 is TC2048, an unrelated 48K-RAM
+// Timex clone with no bank switching, and must not be confused with +3.
 const (
-	Z80_HW_48K      = 0
-	Z80_HW_48K_IF1  = 1
-	Z80_HW_SAMRAM   = 2
-	Z80_HW_128K     = 4
-	Z80_HW_128K_IF1 = 5
-	Z80_HW_PLUS2    = 12
-	Z80_HW_PLUS2A   = 13
-	Z80_HW_PLUS3    = 14
+	Z80_HW_48K       = 0
+	Z80_HW_48K_IF1   = 1
+	Z80_HW_SAMRAM    = 2
+	Z80_HW_128K      = 4
+	Z80_HW_128K_IF1  = 5
+	Z80_HW_PLUS3     = 7
+	Z80_HW_PLUS3_BUG = 8
+	Z80_HW_PLUS2     = 12
+	Z80_HW_PLUS2A    = 13
 )
 
 // loadZ80 loads a .Z80 format snapshot
@@ -110,15 +115,15 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 		// Hardware mode. Its meaning depends on the snapshot version, which
 		// the additional-header length distinguishes: 23 = v2, 54/55 = v3.
 		// In v2, mode 3 = 128K and 4 = 128K+IF1; in v3 mode 3 is 48K+MGT and
-		// the 128K machines are 4/5 (128K, 128K+IF1) and 12/13/14 (+2/+2A/+3).
-		// Get this wrong and a 128K snapshot loads as 48K (or vice-versa) and
-		// crashes on resume.
+		// the 128K machines are 4/5 (128K, 128K+IF1), 7/8 (+3), and 12/13
+		// (+2/+2A). Get this wrong and a 128K snapshot loads as 48K (or
+		// vice-versa) and crashes on resume.
 		hwMode := extHeader[2]
 		if headerLen == 23 { // version 2
 			s.Memory.Is128K = hwMode == 3 || hwMode == 4
 		} else { // version 3+
 			switch hwMode {
-			case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3:
+			case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3, Z80_HW_PLUS3_BUG:
 				s.Memory.Is128K = true
 			}
 		}
@@ -176,17 +181,17 @@ func (s *Snapshot) readZ80V1Memory(file io.Reader) error {
 // readZ80V2V3Memory reads memory blocks from Z80 version 2/3 format
 func (s *Snapshot) readZ80V2V3Memory(file io.Reader) error {
 	for {
-		// Read block header (3 bytes)
+		// Read block header (3 bytes). io.ReadFull distinguishes a clean
+		// end of file (zero bytes read, io.EOF — the normal loop exit)
+		// from a truncated trailing header (1 or 2 bytes read,
+		// io.ErrUnexpectedEOF), which must be reported as an error
+		// rather than silently dropped.
 		blockHeader := make([]byte, 3)
-		n, err := file.Read(blockHeader)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+		if _, err := io.ReadFull(file, blockHeader); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return fmt.Errorf("failed to read block header: %w", err)
-		}
-		if n != 3 {
-			break // End of file
 		}
 
 		blockLen := binary.LittleEndian.Uint16(blockHeader[0:2])

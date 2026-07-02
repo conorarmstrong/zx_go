@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR updates for block output OUTI / OUTD (iter 300).
+// WZ/MEMPTR updates for block output OUTI / OUTD.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.4 / §4.2:
 //   OUTI: WZ = (B-1, C) + 1 — BC at IO time uses post-decrement B

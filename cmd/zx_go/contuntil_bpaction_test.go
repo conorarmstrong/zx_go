@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// iter 336: cover cmdContUntil (arm / inspect / clear / bad-expr) plus
-// the runBPAction dispatch loop and its oneLine / formatHex16 helpers.
+// Covers cmdContUntil (arm / inspect / clear / bad-expr) plus the
+// runBPAction dispatch loop and its oneLine / formatHex16 helpers.
 
 func TestCmdContUntil(t *testing.T) {
 	d := &remoteDebugger{}
@@ -52,4 +52,27 @@ func TestRunBPAction(t *testing.T) {
 	// log line. list-breakpoints needs only the bpsMap (nil → "no
 	// breakpoints set"), so it dispatches cleanly on the fixture.
 	d.runBPAction(0x4000, "list-breakpoints")
+}
+
+// TestContUntilConcurrentArmAndBreakpointCheckRead races cmdContUntil
+// (as the telnet goroutine calls it) against the read pattern
+// BreakpointCheck uses on every M1 fetch (as the CPU goroutine calls
+// it): a single atomic Load followed by a read of the loaded spec's
+// fields. Must be race-free under `go test -race`.
+func TestContUntilConcurrentArmAndBreakpointCheckRead(t *testing.T) {
+	d := newRemoteWithCPU(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 5000; i++ {
+			d.cmdContUntil([]string{"sp", "<", "$2000"})
+			d.cmdContUntil([]string{"clear"})
+		}
+	}()
+	for i := 0; i < 5000; i++ {
+		if specP := d.contUntilCond.Load(); specP != nil {
+			_ = specP.expr
+		}
+	}
+	<-done
 }

@@ -190,8 +190,8 @@ func runHeadless(f *cliFlags) {
 		if f.whyPCAt != "" {
 			// Accept "$ADDR" or "$ADDR:BANK" — the optional ROM-bank
 			// qualifier lets why-pc-at skip benign entries (e.g. the
-			// legit post-reset bank-0 $0000) and fire only on the
-			// fatal one (bank-2 $0000 trap, #229).
+			// legit post-reset bank-0 $0000) and fire only on a
+			// specific bank's trap.
 			spec := f.whyPCAt
 			bankFilter := -1
 			if i := strings.IndexByte(spec, ':'); i >= 0 {
@@ -271,9 +271,9 @@ func runHeadless(f *cliFlags) {
 		tdb = newTraceDB(f.traceDBKeep)
 		if tdb != nil {
 			cpu := emu.cpu
-			// Overlay attribution (the development log): without per-row
-			// alt-rom + divMMC state, logical PCs in multi-overlay
-			// eras cannot be mapped to the code that really executed.
+			// Overlay attribution: without per-row alt-rom + divMMC
+			// state, logical PCs in multi-overlay eras cannot be
+			// mapped to the code that really executed.
 			var tdbFrame int
 			tdbFramePtr = &tdbFrame
 			var dmcPager *divmmc.Pager
@@ -970,7 +970,7 @@ func runHeadless(f *cliFlags) {
 			rdbg.WaitIfPaused()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
-				emu.renderFrame() // GUI-parity probe (the development log)
+				emu.renderFrame() // GUI-parity probe
 			}
 			if snap != nil {
 				snap.Tick()
@@ -999,7 +999,7 @@ func runHeadless(f *cliFlags) {
 			rdbg.WaitIfPaused()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
-				emu.renderFrame() // GUI-parity probe (the development log)
+				emu.renderFrame() // GUI-parity probe
 			}
 			if snap != nil {
 				snap.Tick()

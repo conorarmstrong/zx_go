@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// iter 341: drive handleCommand across its read-only / formatting
-// dispatch arms. Setting paused=true up front skips the pause-ack
-// channel wait (which would otherwise block with no headless loop
-// running), so the switch routing itself is exercised. Channel-
-// driven commands (continue/step) are covered elsewhere.
+// Drives handleCommand across its read-only / formatting dispatch
+// arms. Setting paused=true up front skips the pause-ack channel wait
+// (which would otherwise block with no headless loop running), so the
+// switch routing itself is exercised. Channel-driven commands
+// (continue/step) are covered elsewhere.
 
 func TestHandleCommand_Dispatch(t *testing.T) {
 	d := newRemoteWithCPU(t)

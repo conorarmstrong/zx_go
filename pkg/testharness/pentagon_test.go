@@ -7,7 +7,7 @@ import (
 )
 
 // The Pentagon 128 must cold-boot its editor ROM to the (non-blank) 128-style
-// menu, exercising the new ModelPentagon memory path end-to-end.
+// menu, exercising the ModelPentagon memory path end-to-end.
 func TestPentagonBoots(t *testing.T) {
 	h, err := New(roms.ModelPentagon)
 	if err != nil {

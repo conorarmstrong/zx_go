@@ -28,11 +28,9 @@ func NewEngine() *Engine {
 // "hold all AY in reset" (bits 1-0 == 11) silences the engine; YM/AY/8950 are
 // all active (we model AY behaviour for each). NR$06 does NOT select which
 // TurboSound chip is active — that is SelectChip, driven by the $FFFD
-// chip-select protocol.
-//
-// (The earlier code read bit 2 as "AY disable" and bits 1-0 as a chip index;
-// NextZXOS sets bit 2 for PS/2 during boot, which then wrongly muted all AY —
-// e.g. 128K music under the Next's 128K persona.)
+// chip-select protocol. NextZXOS sets bit 2 for PS/2 during boot, so bit 2
+// must be ignored here or that boot-time write would wrongly silence AY
+// output.
 func (e *Engine) Select(val byte) {
 	e.disabled = val&0x03 == 0x03
 }
@@ -83,12 +81,12 @@ func (e *Engine) SetChip(i int, c *AY) {
 // audio system's AY source (audio.AYSource). Each AY.MixInto adds (saturating)
 // its own contribution, so silent chips (no registers written) contribute
 // nothing — making this correct for a plain 128K (only chip 0 used) as well as
-// TurboSound. When AY output is disabled (NextReg 0x06 bit 2) nothing is mixed.
+// TurboSound. When AY output is disabled (NextReg 0x06 bits 1-0 == 11) nothing
+// is mixed.
 //
-// This is what makes 128K/AY music audible on the Next: port writes route to
-// engine.Active(), but the audio mixer must pull from the engine — feeding it
-// the ULA's single u.ay (as the classic path did) mixes a chip the Next never
-// writes to, so the music was silent.
+// Port writes route to engine.Active(), so the audio mixer must pull from the
+// Engine itself rather than a chip held elsewhere — otherwise it would mix a
+// chip the guest never writes to.
 func (e *Engine) MixInto(buf []int16) {
 	if e.disabled {
 		return

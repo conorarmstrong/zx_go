@@ -62,7 +62,7 @@ func TestDiscipleSectorReadViaZ80(t *testing.T) {
 		t.Fatalf("LoadDiscipleDisk: %v", err)
 	}
 
-	// Z80 program at 0x8000 using FUSE-correct port addresses:
+	// Z80 program at 0x8000 using the DISCiPLE's FDC port addresses:
 	//   0x1F control, 0xDB FDC data, 0x1B FDC cmd, 0x9B FDC sector
 	code := []byte{
 		0x3E, 0x01, // LD A, 0x01
@@ -168,7 +168,7 @@ func TestDiscipleAutoPageOnNMI(t *testing.T) {
 	disc := h.Peripherals().GetDisciple()
 
 	// Patch the GDOS ROM at 0x0066 with a sentinel. NMI auto-pages
-	// without memswap (matching FUSE), so the CPU fetches from ROM.
+	// without memswap, so the CPU fetches from ROM.
 	rom := disc.GetROM()
 	rom[0x0066] = 0x3E // LD A, 0x42
 	rom[0x0067] = 0x42
@@ -249,15 +249,15 @@ func TestDiscipleROMPagingViaZ80(t *testing.T) {
 	//   LD (0x9002), A
 	//   JR $
 	code := []byte{
-		0xDB, 0xBB,             // IN A, (0xBB)     ; page in
-		0x3A, 0x00, 0x00,       // LD A, (0x0000)
-		0x32, 0x00, 0x90,       // LD (0x9000), A
-		0x3A, 0x00, 0x20,       // LD A, (0x2000)
-		0x32, 0x01, 0x90,       // LD (0x9001), A
-		0xD3, 0xBB,             // OUT (0xBB), A    ; page out
-		0x3A, 0x00, 0x00,       // LD A, (0x0000)
-		0x32, 0x02, 0x90,       // LD (0x9002), A
-		0x18, 0xFE,             // JR $
+		0xDB, 0xBB, // IN A, (0xBB)     ; page in
+		0x3A, 0x00, 0x00, // LD A, (0x0000)
+		0x32, 0x00, 0x90, // LD (0x9000), A
+		0x3A, 0x00, 0x20, // LD A, (0x2000)
+		0x32, 0x01, 0x90, // LD (0x9001), A
+		0xD3, 0xBB, // OUT (0xBB), A    ; page out
+		0x3A, 0x00, 0x00, // LD A, (0x0000)
+		0x32, 0x02, 0x90, // LD (0x9002), A
+		0x18, 0xFE, // JR $
 	}
 	for i, b := range code {
 		h.WriteMemory(uint16(0x8000+i), b)

@@ -2,12 +2,9 @@ package z80
 
 import "testing"
 
-// iter 357: interrupt + NMI T-state counts, IM 0/1/2 vector handling,
-// and NMI semantics (vector $0066, PC push, IFF/IM effects).
-//
-// Closes the Z80 interrupt-handling section items: IM1=13T / IM2=19T,
-// NMI=11T, IM 0/1/2 vectoring, and "NMI to $0066, push PC, IM
-// unchanged".
+// Interrupt + NMI T-state counts, IM 0/1/2 vector handling, and NMI
+// semantics (vector $0066, PC push, IFF/IM effects): IM1=13T,
+// IM2=19T, NMI=11T.
 
 // intCPU returns a test CPU primed for an interrupt: IFF1 set, SP in
 // high RAM, a known PC, the requested IM.

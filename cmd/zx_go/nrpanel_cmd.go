@@ -23,7 +23,9 @@ func formatNextRegPanel(rd func(byte) byte) string {
 		r07, speeds[r07&0x03])
 
 	fmt.Fprintf(&b, "  $05 peripheral 1    = $%02X\r\n", rd(0x05))
-	fmt.Fprintf(&b, "  $06 peripheral 2    = $%02X  (divMMC en=%d)\r\n",
+	// Bit 4 here is only the DRIVE-button divMMC-NMI enable, not the
+	// divMMC automap gate itself (that's NR$0A bit 4, decoded below).
+	fmt.Fprintf(&b, "  $06 peripheral 2    = $%02X  (drive-nmi en=%d)\r\n",
 		rd(0x06), b2u(rd(0x06)&0x10 != 0))
 	fmt.Fprintf(&b, "  $8C altrom          = $%02X\r\n", rd(0x8C))
 	fmt.Fprintf(&b, "  $8E paging          = $%02X\r\n", rd(0x8E))

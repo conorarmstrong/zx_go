@@ -146,16 +146,16 @@ type Debugger struct {
 	haltLine *canvas.Text
 
 	// Lists for scrollable, tappable content
-	dasmList   *widget.List
-	dasmCache  []DisassembledLine
-	dasmLastPC uint16
-	hexList    *widget.List
+	dasmList  *widget.List
+	dasmCache []DisassembledLine
+	hexList   *widget.List
 
 	statusTxt    *canvas.Text
 	hexAddrEntry *widget.Entry
 
 	refreshTicker *time.Ticker
 	stopChan      chan struct{}
+	stopOnce      sync.Once
 
 	// Spectrum Next state (optional). When non-nil, the
 	// debugger renders the Next panel and refreshes it each tick.
@@ -534,10 +534,13 @@ func (d *Debugger) stopRefresh() {
 	if d.refreshTicker != nil {
 		d.refreshTicker.Stop()
 	}
-	select {
-	case d.stopChan <- struct{}{}:
-	default:
-	}
+	// Close rather than send: the refresh goroutine isn't always
+	// parked on the receive (it can be off running fyne.Do), so a
+	// single best-effort send could be missed and leak the
+	// goroutine forever. Closing wakes it unconditionally, whenever
+	// it next reaches the select. sync.Once guards repeat calls
+	// (e.g. the window's OnClosed firing more than once).
+	d.stopOnce.Do(func() { close(d.stopChan) })
 }
 
 // cpuStackSource adapts a *z80.CPU to the StackSource interface
@@ -1086,12 +1089,12 @@ func (d *Debugger) refreshRegisters() {
 }
 
 func (d *Debugger) refreshDisassembly() {
-	pc := d.cpu.PC
-	// Only re-disassemble if PC changed
-	if pc != d.dasmLastPC || len(d.dasmCache) == 0 {
-		d.dasmCache = Disassemble(d.mem.Read, pc, dasmRows)
-		d.dasmLastPC = pc
-	}
+	// Always re-disassemble from live memory: PC is the common case
+	// that moves, but a paused-debugger memory write (Write Mem
+	// dialog, a poke via the bank inspector, self-modifying code)
+	// can change the bytes at the current PC without moving it, and
+	// the view must not show stale mnemonics.
+	d.dasmCache = Disassemble(d.mem.Read, d.cpu.PC, dasmRows)
 	d.dasmList.Refresh()
 	// Scroll to show PC at top
 	d.dasmList.ScrollToTop()

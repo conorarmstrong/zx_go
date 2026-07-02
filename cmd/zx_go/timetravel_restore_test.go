@@ -6,10 +6,10 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// tt-rewind restore-fidelity (todo: "rewound Next state can restore
-// Halted=true + IFF1=false (cannot resume); insns counter not
-// rewound"). The snapshot must round-trip the CPU's Halted flag and
-// the rewind must move the instruction counter back to the
+// TestTTRewindRestoresHaltedAndInsnCounter verifies tt-rewind
+// round-trips the CPU's Halted/IFF1 flags — a rewind target captured
+// while running must not leave the CPU halted with interrupts
+// disabled — and moves the instruction counter back to the
 // snapshot's insn so subsequent tt operations and insn-gated
 // diagnostics see a consistent timeline.
 func TestTTRewindRestoresHaltedAndInsnCounter(t *testing.T) {

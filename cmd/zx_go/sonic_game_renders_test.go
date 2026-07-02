@@ -9,13 +9,14 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// TestSonicGameRendersIfPresent is an end-to-end guard for the Sonic fixes:
-// boot NextZXOS, load sonic.nex via the genuine loader, settle at the title,
-// then press Kempston fire (exactly as ZEsarUX does) to start the game. It
-// asserts the game frame is a real, varied level — NOT the uniform sky-blue
-// that the Layer-2 transparency bug produced (an all-zero Layer 2 rendered as
-// opaque palette[0] over the tilemap). Skip-if-absent: sonic.nex is not in the
-// repo. Gated by SONIC_DIAG so it never runs in CI without the local asset.
+// TestSonicGameRendersIfPresent is an end-to-end check that the game
+// actually renders: boot NextZXOS, load sonic.nex via the genuine loader,
+// settle at the title, then press Kempston fire to start the game. It
+// asserts the game frame is a real, varied level — NOT a uniform fill (an
+// all-zero Layer 2 rendering as opaque palette[0] over the tilemap would
+// produce a flat sky-blue screen instead of the level). Skip-if-absent:
+// sonic.nex is not in the repo. Gated by SONIC_DIAG so it never runs in CI
+// without the local asset.
 func TestSonicGameRendersIfPresent(t *testing.T) {
 	if os.Getenv("SONIC_DIAG") == "" {
 		t.Skip("set SONIC_DIAG=1 (requires the local sonic.nex)")
@@ -69,7 +70,7 @@ func TestSonicGameRendersIfPresent(t *testing.T) {
 	for f := 0; f < 1450; f++ { // settle to the title
 		step()
 	}
-	// Press Kempston fire to start the game (4x press/release, like ZEsarUX).
+	// Press Kempston fire to start the game (4x press/release).
 	for rep := 0; rep < 4; rep++ {
 		for f := 0; f < 20; f++ {
 			emu.ula.KempstonState = 0x10
@@ -94,6 +95,6 @@ func TestSonicGameRendersIfPresent(t *testing.T) {
 	// colours). Require a comfortably varied frame.
 	if colours < 16 {
 		t.Errorf("game frame has only %d distinct colours — level not rendering "+
-			"(regression of the Layer-2 palette-mapped transparency fix?)", colours)
+			"(check Layer-2 palette-mapped transparency)", colours)
 	}
 }

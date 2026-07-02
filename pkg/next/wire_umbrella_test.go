@@ -37,11 +37,11 @@ func (stubULA) ReadPort(_ uint16) (byte, bool) { return 0xFF, false }
 func (stubULA) WritePort(_ uint16, _ byte)     {}
 
 // TestWireUmbrellaInstallsAllHandlers verifies the Wire umbrella
-// installs every Sprint 5+6 NextReg handler. Each register is
-// poked through the dispatcher and the side-effect is observed
-// on its target subsystem.
+// installs every NextReg handler. Each register is poked through
+// the dispatcher and the side-effect is observed on its target
+// subsystem.
 //
-// Test must be updated when Sprint 7+ adds new subsystems —
+// Test must be updated whenever a new subsystem is added to Wire —
 // forgetting to invoke a new Wire* helper from the umbrella is
 // exactly the regression this test exists to catch.
 func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
@@ -158,8 +158,7 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 			mem.SpeedMultiplier(), cpu.SpeedMultiplier())
 	}
 
-	// --- Sprint 7 sprite handlers (regression for the umbrella
-	//     missing-handler class of bug) ---
+	// --- sprite handlers ---
 
 	// 0x34: sprite-select
 	disp.Select(0x34)
@@ -208,7 +207,7 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 		t.Errorf("Sprite 5 Byte4 after 0x39=0x40: %#x, want 0x40", s.Byte4)
 	}
 
-	// --- Sprint 8 engine handlers ---
+	// --- Copper / RTC / UART handlers ---
 
 	// 0x60 / 0x61 / 0x62: Copper instruction upload + control.
 	disp.Select(0x61)

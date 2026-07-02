@@ -80,7 +80,7 @@ func (s *nrSnapStore) clear(name string) bool {
 
 // cmdNRSnap captures all 256 NextRegs into a named slot.
 //
-//	nr-snap NAME       capture (auto-name "snap-N" if NAME omitted)
+//	nr-snap NAME       capture under NAME
 //	nr-snap            list active snapshots
 //	nr-snap clear      drop all
 //	nr-snap clear NAME drop one

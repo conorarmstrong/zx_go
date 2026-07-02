@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// iter 340: cover the bp-first-entry + snapshot-on-bp command
-// parsers and their pure helpers. fireBPFirstEntry is exercised with
+// Covers the bp-first-entry + snapshot-on-bp command parsers and
+// their pure helpers. fireBPFirstEntry is exercised with
 // snapshot-on-bp disabled so the heavyweight szx-write path is
 // skipped (it needs a full emulator) while the arm/clear/pause logic
 // is still covered.

@@ -141,7 +141,13 @@ func readSnapshot(payload []byte) (Block, error) {
 
 	var data []byte
 	if flags&snapFlagCompressed != 0 {
-		raw, err := zlibInflate(body)
+		// The block declares its own uncompressed length, so inflation
+		// only ever needs to produce uncompressedLen+1 bytes: exactly
+		// that on a well-formed file, or one byte past it to prove a
+		// mismatch. Bounding the read this way means a small, hostile
+		// zlib stream can't be used to inflate an arbitrarily large
+		// buffer before the length check below rejects it.
+		raw, err := zlibInflateLimit(body, uncompressedLen)
 		if err != nil {
 			return Block{}, fmt.Errorf("snapshot: zlib inflate: %w", err)
 		}
@@ -202,6 +208,13 @@ func readInput(payload []byte) (Block, error) {
 // by IN-count bytes. IN count = 0xFFFF means "repeat the last
 // non-repeated frame's IN reads" and has no following byte stream.
 func readFrames(data []byte, count int) ([]Frame, error) {
+	// Every frame needs at least 4 bytes (instruction count + IN count),
+	// so a declared count exceeding that is rejected before it is used
+	// to size the Frames slice — guards against a corrupt or hostile
+	// frame-count field driving a huge allocation for a tiny stream.
+	if count > len(data)/4 {
+		return nil, fmt.Errorf("frame count %d implausible for a %d-byte stream", count, len(data))
+	}
 	frames := make([]Frame, count)
 	pos := 0
 	for i := 0; i < count; i++ {
@@ -264,8 +277,8 @@ func nullTerminated(b []byte) string {
 }
 
 // zlibInflate decompresses a zlib (RFC 1950) stream into a fresh byte
-// slice. Used for both compressed snapshot bodies and compressed input
-// frame streams.
+// slice. Used for compressed input frame streams, which have no
+// declared uncompressed length to bound the read by.
 func zlibInflate(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -273,6 +286,25 @@ func zlibInflate(data []byte) ([]byte, error) {
 	}
 	defer func() { _ = r.Close() }()
 	out, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// zlibInflateLimit decompresses a zlib stream like zlibInflate, but
+// stops reading at limit+1 bytes. Used for compressed snapshot bodies,
+// where the block header already declares the expected uncompressed
+// length: the caller compares the returned length against that
+// declaration, so reading one byte past it is enough to prove a
+// mismatch without inflating the rest of a hostile stream.
+func zlibInflateLimit(data []byte, limit uint32) ([]byte, error) {
+	r, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+	out, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}

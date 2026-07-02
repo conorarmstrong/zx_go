@@ -11,11 +11,11 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// The Browser-entry chase (the development log+) needed to know WHERE a
-// watched $0000-$3FFF write routes (altROM buffer vs divMMC window
-// vs dropped-on-ROM) — the bare addr/val/pc line couldn't say. The
-// watch-write log line therefore carries the routing context:
-// rom_bank, the NR$8C alt-ROM shadow, and MMU0/MMU1.
+// Diagnosing a watched $0000-$3FFF write needs to know WHERE it routes
+// (altROM buffer vs divMMC window vs dropped-on-ROM) — the bare
+// addr/val/pc line can't say. The watch-write log line therefore
+// carries the routing context: rom_bank, the NR$8C alt-ROM shadow,
+// and MMU0/MMU1.
 func TestWatchWrite_LogsRoutingContext(t *testing.T) {
 	mem, err := memory.New(nextTestROMs(t), roms.ModelNext)
 	if err != nil {

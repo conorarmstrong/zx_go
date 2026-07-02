@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// ED-prefix IM mirror encodings (iter 285).
+// ED-prefix IM mirror encodings.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §A.1:
 //   IM 0: ED $46, $4E, $66, $6E

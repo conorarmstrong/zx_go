@@ -41,3 +41,17 @@ func TestFormatTrackAndBytes(t *testing.T) {
 		t.Error("raw track image has no IDAM (0xFE)")
 	}
 }
+
+// TestFormatTrackErrorsWhenSectorDataDoesntFit exercises the case where
+// idAdd succeeds (a sector's small ID field fits) but its data field is
+// too large for the remaining track space. FormatTrack must report an
+// error rather than silently committing a track with a dangling,
+// data-less sector.
+func TestFormatTrackErrorsWhenSectorDataDoesntFit(t *testing.T) {
+	d := &Disk{Sides: 1, Cylinders: 1, Tracks: [][]*Track{{nil}}}
+	oversized := make([]byte, bytesPerTrackDD)
+	err := d.FormatTrack(0, 0, []Sector{{C: 0, H: 0, R: 1, N: 6, Data: oversized}})
+	if err == nil {
+		t.Fatal("FormatTrack with oversized sector data = nil error, want error")
+	}
+}

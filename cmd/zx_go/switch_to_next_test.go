@@ -15,10 +15,10 @@ func nextROMsInstalled() bool {
 	return !errors.Is(err, install.ErrROMNotInstalled)
 }
 
-// Reproduces the GUI "Machine → ZX Spectrum Next" runtime switch
-// (user report: switching to Next shows a black border + collage of
-// flashing coloured boxes = the TBBLUE testcard, i.e. the bootrom
-// never ran / Layer-2 or tilemap left enabled with stale bank data).
+// Reproduces the GUI "Machine → ZX Spectrum Next" runtime switch. A
+// failure to boot here shows as a black border with a collage of
+// flashing coloured boxes — the TBBLUE testcard, i.e. the bootrom
+// never ran / Layer-2 or tilemap left enabled with stale bank data.
 //
 // The switch path is NOT the cold `--next` path: it goes
 // mem.SwitchModel(Next) → wireNextSubsystems → reboot(), starting
@@ -61,12 +61,11 @@ func TestSwitchToNextFromClassicReachesWelcome(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newEmulator(%s): %v", roms.GetModelName(startModel), err)
 			}
-			// Reproduce the user's config: classic-bus peripherals
-			// (DISCiPLE + Multiface) enabled in the classic session.
-			// On a runtime switch INTO the Next these must be torn
-			// down — DISCiPLE's port $1F shadows the Kempston read
-			// the TBBLUE firmware polls during boot, crashing it into
-			// the testcard (the development log). The cold-boot config
+			// Classic-bus peripherals (DISCiPLE + Multiface) enabled in
+			// the classic session. On a runtime switch INTO the Next
+			// these must be torn down — DISCiPLE's port $1F shadows the
+			// Kempston read the TBBLUE firmware polls during boot,
+			// crashing it into the testcard. The cold-boot config
 			// restore already gates them off for ModelNext; the
 			// runtime switch must do the same.
 			if err := emu.peripherals.EnableDisciple("roms"); err == nil {

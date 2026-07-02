@@ -193,7 +193,8 @@ func TestTimeTravelFindAtOrBeforeReturnsCopy(t *testing.T) {
 	}
 }
 
-// iter 386: per-snapshot bank/paging context (time-travel Phase 2a).
+// TestCaptureBankContext_Next covers the per-snapshot bank/paging
+// context (time-travel Phase 2a).
 func TestCaptureBankContext_Next(t *testing.T) {
 	rd := newRemoteFor(t, roms.ModelNext)
 	ctx := captureBankContext(rd.emu)

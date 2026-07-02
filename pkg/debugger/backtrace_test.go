@@ -143,7 +143,7 @@ func TestBacktraceHintFormat(t *testing.T) {
 }
 
 // TestFrameOrigin_String pins the human-readable mapping used by
-// telnet output. iter 295.
+// telnet output.
 func TestFrameOrigin_String(t *testing.T) {
 	cases := []struct {
 		o    FrameOrigin

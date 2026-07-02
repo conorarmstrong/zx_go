@@ -11,9 +11,8 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 342: cover the previously-untested harness lifecycle helpers —
-// Reboot, the SHIFT-modified key helpers, SaveScreenshot (savePNG),
-// and Wait.
+// Covers the harness lifecycle helpers — Reboot, the SHIFT-modified
+// key helpers, SaveScreenshot (savePNG), and Wait.
 
 func TestHarness_Reboot(t *testing.T) {
 	h, err := New(roms.Model48K)

@@ -2,7 +2,7 @@ package divmmc
 
 import "testing"
 
-// iter 359: divMMC state-transition matrix — the cross-product of
+// divMMC state-transition matrix — the cross-product of
 // automap × CONMEM × entry-point-gate × page-out trigger, driven as
 // full transition sequences. The individual axes are covered by
 // port_e3_state_test / entrypoint_gating_test; this asserts the

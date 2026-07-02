@@ -11,8 +11,8 @@ import (
 )
 
 // TestModelNextLayer2VisibleEndToEnd is the end-to-end pixel check
-// the Sprint 6/7 review fixes added. Configure NextRegs through
-// the dispatcher exactly as guest software would:
+// for the Layer 2 render path. Configure NextRegs through the
+// dispatcher exactly as guest software would:
 //   - select Layer 2's first palette
 //   - upload an entry at index 5 = pure red
 //   - configure Layer 2 bank + enable

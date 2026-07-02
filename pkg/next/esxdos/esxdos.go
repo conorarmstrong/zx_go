@@ -11,11 +11,11 @@
 // and adjusts PC and SP so execution resumes at the instruction
 // after the parameter byte.
 //
-// Sprint 3 ships enough to clear the boot path: M_GETHANDLE and
-// M_DRVAPI return safe defaults; every other API number returns
-// CF=1 with A=ESX_EINVAL so a probing caller sees a clean error
-// rather than executing the wrong code. Sprint 4 fills in the file
-// API.
+// M_GETHANDLE and M_DRVAPI return safe defaults; every other
+// unregistered API number returns CF=1 with A=ESX_EINVAL so a
+// probing caller sees a clean error rather than executing the
+// wrong code. SetMount registers the file API (F_OPEN etc.) once a
+// backing filesystem is available.
 package esxdos
 
 import (
@@ -25,8 +25,8 @@ import (
 )
 
 // esxDOS API numbers. Names and values follow the published
-// esxDOS 0.8.7 / NextZXOS API table; subsetting matches what the
-// Sprint 3 boot path needs.
+// esxDOS 0.8.7 / NextZXOS API table, subset to the boot path and
+// file-API handlers this package implements.
 const (
 	M_GETHANDLE byte = 0x80
 	M_GETDATE   byte = 0x83
@@ -66,9 +66,9 @@ const (
 // On nil-error return the dispatcher clears CF unconditionally;
 // see dispatch's flag contract for the implication.
 //
-// Sprint 3 handlers ignore the Memory argument because their APIs
-// (M_GETHANDLE, M_DRVAPI) only touch registers. Sprint 4's F_OPEN,
-// F_READ, F_WRITE etc. consume it.
+// Register-only handlers (M_GETHANDLE, M_DRVAPI) ignore the Memory
+// argument; the file API (F_OPEN, F_READ, F_WRITE etc.) consumes it
+// for path strings and read/write buffers.
 type APIHandler func(cpu *z80.CPU, mem Memory) error
 
 // Error wraps an esxDOS-numeric error so callers can return it
@@ -113,11 +113,11 @@ func (d *Dispatcher) SetTrace(fn func(api byte, cpu *z80.CPU, mem Memory)) {
 	d.trace = fn
 }
 
-// New returns a dispatcher with the Sprint 3 minimum-viable
-// handler set (M_GETHANDLE, M_DRVAPI) pre-registered. File API
-// handlers (F_OPEN, F_READ, etc.) are NOT registered until a mount
-// is supplied via SetMount — without a backing filesystem they
-// would just return ESX_ENOENT for every call anyway.
+// New returns a dispatcher with the boot-path minimum handler set
+// (M_GETHANDLE, M_DRVAPI) pre-registered. File API handlers
+// (F_OPEN, F_READ, etc.) are NOT registered until a mount is
+// supplied via SetMount — without a backing filesystem they would
+// just return ESX_ENOENT for every call anyway.
 func New() *Dispatcher {
 	d := &Dispatcher{
 		handlers: make(map[byte]APIHandler),
@@ -245,8 +245,8 @@ func (d *Dispatcher) Register(api byte, fn APIHandler) {
 
 // Memory is the interface the dispatcher needs from the memory
 // bus: read for the parameter byte and any input strings, write
-// for output buffers (Sprint 4's F_READ in particular). Declared
-// locally so the package doesn't depend on pkg/memory.
+// for output buffers (F_READ in particular). Declared locally so
+// the package doesn't depend on pkg/memory.
 type Memory interface {
 	Read(addr uint16) byte
 	Write(addr uint16, val byte)
@@ -273,19 +273,16 @@ type OverlayProbe interface {
 // not paged, $0008 holds the currently-mapped NextZXOS bank's
 // own RST $08 handler — each bank's handler is different code
 // that NextZXOS's own internal RST $08 callers depend on. The
-// exact bytes vary between NextZXOS releases (and our installed
-// enNextZX.rom: 9c37b6f5… at 2026-05-18 puts e.g. bank-0 $0008
-// = `JP $05EC` and bank-2 $0008 = `PUSH AF; JR $006F`), so we
-// don't enumerate them here — just observe that they are NOT
-// esxDOS API dispatchers.
+// exact bytes vary between NextZXOS releases, so we don't
+// enumerate them here — just observe that they are NOT esxDOS API
+// dispatchers.
 //
 // Without the overlay gate, our hook would clobber every bank's
-// native RST $08 handler. Bank-2's mount path in particular
-// issues `RST $08; DEFB nn nn nn` expecting its own dispatcher;
-// an unconditional intercept treated the first inline byte as an
-// esxDOS function code, advanced PC by 1 instead of the 3 the
-// bank-2 driver consumed, and the rest of bank-2 drifted off the
-// rails. This caused the May 2026 boot stall.
+// native RST $08 handler. Bank-2's mount path in particular issues
+// `RST $08; DEFB nn nn nn` expecting its own dispatcher; an
+// unconditional intercept would treat the first inline byte as an
+// esxDOS function code and advance PC by 1 instead of the 3 the
+// bank-2 driver consumes, derailing the rest of bank-2.
 //
 // Pass overlay=nil to install a "fire on every $0008" hook (used
 // by classic-model tests that don't have a divMMC at all).
@@ -315,10 +312,9 @@ func (d *Dispatcher) Dispatch(cpu *z80.CPU, mem Memory) {
 // Flag contract: on handler-returns-nil the dispatcher forces CF=0;
 // on handler-returns-Error the dispatcher forces CF=1 and writes A.
 // Handlers therefore CANNOT signal "success-with-CF-set" semantics
-// (some esxDOS APIs use CF=1 to mean "end of data" — those will
-// need a richer handler return type when added in a later sprint).
-// Per the current esxDOS API set required by Sprint 3 boot, the
-// simple success/error split is sufficient.
+// (some esxDOS APIs use CF=1 to mean "end of data" — those would
+// need a richer handler return type). The registered handler set
+// only needs the simple success/error split.
 func (d *Dispatcher) dispatch(cpu *z80.CPU, mem Memory) {
 	// Stack top holds the return address pushed by RST 8 — i.e.
 	// the address of the inline parameter byte.
@@ -351,7 +347,7 @@ func (d *Dispatcher) dispatch(cpu *z80.CPU, mem Memory) {
 }
 
 // handleMGetHandle returns a sentinel "dot command file handle" of
-// 0 with no error. Sprint 3 does not actually maintain dot-command
+// 0 with no error. This package does not maintain dot-command
 // state, so the value is meaningless to NextZXOS — but NextZXOS
 // only probes this on startup, so a clean success is enough to
 // proceed.
@@ -362,8 +358,8 @@ func handleMGetHandle(cpu *z80.CPU, _ Memory) error {
 
 // handleMDrvAPI is the drive-specific API entry. NextZXOS probes
 // it during startup to discover the current drive's capabilities.
-// Sprint 3 returns A=0, BC=0 (no features supported) and no error,
-// which the OS treats as "ordinary FAT drive, no extras".
+// Returns A=0, BC=0 (no features supported) and no error, which the
+// OS treats as "ordinary FAT drive, no extras".
 func handleMDrvAPI(cpu *z80.CPU, _ Memory) error {
 	cpu.A = 0
 	cpu.B = 0

@@ -2,9 +2,9 @@ package debugger
 
 import "testing"
 
-// iter 331: exhaustive coverage of disasmBase — the 256-entry base
-// opcode dispatcher. One representative encoding per case branch,
-// plus the DB fallthrough, via the public Disassemble entry point.
+// Exhaustive coverage of disasmBase — the 256-entry base opcode
+// dispatcher. One representative encoding per case branch, plus the
+// DB fallthrough, via the public Disassemble entry point.
 
 func TestDisasmBase(t *testing.T) {
 	cases := []struct {

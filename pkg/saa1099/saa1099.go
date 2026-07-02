@@ -3,9 +3,9 @@
 // amplitude, two noise generators, two envelope generators, and a master
 // enable/reset. Registers are written via an address-latch + data protocol.
 //
-// Modelled from the SAA1099 datasheet (the chip core is external to the
-// SimCoupe reference — it links libSAASound; SimCoupe only provides the SAM
-// port wiring). Synthesis is at the audio sample rate using phase accumulators.
+// Modelled directly from the SAA1099 datasheet — no open hardware-verified
+// reference core exists for this chip to cross-check against. Synthesis is at
+// the audio sample rate using phase accumulators.
 package saa1099
 
 const (

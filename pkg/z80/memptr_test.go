@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// MEMPTR / WZ register tests (iter 275). Per Sean Young §A.1, WZ
+// MEMPTR / WZ register tests. Per Sean Young §A.1, WZ
 // is an undocumented internal register the Z80 uses to compose
 // memory addresses. Its current value affects the F3/F5 flags of
 // BIT n,(HL), so software depending on those bits sees different
@@ -102,7 +102,7 @@ func TestWZ_LD_nn_A(t *testing.T) {
 	}
 }
 
-// RST WZ updates (iter 278) — WZ = vector after each RST.
+// RST WZ updates — WZ = vector after each RST.
 
 func TestWZ_RST(t *testing.T) {
 	cases := []struct {
@@ -149,7 +149,7 @@ func TestWZ_ED_IN_OUT_C(t *testing.T) {
 	}
 }
 
-// CALL/RET/JR/DJNZ WZ updates (iter 277).
+// CALL/RET/JR/DJNZ WZ updates.
 
 func TestWZ_CALL_nn(t *testing.T) {
 	cpu, mem := createTestCPU()
@@ -171,7 +171,7 @@ func TestWZ_CALL_cc_nn_SetsAlways(t *testing.T) {
 	defer cleanupTestROMs("test_roms_z80")
 	cpu.PC = 0x8000
 	cpu.SP = 0xFFF0
-	cpu.F = FLAG_Z // for CALL NZ, this means NOT taken
+	cpu.F = FLAG_Z          // for CALL NZ, this means NOT taken
 	mem.Write(0x8000, 0xC4) // CALL NZ,nn
 	mem.Write(0x8001, 0x00)
 	mem.Write(0x8002, 0x90)

@@ -40,8 +40,7 @@ func TestLoadNEXAgainstRealSample(t *testing.T) {
 		t.Fatalf("LoadNEX: %v", err)
 	}
 
-	// bbcbasic.nex sets PC = 0x5b00, SP = 0 (per the manual parse
-	// trial during Sprint 4 development).
+	// bbcbasic.nex sets PC = 0x5b00, SP = 0.
 	if h.CPU().PC != 0x5b00 {
 		t.Errorf("PC after LoadNEX = %#x, want 0x5b00", h.CPU().PC)
 	}

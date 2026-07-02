@@ -2,10 +2,9 @@ package debugger
 
 import "testing"
 
-// iter 329: cover disasmCB (CB-prefixed rotates/BIT/RES/SET) and
-// disasmDDFD (IX/IY-prefixed loads/ALU/DDCB) via the public
-// Disassemble entry point. These two helpers were entirely
-// uncovered despite being the bulk of the disassembler.
+// Covers disasmCB (CB-prefixed rotates/BIT/RES/SET) and disasmDDFD
+// (IX/IY-prefixed loads/ALU/DDCB) via the public Disassemble entry
+// point.
 
 func TestDisasmCB(t *testing.T) {
 	cases := []struct {

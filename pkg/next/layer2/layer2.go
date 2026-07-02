@@ -1,21 +1,19 @@
 // Package layer2 implements the Spectrum Next's Layer 2 framebuffer.
 //
 // Layer 2 is a linear, byte-per-pixel framebuffer that lives in
-// three consecutive 16 KB RAM banks. In the 256x192 mode (the only
-// mode Sprint 6 ships), each row is 256 bytes and the buffer is
-// 49152 bytes total — exactly three banks.
+// three consecutive 16 KB RAM banks. In the 256x192 mode, each row
+// is 256 bytes and the buffer is 49152 bytes total — exactly three
+// banks.
 //
 // NextReg 0x12 selects the bank that holds the FIRST 16K of the
 // active framebuffer; the two banks above it complete the image.
 // NextReg 0x13 does the same for the "shadow" framebuffer used by
-// dual-buffer software. Sprint 6 wires both registers via
+// dual-buffer software; both registers are wired via
 // pkg/next.WireLayer2 but the renderer only consults the active
 // frame.
 //
-// The 320x256 and 640x256 modes — which use column-major memory
-// layouts and 4bpp packing respectively — are deferred to a later
-// pass; the underlying machinery (palette, compositor) is the same
-// so they're additive, not a rewrite.
+// The 320x256 and 640x256 modes use column-major memory layouts and
+// 4bpp packing respectively.
 package layer2
 
 // Width and Height fix the dimensions of the only mode supported
@@ -74,10 +72,8 @@ func (l *Layer2) SetShadowBank(v byte) { l.shadowBank = v & 0x7F }
 // ShadowBank returns the shadow bank index.
 func (l *Layer2) ShadowBank() byte { return l.shadowBank }
 
-// SetEnabled toggles Layer 2 rendering. When disabled,
-// RenderScanline fills dst with the configured transparency
-// colour (Sprint 6 uses 0; transparency-colour plumbing is a
-// later sprint).
+// SetEnabled toggles Layer 2 rendering. When disabled, RenderScanline
+// fills dst with index 0.
 func (l *Layer2) SetEnabled(on bool) { l.enabled = on }
 
 // Enabled reports whether Layer 2 is rendering.

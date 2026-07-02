@@ -50,7 +50,7 @@ func TestReadOutOfRangeIsZero(t *testing.T) {
 }
 
 func TestWriteIsAccepted(t *testing.T) {
-	// Sprint 8 RTC drops writes silently; test confirms no panic.
+	// Clock-register writes are dropped silently; confirms no panic.
 	r := New()
 	r.Write(RegSeconds, 0xFF)
 	r.Write(0x99, 0xFF)

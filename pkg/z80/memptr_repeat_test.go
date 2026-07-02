@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR on repeating block instructions (iter 301).
+// WZ/MEMPTR on repeating block instructions.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §4.2: every
 // repeating block instruction (LDIR / LDDR / CPIR / CPDR /

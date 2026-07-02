@@ -48,12 +48,20 @@ func (s *nrDeltaSet) match(reg byte) bool {
 	return s.watched[reg]
 }
 
+// isAll reports whether the set is in "watch every register" mode.
+// Kept distinct from list() (rather than encoded as a sentinel in its
+// return value) because $FF is itself a valid, if reserved, NextReg
+// number and so cannot double as an "all" marker without colliding
+// with a set that watches only $FF.
+func (s *nrDeltaSet) isAll() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.all
+}
+
 func (s *nrDeltaSet) list() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.all {
-		return []byte{0xFF} // marker for "all"
-	}
 	out := make([]byte, 0, len(s.watched))
 	for r := range s.watched {
 		out = append(out, r)
@@ -112,13 +120,13 @@ type nrDeltaState struct {
 //	trace-nextreg-deltas all                # full NextReg transition log
 func (d *remoteDebugger) cmdTraceNRDeltas(args []string) string {
 	if len(args) == 0 {
+		if d.nrDeltas.set.isAll() {
+			return fmt.Sprintf("OK trace-nextreg-deltas all hits=%d",
+				d.nrDeltas.count.Load())
+		}
 		regs := d.nrDeltas.set.list()
 		if len(regs) == 0 {
 			return "OK trace-nextreg-deltas off"
-		}
-		if len(regs) == 1 && regs[0] == 0xFF {
-			return fmt.Sprintf("OK trace-nextreg-deltas all hits=%d",
-				d.nrDeltas.count.Load())
 		}
 		parts := make([]string, len(regs))
 		for i, r := range regs {

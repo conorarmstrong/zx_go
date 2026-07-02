@@ -53,3 +53,24 @@ func TestGenerateFrameEventTimed(t *testing.T) {
 		t.Errorf("carried frame sample 0 = %d, want %d", got2[0], lo)
 	}
 }
+
+// TestGenerateFrameCarriesEventAtBoundary verifies a write recorded exactly at
+// (or past) the end of the frame's T-state span still lands: its level must
+// carry into the next frame rather than being silently dropped because it
+// fell outside every sample's [start, end) window this frame.
+func TestGenerateFrameCarriesEventAtBoundary(t *testing.T) {
+	d := New()
+	d.SetSpecDrum(true)
+
+	const samples, tstates = 4, 8
+	d.Record(0, 0x40)
+	d.Record(tstates, 0xC0) // exactly at the frame boundary
+
+	d.GenerateFrame(samples, tstates)
+	got := d.GenerateFrame(samples, tstates)
+
+	want := (int16(0xC0) - 128) * amplitude
+	if got[0] != want {
+		t.Errorf("level written at the frame boundary was lost: next-frame sample 0 = %d, want %d", got[0], want)
+	}
+}

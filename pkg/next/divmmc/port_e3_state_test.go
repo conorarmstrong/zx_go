@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// Port $E3 state-transition tests (iter 193 — task #109).
+// Port $E3 state-transition tests.
 //
 // Verifies the documented semantics of divMMC port $E3 writes per
 // the divIDE/divMMC documentation + zxnext.vhd:
@@ -12,7 +12,7 @@ import (
 //   bit 7 = CONMEM (force paging in — non-sticky, drops when cleared)
 //   bit 6 = MAPRAM (replace divMMC ROM with RAM bank 3 at slot 0 —
 //                   sticky: once set, latched until hardware reset)
-//   bits 3:0 = RAM bank selector (8 banks: 0-7)
+//   bits 3:0 = RAM bank selector (16 banks: 0-15)
 //
 // Each test exercises a single transition or interaction.
 
@@ -122,10 +122,9 @@ func TestE3_MAPRAM_IsSticky(t *testing.T) {
 	}
 }
 
-// TestE3_MAPRAM_ClearedByClearMAPRAM verifies that the new ClearMAPRAM
-// method (iter 191, used by NR$09 bit 3) DOES force-clear MAPRAM
-// despite stickiness. Without this, MAPRAM could only be cleared by
-// hardware reset.
+// TestE3_MAPRAM_ClearedByClearMAPRAM verifies that ClearMAPRAM (used
+// by NR$09 bit 3) DOES force-clear MAPRAM despite stickiness. Without
+// this, MAPRAM could only be cleared by hardware reset.
 func TestE3_MAPRAM_ClearedByClearMAPRAM(t *testing.T) {
 	p := New(makeROM())
 	p.WritePort(0xE3, 0x40)
@@ -144,10 +143,10 @@ func TestE3_MAPRAM_ClearedByClearMAPRAM(t *testing.T) {
 }
 
 // TestE3_BankSelect_LowFourBits verifies bits 3:0 select the RAM bank.
-// 8 banks (0-7) accessible at $2000-$3FFF when overlay is paged.
+// 16 banks (0-15) are accessible at $2000-$3FFF when overlay is paged.
 func TestE3_BankSelect_LowFourBits(t *testing.T) {
 	p := New(makeROM())
-	for bank := byte(0); bank < 8; bank++ {
+	for bank := byte(0); bank < NumBanks; bank++ {
 		p.WritePort(0xE3, bank)
 		// Read-back via LastE3 bits 3:0.
 		if got := p.LastE3() & 0x0F; got != bank {
@@ -235,8 +234,8 @@ func TestE3_RAMBankOnReadAtSlot1(t *testing.T) {
 	}
 	p.WritePort(0xE3, 0x80) // page in, bank 0
 
-	// Page in with bank 0 selected.
-	for bank := byte(0); bank < 8; bank++ {
+	// Page in with each of the 16 banks selected in turn.
+	for bank := byte(0); bank < NumBanks; bank++ {
 		p.WritePort(0xE3, 0x80|bank)
 		got, ok := p.HandleRead(0x2000)
 		if !ok {

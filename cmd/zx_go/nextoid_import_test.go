@@ -11,8 +11,9 @@ import (
 
 // TestNextoidImportPathReboot reproduces the GUI File->Open flow: import the
 // .nex into the SD image's /imported/ folder (in-memory; sdImagePath is empty
-// so nothing is persisted) then drive the nexload macro — and watch for the
-// "reboot to Welcome to NextZXOS!" the user reported. Gated by NEXTOID_E2E.
+// so nothing is persisted) then drive the nexload macro, and confirms the
+// game reaches gameplay instead of rebooting back to the NextZXOS welcome
+// loop. Gated by NEXTOID_E2E.
 func TestNextoidImportPathReboot(t *testing.T) {
 	if os.Getenv("NEXTOID_E2E") == "" {
 		t.Skip("set NEXTOID_E2E=1")
@@ -101,8 +102,8 @@ func TestNextoidImportPathReboot(t *testing.T) {
 		}
 	}
 	t.Logf("FINAL PC=$%04X welcomeHits=%d visibleSprites=%d", emu.cpu.PC, welcomeHits, visible)
-	// The File->Open path must reach gameplay, NOT reboot back to the NextZXOS
-	// welcome loop (the user's "loading reboots to Welcome" report).
+	// The File->Open path must reach gameplay, NOT reboot back to the
+	// NextZXOS welcome loop.
 	if welcomeHits > 0 {
 		t.Fatalf("game rebooted to the NextZXOS welcome loop (%d hits) instead of running", welcomeHits)
 	}

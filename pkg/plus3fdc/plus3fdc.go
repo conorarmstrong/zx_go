@@ -11,8 +11,8 @@ import (
 // UPD765 instance and exposes the port-level interface that
 // PeripheralManager talks to. The +3 decodes:
 //
-//   port & 0xF002 == 0x2000  →  FDC main status register (read)
-//   port & 0xF002 == 0x3000  →  FDC data register (read/write)
+//	port & 0xF002 == 0x2000  →  FDC main status register (read)
+//	port & 0xF002 == 0x3000  →  FDC data register (read/write)
 type Plus3FDC struct {
 	fdc *UPD765
 }
@@ -70,11 +70,11 @@ func (p *Plus3FDC) EjectDisk(drive int) {
 // SaveDisk serialises the disk in the given drive back to a file on
 // host disk. Fails if no disk is currently mounted.
 func (p *Plus3FDC) SaveDisk(drive int, path string) error {
-	d := p.fdc.disk(drive)
-	if d == nil {
-		return fmt.Errorf("plus3fdc: drive %d has no disk", drive)
+	data, err := p.fdc.serializeDisk(drive)
+	if err != nil {
+		return err
 	}
-	return d.SaveDSK(path)
+	return os.WriteFile(path, data, 0o644)
 }
 
 // SetWriteProtect toggles the per-drive write-protect flag.

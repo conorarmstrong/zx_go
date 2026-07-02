@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Canonical Z80 base-opcode T-state table (iter 266).
+// Canonical Z80 base-opcode T-state table.
 //
 // One entry per encoding. Sources: Sean Young, "Undocumented Z80
 // Documented" §A.1 (timing tables) and Zilog UM008011-0816. Values
@@ -26,10 +26,10 @@ import (
 // baseTimingCase encodes one opcode-encoding test. setup is run on
 // the CPU before execution; it may set flags / registers / memory.
 type baseTimingCase struct {
-	name   string
-	bytes  []byte
-	setup  func(c *CPU, m memoryWriter)
-	want   uint64
+	name  string
+	bytes []byte
+	setup func(c *CPU, m memoryWriter)
+	want  uint64
 }
 
 type memoryWriter interface {
@@ -59,20 +59,24 @@ func runOpcodeWithSetup(t *testing.T, bytes []byte, setup func(*CPU, memoryWrite
 // setFlagsClear primes flags so all conditional jumps with negated
 // flag conditions (NZ, NC, PO, P) take the FALL-THROUGH path. With
 // F=0:
-//   NZ → Z=0 → taken (so for "not taken" need Z=1)
-//   Z  → Z=0 → not taken
-//   NC → C=0 → taken (so for "not taken" need C=1)
-//   C  → C=0 → not taken
-//   PO → PV=0 → taken (so for "not taken" need PV=1)
-//   PE → PV=0 → not taken
-//   P  → S=0 → taken (so for "not taken" need S=1)
-//   M  → S=0 → not taken
+//
+//	NZ → Z=0 → taken (so for "not taken" need Z=1)
+//	Z  → Z=0 → not taken
+//	NC → C=0 → taken (so for "not taken" need C=1)
+//	C  → C=0 → not taken
+//	PO → PV=0 → taken (so for "not taken" need PV=1)
+//	PE → PV=0 → not taken
+//	P  → S=0 → taken (so for "not taken" need S=1)
+//	M  → S=0 → not taken
+//
 // To unify "not taken" across all 8 conditions we set F = Z|C|PV|S
 // = $C5. Then:
-//   NZ → not taken; Z → taken
-//   NC → not taken; C → taken
-//   PO → not taken; PE → taken
-//   P  → not taken; M → taken
+//
+//	NZ → not taken; Z → taken
+//	NC → not taken; C → taken
+//	PO → not taken; PE → taken
+//	P  → not taken; M → taken
+//
 // Pick one configuration per cc. We use the FALSE-of-flag (not taken)
 // path for tests labelled "_nt" and the TRUE path for "_t" suffixes.
 func setFlagsNotTakenFor(cc int) func(c *CPU, _ memoryWriter) {
@@ -337,8 +341,8 @@ func aluName(idx int) string {
 	return "?"
 }
 
-// TestTimingTable_CBOpcodes — full 256-entry CB-prefix T-state table
-// (iter 267). Per Sean Young:
+// TestTimingTable_CBOpcodes — full 256-entry CB-prefix T-state table.
+// Per Sean Young:
 //
 //	$00..$3F  RLC/RRC/RL/RR/SLA/SRA/SLL/SRL r or (HL)
 //	          register: 8 t, (HL): 15 t
@@ -375,9 +379,9 @@ func TestTimingTable_CBOpcodes(t *testing.T) {
 	}
 }
 
-// TestTimingTable_DDOpcodes — DD-prefix (IX) T-state coverage
-// (iter 268). Covers every documented DD-prefixed instruction shape
-// plus the undocumented IXh/IXl 8-bit accesses.
+// TestTimingTable_DDOpcodes — DD-prefix (IX) T-state coverage.
+// Covers every documented DD-prefixed instruction shape plus the
+// undocumented IXh/IXl 8-bit accesses.
 //
 // Per Sean Young §A.1: DD adds 4 t to the base instruction's prefix
 // fetch. Instructions that fold IX into HL substitute IX+d via an
@@ -484,9 +488,8 @@ func TestTimingTable_FDOpcodes(t *testing.T) {
 	check("LD SP,IY", []byte{0xFD, 0xF9}, 10)
 }
 
-// TestTimingTable_DDCBOpcodes — DD CB d xx instruction timings
-// (iter 269). The d byte is the index displacement; xx is the
-// CB-style sub-opcode.
+// TestTimingTable_DDCBOpcodes — DD CB d xx instruction timings. The
+// d byte is the index displacement; xx is the CB-style sub-opcode.
 //
 //	BIT n,(IX+d): 20 t
 //	RES/SET/RLC/RRC/RL/RR/SLA/SRA/SLL/SRL n,(IX+d): 23 t
@@ -530,7 +533,7 @@ func TestTimingTable_FDCBOpcodes(t *testing.T) {
 	}
 }
 
-// TestTimingTable_EDOpcodes — ED-prefix coverage (iter 270).
+// TestTimingTable_EDOpcodes — ED-prefix coverage.
 //
 // Per Sean Young §A.1: ED is a real M1 + opcode, so most ED opcodes
 // cost base + 4 t. The exceptions fall in three groups:

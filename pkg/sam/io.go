@@ -1,7 +1,7 @@
 package sam
 
 // SAM I/O port map (low-byte decode; the high address byte sub-selects keyboard
-// rows / CLUT index). SimCoupe SAMIO.cpp:415-795, plan Appendix B.
+// rows / CLUT index).
 const (
 	portKempston = 0x1F // IN: Kempston joystick
 	portLEPR     = 0x80 // OUT: low external page register
@@ -134,7 +134,7 @@ func (m *Machine) WritePort(addr uint16, val byte) {
 			}
 			return
 		}
-		// MIDI, clock, SD/IDE: later sprints.
+		// MIDI, clock and SD/IDE ports are not modelled; writes are ignored.
 	}
 }
 

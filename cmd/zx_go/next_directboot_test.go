@@ -25,7 +25,7 @@ func TestApplyDirectBootNextRegs(t *testing.T) {
 			t.Errorf("NR$%02X = $%02X, want $%02X", reg, got, want)
 		}
 	}
-	// divMMC automap (NR$0A bit4) seeded on — matches the reference emulator (NR$0A=$11).
+	// divMMC automap (NR$0A bit4) seeded on at reset.
 	if d.Raw(0x0A)&0x10 == 0 {
 		t.Errorf("NR$0A=$%02X — automap bit should be set", d.Raw(0x0A))
 	}

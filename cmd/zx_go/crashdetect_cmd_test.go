@@ -9,7 +9,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// iter 333: cover the live `crash-detect` command dispatcher and its
+// Covers the live `crash-detect` command dispatcher and its
 // status / enable / disable / set sub-handlers. enable/set wire a
 // pre-fetch hook onto a real CPU, so the fixture supplies one.
 
@@ -80,6 +80,9 @@ func TestCrashDetectSet(t *testing.T) {
 	}
 	if got := d.crashDetectSet([]string{"nop-slide", "-1"}); !strings.HasPrefix(got, "ERR nop-slide") {
 		t.Errorf("bad N = %q", got)
+	}
+	if got := d.crashDetectSet([]string{"nop-slide", "8abc"}); !strings.HasPrefix(got, "ERR nop-slide") {
+		t.Errorf("trailing garbage after N = %q, want ERR nop-slide", got)
 	}
 	if got := d.crashDetectSet([]string{"sp-low", "zz"}); !strings.HasPrefix(got, "ERR sp-low") {
 		t.Errorf("bad sp-low = %q", got)

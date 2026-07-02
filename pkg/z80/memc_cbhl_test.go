@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 354: CB (HL) bit/shift/res/set memory contention. The (HL)
+// CB (HL) bit/shift/res/set memory contention. The (HL)
 // read/write of these CB-prefixed RMW ops goes through rd/wr, so a
 // contended (HL) incurs position-dependent ULA contention.
 func TestMemContention_CBHL(t *testing.T) {

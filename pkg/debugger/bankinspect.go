@@ -206,13 +206,17 @@ func (w *BankInspectWidget) setStatus(s string, isErr bool) {
 
 // parseUserHex accepts $XX, 0xXX, bare hex, or decimal-with-d
 // suffix. The default is hex because the debugger's primary
-// audience reads memory in hex.
+// audience reads memory in hex. The decimal-suffix form only
+// applies to unprefixed input — an explicit $/0x marker always
+// means hex, even when its last digit is 'd' (e.g. $1D, $FD).
 func parseUserHex(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, fmt.Errorf("empty")
 	}
-	if strings.HasSuffix(s, "d") || strings.HasSuffix(s, "D") {
+	hasHexPrefix := strings.HasPrefix(s, "$") ||
+		strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X")
+	if !hasHexPrefix && (strings.HasSuffix(s, "d") || strings.HasSuffix(s, "D")) {
 		v, err := strconv.ParseInt(s[:len(s)-1], 10, 32)
 		if err != nil {
 			return 0, err
@@ -221,6 +225,7 @@ func parseUserHex(s string) (int, error) {
 	}
 	s = strings.TrimPrefix(s, "$")
 	s = strings.TrimPrefix(s, "0x")
+	s = strings.TrimPrefix(s, "0X")
 	v, err := strconv.ParseInt(s, 16, 32)
 	if err != nil {
 		return 0, err

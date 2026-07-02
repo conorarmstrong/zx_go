@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR for DDCB / FDCB indexed instructions (iter 297).
+// WZ/MEMPTR for DDCB / FDCB indexed instructions.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.4, every DDCB /
 // FDCB instruction sets MEMPTR = IX+d (or IY+d) as part of the

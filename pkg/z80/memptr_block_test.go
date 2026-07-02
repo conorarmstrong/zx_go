@@ -6,7 +6,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 )
 
-// WZ/MEMPTR updates for block compare instructions (iter 286).
+// WZ/MEMPTR updates for block compare instructions.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.4:
 //   CPI: WZ += 1

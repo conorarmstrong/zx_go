@@ -64,7 +64,8 @@ func TestRegWatch_HonorsFromVal(t *testing.T) {
 	w.Add(RegWatch{Reg: "ix", HasFrom: true, From: 0xFFFF})
 	src := &fakeRegSrc{vals: map[string]int64{"ix": 0xFFFF}}
 	w.Check(src) // prime
-	// Spurious blip to and from different from value should not fire.
+	// The primed value (0xFFFF) equals From, so the transition away
+	// from it should fire.
 	src.vals["ix"] = 0x1234
 	if !w.Check(src) {
 		t.Fatalf("did not fire on transition away from From")

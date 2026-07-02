@@ -6,8 +6,8 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// Repro: user config disciple=true + multiface=MF3 restored on a
-// classic 48K boot (the GUI startup path) — reported black screen.
+// Guards a 48K boot with DISCiPLE + Multiface MF3 both enabled (the
+// GUI config-restore path) against a black-screen regression.
 func TestDiag48KWithDisciple(t *testing.T) {
 	emu, err := newEmulator(roms.Model48K)
 	if err != nil {

@@ -110,7 +110,7 @@ func TestParseDumpMemSpec(t *testing.T) {
 }
 
 // ========================================================================
-// Symbol map tests (iter 244).
+// Symbol map tests.
 // ========================================================================
 
 // resetSymbolTable clears the package-global symbolTable between tests
@@ -256,7 +256,7 @@ func TestAddSymbolOverwrites(t *testing.T) {
 }
 
 // ========================================================================
-// parsePCTriggers tests (iter 244).
+// parsePCTriggers tests.
 // ========================================================================
 
 func TestParsePCTriggersEmpty(t *testing.T) {
@@ -346,7 +346,7 @@ func TestPCTriggerStepFiresOnceInRange(t *testing.T) {
 }
 
 // ========================================================================
-// loopDetector tests (iter 244).
+// loopDetector tests.
 // ========================================================================
 
 func TestNewLoopDetectorZeroThresholdReturnsNil(t *testing.T) {
@@ -429,7 +429,7 @@ func TestLoopDetectorDoesNotFireBelowThreshold(t *testing.T) {
 }
 
 // ========================================================================
-// parseWatchSpec tests (iter 244).
+// parseWatchSpec tests.
 // ========================================================================
 
 func TestParseWatchSpecEmptyReturnsDefault(t *testing.T) {
@@ -483,7 +483,7 @@ func TestParseWatchSpecSkipsMalformed(t *testing.T) {
 }
 
 // ========================================================================
-// Small pure helpers (iter 245).
+// Small pure helpers.
 // ========================================================================
 
 func TestFormatHexBytes(t *testing.T) {

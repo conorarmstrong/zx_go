@@ -169,9 +169,9 @@ func TestIF1CATCommand(t *testing.T) {
 	h.TapKey(fyne.KeyReturn)
 
 	// Wait for BASIC's "0 OK" prompt — the signal that CAT
-	// completed without an error. The FUSE success.mdr cartridge
-	// contains a single file named "Success"; verify it appears
-	// in the output along with the cartridge name.
+	// completed without an error. success.mdr contains a single
+	// file named "Success"; verify it appears in the output along
+	// with the cartridge name.
 	frames, err := h.RunUntilText("0 OK", 500)
 	if err != nil {
 		_ = h.SaveScreenshot("if1_cat_failure.png")

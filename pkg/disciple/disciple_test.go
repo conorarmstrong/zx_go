@@ -103,9 +103,6 @@ func TestNewDisciple_WithRealROM(t *testing.T) {
 	}
 }
 
-// DISCiPLE accessor coverage (iter 260). IsInhibited, GetRAM,
-// DiskPath, PageIn, PostFetchHook were 0%-cov.
-
 func TestDiscipleInhibitGetterAndPageOut(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
@@ -541,10 +538,8 @@ func TestPreFetchHook_Triggers(t *testing.T) {
 	}
 }
 
-// iter 316: cover loadROM fallback paths.
-
-// TestLoadROM_WrongSizeFile — gdos.rom with non-8K size should be
-// skipped and the placeholder (or alternate-name file) used.
+// TestLoadROM_WrongSizeFile — a gdos.rom with the wrong size should be
+// skipped by loadROM's size check and the embedded ROM used instead.
 func TestLoadROM_WrongSizeFile(t *testing.T) {
 	dir := t.TempDir()
 	// 48.rom is required by memory.New.
@@ -586,10 +581,9 @@ func TestLoadROM_EmbeddedFallback(t *testing.T) {
 	}
 }
 
-// iter 343: cover WD1770 command paths not yet exercised —
-// Read-Address ($C0), Force-Interrupt ($D0), Read-Track ($E0) +
-// Write-Track ($F0) RNF stubs, Step-In ($40) / Step-Out ($60), plus
-// PostFetchHook (a documented no-op).
+// --- Remaining WD1770 command coverage: Read-Address ($C0),
+// Force-Interrupt ($D0), Read-Track ($E0) / Write-Track ($F0) RNF stubs,
+// Step-In ($40) / Step-Out ($60), plus PostFetchHook (a documented no-op).
 
 func TestDisciple_CmdReadAddress(t *testing.T) {
 	d := newTestDiscipleWithDisk(t)

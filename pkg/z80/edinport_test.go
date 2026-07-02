@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// IN r,(C) behavioural coverage (iter 248).
+// IN r,(C) behavioural coverage.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.6 and the
 // Z80 ED-prefix decoder:
@@ -270,7 +270,7 @@ func TestOUTC_B_AddressIsBusValue(t *testing.T) {
 	}
 }
 
-// OUTI block-I/O flag semantics (iter 248b).
+// OUTI block-I/O flag semantics.
 //
 // Per Sean Young §A.2 the flag calculation for OUTI uses the
 // post-increment L and the just-read value:

@@ -6,19 +6,15 @@ import (
 	"fyne.io/fyne/v2/test"
 )
 
-// Regression: opening the visual debugger panicked because
-// NewHeatmapWidget called mode.SetSelectedIndex(0) — which fires the
-// select's onChange → Refresh() → setStatus() — BEFORE status/list
-// were constructed. The GUI smoke tests launched the app but never
-// opened the debugger window (the menu-click path NewWithBreakpoints
-// → buildUI → these widgets), so they missed it.
-//
 // Each parity widget must construct with nil/empty backends without
-// panicking (the heatmap one regressed; pin all three). Constructing
-// the FULL Debugger can't be unit-tested here — buildUI → SetContent
-// forces a text-measuring layout that fyne's headless test driver
-// panics on (painter/font.go) — but these directly exercise the same
-// premature-callback construction path that crashed.
+// panicking. This matters because a Select's SetSelectedIndex fires
+// its onChange callback immediately, which can reach into fields
+// (status/list) that must already be initialized — an ordering hazard
+// that's easy to reintroduce silently, so all three widgets are pinned
+// here. Constructing the FULL Debugger can't be unit-tested here —
+// buildUI → SetContent forces a text-measuring layout that fyne's
+// headless test driver panics on (painter/font.go) — but these
+// directly exercise the same premature-callback construction path.
 func TestParityWidgetsConstruct(t *testing.T) {
 	_ = test.NewApp()
 	if w := NewHeatmapWidget(nil); w == nil || w.Root() == nil {

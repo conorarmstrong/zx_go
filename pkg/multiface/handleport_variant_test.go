@@ -2,9 +2,9 @@ package multiface
 
 import "testing"
 
-// iter 321: cover Multiface3 + Multiface128 variant-specific
-// HandlePortRead branches. MF3 inverts A7 (page-OUT on A7=1,
-// page-IN on A7=0); MF128 accepts both MF1 and MF128 port shapes.
+// Multiface3 + Multiface128 variant-specific HandlePortRead branches:
+// MF3 inverts A7 (page-OUT on A7=1, page-IN on A7=0); MF128 accepts
+// both MF1 and MF128 port shapes.
 
 func TestHandlePortRead_MF3_A7Set_PagesOut(t *testing.T) {
 	mem, _ := newTestMemory(t)
@@ -53,4 +53,3 @@ func TestHandlePortRead_MF128_AcceptsBothPortShapes(t *testing.T) {
 		}
 	}
 }
-

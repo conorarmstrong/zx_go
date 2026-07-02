@@ -8,10 +8,10 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 332: cover the remoteDebugger bank-command parsers —
-// cmdBankPeek / cmdBankPoke / cmdDisasmBank / cmdListBanks. These
-// take raw arg slices and return protocol strings, so they test
-// cleanly with a minimal emulator wrapping a real Memory.
+// Covers the remoteDebugger bank-command parsers — cmdBankPeek /
+// cmdBankPoke / cmdDisasmBank / cmdListBanks. These take raw arg
+// slices and return protocol strings, so they test cleanly with a
+// minimal emulator wrapping a real Memory.
 
 func newRemoteFor(t *testing.T, model roms.SpectrumModel) *remoteDebugger {
 	t.Helper()

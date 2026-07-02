@@ -7,7 +7,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 )
 
-// iter 335: cover the tracepoint / watch-zero / history-graph command
+// These tests cover the tracepoint / watch-zero / history-graph command
 // handlers plus the sortUint16s helper. These operate on atomic maps
 // and global symbol annotation only, so a bare remoteDebugger works.
 

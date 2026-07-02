@@ -16,9 +16,9 @@ func mmuTestROMs(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]int{
-		"48.rom":     0x4000,
-		"128-0.rom":  0x4000,
-		"128-1.rom":  0x4000,
+		"48.rom":      0x4000,
+		"128-0.rom":   0x4000,
+		"128-1.rom":   0x4000,
 		"plus2-0.rom": 0x4000,
 		"plus2-1.rom": 0x4000,
 		"plus3-0.rom": 0x4000,

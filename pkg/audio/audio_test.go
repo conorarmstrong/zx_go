@@ -220,11 +220,8 @@ func TestResetClearsQueue(t *testing.T) {
 }
 
 // ========================================================================
-// WAV recording tests (iter 242).
-//
-// StartRecording / StopRecording / IsRecording / writeWavHeader were
-// previously uncovered. Cover header shape, lifecycle state, and the
-// finalisation step that writes the sample count back to the header.
+// WAV recording tests: header shape, lifecycle state, and the finalisation
+// step that writes the sample count back to the header.
 // ========================================================================
 
 // decodeWavHeader pulls the fields we care about out of the 44-byte
@@ -527,10 +524,9 @@ func TestWriteRecordingNoOpWhenStopped(t *testing.T) {
 
 // TestPrefillSilenceProvidesCushion verifies that a fresh AudioSystem
 // already has queuePrefill silent samples queued up, so the first few
-// consumer pulls don't drain the queue and trigger DC underflow.
-// This is the regression test for the "stuttery BEEP" bug — without
-// the pre-fill, every pull was 882 real samples + 142 DC samples,
-// audible as 14% silence ratio.
+// consumer pulls don't drain the queue and trigger DC underflow (without the
+// cushion, the producer's 50Hz/882-sample pushes lag the consumer's ~43Hz
+// pulls, so every pull is a partial buffer padded with underrun silence).
 func TestPrefillSilenceProvidesCushion(t *testing.T) {
 	as := fakeSystem()
 	as.prefillSilence()
@@ -549,9 +545,8 @@ func TestPrefillSilenceProvidesCushion(t *testing.T) {
 	}
 }
 
-// TestStartRecording_OpenError (iter 312) — StartRecording must
-// propagate os.Create failure as a wrapped "create wav file"
-// error.
+// TestStartRecording_OpenError verifies StartRecording propagates an
+// os.Create failure as a wrapped "create wav file" error.
 func TestStartRecording_OpenError(t *testing.T) {
 	as := fakeSystem()
 	// Path points at a directory that doesn't exist → os.Create
@@ -562,8 +557,8 @@ func TestStartRecording_OpenError(t *testing.T) {
 	}
 }
 
-// iter 339: cover writeRecording's maxWavSamples truncation + the
-// remaining==0 early-return, plus the recScratch grow path.
+// TestWriteRecording_MaxSamplesCap covers writeRecording's maxWavSamples
+// truncation, the remaining==0 early-return, and the recScratch grow path.
 func TestWriteRecording_MaxSamplesCap(t *testing.T) {
 	as := fakeSystem()
 	dir := t.TempDir()

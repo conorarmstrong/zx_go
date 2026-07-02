@@ -1,26 +1,36 @@
 package plus3fdc
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
-// UPD765 is a partial NEC µPD765A floppy disk controller emulation,
-// sufficient for the read paths used by Spectrum +3 / +2A +3DOS to load
-// games and CP/M disks. The implementation is intentionally simplified:
+// UPD765 is a NEC µPD765A floppy disk controller emulation covering the
+// command set Spectrum +3 / +2A +3DOS and CP/M software use to read and
+// write DSK-family disk images: READ/WRITE DATA, READ/WRITE DELETED
+// DATA, READ ID, READ DIAGNOSTIC (READ TRACK), WRITE ID (FORMAT TRACK),
+// SCAN EQUAL/LOW-OR-EQUAL/HIGH-OR-EQUAL, SEEK, RECALIBRATE, SENSE
+// INTERRUPT STATUS, SENSE DRIVE STATUS, and SPECIFY. Simplifications
+// against the real chip:
 //
-//   - No write commands (WRITE DATA, WRITE ID/format) — the disk is
-//     read-only.
 //   - No spin-cycle accurate timing — every status read returns "ready",
 //     so the FDC never enters a wait state. +3DOS tolerates this.
-//   - No weak-sector / copy-protection support.
+//   - SEEK/RECALIBRATE move the head immediately rather than over time.
+//   - SCAN commands compare a single sector; real hardware continues
+//     across consecutive sectors up to EOT the way READ/WRITE DATA do.
 //   - Drive 2/3 alias drive 0/1 (the +3 only wires the US0 line).
+//
+// Weak / copy-protected sectors are modelled with a per-byte "weak" bit
+// (each read of a weak byte returns fresh random data) plus an opt-in
+// Speedlock retry heuristic — see SetSpeedlockEnabled.
 //
 // The state machine has three phases:
 //
 //   CMD: collecting the command byte and its parameter bytes
-//   EXE: per-byte data transfer (READ DATA only)
+//   EXE: per-byte data transfer (reads, writes, and scan comparisons)
 //   RES: delivering the per-command result bytes
 //
-// External interaction is through three port functions, mirroring the
-// FUSE upd_fdc_read_status / read_data / write_data API:
+// External interaction is through three port functions:
 //
 //   ReadStatus()      → main status register byte
 //   ReadData()        → next data byte from EXE or RES
@@ -130,7 +140,10 @@ type commandSpec struct {
 }
 
 // commandTable is scanned linearly on opcode receipt — first match wins.
-// Mask/value/length numbers come from FUSE upd_fdc.c:77-93.
+// Mask/value/paramBytes numbers follow the µPD765A command encoding
+// table: each command occupies bits 0..4 (or fewer) of the opcode byte,
+// with the remaining high bits carrying MT/MF/SK flags the mask treats
+// as don't-care.
 var commandTable = []commandSpec{
 	{cmdReadData, 0x1F, 0x06, 8},
 	{cmdReadDelData, 0x1F, 0x0C, 8},
@@ -165,13 +178,14 @@ type UPD765 struct {
 	// 4 logical drive selects collapse onto these two — see
 	// physicalDrive(). disks[0] = drive A, disks[1] = drive B.
 	disks [2]*Disk
-	// Per-drive write-protect flag (Phase 4 will honour this).
+	// Per-drive write-protect flag, checked by WRITE DATA / WRITE ID
+	// before entering execution phase.
 	wp [2]bool
 
-	phase    fdcPhase
-	cmd      *commandSpec
-	cmdBuf   [9]byte // command opcode + up to 8 parameter bytes
-	cmdLen   int
+	phase  fdcPhase
+	cmd    *commandSpec
+	cmdBuf [9]byte // command opcode + up to 8 parameter bytes
+	cmdLen int
 
 	resultBuf [7]byte
 	resultLen int
@@ -205,12 +219,12 @@ type UPD765 struct {
 	// Speedlock retry-detection state. lastSectorID is a packed
 	// encoding of the last (C,H,R) that READ DATA was issued for;
 	// speedlockCounter increments each time the same sector is read
-	// in succession, resetting on any other sector read. Phase 10
+	// in succession, resetting on any other sector read. execRead
 	// uses this counter to return "random" data on the retried reads
 	// that Speedlock's copy-protection relies on. speedlockEnabled
 	// gates the whole mechanism — disabled by default, the user
 	// opts in via SetSpeedlockEnabled (from the UI).
-	lastSectorID      uint32
+	lastSectorID     uint32
 	speedlockCounter int
 	speedlockEnabled bool
 
@@ -257,9 +271,9 @@ func NewUPD765() *UPD765 {
 }
 
 // physicalDrive returns the physical drive index (0 = A, 1 = B) for a
-// µPD765 unit-select value. The +3 only wires US0, so US bits 0 and 1
-// are the drive selector and bit 1 (US1) is ignored — drives 0/2 alias
-// to A and 1/3 alias to B. Matches FUSE specplus3.c:150-153.
+// µPD765 unit-select value. The +3 only wires US0, so of the two US
+// bits only bit 0 is the drive selector and bit 1 (US1) is ignored —
+// drives 0/2 alias to A and 1/3 alias to B.
 func physicalDrive(us byte) int {
 	return int(us & 1)
 }
@@ -304,15 +318,21 @@ func (f *UPD765) SetSpeedlockEnabled(enabled bool) {
 	}
 }
 
-// disk returns the Disk currently mounted in the given drive, or nil.
-// Used by Plus3FDC.SaveDisk to serialise the disk back to a file.
-func (f *UPD765) disk(drive int) *Disk {
-	if drive < 0 || drive >= len(f.disks) {
-		return nil
-	}
+// serializeDisk returns the EDSK bytes for the disk mounted in the given
+// drive. The FDC lock is held for the whole walk of the track data so
+// this can't race a concurrent WriteData / FormatTrack call mutating the
+// same tracks from the CPU goroutine.
+func (f *UPD765) serializeDisk(drive int) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.disks[drive]
+	var d *Disk
+	if drive >= 0 && drive < len(f.disks) {
+		d = f.disks[drive]
+	}
+	if d == nil {
+		return nil, fmt.Errorf("plus3fdc: drive %d has no disk", drive)
+	}
+	return d.SerializeDSK()
 }
 
 // Reset returns the FDC to idle, dropping any in-flight command. The disk
@@ -643,8 +663,7 @@ func usBits(drive byte) byte {
 // execSenseInt returns the latched seek-complete status for the
 // lowest-indexed drive that has one pending. With no seek pending the
 // command behaves like INVALID and returns a single-byte ST0=0x80
-// result — matches FUSE and the real 82078 datasheet (see
-// upd_fdc.c:1173).
+// result, per the 82078 datasheet's SENSE INTERRUPT STATUS description.
 func (f *UPD765) execSenseInt() {
 	for d := 0; d < 4; d++ {
 		if f.seekDone[d] {
@@ -739,10 +758,10 @@ func (f *UPD765) execReadData() {
 // trackSpeedlockRetry updates the Speedlock repetition counter, but
 // ONLY for the very specific READ DATA pattern Speedlock actually uses
 // for its copy-protection check: a single-sector read of sector 2 on
-// track 0, head 0 (or any even head). This mirrors FUSE's gate at
-// upd_fdc.c:1312-1323 exactly — broadening the detection would cause
-// legitimate BDOS retries of arbitrary sectors to get progressively
-// corrupted and turn recoverable errors into hard failures.
+// track 0, head 0 (or any even head). Broadening the detection would
+// cause legitimate BDOS retries of arbitrary sectors to get
+// progressively corrupted and turn recoverable errors into hard
+// failures.
 func (f *UPD765) trackSpeedlockRetry() {
 	if !f.speedlockEnabled {
 		return
@@ -895,11 +914,9 @@ func (f *UPD765) readDataError(st1 byte) {
 // is advanced. When the data field is exhausted the FDC pulls the
 // trailing CRC bytes from the track, compares them to the running CRC,
 // and transitions to the result phase — flagging ST2.DD if they don't
-// match.
-//
-// Multi-sector transfers across EOT are NOT modelled — +3DOS re-issues
-// READ DATA per sector, which is enough for the games and CP/M images
-// we care about.
+// match. If R is still below EOT and no error occurred, R is advanced
+// and the next sector is queued within the same execution phase
+// (multi-sector transfer); see the tail of this function.
 func (f *UPD765) execRead() byte {
 	if f.ioTrack == nil {
 		return 0xFF
@@ -915,8 +932,7 @@ func (f *UPD765) execRead() byte {
 		f.ioPos++
 		if f.ioPos >= f.ioEnd {
 			st0 := f.makeST0(icNormal)
-			// Echo the first IDAM found on the track as the result
-			// CHRN (matches FUSE behaviour).
+			// Echo the first IDAM found on the track as the result CHRN.
 			var rc, rh, rr, rn byte
 			if c, h, r, n, _, ok := f.ioTrack.idAt(0); ok {
 				rc, rh, rr, rn = c, h, r, n
@@ -929,17 +945,17 @@ func (f *UPD765) execRead() byte {
 
 	b := f.ioTrack.readByte(f.ioPos)
 	f.ioPos++
-	// Accumulate CRC with the original (unmangled) byte first — this
-	// mirrors FUSE's fdd_read_data; crc_add() pattern at upd_fdc.c:921.
+	// Accumulate CRC with the original (unmangled) byte first, before
+	// any Speedlock corruption below — the CRC must reflect what was
+	// actually read off the track.
 	f.ioCRC = crcUpdate(f.ioCRC, b)
 
-	// Speedlock hack (mirrors FUSE upd_fdc.c:920-932): on repeated
-	// reads of the same sector, progressively corrupt the returned
-	// bytes so the program believes it's hitting a weak copy-protected
-	// sector. FUSE increments its counter BEFORE the byte read, so
-	// the first byte has data_offset == 1 (not 0). We match that
-	// exactly so the mangling pattern lines up with real Speedlock
-	// protection checks.
+	// Speedlock heuristic: on repeated reads of the same sector,
+	// progressively corrupt the returned bytes so the program believes
+	// it's hitting a weak copy-protected sector. The offset counter is
+	// incremented before this byte is classified, so the first byte of
+	// the sector has offset == 1, not 0 — that shift is what makes the
+	// mangling land on the byte positions Speedlock's check expects.
 	f.ioDataOffset++
 	offset := f.ioDataOffset
 	if f.speedlockEnabled && f.speedlockCounter > 0 {
@@ -947,10 +963,10 @@ func (f *UPD765) execRead() byte {
 			f.speedlockCounter = 2
 		} else if (f.speedlockCounter > 1 || offset < 64) && offset%29 == 0 {
 			b ^= byte(offset)
-			// FUSE quirk: accumulate the CRC a second time with the
-			// mangled byte so the running CRC ends up in the same
-			// inconsistent state real Speedlock protections observe
-			// on a copy-protected weak sector. See upd_fdc.c:930.
+			// Accumulate the CRC a second time with the mangled byte,
+			// so the running CRC ends up in the same inconsistent state
+			// Speedlock's check expects to see on a genuinely weak
+			// sector.
 			f.ioCRC = crcUpdate(f.ioCRC, b)
 		}
 	}

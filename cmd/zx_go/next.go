@@ -552,7 +552,7 @@ func wireNextSubsystems(e *emulator) error {
 		// ZX_GO_CAPTURE_SPIN: dump the last 64 M1 PCs leading into the FIRST
 		// $0000 spin after the 128K-BASIC launch (insn-gated past boot). Shows
 		// how the NextZXOS launcher derails into bank-2's spin-stub at $0000
-		// instead of completing the editor handoff (NR$8C reads-mode) (D38).
+		// instead of completing the editor handoff (NR$8C reads-mode).
 		if os.Getenv("ZX_GO_CAPTURE_SPIN") != "" {
 			ring := make([]uint16, 64)
 			var ri int
@@ -755,7 +755,7 @@ func wireNextSubsystems(e *emulator) error {
 		// ($3CFC = NEXTREG $8E,$03 -> $3D00 esxDOS $3DXX trap) request regs
 		// the first few times it fires AFTER the 128K-BASIC launch (the insn
 		// gate skips the identical boot-time hits). Reveals the esxDOS
-		// function code + the launcher's poll target (the development log).
+		// function code + the launcher's poll target.
 		if os.Getenv("ZX_GO_CAPTURE_LAUNCH") != "" {
 			var nCap int
 			cpu.AddPreFetchHook("capture-launch-3cfc", func(pc uint16) {
@@ -834,7 +834,7 @@ func wireNextSubsystems(e *emulator) error {
 	// ZX_GO_RTC_FIXED=<RFC3339> freezes the guest clock — makes the
 	// NextZXOS menu's per-second redraw task quiescent so key events
 	// deterministically land in the deep-idle context (the engine
-	// launch gate reads the SP page; the development log).
+	// launch gate reads the SP page).
 	if fixed, ok := parseRTCFixed(os.Getenv("ZX_GO_RTC_FIXED")); ok {
 		rtcEngine.SetNow(func() time.Time { return fixed })
 		slog.Info("rtc frozen", "at", fixed.Format(time.RFC3339))
@@ -861,7 +861,7 @@ func wireNextSubsystems(e *emulator) error {
 	mem.SetDivMMCRAM(pager)
 	// While the Multiface is the active NMI master, the divMMC must not steal
 	// the $0066 NMI vector (the MF handler owns it) — but the divMMC still
-	// automaps for the handler's esxDOS RST-$08 calls. See the development log.
+	// automaps for the handler's esxDOS RST-$08 calls.
 	pager.SetMultifaceActiveFn(mem.MultifaceActive)
 
 	// Next Multiface ROM (enNextMF.rom). The 128K-BASIC launch fires the
@@ -869,7 +869,7 @@ func wireNextSubsystems(e *emulator) error {
 	// $0000-$1FFF so the $0066 NMI handler runs (loads the editor snapshot).
 	// wire.go's NR$02 handler calls mem.SetMultifaceActive(true) on the MF
 	// NMI; this just installs the ROM image. Optional — if absent, the MF
-	// overlay stays disabled and behaviour is unchanged (the development log).
+	// overlay stays disabled and behaviour is unchanged.
 	if mfROM, mferr := install.LoadROM(install.MultifaceROM); mferr == nil {
 		mem.SetMultifaceROM(mfROM)
 		slog.Info("Next Multiface ROM loaded", "size", len(mfROM))
@@ -884,16 +884,13 @@ func wireNextSubsystems(e *emulator) error {
 		})
 	}
 
-	// divMMC RAM starts UNINITIALISED ($FF — see Pager.New, the development log).
-	// An earlier iteration seeded bank 0 with the esxDOS image here ("the
-	// FPGA loads the image into both ROM and RAM bank 0") — REMOVED: the
-	// the reference emulator starts with virgin $FF divMMC RAM and boots; the
-	// seed corrupted the per-partition state byte at bank-0 $0301 (image
-	// byte $08 where the OS expects uninitialised $FF → wrong mount branch
-	// → $3BF5 deliberate-reset loop). NextZXOS populates divMMC RAM itself
-	// at mount time via its $0703/$0769 cross-bank primitives. The seed's
-	// original rationale (bank-0 zeros → NOP slide) was an artifact of the
-	// then-zero power-on fill, which D27 also fixed.
+	// divMMC RAM starts UNINITIALISED ($FF — see Pager.New). Do NOT
+	// pre-seed bank 0 with the esxDOS image here: real hardware boots
+	// with virgin $FF divMMC RAM, and a seed corrupts the per-partition
+	// state byte at bank-0 $0301 (the OS expects uninitialised $FF
+	// there; a written $08 forces the wrong mount branch and a $3BF5
+	// deliberate-reset loop). NextZXOS populates divMMC RAM itself at
+	// mount time via its $0703/$0769 cross-bank primitives.
 
 	// Optional: pre-populate divMMC RAM bank 1 from a user-supplied
 	// snapshot. On real Spectrum Next, TBBLUE.FW installs an
@@ -934,46 +931,46 @@ func wireNextSubsystems(e *emulator) error {
 		slog.Warn("divMMC RAM bank 1 snapshot load failed", "err", err)
 	}
 
-	// Optional: pre-populate 8K main-RAM bank \$DF (= 16K bank 111
-	// offset \$2000-\$3FFF) from a reference emulator-extracted snapshot. Real
-	// Spectrum Next has TBBLUE.FW pre-load handler code there. Pure
-	// cold boot leaves bank \$DF empty, which is hardware-faithful
-	// (real hardware also has uninit RAM until TBBLUE.FW writes to
-	// it). The pre-fill is a DEBUG SHORTCUT — same opt-in gate as
-	// the divMMC bank 1 snapshot above.
+	// Optional: pre-populate 8K main-RAM bank $DF (= 16K bank 111
+	// offset $2000-$3FFF) from a captured snapshot. Real Spectrum Next
+	// has TBBLUE.FW pre-load handler code there. Pure cold boot leaves
+	// bank $DF empty, which is hardware-faithful (real hardware also
+	// has uninit RAM until TBBLUE.FW writes to it). The pre-fill is a
+	// DEBUG SHORTCUT — same opt-in gate as the divMMC bank 1 snapshot
+	// above.
 	if wantWarmBoot {
 		if snap, err := install.LoadROM(install.MainRAMBankDF); err == nil {
 			const want = 8192
-			// Load into BOTH bank 111 high half (= 8K bank \$DF, where
+			// Load into BOTH bank 111 high half (= 8K bank $DF, where
 			// our boot's slot 7 maps after the memory sweep terminator)
-			// AND bank 0 high half (= 8K bank \$01, the working-bank
-			// mapping the reference emulator has at every dispatch moment after the
-			// sweep). Real boot eventually transitions slot 7 to bank \$01
-			// and continues reading code there, so both need the same
-			// post-init content.
+			// AND bank 0 high half (= 8K bank $01, the working-bank
+			// mapping seen at every dispatch moment after the sweep on
+			// real hardware). Real boot eventually transitions slot 7
+			// to bank $01 and continues reading code there, so both
+			// need the same post-init content.
 			bank111 := mem.GetPage(111)
 			bank0 := mem.GetPage(0)
 			if len(snap) >= want && len(bank111) >= 0x4000 && len(bank0) >= 0x4000 {
 				copy(bank111[0x2000:0x4000], snap[:want])
 				copy(bank0[0x2000:0x4000], snap[:want])
-				slog.Info("main RAM bank \\$DF snapshot loaded",
+				slog.Info("main RAM bank $DF snapshot loaded",
 					"bytes", want,
 					"sample_at_$ED82",
 					fmt.Sprintf("$%02X $%02X $%02X $%02X",
 						snap[0x0D82], snap[0x0D83], snap[0x0D84], snap[0x0D85]),
-					"banks", "111+0 (= 8K banks \\$DF and \\$01)")
+					"banks", "111+0 (= 8K banks $DF and $01)")
 			} else {
-				slog.Warn("main RAM bank \\$DF snapshot too small or no banks",
+				slog.Warn("main RAM bank $DF snapshot too small or no banks",
 					"snap_size", len(snap), "bank111", len(bank111),
 					"bank0", len(bank0))
 			}
 		} else if !errors.Is(err, install.ErrROMNotInstalled) {
-			slog.Warn("main RAM bank \\$DF snapshot load failed", "err", err)
+			slog.Warn("main RAM bank $DF snapshot load failed", "err", err)
 		}
 
-		// Companion: pre-populate 8K main-RAM bank \$DE (= 16K bank 111
-		// low half) from the reference emulator's bank \$00 snapshot. Same opt-in gate
-		// as bank \$DF above.
+		// Companion: pre-populate 8K main-RAM bank $DE (= 16K bank 111
+		// low half) from the captured bank $00 snapshot. Same opt-in
+		// gate as bank $DF above.
 		if snap, err := install.LoadROM(install.MainRAMBankDE); err == nil {
 			const want = 8192
 			bank111 := mem.GetPage(111)
@@ -981,14 +978,14 @@ func wireNextSubsystems(e *emulator) error {
 			if len(snap) >= want && len(bank111) >= 0x4000 && len(bank0) >= 0x4000 {
 				copy(bank111[0x0000:0x2000], snap[:want])
 				copy(bank0[0x0000:0x2000], snap[:want])
-				slog.Info("main RAM bank \\$DE snapshot loaded",
+				slog.Info("main RAM bank $DE snapshot loaded",
 					"bytes", want,
-					"banks", "111+0 (= 8K banks \\$DE and \\$00)")
+					"banks", "111+0 (= 8K banks $DE and $00)")
 			}
 		} else if !errors.Is(err, install.ErrROMNotInstalled) {
-			slog.Warn("main RAM bank \\$DE snapshot load failed", "err", err)
+			slog.Warn("main RAM bank $DE snapshot load failed", "err", err)
 		}
-	} // end of `if wantWarmBoot` wrapping the bank \$DF and \$DE loaders
+	} // end of `if wantWarmBoot` wrapping the bank $DF and $DE loaders
 
 	// FPGA-firmware emulation: install a FRAMES-bumper that fires
 	// whenever the CPU M1-fetches at divMMC-RAM-bank-1 $2009 with
@@ -1029,10 +1026,9 @@ func wireNextSubsystems(e *emulator) error {
 	// load-bearing for the menu-era $0038 IM1 automap: NextZXOS runs the
 	// menu with ROM 0 paged but an Alt-ROM read-replacement configuration
 	// staged across its boot soft-reset (NR$8C nibble promote), which
-	// opens the gate via alt_128_n (the development log). The earlier
-	// rom_bank==3-only predicate denied every menu frame INT (899×
-	// DENY(rst) pc=$0038 rom_bank=0) → dead OS ISR → Browser-ENTER
-	// restart loop.
+	// opens the gate via alt_128_n. A rom_bank==3-only predicate would
+	// deny every menu frame INT (rom_bank stays 0 there), starving the
+	// OS ISR and stalling the Browser on ENTER.
 	pager.SetRom3Query(mem.DivMMCRom3Gate)
 	if os.Getenv("ZX_GO_DIVMMC_WRITE_TRACE") != "" {
 		var n int
@@ -1092,21 +1088,20 @@ func wireNextSubsystems(e *emulator) error {
 	// Automap starts disabled. enNextZX bank-0 enables it itself
 	// at $023E (LD A,$0A; CALL $0D6B; OR $10; OUT(C),A — i.e.
 	// select NextReg $0A then set bit 4) during its early boot,
-	// once it has run past the reset entry at $0000. The earlier
-	// path-A hack of forcing automap=true before CPU start meant
-	// the very first $0000 M1 fetch triggered the divMMC overlay
-	// (since $0000 ∈ TriggerPCs), which hijacked enNextZX's reset
-	// entry and broke the boot in a different way.
-	// Load the FPGA bootrom BEFORE next.Wire. WireReset seeds the NR$02
-	// reset_type history from mem.FPGABootROMActive(): the real FPGA-bootrom
-	// boot powers on at the VHDL "100" ($04) seed, but SetFPGABootROM used to
-	// run ~160 lines AFTER next.Wire, so the seed wrongly fell to the
-	// direct-boot "010" ($02). The single NextZXOS staging soft reset then
-	// shifted $02→$01 instead of $04→$02, so the OS read NR$02=$01
-	// (post-staging) where the FPGA reads $02 (first staging) — it SKIPPED the
-	// 128K-BASIC staging pass and derailed to a black screen (a bad RET to
-	// $FF00 → NOP-slide → $0000 hang). the reference emulator NR$02-read lockstep pinned it;
-	// see the development log. Loading here makes FPGABootROMActive() true at seed.
+	// once it has run past the reset entry at $0000. Forcing
+	// automap=true before CPU start would trigger the divMMC overlay
+	// on the very first $0000 M1 fetch (since $0000 ∈ TriggerPCs),
+	// hijacking enNextZX's reset entry.
+	//
+	// Load the FPGA bootrom BEFORE next.Wire: WireReset seeds the
+	// NR$02 reset_type history from mem.FPGABootROMActive(), and a
+	// real FPGA-bootrom boot powers on at the VHDL "100" ($04) seed.
+	// Loading the bootrom after next.Wire would leave that seed at
+	// the direct-boot "010" ($02) instead, so the single NextZXOS
+	// staging soft reset shifts to the wrong value and the boot
+	// skips the 128K-BASIC staging pass — a black screen (a bad RET
+	// to $FF00 → NOP-slide → $0000 hang). Loading here makes
+	// FPGABootROMActive() true at seed.
 	fpgaBootArmed := os.Getenv("ZX_GO_NO_FPGA_BOOTROM") == ""
 	if fpgaBootArmed {
 		fpgaROM, err := install.LoadROM(install.FPGABootROM)
@@ -1147,20 +1142,17 @@ func wireNextSubsystems(e *emulator) error {
 	// Next hardware always boots through the FPGA loader at
 	// $0000-$3FFF: it runs the initial Z80 reset entry, reads
 	// TBBLUE.FW from SD via SPI, copies it to RAM at $6000, then
-	// writes NextReg $03 to select the machine personality.
-	//
-	// As of 2026-05-19 (commits acc067a + 0365613) this path now
+	// writes NextReg $03 to select the machine personality. This path
 	// reaches the NextZXOS Browser splash with the tilemap layer
-	// rendering — significantly further than the earlier "direct
-	// enNextZX" workaround path, which fell back to 48K BASIC
-	// because it bypassed the boot.bin-loaded divMMC modules and
-	// the config-mode RAM-bank dispatch.
+	// rendering — unlike the "direct enNextZX" fallback path, which
+	// drops to 48K BASIC because it bypasses the boot.bin-loaded
+	// divMMC modules and the config-mode RAM-bank dispatch.
 	//
-	// $ZX_GO_SKIP_FPGA_BOOTROM=1 opts out (booting through the
-	// classic ROM banks directly), kept for regression testing /
-	// users who specifically want the old behaviour. With no opt-
-	// out and no installed tbblue_loader.rom we log a warning and
-	// boot the legacy direct path.
+	// $ZX_GO_NO_FPGA_BOOTROM=1 opts out (booting through the classic
+	// ROM banks directly), kept for regression testing / users who
+	// specifically want the old behaviour. With no opt-out and no
+	// installed tbblue_loader.rom we log a warning and boot the
+	// legacy direct path.
 	if spec := os.Getenv("ZX_GO_CONFIG_WRITE_TRACE"); spec != "" {
 		// spec format: "page:addr_lo-addr_hi" hex (e.g. "03:0000-0017"
 		// to log every config-mode write to ROM 3 at $0000-$0017).
@@ -1202,9 +1194,9 @@ func wireNextSubsystems(e *emulator) error {
 	if os.Getenv("ZX_GO_PAGING_TRACE") != "" {
 		// Log every classic-paging port write (7FFD/1FFD) with pc +
 		// insn count — including writes DROPPED by the bit-5 lock —
-		// plus the +3 special-paging (all-RAM) flag around it. The
-		// launch-stall hunt needs to know whether the guest's $1FFD
-		// special-mode writes are made and honoured (the development log).
+		// plus the +3 special-paging (all-RAM) flag around it. Shows
+		// whether the guest's $1FFD special-mode writes are made and
+		// honoured.
 		mem.SetPagingTracer(func(source string, val byte, applied, specialBefore, specialAfter bool) {
 			slog.Info("paging-write", "port", source,
 				"val", fmt.Sprintf("$%02X", val),
@@ -1219,8 +1211,8 @@ func wireNextSubsystems(e *emulator) error {
 		// to log every Memory.Write that lands in 16K SRAM bank 5 at
 		// addresses $2000-$2FFF), or "*:addr_lo-addr_hi" to match the
 		// offset in EVERY bank — finds which physical bank backs a
-		// logical sysvar when the OS remaps the slot (the development log:
-		// the ($5B6C) continuation lives in a non-default bank).
+		// logical sysvar when the OS remaps the slot (e.g. a
+		// continuation that lives in a non-default bank).
 		if watchBank, watchLo, watchHi, ok := parseRAMWriteTraceSpec(spec); ok {
 			mem.SetRAMWriteHook(func(bank int, addr uint16, val byte) {
 				if (watchBank < 0 || bank == watchBank) && addr >= watchLo && addr <= watchHi {
@@ -1236,16 +1228,12 @@ func wireNextSubsystems(e *emulator) error {
 	if spec := os.Getenv("ZX_GO_DIVMMC_WRITE_TRACE"); spec != "" {
 		// Same spec syntax as ZX_GO_RAM_WRITE_TRACE but for divMMC
 		// RAM: "B:LLLL-HHHH" (8K bank + WINDOW addresses $2000-$3FFF)
-		// or "*:LLLL-HHHH". Finds who populates/corrupts a divMMC
-		// cell (the development log: the launch's saved context in bank 0
-		// gets overwritten between save and resume).
+		// or "*:LLLL-HHHH". Finds who populates/corrupts a divMMC cell.
 		//
-		// Wired on the in-scope `pager` directly. An earlier version
-		// fetched it back via u.NextDivMMC(), which is not wired
-		// until later in this function — the type assertion failed
-		// silently and the logger was NEVER installed, making every
-		// ZX_GO_DIVMMC_WRITE_TRACE run report zero writes (a false
-		// negative that derailed the development log's census).
+		// Must wire on the in-scope `pager` directly, not via
+		// u.NextDivMMC() — that accessor isn't wired until later in
+		// this function, so a type assertion against it here would
+		// fail silently and the logger would never be installed.
 		if watchBank, watchLo, watchHi, ok := parseRAMWriteTraceSpec(spec); ok {
 			pager.SetWriteLogger(func(bank int, addr uint16, val byte) {
 				if (watchBank < 0 || bank == watchBank) && addr >= watchLo && addr <= watchHi {
@@ -1264,30 +1252,21 @@ func wireNextSubsystems(e *emulator) error {
 	// final state is the NextZXOS Browser. Per the project's
 	// "no hacks" rule, this must be the default.
 	//
-	// Status (2026-05-26, iter 131): cold-boot is byte-for-byte
-	// lockstep-aligned with the reference emulator through the
-	// 51K-instruction FPGA bootrom phase. It stalls visibly at
-	// PC=\$1D47 ("Error reading file: c:/machines/next/enAltZX.rom")
-	// because the bank-2 FAT16 walker fails to resolve "machines"
-	// to the right cluster — diagnosed in ROADMAP.md iter 127-130.
-	// That's the user-visible v1.0 limitation right now.
-	//
 	// Opt-OUT via $ZX_GO_NO_FPGA_BOOTROM=1 — falls back to the
 	// "fast-boot" (skip FPGA bootrom + skip NextZXOS), which
 	// drops directly to the 48K BASIC ROM with every Next
 	// extension wired. Useful for .NEX testing or as a
 	// regression check while debugging the cold-boot path.
 	// (The FPGA bootrom is loaded ABOVE, before next.Wire, so WireReset's
-	// NR$02 reset_type seed is correct — see the comment there / the development log.)
-	// Bootrom-clear is handled inside WireMachineType (NextReg $03), where the
-	// reference Spectrum Next emulator puts it — the same hardware event as the
-	// config-mode transition.
+	// NR$02 reset_type seed is correct — see the comment there.)
+	// Bootrom-clear is handled inside WireMachineType (NextReg $03) —
+	// the same hardware event as the config-mode transition.
 	if !fpgaBootArmed && os.Getenv("ZX_GO_NEXT_DIRECT_BOOT") != "" {
-		// Direct-core boot (#226): no FPGA bootrom, no TBBLUE.FW
-		// execution. Seed the post-core-config NextReg personality
-		// (captured from the reference emulator, the reference) so NextZXOS init reads
-		// the machine it expects and completes setup. The CPU resets
-		// straight into enNextZX.rom (preloaded into rom[0..3]).
+		// Direct-core boot: no FPGA bootrom, no TBBLUE.FW execution.
+		// Seed the post-core-config NextReg personality (captured from
+		// a live NextZXOS boot) so NextZXOS init reads the machine it
+		// expects and completes setup. The CPU resets straight into
+		// enNextZX.rom (preloaded into rom[0..3]).
 		applyDirectBootNextRegs(disp)
 		slog.Info("next: direct-core boot — seeded post-config NextRegs (no FPGA bootrom / no TBBLUE.FW)")
 	}
@@ -1384,7 +1363,7 @@ func wireNextSubsystems(e *emulator) error {
 	// i2c DS1307 RTC on ports $103B/$113B (zxnext.vhd:2630/3234) —
 	// NextZXOS bit-bangs this bus for the menu's date/time line; with
 	// no slave the clock fetch fails every frame and the menu engine
-	// degenerates into a re-render storm (the development log).
+	// degenerates into a re-render storm.
 	u.SetNextI2C(rtcpkg.NewBus(rtcEngine))
 	u.SetNextCopper(cop)
 	u.SetNextDAC(dacBank)
@@ -1396,7 +1375,7 @@ func wireNextSubsystems(e *emulator) error {
 	if os.Getenv("ZX_GO_DIVMMC_PAGE_TRACE") != "" {
 		// Log every automap latch transition with pc + insn count —
 		// the latch timeline is the ground truth for dispatch-era
-		// overlay state (the development log).
+		// overlay state.
 		pager.SetPageLogger(func(event string, pc uint16) {
 			slog.Info("divmmc-page", "event", event,
 				"pc", fmt.Sprintf("$%04X", pc),
@@ -1543,10 +1522,9 @@ func wireNextSubsystems(e *emulator) error {
 		}
 	}
 	if root := install.SDCardRoot(); root != "" {
-		// FAT32-LBA — the bootable format (#227). The previous FAT16
-		// fallback never booted NextZXOS (the development log); FAT32
-		// built from the same tree boots to the welcome screen and
-		// launches menu items (verified end-to-end, D31eo era).
+		// FAT32-LBA is the bootable format: NextZXOS requires it, and
+		// a FAT32 image built from the host tree boots to the welcome
+		// screen and launches menu items. A FAT16 image does not boot.
 		img, err := sdcard.BuildFAT32(root, sdcard.FAT32Opts{
 			SizeMB:      256,
 			VolumeLabel: "ZXNEXT",
@@ -1618,9 +1596,10 @@ sdReady:
 	// ONLY in host-dir mode: when a raw SD-card IMAGE is configured
 	// the guest's own divMMC/+3DOS code does all filesystem work
 	// against the image, and this host shim must stay out of the way
-	// — see useESXDOSHostHook (the development log: the shim answered
-	// opens from the host dir while the guest FS lived on the image,
-	// and the menu engine's source-open failed on the mismatch).
+	// (see useESXDOSHostHook) — mixing the two makes the shim answer
+	// opens from the host dir while the guest filesystem lives on the
+	// image, so a source-open through the guest's own FS code fails
+	// on the mismatch.
 	hostHook := useESXDOSHostHook(install.SDCardImage(), install.SDCardRoot())
 	if hostHook {
 		if mount, err := sdcard.NewHostDir(install.SDCardRoot()); err != nil {
@@ -1707,30 +1686,17 @@ sdReady:
 	e.nextSprites = sprites
 	e.nextLayer2 = l2
 
-	// Warm-boot: skip our cold-boot path entirely and load
-	// the reference emulator's captured post-init state directly. Activates
-	// automatically when both snapshot files are present in
-	// roms/next/ (gitignored, captured per-install) UNLESS the
-	// user explicitly opts out via $ZX_GO_NO_WARM_BOOT=1.
-	//
-	// Why auto-enable: our cold-boot path reaches an alive-but-
-	// non-visual state due to a stack-state divergence cascade
-	// upstream (see docs/nextzxos-boot-flow.md iter 79-108 for
-	// the 30-iteration investigation that identified the root
-	// cause but didn't fix it). Warm-boot gives users a working
-	// visible Spectrum Next experience now; the cold-boot
-	// accuracy work continues as a separate sprint.
+	// Warm-boot: skip the cold-boot path entirely and load a captured
+	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG
+	// SHORTCUT that bypasses the real FPGA-bootrom → TBBLUE.FW →
+	// NextZXOS chain. Per the project's "no hacks" rule, it is
+	// OPT-IN, never the default, even when the snapshot files are
+	// installed.
 	//
 	// Requires:
 	//   roms/next/zes_full_ram.bin  (2 MB Machine RAM dump)
 	//   roms/next/zes_nextregs.txt  (256 NR values + CPU regs)
-	// Capture via the procedure in docs/nextzxos-boot-flow.md
-	// iter 95 (ZRCP save-binary + tbblue-get-register loop).
-	// Warm-boot is a debug shortcut that bypasses the real
-	// FPGA-bootrom → TBBLUE.FW → NextZXOS chain by loading captured
-	// the reference emulator state directly into CPU/RAM/NextRegs. Per the project's
-	// "no hacks" rule, it must be OPT-IN, not the default — even
-	// when snapshot files are installed.
+	// captured via ZRCP (save-binary + tbblue-get-register loop).
 	//
 	// Triggers (any of):
 	//   - $ZX_GO_WARM_BOOT=1       — explicit env opt-in (for the
@@ -1775,10 +1741,9 @@ sdReady:
 // at runtime, mirroring the cold-boot config-restore gate
 // (classicPeripheralsOK). Without it a Machine→Next switch from a
 // session that had DISCiPLE enabled wedges the firmware into a
-// DI/HALT (the development log; the user-reported uninitialised-RAM
-// screen on switch). Also clears the CPU's DISCiPLE pre/post-fetch
-// hooks, which live in dedicated fields separate from the Next's
-// named hook map.
+// DI/HALT (an uninitialised-RAM-looking screen on switch). Also
+// clears the CPU's DISCiPLE pre/post-fetch hooks, which live in
+// dedicated fields separate from the Next's named hook map.
 func disableClassicBusPeripherals(e *emulator) {
 	pm := e.peripherals
 	if pm.IsDiscipleEnabled() {
@@ -1853,11 +1818,10 @@ func parseRAMWriteTraceSpec(spec string) (bank int, lo, hi uint16, ok bool) {
 }
 
 // useESXDOSHostHook decides whether the host-directory esxDOS RST 8
-// shim should be wired. True ONLY in host-dir SD mode: with a raw
-// SD image configured the guest's own divMMC/+3DOS code is the
-// single source of filesystem truth (matching real hardware and
-// reference emulators), and the shim would create a split-brain FS
-// (the development log / task #255).
+// shim should be wired. True ONLY in host-dir SD mode: with a raw SD
+// image configured the guest's own divMMC/+3DOS code is the single
+// source of filesystem truth (matching real hardware), and the shim
+// would create a split-brain filesystem.
 func useESXDOSHostHook(sdImage, sdRoot string) bool {
 	return sdImage == "" && sdRoot != ""
 }

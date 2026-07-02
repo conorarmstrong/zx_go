@@ -113,9 +113,10 @@ func TestSAMBootToBasicAndType(t *testing.T) {
 
 // TestSAMBootsGameDiskIfPresent loads a real SAM disk image (gitignored under
 // games/) and drives the BOOT command, asserting the title screen actually
-// renders. Skipped when no disk is present, so CI stays green; locally it is the
-// end-to-end proof that disk games load. (Regression guard for the WD1772
-// spin-up and FORCE-INTERRUPT status fixes.)
+// renders. Skipped when no disk is present, so CI stays green; locally it is
+// the end-to-end proof that disk games load, exercising the WD1772 spin-up
+// detection and FORCE INTERRUPT status handling a real boot sequence depends
+// on.
 func TestSAMBootsGameDiskIfPresent(t *testing.T) {
 	for _, name := range []string{"ManicMiner.dsk", "Tetris.dsk"} {
 		path := "../../games/" + name

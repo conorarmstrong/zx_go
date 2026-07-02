@@ -3,11 +3,12 @@
 // current speaker level; the mixer samples this at the audio
 // sample rate and adds it to the AY / beeper / DAC sum.
 //
-// Port mapping (per the SpecNext wiki):
+// Port mapping (soundrive-1 / soundrive-2 columns of the ports.txt DAC
+// channel table):
 //
-//	Channel A: 0x0F or 0xF1   (FairLight / Profi)
-//	Channel B: 0x1F or 0xF3
-//	Channel C: 0xF9 or 0xDF   (Specdrum-compatible)
+//	Channel A: 0x1F or 0xF1
+//	Channel B: 0x0F or 0xF3
+//	Channel C: 0x4F or 0xF9
 //	Channel D: 0xFB
 //
 // Each channel has two alias ports — both are decoded; writing
@@ -104,11 +105,11 @@ func (b *Bank) Level(c Channel) byte {
 // uses this as a fall-through signal.
 func (b *Bank) WritePort(port uint16, val byte) bool {
 	switch port & 0xFF {
-	case 0x0F, 0xF1:
+	case 0x1F, 0xF1:
 		b.levels[ChannelA] = val
-	case 0x1F, 0xF3:
+	case 0x0F, 0xF3:
 		b.levels[ChannelB] = val
-	case 0xF9, 0xDF:
+	case 0x4F, 0xF9:
 		b.levels[ChannelC] = val
 	case 0xFB:
 		b.levels[ChannelD] = val

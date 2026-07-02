@@ -219,7 +219,7 @@ func contains(s, substr string) bool {
 }
 
 // ========================================================================
-// SDCardRoot / SDCardImage tests (iter 229).
+// SDCardRoot / SDCardImage tests.
 // ========================================================================
 
 // TestSDCardRoot_EnvOverridesAll — ZX_GO_NEXT_SD_DIR has highest priority.
@@ -326,7 +326,7 @@ func TestSDCardImage_EnvEmptyFallsToConfigured(t *testing.T) {
 	}
 }
 
-// iter 364: cover the repo-relative fallback of Path() — when
+// Covers the repo-relative fallback of Path(): when
 // ZX_GO_NEXT_ROM_DIR is unset, Path() resolves via findRepoRoot and
 // lands at <repo>/roms/next (the .gitignore'd safe default).
 func TestPathRepoRelativeFallback(t *testing.T) {

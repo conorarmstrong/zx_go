@@ -7,9 +7,9 @@ import (
 )
 
 type bankSwitchEvent struct {
-	slot    byte
-	bank    int
-	source  string
+	slot   byte
+	bank   int
+	source string
 }
 
 func TestBankTracerOnSetMMU(t *testing.T) {

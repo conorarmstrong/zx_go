@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 353: per-access memory contention for the ED block opcodes
+// Per-access memory contention for the ED block opcodes
 // (LDI/LDD/LDIR/LDDR, CPI/CPD/CPIR/CPDR, INI/IND/INIR/INDR,
 // OUTI/OUTD/OTIR/OTDR). The block memory accesses ((HL) read,
 // (DE) write, (HL) write) route through c.rd/c.wr, so an access to

@@ -31,11 +31,11 @@ type traceWritesState struct {
 // Why this exists: the existing `ramWriteHook` only reports the
 // resolved (bank, offset) for writes that go through Memory.Write's
 // standard RAM path. Config-mode writes (NR$04 RAMPAGE), alt-rom
-// redirects, FPGA-bootrom INIR loops, and divMMC overlay writes
-// all land via DIFFERENT dispatch paths — the existing tooling lumps
-// them together as "bank N writes" without distinguishing config-mode
-// routing from MMU8 mapping. iter 60 took 4 iters to correct because
-// of this — `trace-writes` exposes the full routing context.
+// redirects, FPGA-bootrom INIR loops, and divMMC overlay writes all
+// land via DIFFERENT dispatch paths — the existing tooling lumps them
+// together as "bank N writes" without distinguishing config-mode
+// routing from MMU8 mapping. `trace-writes` exposes the full routing
+// context so the two are never conflated.
 //
 // Each log line is one slog.Info("write-trace") event with fields:
 //

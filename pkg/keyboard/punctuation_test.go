@@ -24,8 +24,8 @@ func scannedBits(k *Keyboard) map[[2]byte]bool {
 }
 
 // TestTypedRuneSymbols pins the layout-independent symbol mappings. The ';'
-// case is the regression a French-keyboard user hit: it used to drive SYMBOL
-// SHIFT + W (the "<>" token) instead of SYMBOL SHIFT + O (';').
+// case is easy to transpose with '<'/'>' (SYMBOL SHIFT + W/T): ';' must map
+// to SYMBOL SHIFT + O.
 func TestTypedRuneSymbols(t *testing.T) {
 	sym := [2]byte{7, 0x02} // SYMBOL SHIFT
 	cases := []struct {

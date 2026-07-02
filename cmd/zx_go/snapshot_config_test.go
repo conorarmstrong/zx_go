@@ -7,9 +7,9 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 337: cover parseWatchSpec (default + explicit + word + error
-// branches), newSnapshotConfig (disabled + configured), and
-// installBankSwitchLogger (tracer fires on a 128K ROM switch).
+// Covers parseWatchSpec (default + explicit + word + error branches),
+// newSnapshotConfig (disabled + configured), and installBankSwitchLogger
+// (tracer fires on a 128K ROM switch).
 
 func TestParseWatchSpec(t *testing.T) {
 	// Empty → canonical default set (non-empty).

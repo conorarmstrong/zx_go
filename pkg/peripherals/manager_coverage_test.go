@@ -7,10 +7,9 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 287: peripheral manager wrapper-method coverage.
-// Targets: ZX Printer, Kempston Mouse, microdrive helpers, Frame,
-// currentTstates, IF1 accessor and convenience methods that the
-// existing test file only exercises in the high-traffic paths.
+// Peripheral manager wrapper-method coverage: ZX Printer, Kempston
+// Mouse, microdrive helpers, Frame, currentTstates, IF1 accessor and
+// other convenience methods.
 
 func TestZXPrinter_EnableDisableLifecycle(t *testing.T) {
 	dir := createTestROMDir(t)
@@ -131,7 +130,7 @@ func TestIF1Methods_NoIF1(t *testing.T) {
 	if err := pm.InsertMicrodrive(0, nil); err == nil {
 		t.Error("InsertMicrodrive on disabled IF1 = nil err, want error")
 	}
-	pm.EjectMicrodrive(0)            // must not panic when IF1 is nil
+	pm.EjectMicrodrive(0)                 // must not panic when IF1 is nil
 	pm.SetMicrodriveWriteProtect(0, true) // ditto
 	if pm.MicrodriveWriteProtected(0) {
 		t.Error("MicrodriveWriteProtected without IF1 should be false")

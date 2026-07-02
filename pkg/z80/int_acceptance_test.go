@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// INT acceptance edge-case tests (iter 193 — task #109).
+// INT acceptance edge-case tests.
 //
 // Verifies Z80 interrupt-acceptance rules per the canonical Z80
 // programmer's manual + Sean Young's "Undocumented Z80 Documented":

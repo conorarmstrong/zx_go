@@ -168,9 +168,6 @@ func TestResetPagesOut(t *testing.T) {
 	}
 }
 
-// File-IO + accessor coverage (iter 261). LoadROM (disk wrapper),
-// ROM accessor, Cartridge accessor were 0%-cov.
-
 func TestLoadROM_Roundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "if1-2.rom")

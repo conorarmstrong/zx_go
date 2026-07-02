@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 348: per-opcode MEMORY contention. Converted opcodes route
+// Per-opcode MEMORY contention. Converted opcodes route
 // their memory accesses through the m1/rd/wr/exec cycle helpers, which
 // apply ULA contention at each access. An opcode whose (HL) data
 // access lands in contended screen RAM ($4000-$7FFF) must cost MORE
@@ -85,7 +85,7 @@ func TestMemContention_BaseTotalsUnchanged(t *testing.T) {
 	}
 }
 
-// iter 350: stack-group memory contention. PUSH/POP/CALL/RET/RST/
+// Stack-group memory contention. PUSH/POP/CALL/RET/RST/
 // EX(SP),HL route their stack accesses through pushC/popC (contended
 // wr/rd), so a stack in contended RAM ($4000-$7FFF) incurs
 // position-dependent contention.
@@ -148,7 +148,7 @@ func TestMemContention_StackTotalsUnchanged(t *testing.T) {
 	}
 }
 
-// iter 351: 16-bit absolute memory LD group contention.
+// 16-bit absolute memory LD group contention.
 // LD (nn),HL / LD HL,(nn) / LD (nn),A / LD A,(nn) route their data
 // accesses through rd/wr, so a target address in contended RAM
 // incurs position-dependent ULA contention.
@@ -181,7 +181,7 @@ func TestMemContention_Abs16Group(t *testing.T) {
 	}
 }
 
-// iter 352: LD A,(BC)/(DE) + LD (BC)/(DE),A indirect group contention.
+// LD A,(BC)/(DE) + LD (BC)/(DE),A indirect group contention.
 func TestMemContention_IndirectBCDE(t *testing.T) {
 	const displayT = 14336
 	const borderT = 100000

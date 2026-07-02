@@ -245,7 +245,7 @@ func TestChecksumEmptyBlockSkipsDataCheck(t *testing.T) {
 	for i := 0; i < HeadLen-1; i++ {
 		d[i] = byte(i)
 	}
-	d[HeadLen-1] = blockSum(d[0:HeadLen-1])
+	d[HeadLen-1] = blockSum(d[0 : HeadLen-1])
 	for i := 0; i < HeadLen-1; i++ {
 		d[HeadLen+i] = byte(i + 100)
 	}

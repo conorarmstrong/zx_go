@@ -4,6 +4,61 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.4]
+
+### Fixed
+
+Codebase-wide bug-hunt and hardware-faithfulness sweep. Each fix below was
+cross-checked against the FPGA VHDL, a chip datasheet, the reference driver
+source, or the relevant file-format spec, and is covered by a regression test.
+
+- **Pentagon / 48K frame-interrupt timing was swapped** — the maskable-interrupt
+  assert position for the Pentagon and 48K models used each other's raster
+  coordinates, firing the Pentagon INT near the top of the frame instead of the
+  bottom. Corrected to match `zxula_timing.vhd`.
+- **Spectrum Next Layer 2 read paging (`$123B` bit 2) was never applied** — the
+  read-enable flag was decoded but the read redirect was missing from the memory
+  read path, so software mapping Layer 2 for readback saw the wrong bytes. Also,
+  Layer 2 map mode no longer redirects `$C000-$FFFF` in all-segments mode (the
+  FPGA forces that region to the normal page).
+- **`$DFFD` high-bank latch** — now cleared on reset (hard and NR$02 soft) and
+  ignored while paging is locked, matching `port_dffd_reg` in the core.
+- **ULA border colour** — a mid-frame border write no longer retroactively
+  repaints the scanlines above it, and the border-change scanline is now timed
+  with the per-model line length (224 T on 48K vs 228 on 128K).
+- **Spectrum Next DAC channel routing** — three of the four SounDrive/Covox DAC
+  port aliases were mapped to the wrong channel (A/B swapped, C on a stray port);
+  corrected against the port table.
+- **Next compositor LUS priority mode** was missing its ULA+tilemap pass, so ULA
+  did not sit above sprites as the mode requires.
+- **DAC writes at a frame boundary** were dropped instead of carrying into the
+  next frame (audible on longer 128K/Pentagon frames).
+- **ZX Printer** mid-print speed changes were ignored (the running-motor write
+  never read the speed bit).
+- **+3 floppy controller** — a data race between disk-save and the CPU thread,
+  and a swallowed error that could commit a corrupt formatted track.
+- **DISCiPLE / SAM Coupé WD177x** — Force-Interrupt during a busy transfer no
+  longer mis-reports the status class; SAM multi-sector writes now advance past
+  the first sector.
+- **Interface 1 / Microdrive** idle-read values corrected to match the hardware.
+- **Snapshot & RZX loaders hardened** against malformed/hostile files — bounded
+  the allocations and zlib decompression driven by untrusted length fields,
+  rejected truncated headers instead of silently misloading, and fixed the `.z80`
+  v3 `+3` hardware-mode constant and an out-of-bounds panic in RZX recording.
+- **FAT16 image builder** — nested-subdirectory `..` entries now point at the
+  real parent (not root), and `.`/`..` names are written correctly.
+- **Machine-switch fixes** — switching models via the menu now updates the
+  per-frame timing budget; DAC and TR-DOS state no longer goes stale when
+  crossing to a ZX80/ZX81/SAM machine and back.
+- **Debugger** — fixed a refresh-goroutine leak on window close, stale
+  disassembly after an in-place memory edit, a hex-parse failure on `$`-prefixed
+  values ending in `d`/`D`, a data race on the `cont-until` condition, missing
+  implicit-pause on several hook-installing commands, and assorted diagnostic
+  read-out corrections.
+- **Test harness** — the Next test harness now wires the sprite port and RTC I²C
+  bus it was silently omitting, closing a coverage gap.
+- ROM Info now names Interface 1 / ZX81 / ZX80 ROMs instead of "Unknown ROM".
+
 ## [v1.3.3]
 
 ### Added

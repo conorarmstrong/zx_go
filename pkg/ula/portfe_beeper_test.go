@@ -8,11 +8,9 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 368: port $FE write/read behaviour — beeper (bit 4), MIC
-// (bit 3), border (bits 2:0) on write; EAR (bit 6) + reserved bits
-// (5,7 read as 1) on read. Plus the BRIGHT attribute (bit 6) render
-// path. These close the [partial] beeper/EAR + [partial] attr-bright
-// markers with dedicated behavioural tests.
+// Port $FE write/read behaviour — beeper (bit 4), MIC (bit 3), border
+// (bits 2:0) on write; EAR (bit 6) + reserved bits (5,7 read as 1) on
+// read. Plus the BRIGHT attribute (bit 6) render path.
 
 func newULAForPortTest(t *testing.T) *ULA {
 	t.Helper()

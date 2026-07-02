@@ -89,11 +89,10 @@ func makeROM() []byte {
 func newPagerAutomapped(rom []byte) *Pager {
 	p := New(rom)
 	p.SetAutomap(true)
-	// Open NR$B9 validation gate (iter 196): defaults limit RST traps
-	// to RST $00 only; legacy tests assume all configured B8 bits
-	// trigger. Per spec a guest writes NR$B9 to enable the others;
-	// for unit tests we just open the gate here so the test exercises
-	// the NR$B8 logic in isolation.
+	// Open the NR$B9 validation gate: its default limits RST traps to
+	// RST $00 only, but a real guest writes NR$B9 to enable the
+	// others. Opening it here lets tests exercise the NR$B8 logic in
+	// isolation.
 	p.SetEntryPointsValid0(0xFF)
 	// epTiming0 defaults to $00 (all entry points delayed_on — page-in
 	// effective next M1). Tests using this helper assert page-in/read
@@ -583,8 +582,8 @@ func TestPagerRom3EngagedServesDivMMCWindows(t *testing.T) {
 	rom := makeROM()
 	p := New(rom)
 	p.SetAutomap(true)
-	p.SetEntryPointsValid0(0x00)                // $0038 bit7 = 0 => rom3 entry
-	p.SetEntryPointsTiming0(0x80)               // bit7 = 1 => instant
+	p.SetEntryPointsValid0(0x00)                      // $0038 bit7 = 0 => rom3 entry
+	p.SetEntryPointsTiming0(0x80)                     // bit7 = 1 => instant
 	p.SetRom3Query(func(uint16) bool { return true }) // ROM3 selected => engages
 	p.Step(0x0038)
 	if !p.IsPagedIn() {

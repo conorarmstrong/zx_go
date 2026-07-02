@@ -53,8 +53,9 @@ func DecodeSnapshot(block *SnapshotBlock) (*snapshot.Snapshot, error) {
 }
 
 // parseSnapshotFormat maps an RZX format identifier to the snapshot
-// package's enum. Accepts "Z80", "SZX", "SNA" (case-insensitive,
-// trailing NULs tolerated thanks to nullTerminated on the read path).
+// package's enum. Accepts the canonical uppercase identifiers ("Z80",
+// "SZX", "SNA") or their all-lowercase equivalents; trailing NULs are
+// already stripped by nullTerminated on the read path.
 func parseSnapshotFormat(name string) (snapshot.SnapshotFormat, error) {
 	switch name {
 	case SnapshotFormatZ80, "z80":

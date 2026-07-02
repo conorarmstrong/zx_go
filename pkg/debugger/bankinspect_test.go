@@ -27,6 +27,29 @@ func TestParseUserHexDecimalSuffix(t *testing.T) {
 	}
 }
 
+// TestParseUserHexDollarPrefixEndingInD guards against the decimal
+// "...d" suffix rule shadowing an explicit $-prefixed hex literal
+// whose last digit happens to be D — $1D and $FD are valid hex
+// (should be treated as such, not as "1" / "F" with a decimal
+// suffix marker).
+func TestParseUserHexDollarPrefixEndingInD(t *testing.T) {
+	v, err := parseUserHex("$1D")
+	if err != nil || v != 0x1D {
+		t.Fatalf("$1D → %d err=%v, want %d nil", v, err, 0x1D)
+	}
+	v, err = parseUserHex("$FD")
+	if err != nil || v != 0xFD {
+		t.Fatalf("$FD → %d err=%v, want %d nil", v, err, 0xFD)
+	}
+}
+
+func TestParseUserHexUppercase0XPrefix(t *testing.T) {
+	v, err := parseUserHex("0X1A")
+	if err != nil || v != 0x1A {
+		t.Fatalf("0X1A → %d err=%v, want %d nil", v, err, 0x1A)
+	}
+}
+
 func TestParseUserHexEmpty(t *testing.T) {
 	if _, err := parseUserHex(""); err == nil {
 		t.Fatalf("empty input must error")

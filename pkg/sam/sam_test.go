@@ -17,8 +17,8 @@ func TestMachineStartsInROM0(t *testing.T) {
 	}
 }
 
-// TestMachineRunsAFrame confirms the CPU executes against ROM0 without faulting
-// (Sprint 0 has only a stub I/O; this isn't a boot, just liveness).
+// TestMachineRunsAFrame confirms the CPU executes against ROM0 without
+// faulting; this is a liveness check, not a boot check.
 func TestMachineRunsAFrame(t *testing.T) {
 	m, err := NewFromROM(synthROM())
 	if err != nil {

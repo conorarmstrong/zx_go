@@ -7,10 +7,10 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 )
 
-// LayerPriority unit tests (iter 221) for the small storage type
-// that mediates between NR$15 writes and compositor.PriorityMode
-// decoding. The compositor's existing tests cover the rendering
-// effects; these tests pin the byte → mode decoding in isolation.
+// LayerPriority unit tests for the small storage type that mediates
+// between NR$15 writes and compositor.PriorityMode decoding. The
+// compositor's existing tests cover the rendering effects; these
+// tests pin the byte → mode decoding in isolation.
 
 // TestLayerPriority_NewIsZero verifies a fresh priority store is at
 // raw byte 0 (= ModeSLU, the reset default).

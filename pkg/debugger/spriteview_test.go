@@ -33,3 +33,22 @@ func TestSpriteViewRendersProvider(t *testing.T) {
 		t.Fatalf("sheet = %dx%d, want %dx%d", g.Dx(), g.Dy(), wantW, wantH)
 	}
 }
+
+// TestSpriteViewRefreshReadsProviderOnce guards against the label and
+// the rendered sheet observing two different snapshots: the provider
+// reads live emulator state that mutates between calls, so Refresh
+// must pull it exactly once and derive both the count and the pixels
+// from that single read.
+func TestSpriteViewRefreshReadsProviderOnce(t *testing.T) {
+	calls := 0
+	sv := NewSpriteView(nil)
+	sv.SetProvider(func() []SpriteSnapshot {
+		calls++
+		return []SpriteSnapshot{{Index: 0}}
+	})
+	calls = 0 // isolate the explicit Refresh below from SetProvider's own
+	sv.Refresh()
+	if calls != 1 {
+		t.Fatalf("Refresh() read the provider %d times, want 1", calls)
+	}
+}

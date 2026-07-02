@@ -3,16 +3,11 @@
 // lines that real hardware uses to talk to a DS1307-class RTC chip
 // at i2c address 0x68.
 //
-// Sprint 8 ships a "host clock" stub: instead of modelling i2c bus
-// turn-around, the package exposes a Read(addr) helper that
-// returns the current host date / time formatted to match the
-// DS1307 register set. Guest software using the standard NextZXOS
-// RTC routines sees plausible values; software that drives raw
-// i2c will see no response (the SDA line stays high).
-//
-// The clock always tracks the host time, but the DS1307's 56-byte
-// battery-backed NVRAM (registers 0x08-0x3F) is modelled and persisted
-// across runs via SetPersistPath.
+// The RTC's clock registers (0x00-0x07) always reflect the host date /
+// time, formatted to match the DS1307 register set; guest software
+// using the standard NextZXOS RTC routines sees plausible values. The
+// DS1307's 56-byte battery-backed NVRAM (registers 0x08-0x3F) is
+// modelled and persisted across runs via SetPersistPath.
 package rtc
 
 import (
@@ -21,7 +16,7 @@ import (
 )
 
 // DS1307 register addresses (bytes the RTC chip would normally
-// hold at i2c offset 0..7). Sprint 8 returns values derived from
+// hold at i2c offset 0..7). Reads return values derived from
 // time.Now(); date / time writes are accepted but ignored.
 const (
 	RegSeconds    byte = 0x00
@@ -74,8 +69,9 @@ func bcd(v int) byte {
 	return byte((v/10)<<4 | (v % 10))
 }
 
-// Read returns the DS1307-style byte at register address reg
-// (0..7). Values >= 8 return 0.
+// Read returns the DS1307-style byte at register address reg: 0x00-0x07
+// are the live clock registers, 0x08-0x3F are the battery-backed NVRAM,
+// and anything else returns 0.
 func (r *RTC) Read(reg byte) byte {
 	if traceReads {
 		traceRead(reg)

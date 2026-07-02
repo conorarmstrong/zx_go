@@ -8,8 +8,7 @@ package ula
 // steady level (beeperLow/beeperHigh), so without this filter an idle speaker
 // sits at a full-scale DC rail and every transition to/from it (power-on,
 // reset, the gaps between loader blocks) is a large step — the "speaker wired
-// to a battery" click. A captured recording confirmed the output sat at the
-// beeperLow rail for an entire session.
+// to a battery" click.
 //
 // The filter is the textbook DC blocker
 //

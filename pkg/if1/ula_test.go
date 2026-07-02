@@ -11,12 +11,12 @@ func TestDecodePort(t *testing.T) {
 		port uint16
 		want portClass
 	}{
-		{0xE7, portMDR},  // canonical MDR
-		{0x00E7, portMDR}, // same with explicit zero high byte
-		{0xEF, portCTR},  // canonical CTR
-		{0xF7, portNET},  // canonical NET
+		{0xE7, portMDR},     // canonical MDR
+		{0x00E7, portMDR},   // same with explicit zero high byte
+		{0xEF, portCTR},     // canonical CTR
+		{0xF7, portNET},     // canonical NET
 		{0xFE, portUnknown}, // ULA port — must NOT decode as IF1
-		{0x00, portMDR},  // matches MDR mask exactly
+		{0x00, portMDR},     // matches MDR mask exactly
 		{0x18, portUnknown}, // bits 3 and 4 set — neither pattern
 	}
 	for _, tc := range cases {
@@ -96,31 +96,34 @@ func TestULAMDRReadAfterMotorSelect(t *testing.T) {
 	}
 }
 
-// TestULANetReadStubbed sanity-checks that NET reads return 0xFF
-// (nothing connected) when no serial peripherals are plugged.
+// TestULANetReadStubbed checks the NET port's idle read value with no
+// serial peripherals plugged in. Both TX and NET are open-collector
+// wires that rest low when nothing is driving them (schematic: TX/NET
+// are read straight, not inverted, and their floating level is ~0V),
+// so bits 7 and 0 read back low — only the six unused bits are high.
 func TestULANetReadStubbed(t *testing.T) {
 	u := NewULA(nil)
 	val, ok := u.HandlePortRead(PortNET)
 	if !ok {
 		t.Fatal("NET read: not handled")
 	}
-	if val != 0xFF {
-		t.Errorf("NET read with nothing plugged: got %02X, want 0xFF", val)
+	if val != 0x7E {
+		t.Errorf("NET read with nothing plugged: got %02X, want 0x7E (TX/NET idle-low)", val)
 	}
 }
 
 // TestULA_writeNET — write path to NET port is a no-op stub
-// (RS-232 / SinclairNET have no peripherals connected). Iter 281.
+// (RS-232 / SinclairNET have no peripherals connected).
 func TestULA_writeNET(t *testing.T) {
 	u := NewULA(nil)
 	// Write a few patterns — must not panic and must not affect state.
 	for _, v := range []byte{0x00, 0xFF, 0x55, 0xAA, 0x03} {
 		u.HandlePortWrite(PortNET, v)
 	}
-	// Read back — still no peripheral.
+	// Read back — still no peripheral, same idle-low TX/NET bits.
 	val, _ := u.HandlePortRead(PortNET)
-	if val != 0xFF {
-		t.Errorf("after writeNET sweep: read = %02X, want 0xFF", val)
+	if val != 0x7E {
+		t.Errorf("after writeNET sweep: read = %02X, want 0x7E", val)
 	}
 }
 

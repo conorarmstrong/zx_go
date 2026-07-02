@@ -6,10 +6,6 @@ package sam
 // HPEN (the current display line). The boot ROM busy-waits on HPEN to lock to
 // the raster, so both must follow the beam derived from the CPU T-state counter
 // rather than floating to a constant.
-//
-// (SimCoupe Base/SAMIO.cpp update_lpen/update_hpen; Base/SAM.h timing
-// constants; Base/SAMIO.h LPEN_PORT 0xF8 / HPEN_PORT 0x1F8 / PEN_PORT_MASK
-// 0x1FF / LPEN_TXFMST 0x02 / LPEN_BORDER_BCD0 0x01.)
 
 const (
 	lpenTXFMST     = 0x02 // LPEN bit 1: transmit-status, preserved across reads
