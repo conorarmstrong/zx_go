@@ -40,7 +40,7 @@ func TestZ80NMatchesCoreGolden(t *testing.T) {
 			t.Fatalf("malformed golden line: %q", line)
 		}
 		opHex := p[0]
-		in := make([]uint16, 8)  // AF BC DE HL IX IY memHL memDE
+		in := make([]uint16, 8) // AF BC DE HL IX IY memHL memDE
 		out := make([]uint16, 8)
 		for i := 0; i < 8; i++ {
 			in[i] = h16(p[1+i])

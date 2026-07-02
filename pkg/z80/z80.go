@@ -171,9 +171,9 @@ type CPU struct {
 
 	// speedSelect is the NextReg 0x07 speed selector (low 2 bits):
 	// 0 = 3.5 MHz, 1 = 7 MHz, 2 = 14 MHz, 3 = 28 MHz. Default 0.
-	// Reads return whatever was last written. Sprint 5 lands the
-	// storage + SpeedMultiplier accessor; Sprint 5.2 wires it
-	// into the ExecuteFrame budget.
+	// Reads return whatever was last written. SpeedMultiplier derives
+	// the scale factor from it, and ExecuteFrame uses that to size the
+	// per-frame T-state budget.
 	speedSelect byte
 
 	// speedLocked pins speedSelect across guest NR$07 writes (diagnostic).
@@ -371,7 +371,7 @@ type memContender interface {
 	ContendMemory(addr uint16)
 }
 
-// --- FUSE-style per-cycle timing helpers (iter 348) ---
+// --- FUSE-style per-cycle timing helpers ---
 //
 // These advance the T-state counter ONE machine cycle at a time and
 // apply ULA memory contention at the cycle's address before charging
@@ -596,11 +596,9 @@ func (c *CPU) SetDE(val uint16) { c.D = byte(val >> 8); c.E = byte(val) }
 // SpeedMultiplier returns how much faster than the 3.5 MHz reference
 // the CPU is currently running. Always 1 on non-Next models. On
 // ModelNext, mirrors the NextReg 0x07 speed selector: 0 -> 1,
-// 1 -> 2, 2 -> 4, 3 -> 8.
-//
-// Sprint 5.1 wires storage + this accessor. Sprint 5.2 will scale
-// the ExecuteFrame budget by this value; Sprint 5.3 adds the 28 MHz
-// M1 wait state when the multiplier is 8.
+// 1 -> 2, 2 -> 4, 3 -> 8. ExecuteFrame scales its per-frame T-state
+// budget by this value, and fetch() adds the 28 MHz M1 wait state
+// when the multiplier is 8.
 func (c *CPU) SpeedMultiplier() int {
 	switch c.speedSelect {
 	case 1:
@@ -616,9 +614,9 @@ func (c *CPU) SpeedMultiplier() int {
 // retnHook, when non-nil, fires after every RETN/RETI (all ED
 // mirror encodings). The TBBlue T80N asserts I_RETN for BOTH
 // instructions (t80n_mcode.vhd:660,2432) and zxnext.vhd routes it
-// to the divMMC as i_retn_seen, clearing the automap latch —
-// without this the overlay stays latched across ISR exits where
-// real hardware drops it (the development log).
+// to the divMMC as i_retn_seen, clearing the automap latch — without
+// this the overlay would stay latched across ISR exits where real
+// hardware drops it.
 //
 // SetRETNHook installs it; pass nil to remove.
 func (c *CPU) SetRETNHook(fn func()) { c.retnHook = fn }
@@ -1123,9 +1121,8 @@ func (c *CPU) StepInstructionWithIRQ() {
 	// boundary by SpeedMultiplier so the maskable INT fires exactly once
 	// per ULA frame (50 Hz) regardless of turbo, matching ExecuteFrame
 	// (which scales its budget identically). Without this the single-step
-	// path fires the frame INT SpeedMultiplier× too often at turbo — e.g.
-	// 8× at 28 MHz, the spurious interrupts that derailed the Next cold
-	// boot under the debugger / bisection / memdiff (all step-driven).
+	// path would fire the frame INT SpeedMultiplier× too often at turbo —
+	// e.g. 8× at 28 MHz — spurious interrupts that derail boot.
 	frameBudget := stepFrameBudget * uint64(c.SpeedMultiplier())
 	// Frame-boundary IRQ assertion. Legacy: assert at the boundary, hold.
 	// Narrow pulse: only reset the per-frame one-shots here; the pulse
@@ -2115,7 +2112,7 @@ func (c *CPU) executeBaseInstruction(opcode byte) {
 		c.tstates += 4
 	case 0x3F: // CCF
 		// Z80 spec: H ← old C; C ← !old C; N ← 0; S,Z,PV unchanged;
-		// F3,F5 from A. We were previously setting H from the NEW C.
+		// F3,F5 from A.
 		oldC := c.F & FLAG_C
 		f := c.F & (FLAG_S | FLAG_Z | FLAG_PV)
 		if oldC != 0 {
@@ -2677,10 +2674,9 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 			c.OnSPLoad(c.currentInstrPC, oldSP, c.SP)
 		}
 
-	// Block operations. iter 353: per-access memory contention. Each
-	// helper now performs its own M1 + memory-access accounting through
-	// c.m1/c.rd/c.wr/c.exec so the (HL)/(DE) accesses contend; the lump
-	// "c.tstates += 16" was removed (timing folded into the helpers).
+	// Block operations. Each helper performs its own M1 + memory-access
+	// accounting through c.m1/c.rd/c.wr/c.exec so the (HL)/(DE) accesses
+	// participate in per-access ULA memory contention.
 	case 0xB0: // LDIR - Load, increment and repeat
 		c.ldir()
 	case 0xB8: // LDDR - Load, decrement and repeat
@@ -2911,8 +2907,8 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		}
 		// Invalid ED-prefix opcodes execute as "NONI NOP" on the real
 		// Z80 — 8 T-states, no register / memory effect. NextZXOS hits
-		// `ED 00` repeatedly as part of its scrambler / token tables,
-		// which used to spam the log; silently consume the cycles.
+		// `ED 00` repeatedly as part of its scrambler / token tables, so
+		// this stays silent rather than logging each occurrence.
 		c.tstates += 8
 	}
 }
@@ -3533,8 +3529,7 @@ func (c *CPU) executeFDInstruction(opcode byte) {
 
 	// FD CB prefix (IY bit operations) — executeFDCBInstruction
 	// charges the full 23 t (or 20 for BIT) per spec, just like
-	// DD CB. No extra +8 needed — the prior +8 here put FD CB
-	// instructions 8 t-states over spec.
+	// DD CB, so no extra t-states are added here.
 	case 0xCB: // FD CB prefix
 		d := int8(c.readOperand()) // Displacement comes first
 		// FD CB d xx has TWO M1 cycles (FD and CB); the inner xx
@@ -4196,11 +4191,11 @@ func (c *CPU) adc16(hl, value uint16) {
 
 // Block load operations
 func (c *CPU) ldi() {
-	// Load and increment. iter 353 timing: 2×M1 (8) + MR (HL) (3) +
-	// MW (DE) (3) + 2 internal cycles at the write address (2) = 16 T.
-	// Both memory accesses route through c.rd/c.wr so contended screen
-	// RAM applies the ULA hold per access; the 2 internal no-MREQ
-	// cycles contend at DE (FUSE z80_ops.c).
+	// Load and increment. Timing: 2×M1 (8) + MR (HL) (3) + MW (DE) (3)
+	// + 2 internal cycles at the write address (2) = 16 T. Both memory
+	// accesses route through c.rd/c.wr so contended screen RAM applies
+	// its hold per access; the 2 internal no-MREQ cycles contend at DE
+	// (FUSE z80_ops.c).
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
 	val := c.rd(c.hl())
@@ -4270,8 +4265,8 @@ func (c *CPU) lddr() {
 
 // Block search operations
 func (c *CPU) cpi() {
-	// Compare and increment. iter 353 timing: 2×M1 (8) + MR (HL) (3) +
-	// 5 internal cycles at HL (5) = 16 T. The (HL) read routes through
+	// Compare and increment. Timing: 2×M1 (8) + MR (HL) (3) + 5
+	// internal cycles at HL (5) = 16 T. The (HL) read routes through
 	// c.rd so contended screen RAM applies its hold.
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
@@ -4391,10 +4386,10 @@ func (c *CPU) outi() {
 	// pre-decrement B shifts the whole palette by one. WZ = BC + 1 with the
 	// post-decrement BC.
 	//
-	// iter 353 timing: 2×M1 (8) + 1 internal at I:R (1) + MR (HL) (3) +
-	// IO-out machine cycle (4 base). The (HL) read routes through c.rd
-	// so contended screen RAM applies its hold; ContendPort still adds
-	// the ULA-port contention on top of the IO base. Total non-ULA,
+	// Timing: 2×M1 (8) + 1 internal at I:R (1) + MR (HL) (3) + IO-out
+	// machine cycle (4 base). The (HL) read routes through c.rd so
+	// contended screen RAM applies its hold; ContendPort still adds the
+	// ULA-port contention on top of the IO base. Total non-ULA,
 	// uncontended = 8 + 1 + 3 + 4 = 16 T.
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
@@ -4429,7 +4424,7 @@ func (c *CPU) outd() {
 	// I/O write, so the port high byte is the post-decrement B (see outi).
 	// WZ = BC - 1 with the post-decrement BC.
 	//
-	// iter 353 timing: same structure as outi (16 T base).
+	// Timing: same structure as outi (16 T base).
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
 	c.exec(c.ir(), 1)
@@ -4495,13 +4490,12 @@ func (c *CPU) ini() {
 	//   N = val bit 7                        ; NOT always-set
 	//   C = k > $FF
 	//
-	// Iter 134 lockstep against reference caught our previous
-	// implementation hardcoding N = 1 always and leaving F5/F3 zero;
-	// the FPGA bootrom's INIR loop at PC=$04F7 diverged on the
-	// flag byte every iteration.
-	// iter 353 timing: 2×M1 (8) + 1 internal at I:R (1) + IO-in machine
-	// cycle (4 base) + MW (HL) (3). The (HL) write routes through c.wr
-	// so contended screen RAM applies its hold; ContendPort still adds
+	// N is the value's bit 7, not unconditionally 1 as some
+	// simplified references claim; F5/F3 mirror B post-decrement.
+	//
+	// Timing: 2×M1 (8) + 1 internal at I:R (1) + IO-in machine cycle
+	// (4 base) + MW (HL) (3). The (HL) write routes through c.wr so
+	// contended screen RAM applies its hold; ContendPort still adds
 	// the ULA-port contention on top of the IO base. Total non-ULA,
 	// uncontended = 8 + 1 + 4 + 3 = 16 T.
 	c.m1(c.currentInstrPC)
@@ -4538,7 +4532,7 @@ func (c *CPU) ini() {
 func (c *CPU) ind() {
 	// Input and decrement. Same flag semantics as INI except the
 	// modular C arithmetic uses C-1 instead of C+1.
-	// iter 353 timing: same structure as ini (16 T base).
+	// Timing: same structure as ini (16 T base).
 	c.m1(c.currentInstrPC)
 	c.m1(c.currentInstrPC + 1)
 	c.exec(c.ir(), 1)
@@ -4654,12 +4648,10 @@ func (c *CPU) interrupt() {
 
 	// Acknowledge: a maskable interrupt clears BOTH IFF1 and IFF2 —
 	// faithful Z80 behaviour (an accepted interrupt clears both IFF1 and
-	// IFF2; Zilog manual). A NextZXOS/48K IM1
-	// handler re-enables interrupts with an explicit `EI` before `RET`/
-	// `RETI`, so clearing both here does not strand interrupts off (EI
-	// sets both, and RETI's `IFF1=IFF2` then keeps them on). An earlier
-	// variant cleared IFF1 only (preserving IFF2) as a work-around; that
-	// is non-faithful and masked the real behaviour.
+	// IFF2; Zilog manual). A NextZXOS/48K IM1 handler re-enables
+	// interrupts with an explicit `EI` before `RET`/`RETI`, so clearing
+	// both here does not strand interrupts off (EI sets both, and
+	// RETI's `IFF1=IFF2` then keeps them on).
 	c.IFF1, c.IFF2 = false, false
 
 	// Exit halt state if in it

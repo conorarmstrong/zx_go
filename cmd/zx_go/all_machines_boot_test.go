@@ -8,8 +8,8 @@ import (
 
 // Every classic machine must cold-boot to its interactive prompt: a
 // non-blank screen (the © copyright / 128-menu) and the CPU running
-// (not halted with interrupts off). This is the broad regression net
-// the user asked for across all machine types.
+// (not halted with interrupts off). This is a broad regression net
+// across all machine types.
 func TestAllClassicMachinesBoot(t *testing.T) {
 	prev := cliFlagsActive
 	nf := cliFlags{}

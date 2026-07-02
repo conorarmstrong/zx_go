@@ -9,11 +9,10 @@ import (
 
 // TestWireLineInterruptNR22EnableComputesOffset verifies the
 // NR$22/$23 → cpu.LineIntOffsetTstates pipeline. Per nextreg.txt 0x22
-// bit 1 enables line interrupt (NOT bit 7 — iter 191 corrected). The
-// target line is relative to the 256×192 active area (MAME line_irq_adjust:
-// vpos = cvc_to_vpos(target-1) = target-1+min_vactive, min_vactive=64 = the
-// top border), measured from frameStart (absolute line 0). So target 192 →
-// (192-1+64) × 228.
+// bit 1 enables line interrupt. The target line is relative to the
+// 256×192 active area (vpos = target-1+min_vactive, min_vactive=64 =
+// the top border), measured from frameStart (absolute line 0). So
+// target 192 → (192-1+64) × 228.
 func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -35,7 +34,7 @@ func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 }
 
 // TestWireLineInterruptNR22DisableClearsOffset checks that clearing
-// bit 1 of NR$22 zeros the cached offset (iter 191 bit-position fix).
+// bit 1 of NR$22 zeros the cached offset.
 func TestWireLineInterruptNR22DisableClearsOffset(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -58,7 +57,7 @@ func TestWireLineInterruptNR22DisableClearsOffset(t *testing.T) {
 }
 
 // TestWireLineInterruptNR22FrameDisable covers bit 2: setting it
-// propagates to cpu.FrameIntDisabled (iter 191 bit-position fix).
+// propagates to cpu.FrameIntDisabled.
 func TestWireLineInterruptNR22FrameDisable(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()

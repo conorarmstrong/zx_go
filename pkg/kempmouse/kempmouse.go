@@ -13,14 +13,12 @@
 // at 0/255. Reading the buttons port returns an 8-bit bitmap where
 // 0 = pressed (active-low), the same convention as the Kempston
 // joystick: bit 0 = right button, bit 1 = left button, default all 1.
-//
-// Mirrors FUSE's peripherals/kempmouse.c.
 package kempmouse
 
 import "sync/atomic"
 
-// Port-decode masks and values. Match the `periph_port_t` entries
-// in FUSE's kempmouse.c:67-72.
+// Port-decode masks and values for the three canonical Kempston
+// mouse ports.
 const (
 	maskButtons = 0x0121
 	valButtons  = 0x0001
@@ -70,16 +68,14 @@ func (m *Mouse) Reset() {
 // the Spectrum software interprets them freely. Y is inverted on
 // the way in to match Kempston convention (host +Y = screen down,
 // Kempston +Y = screen up).
-//
-// Mirrors FUSE's kempmouse_update at kempmouse.c:100.
 func (m *Mouse) Move(dx, dy int) {
 	m.x.Add(int32(dx))
 	m.y.Add(-int32(dy))
 }
 
-// SetButton presses or releases the given Kempston button bit. The
-// convention matches FUSE: bit 0 is right-click, bit 1 is left-click.
-// Pressed drives the bit LOW on the Kempston bus (active-low).
+// SetButton presses or releases the given Kempston button bit:
+// bit 0 is right-click, bit 1 is left-click. Pressed drives the bit
+// LOW on the Kempston bus (active-low).
 func (m *Mouse) SetButton(btn int, pressed bool) {
 	if btn < 0 || btn > 7 {
 		return

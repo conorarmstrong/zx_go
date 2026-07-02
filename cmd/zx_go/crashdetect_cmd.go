@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 )
 
@@ -123,8 +124,8 @@ func (d *remoteDebugger) crashDetectSet(args []string) string {
 	}
 	switch strings.ToLower(args[0]) {
 	case "nop-slide":
-		var n int
-		if _, err := fmt.Sscanf(args[1], "%d", &n); err != nil || n < 0 {
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n < 0 {
 			return fmt.Sprintf("ERR nop-slide: bad N %q", args[1])
 		}
 		cfg.nopSlideMin = n

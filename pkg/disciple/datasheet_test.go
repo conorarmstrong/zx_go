@@ -626,6 +626,34 @@ func TestWD1772ForceInterruptAbortsTransfer(t *testing.T) {
 	}
 }
 
+// WD1772 Force Interrupt issued while a Type II/III command is busy (datasheet
+// "Status Register": distinct from the idle case above — only the Busy bit is
+// reset; the rest of the status bits, and therefore the Type II/III bit
+// meanings, are left as they were). At track 0 with the motor on, a wrong
+// switch to Type I meanings would spuriously show the Track-0 (bit 2) and
+// Spin-Up (bit 5) bits; correctly it must keep reporting Lost-Data/Record-Type
+// (both 0, no such condition occurred).
+func TestWD1772ForceInterruptMidTransferKeepsCommandClass(t *testing.T) {
+	d := dsNewFDC(t)
+	dsSelDrive0Side0(d)
+	dsSetSector(d, 1)
+	dsCmd(d, 0x80) // Read Sector → Busy + DRQ, Type II, track register at 0
+	dsReadData(d)  // consume one byte; transfer mid-flight
+
+	dsCmd(d, 0xD0) // Force Interrupt while busy
+
+	if d.lastCmdType1 {
+		t.Error("Force Interrupt while busy switched to Type I status; the datasheet keeps the interrupted command's status class")
+	}
+	st := dsStatus(d)
+	if st&stTrack0 != 0 {
+		t.Errorf("bit 2 read as Track-0 (Type I) after a busy Force Interrupt: %02X; should read as Lost Data (Type II/III, clear)", st)
+	}
+	if st&stSpinUp != 0 {
+		t.Errorf("bit 5 read as Spin-Up (Type I) after a busy Force Interrupt: %02X; should read as Record Type (Type II/III, clear)", st)
+	}
+}
+
 // WD1772 Force Interrupt while idle (datasheet "Status Register": "If the Force
 // Interrupt Command is received when there is not a current command under
 // execution, the Busy Status Bit is reset and ... Status reflects the Type I

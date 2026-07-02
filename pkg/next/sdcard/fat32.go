@@ -11,13 +11,12 @@ import (
 	"unicode/utf16"
 )
 
-// FAT32 image builder (#227).
+// FAT32 image builder.
 //
 // Produces an in-memory FAT32-LBA disk image from a host directory
-// tree. This is the bootable-card format: NextZXOS boots from the
-// FAT32 reference card (the development log established the FAT16
-// builder's output does NOT boot), so this builder is what backs
-// "out-of-box SD" for users without a pre-made card image.
+// tree. This is the bootable-card format: NextZXOS boots from a
+// FAT32 card (a FAT16 image does not boot), so this builder is what
+// backs "out-of-box SD" for users without a pre-made card image.
 //
 // Layout (sector = 512 bytes):
 //
@@ -52,7 +51,7 @@ type FAT32Opts struct {
 const (
 	fat32EOC      = 0x0FFFFFFF
 	fat32PartLBA  = 2048 // 1 MB alignment, matches the FAT16 builder
-	fat32Reserved = 32   // reserved sectors, matches the reference card
+	fat32Reserved = 32   // reserved sectors
 )
 
 // BuildFAT32 walks dir and produces a FAT32-LBA image containing

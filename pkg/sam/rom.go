@@ -3,10 +3,6 @@
 // CLUT), 256/512K paged memory, an SAA1099 stereo sound chip and a WD1772
 // floppy controller. It is a self-contained machine (like pkg/zx8x), reusing
 // the shared Z80 core (pkg/z80) but with its own memory map, IO and video.
-//
-// Hardware behaviour is transcribed from the SimCoupe reference emulator; see
-// the local implementation plan (sam_coupe.md) for the sprint breakdown and
-// per-subsystem source citations.
 package sam
 
 import "fmt"
@@ -17,7 +13,7 @@ const (
 	// ROMSize is the SAM system ROM: 32 KB = ROM0 (low 16K) + ROM1 (high 16K).
 	ROMSize = 2 * PageSize
 	// ZX82HeaderLen is the optional "ZX82" wrapper header on some ROM images
-	// (Andy Wright dumps); stripped before use. (SimCoupe Memory.cpp:203-211.)
+	// (Andy Wright dumps); stripped before use.
 	ZX82HeaderLen = 140
 )
 
@@ -25,8 +21,7 @@ const (
 // (the low 16 KB, paged at $0000 on reset) and ROM1 (the high 16 KB, paged at
 // $C000 when LMPR bit 6 is set). An optional 140-byte "ZX82" wrapper header is
 // stripped first. The image is accepted when at least 32 KB remain and either
-// it is exactly 32 KB or its first byte is DI (0xF3, the genuine reset entry) —
-// mirroring SimCoupe's acceptance check (Memory.cpp:203-228).
+// it is exactly 32 KB or its first byte is DI (0xF3, the genuine reset entry).
 func SplitROM(data []byte) (rom0, rom1 []byte, err error) {
 	raw := data
 	if len(raw) >= 4 && string(raw[:4]) == "ZX82" {

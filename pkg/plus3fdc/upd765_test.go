@@ -386,10 +386,10 @@ func TestUPD765FormatThenReadDataRoundTrip(t *testing.T) {
 	f.WriteData(0x54) // GPL
 	f.WriteData(filler)
 	for j := 0; j < 4; j++ {
-		f.WriteData(12)         // C
-		f.WriteData(0)          // H
+		f.WriteData(12)          // C
+		f.WriteData(0)           // H
 		f.WriteData(byte(j + 1)) // R
-		f.WriteData(2)          // N
+		f.WriteData(2)           // N
 	}
 	res := drainResult(t, f, 7)
 	if res[0]&st0IC0 != 0 {
@@ -990,7 +990,7 @@ func TestUPD765SpeedlockFirstReadOnZeroCHRNSector(t *testing.T) {
 	b := newTrackBuilder(tr, gapMFM)
 	b.preindexAdd()
 	b.postindexAdd()
-	b.idAdd(0, 0, 0, 0, false)        // CHRN all zero
+	b.idAdd(0, 0, 0, 0, false) // CHRN all zero
 	b.dataAdd(make([]byte, 128), false, false)
 	b.gap4Add()
 	d.Tracks[0][0] = tr

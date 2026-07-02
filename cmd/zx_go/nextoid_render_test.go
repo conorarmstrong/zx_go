@@ -8,17 +8,13 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// TestNextoidSpritesRender is the end-to-end lock-in for the Nextoid fixes:
-// the game uses hardware sprites (uploaded via port $57) for its bat, ball and
-// the SHIPS/SCORE HUD. Three bugs hid them all:
-//   - port $57 "Sprite Attribute Upload" was unimplemented, so no sprite
-//     attributes ever reached the engine;
-//   - NR$15's layer-priority field was decoded from bits 1:0 instead of 4:2,
-//     so Nextoid (NR$15=$03) ran as Layer2-over-Sprites and the diamond
-//     background covered the bat;
-//   - sprites were composited in paper-relative 256x192 coordinates, but the
-//     sprite X/Y are frame-relative (320x256, paper at 32,32), so the bat
-//     (Y~207) and the bottom-border HUD (Y~224) fell outside the composed area.
+// TestNextoidSpritesRender is the end-to-end check that the game's hardware
+// sprites (bat, ball, and the SHIPS/SCORE HUD, uploaded via port $57 "Sprite
+// Attribute Upload") render correctly: NR$15's layer-priority field (bits
+// 4:2) must place Nextoid's sprites (NR$15=$03) above Layer 2, and sprite
+// compositing must use frame-relative coordinates (320x256, paper at 32,32)
+// rather than paper-relative 256x192, since the bat (Y~207) and the
+// bottom-border HUD (Y~224) sit outside the paper area.
 //
 // This drives the game to its playfield (press 'S' then SPACE) and asserts the
 // sprites are both uploaded AND composited (toggling the sprite layer changes

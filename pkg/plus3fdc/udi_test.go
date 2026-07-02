@@ -52,9 +52,9 @@ func buildSyntheticUDI(t *testing.T) []byte {
 	// stored field is 16 + len(tracks).
 	eof := uint32(16 + tracks.Len())
 	binary.LittleEndian.PutUint32(hdr[4:8], eof)
-	hdr[8] = 0            // version
+	hdr[8] = 0             // version
 	hdr[9] = cylinders - 1 // cyl - 1
-	hdr[10] = sides - 1   // sides - 1
+	hdr[10] = sides - 1    // sides - 1
 
 	var out bytes.Buffer
 	out.Write(hdr)

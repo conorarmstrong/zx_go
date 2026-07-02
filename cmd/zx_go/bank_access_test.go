@@ -11,11 +11,11 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
-// iter 304: cover emuBanks.Bank / BankPeek / BankPoke for the
-// memory-only kinds (ram, rom, altrom). The divmmc-ram path
-// requires an *emulator and is tested separately at integration
-// level; here we just confirm it returns ErrUnknownKind when emu
-// is nil (the safe default).
+// Covers emuBanks.Bank / BankPeek / BankPoke for the memory-only
+// kinds (ram, rom, altrom). The divmmc-ram path requires an
+// *emulator and is tested separately at integration level; here we
+// just confirm it returns ErrUnknownKind when emu is nil (the safe
+// default).
 
 func newTestRomDir(t *testing.T) string {
 	t.Helper()
@@ -139,8 +139,7 @@ func TestEmuBanks_BankPeekAndPoke(t *testing.T) {
 }
 
 // TestPoolScanFindsPattern — pool-scan locates a byte pattern across
-// physical RAM banks regardless of CPU mapping (built to settle where
-// a DOS load landed; the development log).
+// physical RAM banks regardless of CPU mapping.
 func TestPoolScanFindsPattern(t *testing.T) {
 	b := newBanksFor(t, roms.Model48K)
 	page, err := b.Bank("ram", 5)

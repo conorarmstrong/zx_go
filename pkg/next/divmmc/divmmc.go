@@ -85,7 +85,7 @@ type Pager struct {
 	// per zxnext.vhd:3093 ("00001" & divmmc_bank). This is a DEDICATED
 	// region: main RAM lives at SRAM pages 128+ (zxnext.vhd:2964 adds
 	// +128 to every MMU page), so divMMC RAM never aliases main-RAM
-	// banks (the development log tested and refuted the aliasing hypothesis).
+	// banks.
 	ram     [NumBanks][]byte
 	rom     []byte
 	pagedIn bool
@@ -215,8 +215,7 @@ type Pager struct {
 	//	B9=0,BA=0 -> rom3_delayed_on  (machine ROM3 path, next M1)
 	//
 	// So B9 selects the divMMC-ROM (set) vs ROM3 (clear) path and BA the
-	// instant (set) vs delayed (clear) timing. (The earlier "B8 AND
-	// (B9 OR BA)" gate was a misread of the VHDL — see Step's armRST0.)
+	// instant (set) vs delayed (clear) timing. See Step's armRST0.
 	//
 	// Default after soft reset: $01 (RST $00 validated). Per zxnext.vhd:5088.
 	epValid0 byte
@@ -422,10 +421,10 @@ func (p *Pager) Step(pc uint16) {
 	//
 	// So the page-in gate is B8[n] alone. This is load-bearing for the
 	// IM1 ($0038) handler: NextZXOS runs with B8=$82 (bits 1,7), B9=$00,
-	// BA=$00 (captured from the reference), i.e. $0038 pages in via the
-	// rom3_delayed_on path. The earlier gate `B8 & (B9|BA)` (iter 196,
-	// a misread of the VHDL) required B9/BA set and so never fired $0038
-	// — the IM1 handler then skipped its $25B8 SP-save and hung.
+	// BA=$00, i.e. $0038 pages in via the rom3_delayed_on path. Gating
+	// on B8[n] AND (B9[n] OR BA[n]) instead would never fire $0038 under
+	// that configuration, so the IM1 handler would skip its SP-save and
+	// hang.
 	//
 	// The instant-vs-delayed (BA/epTiming0) and rom-vs-rom3 (B9/epValid0)
 	// variants ARE modelled for the ep0 RST entry points: armRST0 below
@@ -485,7 +484,7 @@ func (p *Pager) Step(pc uint16) {
 			// .nex game whose ISR spans $0066). Also NOT when the Multiface is
 			// the active NMI master: the MF NMI (NR$02 bit 3) vectors to $0066
 			// in the MF ROM and owns the vector; the divMMC still automaps for
-			// the handler's esxDOS RST-$08 calls ($0008 etc.). (the development log)
+			// the handler's esxDOS RST-$08 calls ($0008 etc.).
 			p.pagedIn = true
 			p.nmiButton = false // button_nmi clears once the automap engages (vhd:112)
 			if p.pageLogger != nil {
@@ -504,9 +503,8 @@ func (p *Pager) Step(pc uint16) {
 			// fetched from the pre-overlay map and the overlay pages in
 			// on the NEXT M1. (a) is load-bearing for the NextZXOS cold
 			// boot: ROM2 (+3DOS) executes its OWN code at $056A/$04C6/…
-			// mid-mount; trapping those fetches hijacked the DOS into
-			// the esxDOS tape loader → volume-label cluster-0 read
-			// ($1009) → NR$02 soft-reset loop (the development log).
+			// mid-mount, so trapping those fetches unconditionally would
+			// hijack the DOS into the esxDOS tape loader instead.
 			if p.rom3Query == nil || p.rom3Query(pc) {
 				p.pendingPageIn = true
 				p.pendingRom3 = true
@@ -588,10 +586,10 @@ func (p *Pager) PostStep(pc uint16) {
 	// OR'd by IsPagedIn/HandleRead/HandleWrite. So the page-out must clear
 	// the latch even while CONMEM is set: the overlay stays mapped via the
 	// CONMEM OR until CONMEM itself is cleared, at which point it drops.
-	// (An earlier CONMEM guard here stranded the latch paged-in across a
-	// CONMEM-held page-out — the NextBASIC Invaders crash: the esxDOS IM1
-	// handler's JP C,$1FFC page-out runs with CONMEM set, then the
-	// trampoline clears CONMEM and the RET fell into divMMC RAM.)
+	// (Guarding this on !CONMEM would strand the latch paged-in across a
+	// CONMEM-held page-out: the esxDOS IM1 handler's JP C,$1FFC page-out
+	// runs with CONMEM set, then a later trampoline clears CONMEM and the
+	// RET would fall into divMMC RAM.)
 	if p.pagedIn && pc >= 0x1FF8 && pc <= 0x1FFF && p.entryPoints1&0x40 != 0 {
 		p.pageOut()
 		if p.pageLogger != nil {
@@ -617,7 +615,7 @@ func (p *Pager) SetFramesBumper(fn func()) { p.framesBump = fn }
 
 // SetMultifaceActiveFn wires a predicate reporting whether the Next Multiface
 // overlay is the active NMI master. While it returns true the divMMC skips its
-// $0066 NMI-vector automap (the MF owns that vector). See Step / the development log.
+// $0066 NMI-vector automap (the MF owns that vector). See Step.
 func (p *Pager) SetMultifaceActiveFn(fn func() bool) { p.mfActiveFn = fn }
 
 // SetStubProtected toggles write-shadow protection on bank 1
@@ -686,8 +684,7 @@ func (p *Pager) AssertNMIButton() { p.nmiButton = true }
 // when the CPU executes RETN from within the overlay — this is
 // how the NMI handler (RST 0x66 → RETN) returns to the underlying
 // code and surrenders the bus. The Z80 core calls this after every
-// RETN. No-op when automap is disabled or when CONMEM is forcing
-// the overlay in.
+// RETN. No-op when automap is disabled.
 func (p *Pager) HandleRETN() {
 	// button_nmi clears on RETN regardless of automap/CONMEM (divmmc.vhd:108).
 	p.nmiButton = false
@@ -698,8 +695,7 @@ func (p *Pager) HandleRETN() {
 	// i_retn_seen — no CONMEM term). CONMEM is an orthogonal force-in
 	// (lines 94-95) carried separately in lastE3 and OR'd by IsPagedIn, so
 	// clearing the latch here is safe under CONMEM: the overlay stays mapped
-	// until CONMEM is cleared, then drops. (A former CONMEM guard here
-	// stranded the latch — see PostStep and the NextBASIC Invaders crash.)
+	// until CONMEM is cleared, then drops.
 	if p.pageLogger != nil && p.pagedIn {
 		p.pageLogger("out(retn)", 0)
 	}
@@ -859,14 +855,10 @@ func (p *Pager) WriteROMByte(addr int, val byte) {
 }
 
 // HandleRead is the memory.PeripheralRead hook. When paged in,
-// 0x0000–0x1FFF reads come from divMMC ROM (or RAM bank 3 if
-// MAPRAM is set and CONMEM is clear) and 0x2000–0x3FFF reads come
-// from the selected divMMC RAM bank. Addresses outside that range
-// fall through to the normal memory map.
-//
-// MAPRAM is gated on `!conmem` per the FBLabs FPGA core: when CONMEM is
-// forcing the overlay in, the low window always reads divMMC ROM
-// (esxDOS dot-command launchers depend on this).
+// 0x0000–0x1FFF reads come from divMMC ROM (or RAM bank 3 if MAPRAM
+// is set — independent of CONMEM, see below) and 0x2000–0x3FFF reads
+// come from the selected divMMC RAM bank. Addresses outside that
+// range fall through to the normal memory map.
 func (p *Pager) HandleRead(addr uint16) (byte, bool) {
 	if addr >= 0x4000 {
 		return 0, false
@@ -881,15 +873,13 @@ func (p *Pager) HandleRead(addr uint16) (byte, bool) {
 		return 0, false
 	}
 	if addr < 0x2000 {
-		// divmmc.vhd:94-95 + the Issue #7 comment (line 91): page0
-		// ($0000-$1FFF) serves the divMMC ROM only when MAPRAM is CLEAR
-		// (`rom_en = page0 & (conmem|automap) & !mapram`); when MAPRAM is
-		// latched it serves RAM bank 3, INDEPENDENT of CONMEM
-		// (`ram_en = page0 & (conmem|automap) & mapram`). CONMEM only
-		// gates whether the overlay is paged in (the `conmem|automap`
-		// term it shares with automap) — it never forces ROM over the
-		// MAPRAM bank-3 substitution. (Earlier code had `&& !conmem`
-		// here, the inverse of the FPGA; VHDL is the oracle.)
+		// divmmc.vhd:94-95: page0 ($0000-$1FFF) serves the divMMC ROM only
+		// when MAPRAM is CLEAR (`rom_en = page0 & (conmem|automap) & !mapram`);
+		// when MAPRAM is latched it serves RAM bank 3, INDEPENDENT of CONMEM
+		// (`ram_en = page0 & (conmem|automap) & mapram`). CONMEM only gates
+		// whether the overlay is paged in (the `conmem|automap` term it
+		// shares with automap) — it never forces ROM over the MAPRAM bank-3
+		// substitution.
 		if p.mapram {
 			return p.ram[MAPRAMBank][addr], true
 		}
@@ -927,10 +917,7 @@ func (p *Pager) HandleRead(addr uint16) (byte, bool) {
 // CONMEM (port $E3 bit 7) forces divMMC RAM into $2000-$3FFF
 // independent of overlay-paged state, so NextZXOS init can
 // populate divMMC RAM banks BEFORE arming the overlay-on automap
-// trigger. Without honouring CONMEM during overlay-off, writes
-// silently fell through to the classic RAM bank and divMMC RAM
-// stayed empty — the IRQ handler then ran `CALL $2009` against
-// a zero/placeholder stub and the boot stalled in scheduler idle.
+// trigger.
 func (p *Pager) HandleWrite(addr uint16, val byte) bool {
 	conmem := p.lastE3&0x80 != 0
 	// Effective overlay-mapped = automap-held latch OR CONMEM force-in
@@ -952,7 +939,7 @@ func (p *Pager) HandleWrite(addr uint16, val byte) bool {
 			// MAPRAM write-protects bank 3 globally (low and high
 			// windows), INDEPENDENT of CONMEM: divmmc.vhd:100
 			// `rdonly = page0 | (mapram & ram_bank=3)` has no CONMEM
-			// term. (Earlier code had `&& !conmem`; VHDL is the oracle.)
+			// term.
 			return true
 		}
 		// Stub protection: when a TBBLUE.FW snapshot is loaded we
@@ -1025,18 +1012,15 @@ func (p *Pager) ResetSPI() {
 //	 does not.)
 //	bit 6 = MAPRAM (sticky: once set, latched until hardware
 //	 reset. When set AND the overlay is paged in
-//	 AND CONMEM is clear, 0x0000-0x1FFF maps to
+//	 (via automap OR CONMEM), 0x0000-0x1FFF maps to
 //	 divMMC RAM bank 3 instead of divMMC ROM, and
 //	 writes into bank 3 via the 0x2000-0x3FFF
 //	 window are dropped. NextZXOS sets this during
 //	 boot so its IRQ handler at 0x0038 can live in
 //	 divMMC RAM bank 3.)
-//	bits 5-3 = reserved.
-//	bits 2-0 = divMMC RAM bank selector for 0x2000-0x3FFF.
-//
-// Bit layout follows the FBLabs FPGA core: it was
-// reversed in an earlier version of this file. Real hardware: CONMEM
-// is the high bit, MAPRAM is bit 6.
+//	bits 5-4 = reserved.
+//	bits 3-0 = divMMC RAM bank selector for 0x2000-0x3FFF
+//	 (16 pages of 8K = 128K, zxnext.vhd port_e3_reg(3 downto 0)).
 //
 // Page-in state: writing to $E3 does NOT directly enable the
 // overlay (that's what automap is for). It DOES force the overlay
@@ -1069,10 +1053,9 @@ func (p *Pager) WritePort(port uint16, val byte) bool {
 		// all consult CONMEM directly via lastE3 bit 7, and
 		// IsPagedIn() reports the OR. This is load-bearing: NextZXOS's
 		// $DB41 stub sets CONMEM, writes $2009, then clears CONMEM and
-		// RETs into enNextZX ROM at $2000-$3FFF. If clearing CONMEM
-		// stranded the latch paged-in (the old behaviour, when automap
-		// was enabled), that RET would land in divMMC RAM (zeros) and
-		// the CPU would run off into a NOP-slide.
+		// RETs into enNextZX ROM at $2000-$3FFF. If clearing CONMEM also
+		// dropped the automap latch (were it set), that RET would land
+		// in divMMC RAM instead of the intended ROM.
 		return true
 	case 0xE7:
 		if p.card != nil {

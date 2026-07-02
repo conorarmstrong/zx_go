@@ -12,7 +12,7 @@ const SamplesPerFrame = saa1099.SampleRate / 50
 //
 // The 1-bit beeper (BORDER bit 4) is mixed in by the audio-system integration
 // (it needs the event-timed waveform reconstruction the ULA uses); the SAA is
-// the SAM's music/SFX chip and is the audio Sprint 5 delivers.
+// the SAM's dedicated music/SFX chip.
 func (m *Machine) GenerateAudio(buf []int16) {
 	m.SAA.GenerateStereo(buf)
 }

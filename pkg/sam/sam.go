@@ -9,7 +9,7 @@ import (
 )
 
 // CyclesPerFrame is the SAM frame length in CPU T-states: 6 MHz / ~50.08 Hz =
-// 384 cycles/line × 312 lines. (SimCoupe SAM.h CPU_CYCLES_PER_FRAME.)
+// 384 cycles/line × 312 lines.
 const CyclesPerFrame = 119808
 
 const (
@@ -19,7 +19,7 @@ const (
 	// effects; the ROM services the INT once per frame wherever it lands.
 	samFrameIntTstate = 99840
 	// samIntActiveCycles is how long an interrupt is held active in the STATUS
-	// register (SimCoupe CPU_CYCLES_INT_ACTIVE).
+	// register.
 	samIntActiveCycles = 128
 )
 
@@ -34,7 +34,7 @@ type Machine struct {
 	FDC [2]*WD1772 // drive 1 (ports 0xE0-E7), drive 2 (ports 0xF0-F7)
 
 	border byte     // last BORDER write (colour + MIC + BEEP + SOFF)
-	clut   [16]byte // CLUT palette registers (7-bit indices); consumed by Sprint 3
+	clut   [16]byte // CLUT palette registers (7-bit indices)
 	line   byte     // line-interrupt target line (>=192 = disabled)
 	lpen   byte     // ASIC light-pen horizontal register (IN 0x0F8)
 	hpen   byte     // ASIC light-pen line register (IN 0x1F8)
@@ -126,7 +126,7 @@ func (m *Machine) InsertDisk(drive int, d *Disk) {
 }
 
 // BorderColour returns the current 4-bit border CLUT index (BORDER bits map
-// ((x&0x20)>>2)|(x&7)). The renderer (Sprint 3) resolves it through the CLUT.
+// ((x&0x20)>>2)|(x&7)). The renderer resolves it through the CLUT.
 func (m *Machine) BorderColour() byte { return (m.border&0x20)>>2 | (m.border & 0x07) }
 
 // CLUT returns the 16 palette registers (7-bit master-palette indices).

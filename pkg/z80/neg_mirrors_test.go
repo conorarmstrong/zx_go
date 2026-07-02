@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// ED-prefix NEG mirror encodings (iter 284).
+// ED-prefix NEG mirror encodings.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §A.1, ED $44, $4C,
 // $54, $5C, $64, $6C, $74, $7C are all NEG mirror encodings — they

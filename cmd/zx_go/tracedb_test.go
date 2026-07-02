@@ -143,9 +143,8 @@ func TestLoadM1RoundTrip(t *testing.T) {
 
 // TestTraceDBOverlayColumns verifies the flush carries the per-row
 // overlay context: alt (NR$8C alt-rom register) and dmc (divMMC
-// paged-in) — without these, logical PCs in multi-overlay eras
-// (the development log) cannot be attributed to the code that actually
-// executed.
+// paged-in) — without these, a logical PC recorded while an overlay
+// was active cannot be attributed to the code that actually executed.
 func TestTraceDBOverlayColumns(t *testing.T) {
 	tb := newTraceDB(4)
 	tb.record(traceDBRow{insn: 1, pc: 0x0136, bank: 0, alt: 0x80, dmc: 0})
@@ -175,8 +174,8 @@ func TestTraceDBOverlayColumns(t *testing.T) {
 }
 
 // TestTraceDBFrameColumn verifies the flush carries the frame number —
-// the only honest era anchor (insn counts conflate boot-wipe loops
-// with menu idle; the development log).
+// the only honest era anchor (insn counts alone conflate boot-wipe
+// loops with menu idle).
 func TestTraceDBFrameColumn(t *testing.T) {
 	tb := newTraceDB(4)
 	tb.record(traceDBRow{insn: 1, pc: 0x1000, frame: 1999})

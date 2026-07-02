@@ -144,8 +144,6 @@ func TestSaveAtomic(t *testing.T) {
 	}
 }
 
-// iter 292: cover error and edge branches in Path/Save.
-
 // blockConfigDir sets up an env where os.UserConfigDir resolves
 // under tmp, then writes a regular file where MkdirAll would put
 // the "zx_go" subdir — forcing the MkdirAll inside Path() to fail.
@@ -189,8 +187,8 @@ func TestSave_PropagatesPathError(t *testing.T) {
 	}
 }
 
-// TestSave_PreservesAtomicWrite_ContentRoundtrip — extra confidence
-// that a successful Save still produces the JSON we expect on disk.
+// TestSave_WritesJSONContent checks that a successful Save produces
+// the JSON we expect on disk.
 func TestSave_WritesJSONContent(t *testing.T) {
 	redirectConfig(t)
 	c := &Config{Model: "Next", Scale: 300, NextSDDir: "/sd/dir"}

@@ -55,7 +55,7 @@ func TestProvenancePhysRecordsLastWriter(t *testing.T) {
 	p.enabled.Store(true)
 	p.phys = make(map[uint32]provRec)
 
-	// $C7 written to physical bank 111, offset $002D — the #229 case.
+	// $C7 written to physical bank 111, offset $002D.
 	p.recordPhys(111, 0x002D, 0xC7, 999, 0x4321)
 
 	got := p.lookupPhys(111, 0x002D)

@@ -179,7 +179,7 @@ func TestResetClearsState(t *testing.T) {
 }
 
 // =========================================================================
-// AY envelope shape end-state tests (iter 201 — task #116).
+// AY envelope shape end-state tests.
 //
 // Each of the 16 envelope shapes (NR$13 / RegEnvShape bits 3:0) defines
 // a unique pattern. Per the AY-3-8910 / YM2149 datasheet, the
@@ -252,9 +252,6 @@ func TestEnvelope_Shape9_HoldAtZero(t *testing.T) {
 
 // TestEnvelope_Shape11_HoldAtFifteen — 1011 = continue + hold + alt + decay.
 // Decay then hold at 15 (the "_" inverts to "¯" because of alt).
-//
-// Fixed in iter 207 — envelope generator rewritten to use 0..15
-// step counter with direction tracking, matching AY-3-8910 spec.
 func TestEnvelope_Shape11_HoldAtFifteen(t *testing.T) {
 	a := New()
 	a.WriteRegister(RegEnvShape, 0x0B)
@@ -269,8 +266,6 @@ func TestEnvelope_Shape11_HoldAtFifteen(t *testing.T) {
 
 // TestEnvelope_Shape13_HoldAtFifteen — 1101 = continue + hold + attack.
 // Attack then hold at 15.
-//
-// Fixed in iter 207.
 func TestEnvelope_Shape13_HoldAtFifteen(t *testing.T) {
 	a := New()
 	a.WriteRegister(RegEnvShape, 0x0D)
@@ -341,8 +336,6 @@ func TestEnvelope_Shape14_AlternatingNeverHolds(t *testing.T) {
 
 // TestEnvelope_LevelAtStart verifies the initial output level
 // matches the spec: attack shapes start at 0, decay shapes start at 15.
-//
-// Fixed in iter 207 — decay shapes now start at envelope level 15.
 func TestEnvelope_LevelAtStart(t *testing.T) {
 	for _, tc := range []struct {
 		shape byte
@@ -378,9 +371,6 @@ func TestEnvelope_ReassertingShapeResetsHolding(t *testing.T) {
 		t.Error("envHolding still set after shape re-write — startEnvelope should reset")
 	}
 }
-
-// AY register coverage iter 276 — exercise every register's
-// documented bit-width mask and mixer/tone period mixed cases.
 
 // TestRegMasks_AllSixteen exhaustively verifies each register's
 // mask: writing 0xFF should produce only the bits the chip

@@ -9,7 +9,7 @@ import (
 	"fyne.io/fyne/v2"
 )
 
-// iter 293: cover PressMatrixKey + Get/Set/Load/SaveOverrides.
+// Covers PressMatrixKey and Get/Set/Load/SaveOverrides.
 
 func TestPressMatrixKey_PressAndRelease(t *testing.T) {
 	k := New()

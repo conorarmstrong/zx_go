@@ -2,8 +2,8 @@ package testharness
 
 import "testing"
 
-// iter 308: cover the unexported helpers (textTimeoutError.Error,
-// quote, itoa) used by RunUntilText timeout reporting. They're pure
+// Covers the unexported helpers (textTimeoutError.Error, quote,
+// itoa) used by RunUntilText timeout reporting. They're pure
 // formatters with simple inputs, but the cover tool flags them as
 // uncovered without a direct call.
 

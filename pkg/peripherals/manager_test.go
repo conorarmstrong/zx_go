@@ -581,8 +581,7 @@ func TestLoadDiscipleDisk_NotEnabled(t *testing.T) {
 	}
 }
 
-// PeripheralManager IF1 + IF2 + Plus3 method coverage (iter 262).
-// Multiple 0%-cov funcs in manager.go.
+// PeripheralManager IF1 + IF2 + Plus3 method coverage.
 
 func TestEnableInterface1_Only48K(t *testing.T) {
 	dir := createTestROMDir(t)
@@ -682,4 +681,3 @@ func createTestROMs128(t *testing.T, dir string) {
 		}
 	}
 }
-

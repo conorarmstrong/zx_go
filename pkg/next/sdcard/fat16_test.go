@@ -162,6 +162,69 @@ func TestBuildFAT16_Subdirectory(t *testing.T) {
 	}
 }
 
+// TestBuildFAT16_NestedSubdirectoryDotDot verifies that a subdirectory
+// nested two levels deep has its ".." entry pointing at its immediate
+// parent's cluster, not unconditionally at the root (cluster 0).
+func TestBuildFAT16_NestedSubdirectoryDotDot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "GAMES", "SUB"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	img, err := BuildFAT16(dir, BuildOpts{SizeMB: 16, SectorsPerCluster: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const partitionLBA = 2048
+	const reserved = 1
+	const numFATs = 2
+	const sectorsPerCluster = 4
+	const sectorSize = 512
+	totalSectors := 16 * 1024 * 1024 / sectorSize
+	partitionSectors := totalSectors - partitionLBA
+	rootDirSectors := 32
+	dataSectors := partitionSectors - reserved - rootDirSectors
+	totalClusters := dataSectors / sectorsPerCluster
+	fatSize := (totalClusters*2 + sectorSize - 1) / sectorSize
+	rootDirOffset := (partitionLBA + reserved + numFATs*fatSize) * sectorSize
+	dataOffset := (partitionLBA + reserved + numFATs*fatSize + rootDirSectors) * sectorSize
+	clusterBytes := sectorsPerCluster * sectorSize
+
+	findEntry := func(dirOff int, name string) (cluster uint16, ok bool) {
+		for i := 0; i < clusterBytes/32; i++ {
+			eoff := dirOff + i*32
+			if bytes.Equal(img[eoff:eoff+11], []byte(name)) {
+				return binary.LittleEndian.Uint16(img[eoff+26 : eoff+28]), true
+			}
+		}
+		return 0, false
+	}
+
+	var gamesCluster uint16
+	for i := 0; i < 512; i++ {
+		off := rootDirOffset + i*32
+		if bytes.Equal(img[off:off+8], []byte("GAMES   ")) && img[off+11]&attrDir != 0 {
+			gamesCluster = binary.LittleEndian.Uint16(img[off+26 : off+28])
+			break
+		}
+	}
+	if gamesCluster == 0 {
+		t.Fatal("GAMES subdir not found in root")
+	}
+	gamesOff := dataOffset + int(gamesCluster-2)*clusterBytes
+	subCluster, ok := findEntry(gamesOff, padFAT("SUB", 11))
+	if !ok {
+		t.Fatal("SUB subdir not found inside GAMES")
+	}
+	subOff := dataOffset + int(subCluster-2)*clusterBytes
+	dotDotCluster, ok := findEntry(subOff, padFAT("..", 11))
+	if !ok {
+		t.Fatal("\"..\" entry not found inside SUB")
+	}
+	if dotDotCluster != gamesCluster {
+		t.Errorf("SUB's \"..\" cluster = %d, want %d (GAMES, its immediate parent)", dotDotCluster, gamesCluster)
+	}
+}
+
 func TestToFAT83(t *testing.T) {
 	cases := map[string]string{
 		"hello.txt":       "HELLO.TXT",

@@ -1,17 +1,23 @@
 package debugger
 
 import (
+	"image/color"
 	"testing"
+	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// iter 328: cover the non-GUI logic in debugger.go — CheckBreakpoint
+// Covers the non-GUI logic in debugger.go — CheckBreakpoint
 // (plain / bank-filtered / conditional), cpuBank, visualCPUState,
-// bpStoreAdapter, and cpuStackSource. These all run without the Fyne
-// window, so the Debugger is built field-by-field rather than via New.
+// and cpuStackSource. These all run without the Fyne window, so the
+// Debugger is built field-by-field rather than via New.
 
 // newLogicDebugger builds a Debugger with just the fields the
 // breakpoint-evaluation paths read: cpu, mem, and the breakpoint map.
@@ -146,8 +152,7 @@ func TestVisualCPUState_ReadMem(t *testing.T) {
 func TestBpStoreAdapter_RoundTrip(t *testing.T) {
 	// The shared BreakpointSet is the BreakpointsStore the GUI and
 	// telnet both use; this pins its List/Add/Remove/Clear contract
-	// (copy-on-read, etc.). Formerly tested bpStoreAdapter, now folded
-	// into BreakpointSet.
+	// (copy-on-read, etc.).
 	a := NewBreakpointSet()
 
 	a.Add(0x4000, BPEntry{Bank: 2})
@@ -190,6 +195,75 @@ func TestFormatAddr(t *testing.T) {
 	if got := d.formatAddr(0x1A2B); got != "15053" {
 		t.Errorf("base8 = %q, want 15053", got)
 	}
+}
+
+// newDasmListStub builds a minimal *widget.List usable as
+// Debugger.dasmList in tests that exercise refreshDisassembly
+// without going through buildUI (which requires a shown window).
+func newDasmListStub() *widget.List {
+	return widget.NewList(
+		func() int { return 0 },
+		func() fyne.CanvasObject { return canvas.NewText("", color.White) },
+		func(widget.ListItemID, fyne.CanvasObject) {},
+	)
+}
+
+func TestRefreshDisassembly_PicksUpMemoryEditAtSamePC(t *testing.T) {
+	d, cpu, mem := newLogicDebugger(t, roms.Model48K)
+	d.dasmList = newDasmListStub()
+	cpu.PC = 0x8000
+	mem.Write(0x8000, 0x00) // NOP
+
+	d.refreshDisassembly()
+	if got := d.dasmCache[0].Mnem; got != "NOP" {
+		t.Fatalf("initial disassembly Mnem = %q, want NOP", got)
+	}
+
+	// Self-modify the byte at PC without moving PC — a paused-debugger
+	// memory write (e.g. the Write Mem dialog) must be reflected on
+	// the next refresh even though PC is unchanged.
+	mem.Write(0x8000, 0xF3) // DI
+	d.refreshDisassembly()
+	if got := d.dasmCache[0].Mnem; got != "DI" {
+		t.Errorf("refreshDisassembly kept stale bytes: Mnem = %q, want DI", got)
+	}
+}
+
+// TestStopRefresh_DoesNotDropSignalWhenReceiverBusy pins that
+// stopRefresh's stop signal is never lost. startRefresh's goroutine
+// isn't always parked in its select — it can be off running
+// fyne.Do(d.Refresh) when the window closes — so the signal must be
+// durable (e.g. closing the channel) rather than a single
+// best-effort non-blocking send.
+func TestStopRefresh_DoesNotDropSignalWhenReceiverBusy(t *testing.T) {
+	d := &Debugger{stopChan: make(chan struct{})}
+	busy := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(busy)
+		// Simulate the refresh goroutine being busy elsewhere (e.g.
+		// inside fyne.Do) at the moment stopRefresh runs, so it isn't
+		// yet parked on the receive.
+		time.Sleep(20 * time.Millisecond)
+		<-d.stopChan
+		close(done)
+	}()
+	<-busy
+	d.stopRefresh()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop signal was dropped: receiver never woke up")
+	}
+}
+
+// TestStopRefresh_SafeToCallMultipleTimes guards against a panic if
+// the window's OnClosed callback (or a caller) invokes stopRefresh
+// more than once on the same Debugger.
+func TestStopRefresh_SafeToCallMultipleTimes(t *testing.T) {
+	d := &Debugger{stopChan: make(chan struct{})}
+	d.stopRefresh()
+	d.stopRefresh()
 }
 
 func TestCpuStackSource(t *testing.T) {

@@ -90,7 +90,7 @@ func TestNBIDefprocIntParamBinds(t *testing.T) {
 		t.Skip("did not reach the NextZXOS menu loop (boot path differs)")
 	}
 	hold([][2]int{{7, 0x01}}, 40)
-	stepN(140) // SPACE -> main menu
+	stepN(140)               // SPACE -> main menu
 	for d := 0; d < 2; d++ { // down x2 -> NextBASIC
 		hold([][2]int{{0, 0x01}, {4, 0x10}}, 6)
 		stepN(20)

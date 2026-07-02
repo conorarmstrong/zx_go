@@ -7,10 +7,10 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
 )
 
-// Step 1 of the shared-backend work: the telnet debugger and the
-// visual debugger operate on ONE breakpoint store (emulator-owned),
-// so a breakpoint set from either surface is visible to the other.
-// This pins that bidirectional sharing at the backend level.
+// The telnet debugger and the visual debugger operate on ONE
+// breakpoint store (emulator-owned), so a breakpoint set from either
+// surface is visible to the other. This pins that bidirectional
+// sharing at the backend level.
 func TestSharedBreakpointsTelnetToGUI(t *testing.T) {
 	d := newRemoteWithCPU(t)
 	// The telnet debugger's command path resolves the shared set via
@@ -52,8 +52,8 @@ func TestBpsetResolvesToEmulatorShared(t *testing.T) {
 	}
 }
 
-// Step 2: register watchpoints share one set across telnet and GUI.
-// A watch added via the telnet `watch-reg` command must appear in the
+// Register watchpoints share one set across telnet and GUI. A watch
+// added via the telnet `watch-reg` command must appear in the
 // emulator's shared RegWatchSet that the GUI Watchpoints tab renders.
 func TestSharedRegWatchesTelnetToGUI(t *testing.T) {
 	d := newRemoteWithCPU(t)
@@ -74,11 +74,11 @@ func TestSharedRegWatchesTelnetToGUI(t *testing.T) {
 	}
 }
 
-// Step 3: the time-travel ring is emulator-owned, so the GUI
-// controller and the telnet tt-* commands drive the SAME buffer.
-// (Taking an actual snapshot needs a full machine — ULA etc. — so
-// this pins the shared-ownership wiring, not snapshot capture, which
-// TestTTRewind* already covers with a real emulator.)
+// The time-travel ring is emulator-owned, so the GUI controller and
+// the telnet tt-* commands drive the SAME buffer. (Taking an actual
+// snapshot needs a full machine — ULA etc. — so this pins the
+// shared-ownership wiring, not snapshot capture, which TestTTRewind*
+// already covers with a real emulator.)
 func TestSharedTimeTravelTelnetAndGUI(t *testing.T) {
 	d := newRemoteWithCPU(t)
 	ctl := ttController{emu: d.emu}

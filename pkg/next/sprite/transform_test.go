@@ -155,8 +155,7 @@ func TestSpriteCollision(t *testing.T) {
 }
 
 // TestSprite4bppPaletteOffset: in 4bpp the palette offset is the index's
-// HIGH nibble (offset<<4 | pixel), per FPGA sprites.vhd:968 — not the old
-// pixel+offset sum.
+// HIGH nibble (offset<<4 | pixel), per FPGA sprites.vhd:968.
 func TestSprite4bppPaletteOffset(t *testing.T) {
 	e := New()
 	e.SetEnabled(true)

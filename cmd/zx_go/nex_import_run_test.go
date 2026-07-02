@@ -11,9 +11,10 @@ import (
 // TestNexImportAndRunFolderMode exercises the exact File->Open .nex user flow
 // end-to-end in folder mode (the default): import a host .nex into the live
 // in-memory SD image (under /imported/) and load it through NextZXOS's own
-// .nexload. Before the sdImageSrc fix this path was unreachable in folder mode
-// (the gate blocked it as "no SD card configured"). Gated by SONIC_DIAG since
-// it needs the local Next ROMs + a .nex on disk.
+// .nexload. Guards against folder mode gating .nex loads on "no SD card
+// configured" — sdImageSrc must be populated whenever an SD card is
+// configured, not just in raw-image mode. Gated by SONIC_DIAG since it needs
+// the local Next ROMs + a .nex on disk.
 func TestNexImportAndRunFolderMode(t *testing.T) {
 	if os.Getenv("SONIC_DIAG") == "" {
 		t.Skip("set SONIC_DIAG=1 to run the import-and-run end-to-end check")

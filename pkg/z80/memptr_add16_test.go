@@ -2,8 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR updates for ADD HL,rr / ADD IX,rr / ADD IY,rr
-// (iter 298).
+// WZ/MEMPTR updates for ADD HL,rr / ADD IX,rr / ADD IY,rr.
 //
 // Per Sean Young §3.4, every 16-bit ADD sets MEMPTR = HL+1 (or
 // IX+1 / IY+1), using the value of the destination register BEFORE

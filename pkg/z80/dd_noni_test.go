@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// DD / FD "wasted prefix" behavior (iter 313).
+// DD / FD "wasted prefix" behavior.
 //
 // Per Sean Young §5.7: a DD or FD prefix followed by an opcode
 // that doesn't use the indexed register is a NONI ("no-operation,

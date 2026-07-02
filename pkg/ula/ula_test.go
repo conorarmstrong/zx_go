@@ -507,10 +507,9 @@ func BenchmarkULARender(b *testing.B) {
 	}
 }
 
-// ULA setter/getter coverage (iter 254). Targets 0%-coverage public
-// hooks: SetTapePlayer + GetTapePlayer, Reset clears border/mic/
-// speaker/AY state, SetPeripherals nil-safe, SetNextDMA / Compositor
-// / Copper / DAC / DivMMC + getter sanity, GetPortTracer.
+// ULA setter/getter coverage: SetTapePlayer + GetTapePlayer, Reset clears
+// border/mic/speaker/AY state, SetPeripherals nil-safe, SetNextDMA /
+// Compositor / Copper / DAC / DivMMC + getter sanity, GetPortTracer.
 
 func ulaTest(t *testing.T, model roms.SpectrumModel) *ULA {
 	t.Helper()
@@ -587,7 +586,7 @@ func TestULASetNextHooksAreSettable(t *testing.T) {
 	}
 }
 
-// Port/border tracer + audio recording hook coverage (iter 279).
+// Port/border tracer + audio recording hook coverage.
 
 func TestULA_GetPortTracer(t *testing.T) {
 	u := ulaTest(t, roms.Model48K)

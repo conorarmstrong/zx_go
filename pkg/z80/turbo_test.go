@@ -77,10 +77,10 @@ func TestTurbo28MHzM1WaitState(t *testing.T) {
 		return cpu.Tstates() - startT
 	}
 
-	base := tstatesPerNOPNo28(t, 0, VariantZ80)        // 3.5 MHz Z80
-	z80At28 := tstatesPerNOPNo28(t, 3, VariantZ80)     // 28 MHz Z80 (no wait — variant gates)
-	z80nAt7 := tstatesPerNOPNo28(t, 1, VariantZ80N)    // 7 MHz Z80N (no wait — speed gates)
-	z80nAt28 := tstatesPerNOPNo28(t, 3, VariantZ80N)   // 28 MHz Z80N (wait active)
+	base := tstatesPerNOPNo28(t, 0, VariantZ80)      // 3.5 MHz Z80
+	z80At28 := tstatesPerNOPNo28(t, 3, VariantZ80)   // 28 MHz Z80 (no wait — variant gates)
+	z80nAt7 := tstatesPerNOPNo28(t, 1, VariantZ80N)  // 7 MHz Z80N (no wait — speed gates)
+	z80nAt28 := tstatesPerNOPNo28(t, 3, VariantZ80N) // 28 MHz Z80N (wait active)
 
 	if base != 4 {
 		t.Errorf("baseline NOP at 3.5 MHz Z80 = %d T-states, want 4", base)

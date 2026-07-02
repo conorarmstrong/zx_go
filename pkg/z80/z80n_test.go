@@ -7,9 +7,9 @@ import (
 )
 
 // createZ80NTestCPU returns a Z80N-variant CPU sharing the 48K
-// memory backing used by the existing ED tests. Sprint 2's Z80N
-// opcodes are unit-tested in isolation against this CPU; integration
-// with the Next bus comes in Sprint 3.
+// memory backing used by the existing ED tests, for unit-testing
+// Z80N opcodes in isolation (Next-bus integration is exercised
+// elsewhere).
 func createZ80NTestCPU() (*CPU, *memory.Memory) {
 	cpu, mem := createTestCPU()
 	cpu.Variant = VariantZ80N
@@ -17,7 +17,7 @@ func createZ80NTestCPU() (*CPU, *memory.Memory) {
 }
 
 // =============================================================================
-// Z80N arithmetic group (S2.2)
+// Z80N arithmetic group
 // =============================================================================
 
 func TestZ80N_MUL(t *testing.T) {
@@ -148,7 +148,7 @@ func TestZ80N_ADD16FromImmediate(t *testing.T) {
 }
 
 // =============================================================================
-// Z80N bit / shift group (S2.3)
+// Z80N bit / shift group
 // =============================================================================
 
 func TestZ80N_SWAPNIB(t *testing.T) {
@@ -279,11 +279,11 @@ func TestZ80N_BSRA(t *testing.T) {
 		b    byte
 		want uint16
 	}{
-		{0x4000, 1, 0x2000},        // positive -> arithmetic = logical
-		{0x8000, 1, 0xC000},        // negative -> fill with 1s
+		{0x4000, 1, 0x2000}, // positive -> arithmetic = logical
+		{0x8000, 1, 0xC000}, // negative -> fill with 1s
 		{0x8001, 4, 0xF800},
-		{0x8000, 16, 0xFFFF},       // shifted out, sign fill
-		{0x4000, 16, 0x0000},       // shifted out, no sign
+		{0x8000, 16, 0xFFFF}, // shifted out, sign fill
+		{0x4000, 16, 0x0000}, // shifted out, no sign
 		{0x1234, 0, 0x1234},
 	}
 	for _, c := range cases {
@@ -303,8 +303,8 @@ func TestZ80N_BSRL(t *testing.T) {
 		b    byte
 		want uint16
 	}{
-		{0x8000, 1, 0x4000},        // logical -> zero fill
-		{0x8000, 16, 0x0000},       // all shifted out
+		{0x8000, 1, 0x4000},  // logical -> zero fill
+		{0x8000, 16, 0x0000}, // all shifted out
 		{0xFFFF, 4, 0x0FFF},
 		{0x1234, 0, 0x1234},
 	}
@@ -325,8 +325,8 @@ func TestZ80N_BSRF(t *testing.T) {
 		b    byte
 		want uint16
 	}{
-		{0x0000, 1, 0x8000},        // fill with 1 even if input was 0
-		{0x0000, 16, 0xFFFF},       // shifts all in
+		{0x0000, 1, 0x8000},  // fill with 1 even if input was 0
+		{0x0000, 16, 0xFFFF}, // shifts all in
 		{0xFFFF, 4, 0xFFFF},
 		{0x4000, 1, 0xA000},
 		{0x1234, 0, 0x1234},
@@ -389,7 +389,7 @@ func TestZ80N_SETAE(t *testing.T) {
 }
 
 // =============================================================================
-// Z80N block group (S2.4)
+// Z80N block group
 // =============================================================================
 
 func TestZ80N_LDIX_Copies(t *testing.T) {
@@ -545,7 +545,7 @@ func TestZ80N_LDPIRX_Pattern(t *testing.T) {
 }
 
 // =============================================================================
-// Z80N system group (S2.5)
+// Z80N system group
 // =============================================================================
 
 // fakeNextRegSink captures NextReg writes so NEXTREG opcode tests can
@@ -651,8 +651,8 @@ func TestZ80N_NEXTREGTolerantOfNilSink(t *testing.T) {
 
 func TestZ80N_JPC(t *testing.T) {
 	cpu, _ := createZ80NTestCPU()
-	cpu.PC = 0x8123             // top two bits 10
-	cpu.setBC(0x1234)            // bottom 14 bits = 0x1234
+	cpu.PC = 0x8123   // top two bits 10
+	cpu.setBC(0x1234) // bottom 14 bits = 0x1234
 	_ = cpu.executeZ80NEDInstruction(0x98)
 	// (0x8123 & 0xC000) | (0x1234 & 0x3FFF) = 0x8000 | 0x1234 = 0x9234
 	if cpu.PC != 0x9234 {
@@ -720,13 +720,13 @@ func TestZ80N_PIXELDN(t *testing.T) {
 }
 
 // =============================================================================
-// Coverage: T-state costs across all Z80N opcodes (S2 review fix)
+// Coverage: T-state costs across all Z80N opcodes
 // =============================================================================
 
 // TStateCostsTable pins the documented T-state cost for every
 // Z80N opcode against the implementation. If a future change tweaks
-// an opcode's cost (e.g. for the 28 MHz M1 wait-state work in
-// Sprint 5), this table makes the regression loud.
+// an opcode's cost (e.g. the 28 MHz M1 wait-state), this table makes
+// the regression loud.
 //
 // Costs taken from https://wiki.specnext.dev/Extended_Z80_instruction_set. Repeating
 // variants (LDIRX, LDDRX, LDPIRX) test only the non-repeating
@@ -800,7 +800,7 @@ func TestZ80N_TStateCostsTable(t *testing.T) {
 }
 
 // =============================================================================
-// Flag-correctness checks for block / system opcodes (S2 review fix)
+// Flag-correctness checks for block / system opcodes
 // =============================================================================
 
 func TestZ80N_LDWS_Flags(t *testing.T) {
@@ -888,7 +888,7 @@ func TestZ80N_OUTINB_Flags(t *testing.T) {
 }
 
 // =============================================================================
-// JP (C) edge case (S2 review fix)
+// JP (C) edge case
 // =============================================================================
 
 func TestZ80N_JPC_HighBitsAtBoundary(t *testing.T) {
@@ -907,15 +907,15 @@ func TestZ80N_JPC_HighBitsAtBoundary(t *testing.T) {
 }
 
 // =============================================================================
-// Regression: operand fetches must NOT count as M1 (Sprint 5 fix)
+// Regression: operand fetches must NOT count as M1
 // =============================================================================
 
-// Pre-Sprint-5, the Z80N immediate-operand opcodes (TEST n,
-// PUSH nn, NEXTREG r,n, NEXTREG r,A) were calling fetch() for
-// their operand bytes. fetch() increments R and instructionCount
-// — which is correct for M1 cycles but WRONG for operand reads.
-// Classic ED-prefixed opcodes have always used readOperand() for
-// their operands. Sprint 5 fixed this. The test pins it.
+// The Z80N immediate-operand opcodes (TEST n, PUSH nn, NEXTREG r,n,
+// NEXTREG r,A) must read their operand bytes via readOperand(), not
+// fetch(): fetch() increments R and instructionCount, which is
+// correct for M1 cycles but wrong for operand reads. Classic
+// ED-prefixed opcodes have always used readOperand() for their
+// operands; this test pins the same contract for the Z80N opcodes.
 func TestZ80NOperandFetchesNotCountedAsM1(t *testing.T) {
 	// PUSH nn fetches two operand bytes plus its ED prefix and
 	// secondary opcode byte. The classic Z80 M1 count for the

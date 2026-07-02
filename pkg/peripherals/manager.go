@@ -97,13 +97,13 @@ func (pm *PeripheralManager) EnableDisciple(romPath string) error {
 	if pm.discipleEnabled {
 		return nil // Already enabled
 	}
-	
+
 	var err error
 	pm.disciple, err = disciple.NewDisciple(romPath, pm.memory)
 	if err != nil {
 		return fmt.Errorf("failed to initialize Disciple: %w", err)
 	}
-	
+
 	pm.discipleEnabled = true
 	log.Println("Disciple disk interface enabled")
 	return nil
@@ -121,13 +121,13 @@ func (pm *PeripheralManager) EnableMultiface(variant multiface.MultifaceType, ro
 	if pm.multifaceEnabled && pm.multifaceVariant == variant {
 		return nil // Already enabled with same variant
 	}
-	
+
 	var err error
 	pm.multiface, err = multiface.NewMultiface(variant, romPath, pm.memory)
 	if err != nil {
 		return fmt.Errorf("failed to initialize %s: %w", multiface.GetVariantName(variant), err)
 	}
-	
+
 	pm.multifaceEnabled = true
 	pm.multifaceVariant = variant
 	log.Printf("%s enabled", multiface.GetVariantName(variant))
@@ -296,7 +296,7 @@ func (pm *PeripheralManager) KempstonMouseMove(dx, dy int) {
 }
 
 // KempstonMouseButton presses or releases a Kempston mouse button.
-// btn is the button index (0 = right, 1 = left, per FUSE convention).
+// btn is the button index (0 = right, 1 = left).
 func (pm *PeripheralManager) KempstonMouseButton(btn int, pressed bool) {
 	if pm.kempmouse != nil {
 		pm.kempmouse.SetButton(btn, pressed)
@@ -533,7 +533,7 @@ func (pm *PeripheralManager) HandleNMI() bool {
 	if pm.multifaceEnabled && pm.multiface != nil {
 		return pm.multiface.HandleNMI()
 	}
-	
+
 	return false
 }
 
@@ -542,7 +542,7 @@ func (pm *PeripheralManager) HandleOpcodeRead(addr uint16) bool {
 	if pm.multifaceEnabled && pm.multiface != nil {
 		return pm.multiface.HandleOpcodeRead(addr)
 	}
-	
+
 	return false
 }
 
@@ -569,7 +569,7 @@ func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
 			return ram[addr-0x2000], true
 		}
 	}
-	
+
 	// Check if Disciple ROM/RAM is paged in. The memswap flag
 	// swaps which 8K block (ROM or RAM) appears at each half.
 	if pm.discipleEnabled && pm.disciple != nil && pm.disciple.IsROMPaged() {
@@ -604,13 +604,13 @@ func (pm *PeripheralManager) HandleMemoryRead(addr uint16) (byte, bool) {
 func (pm *PeripheralManager) HandleMemoryWrite(addr uint16, value byte) bool {
 	// Check if Multiface RAM is accessible
 	if pm.multifaceEnabled && pm.multiface != nil && pm.multiface.IsROMPaged() {
-		if addr >= 0x2000 && addr < 0x4000 { // Multiface RAM area (hypothetical)
+		if addr >= 0x2000 && addr < 0x4000 { // Multiface RAM area (0x2000-0x3FFF)
 			ram := pm.multiface.GetRAM()
 			ram[addr-0x2000] = value
 			return true
 		}
 	}
-	
+
 	// DISCiPLE: writes to 0x0000-0x3FFF always go to the 8KB RAM,
 	// regardless of memswap. On real hardware, the ROM chip is
 	// read-only and doesn't respond to writes; the RAM chip
@@ -622,20 +622,20 @@ func (pm *PeripheralManager) HandleMemoryWrite(addr uint16, value byte) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
 // GetStatus returns status information about enabled peripherals
 func (pm *PeripheralManager) GetStatus() map[string]interface{} {
 	status := make(map[string]interface{})
-	
+
 	status["disciple_enabled"] = pm.discipleEnabled
 	if pm.discipleEnabled && pm.disciple != nil {
 		status["disciple_rom_paged"] = pm.disciple.IsROMPaged()
 		status["disciple_inhibited"] = pm.disciple.IsInhibited()
 	}
-	
+
 	status["multiface_enabled"] = pm.multifaceEnabled
 	if pm.multifaceEnabled && pm.multiface != nil {
 		status["multiface_variant"] = multiface.GetVariantName(pm.multifaceVariant)
@@ -643,7 +643,7 @@ func (pm *PeripheralManager) GetStatus() map[string]interface{} {
 		status["multiface_invisible"] = pm.multiface.IsInvisible()
 		status["multiface_red_button"] = pm.multiface.IsRedButtonPressed()
 	}
-	
+
 	return status
 }
 
@@ -672,7 +672,7 @@ func (pm *PeripheralManager) LoadDiscipleDisk(drive int, filename string) error 
 	if !pm.discipleEnabled || pm.disciple == nil {
 		return fmt.Errorf("disciple not enabled")
 	}
-	
+
 	return pm.disciple.LoadDisk(drive, filename)
 }
 

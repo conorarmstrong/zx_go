@@ -505,6 +505,67 @@ func TestPriorityModeLUS(t *testing.T) {
 	}
 }
 
+// TestPriorityModeLUSULAOverSprite exercises the part of LUS that a fully
+// L2-opaque fixture can't: ULA must sit ABOVE Sprites (LUS = Layer2 > ULA >
+// Sprites). Layer 2 here is transparent under the sprite (x<16), so that
+// region's winner reveals the ULA/Sprite order directly.
+func TestPriorityModeLUSULAOverSprite(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteLayer2First)
+	pal.Active().Set(5, 0b0_0011_1000)                  // L2 = green
+	pal.Active().Set(0, uint16(DefaultTransparency)<<1) // L2 index 0 = transparent
+	pal.Select(palette.PaletteSpritesFirst)
+	pal.Active().Set(1, 0b1_1100_0000) // sprite = red
+	pal.Select(0)
+
+	bank := make([]byte, 16384)
+	for i := 16; i < 256; i++ {
+		bank[i] = 5 // green from x=16 on; x<16 stays index 0 (transparent)
+	}
+	l2 := layer2.New(&fakeBanks{banks: map[int][]byte{0: bank}})
+	l2.SetActiveBank(0)
+	l2.SetEnabled(true)
+
+	sp := sprite.New()
+	sp.SetEnabled(true)
+	for i := 0; i < 128; i++ {
+		sp.SetPatternAddr(uint16(i))
+		sp.WritePatternByte(0x01)
+	}
+	sp.Set(0, sprite.Attr{X: 32, Y: 32, Pattern: 0, Visible: true})
+
+	c := New(pal, l2)
+	c.SetSprites(sp)
+	c.SetPrioritySource(fakedPrio{ModeLUS})
+
+	ulaRGBA := make([]byte, Width*4)
+	for i := 0; i < Width; i++ {
+		ulaRGBA[i*4+0] = 0xFF
+		ulaRGBA[i*4+2] = 0xFF
+		ulaRGBA[i*4+3] = 0xFF
+	}
+	dst := make([]byte, Width*4)
+	c.ComposeScanline(0, ulaRGBA, dst)
+
+	// Under the sprite, where L2 is transparent: ULA (magenta) must win,
+	// since ULA sits above Sprites in LUS.
+	for x := 0; x < 16; x++ {
+		r, g, b := dst[x*4+0], dst[x*4+1], dst[x*4+2]
+		if r == 0 || g != 0 || b == 0 {
+			t.Errorf("LUS x=%d: rgb=%d/%d/%d, want magenta (ULA over sprite)", x, r, g, b)
+			break
+		}
+	}
+	// From x=16 on, Layer 2 is opaque green and tops everything.
+	for x := 16; x < Width; x++ {
+		r, g, b := dst[x*4+0], dst[x*4+1], dst[x*4+2]
+		if r != 0 || g == 0 || b != 0 {
+			t.Errorf("LUS x=%d: rgb=%d/%d/%d, want green (L2 top)", x, r, g, b)
+			break
+		}
+	}
+}
+
 // TestComposeWideLayer2Row320 verifies the wide-L2 path colours a 320-wide
 // hi-res Layer 2 row via the L2 palette, overlaying onto dst.
 func TestComposeWideLayer2Row320(t *testing.T) {

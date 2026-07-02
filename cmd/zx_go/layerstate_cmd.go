@@ -25,7 +25,7 @@ func formatLayerState(rd func(byte) byte) string {
 	r15 := rd(0x15)
 	fmt.Fprintf(&b, "  $15 layer priority = %s\r\n", sluPriority[(r15>>2)&0x07])
 	fmt.Fprintf(&b, "  sprites: %s   over-border: %s   sprite0-on-top: %s\r\n",
-		onOff(r15&0x01 != 0), yesNo(r15&0x02 != 0), yesNo(r15&0x40 == 0))
+		onOff(r15&0x01 != 0), yesNo(r15&0x02 != 0), yesNo(r15&0x40 != 0))
 
 	r68 := rd(0x68)
 	fmt.Fprintf(&b, "  ULA   : %s ($68=$%02X)\r\n", enDis(r68&0x80 == 0), r68)

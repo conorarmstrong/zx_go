@@ -63,7 +63,16 @@ type ULA struct {
 	// Built only when the Next sprite layer is active (NextBASIC Invaders parks
 	// its player ship at sprite Y=240, in the bottom over-border strip).
 	nextFullImg *image.RGBA
-	palette     [16]color.RGBA
+	// compositorScan / compositorComposed are reused across frames as the
+	// per-row scratch buffers for the Spectrum Next inner-screen compositor
+	// pass (applyNextCompositor), and compositorRow likewise for its
+	// border-area tilemap and sprite passes (run sequentially, so the one
+	// buffer serves both), avoiding a heap allocation on every row pass of
+	// every frame.
+	compositorScan     []byte
+	compositorComposed []byte
+	compositorRow      []byte
+	palette            [16]color.RGBA
 	// borderTracer, if non-nil, fires on every border-colour change
 	// caused by an even-port write. Used by the debugger to observe
 	// border modulation through any port that matches the ULA's
@@ -114,6 +123,13 @@ type ULA struct {
 	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
 	// Allows accurate rendering of border effects that change colour during the frame.
 	borderChanges []borderChange
+	// frameStartBorderColour is the border colour in effect at the start of
+	// the frame currently being built, i.e. before any of this frame's port
+	// 0xFE writes. BorderColour itself is mutated live by WritePort as the
+	// CPU runs, so by the time Render() runs it already holds this frame's
+	// latest value — Render uses frameStartBorderColour, not BorderColour,
+	// as the baseline for scanlines before the first recorded change.
+	frameStartBorderColour byte
 
 	// Beeper audio event recording. Each port-0xFE write that flips
 	// bit 4 appends an (offset, state) tuple here. Render() walks the
@@ -234,8 +250,8 @@ type PortTracer func(addr uint16, val byte, write, handled bool)
 // implementation today is pkg/next/compositor.Compositor; the
 // interface lives in pkg/ula so the package doesn't have to
 // import pkg/next/compositor (which would invite a cycle once
-// the compositor pulls in more pkg/ula state for the sprite
-// bandwidth model in Sprint 7).
+// the compositor needs to pull in more pkg/ula state, e.g. for a
+// sprite bandwidth model).
 type NextCompositor interface {
 	ComposeScanline(y int, ulaRGBA []byte, dst []byte)
 	// HasActiveTilemap reports whether the compositor has a
@@ -624,9 +640,10 @@ func (u *ULA) Render() *image.RGBA {
 	// Each display scanline (0-239) maps to a border colour.
 	var borderPerLine [TotalHeight]byte
 	if len(u.borderChanges) > 0 {
-		// Start with the colour that was active before the first change in this frame.
-		// If the first change isn't on scanline 0, the previous frame's final colour applies.
-		currentBorder := u.BorderColour
+		// Start with the colour that was active before the first change in
+		// this frame (frameStartBorderColour, not the live BorderColour,
+		// which this frame's writes have already advanced past).
+		currentBorder := u.frameStartBorderColour
 		if u.borderChanges[0].scanline == 0 {
 			currentBorder = u.borderChanges[0].colour
 		}
@@ -647,6 +664,9 @@ func (u *ULA) Render() *image.RGBA {
 		}
 	}
 	u.borderChanges = u.borderChanges[:0] // Clear for next frame
+	// Snapshot the now-current border colour as the baseline for the next
+	// frame's render (see frameStartBorderColour).
+	u.frameStartBorderColour = u.BorderColour
 
 	// NextReg $68 bit 7 ("Disable ULA output"): the ULA layer paints
 	// nothing. Fill the whole frame with the disabled fill (the NR$4A
@@ -690,9 +710,7 @@ func (u *ULA) Render() *image.RGBA {
 
 	for y := 0; y < ScreenHeight; y++ {
 		for x := 0; x < ScreenWidth/8; x++ {
-			// Calculate address of pixel data and attribute data
-			// This layout is non-linear
-			addr := ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | x
+			addr := screenAddrForRowCol(y, x)
 			attrAddr := ((y >> 3) * 32) + x
 
 			pixels := screenMem[addr]
@@ -874,7 +892,7 @@ func (u *ULA) renderTimexHiRes() *image.RGBA {
 	for sy := 0; sy < ScreenHeight; sy++ { // 192
 		py := BorderTop + sy
 		for fileIdx := 0; fileIdx < ScreenWidth/8; fileIdx++ { // 0..31
-			addr := ((sy & 0xC0) << 5) | ((sy & 0x07) << 8) | ((sy & 0x38) << 2) | fileIdx
+			addr := screenAddrForRowCol(sy, fileIdx)
 			for half := 0; half < 2; half++ {
 				bb := screen[addr] // display file 1 -> even display bytes
 				if half == 1 {
@@ -1011,9 +1029,9 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	// Select port (0x243B) reads back the selected register NUMBER
 	// (zxnext.vhd:4603 `port_243b_dat <= nr_register`) — NextZXOS's
 	// IM1 handler saves the guest's selection with an IN here on
-	// entry and restores it at the handler tail ($2040 OUT (C),L);
-	// a write-only select port floats $FF into that save and every
-	// interrupt then corrupts the guest's NR-select (the development log).
+	// entry and restores it at the handler tail ($2040 OUT (C),L), so
+	// a write-only select port (returning open bus) would corrupt the
+	// guest's NR-select on every interrupt.
 	if u.nextRegs != nil {
 		switch addr {
 		case 0x253B:
@@ -1046,13 +1064,12 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	//            "0000" & !motor & 1ffd_reg(2:0))
 	// NextZXOS's 128K-BASIC launch fires the MF NMI; its handler reads
 	// $7F3F/$1F3F to snapshot the live paging into MF RAM ($3FCC/$3FFF),
-	// then a routine ($15F9) tests those bytes. Returning open bus ($FF)
-	// here set $3FCC bit4, flipping a `cp $04; jr nz` at MF ROM $01F6 and
-	// routing the launch to the abort path instead of the Sinclair 128
-	// menu (found via the ours-vs-reference launch instruction-trace diff).
-	// The $Dxxx/$Exxx (dffd/eff7) and border high-nibble cases aren't
-	// modelled — ours doesn't track those registers and the launch
-	// doesn't read them.
+	// then a routine ($15F9) tests those bytes against the expected paging
+	// state (MF ROM $01F6 `cp $04; jr nz`) to decide whether to continue to
+	// the Sinclair 128 menu or abort — so this read must return the real
+	// paging register, not open bus. The $Dxxx/$Exxx (dffd/eff7) and border
+	// high-nibble cases aren't modelled — ours doesn't track those
+	// registers and the launch doesn't read them.
 	if u.mem != nil && u.mem.MultifaceActive() && addr&0x00FF == 0x003F {
 		p7ffd, p1ffd, _ := u.mem.GetPortState()
 		switch addr >> 12 {
@@ -1065,9 +1082,9 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 
 	// Port $123B (Layer 2) readback: returns the last value written
 	// (zxnext.vhd:2822 port_123b_rd_dat <= port_123b_dat). The 128K
-	// launch's MF NMI handler reads $123B to snapshot Layer 2; open bus
-	// here saved bit1=1, leaving NR$69 = $C0 (Layer 2 visible) at the
-	// 128 menu and bleeding striping into the top border.
+	// launch's MF NMI handler reads $123B to snapshot Layer 2 state, so
+	// this must return the real latch, not open bus (which would read as
+	// bit1=1, "Layer 2 visible", and leave it visibly enabled afterwards).
 	if u.nextRegs != nil && addr == 0x123B {
 		return u.port123BVal, true
 	}
@@ -1102,16 +1119,12 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		// Per ZX Spectrum ULA spec: bits 0-4 are the keyboard
 		// matrix half-row, bit 5 is reserved (reads 1), bit 6 is
 		// the tape EAR signal (0 normally, 1 when TapeIn drives it),
-		// bit 7 is reserved (reads 1). The original code used
-		// 0x1F as the base — that forced bits 5 and 7 to zero
-		// alongside bit 6, which is wrong for the reserved bits.
-		// Spectrum Next's boot.bin (and Sinclair Test ROMs)
-		// distinguish "live ULA" from "stuck bus" by reading
-		// those reserved bits as 1; a zero there sends them
-		// into error-handling paths. Fix: base value is 0xBF
-		// (bit 6 = 0 default, bits 5 and 7 = 1) and the AND with
-		// the keyboard scan ORs in 0xE0 so the kbd matrix only
-		// affects bits 0-4.
+		// bit 7 is reserved (reads 1). Spectrum Next's boot.bin (and
+		// Sinclair Test ROMs) distinguish "live ULA" from "stuck bus"
+		// by reading the reserved bits as 1; a zero there sends them
+		// into error-handling paths. The base value is therefore 0xBF
+		// (bit 6 = 0 default, bits 5 and 7 = 1) ANDed with the keyboard
+		// scan ORed with 0xE0, so the kbd matrix only affects bits 0-4.
 		// Count port-$FE reads. A tape loader polls this register thousands
 		// of times per frame to time edges, whereas a running game reads it
 		// only sparsely for the keyboard — so the rate cleanly distinguishes
@@ -1480,10 +1493,12 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	if addr&0x01 == 0 { // Port 0xFE
 		newBorder := val & 0x07
 		if newBorder != u.BorderColour {
-			// Record the border change with current scanline for mid-frame rendering
+			// Record the border change with current scanline for mid-frame rendering.
+			// Per-model line length (224 on 48K, 228 on 128K+) — see
+			// TStatesPerLineFor and its use in floatingBusByte.
 			scanline := 0
 			if u.mem.TStates != nil {
-				scanline = int(*u.mem.TStates / TStatesPerLine)
+				scanline = int(*u.mem.TStates) / TStatesPerLineFor(u.mem.GetCurrentModel())
 			}
 			u.borderChanges = append(u.borderChanges, borderChange{scanline: scanline, colour: newBorder})
 			u.BorderColour = newBorder
@@ -1515,11 +1530,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		u.nextAY.SelectChip(0xFF - val)
 	} else if u.mem.GetCurrentModel() == roms.ModelNext && (addr&0xF002) == 0xD000 {
 		// Port 0xDFFD (Spectrum Next high RAM-bank extension): bits 3:0 are the
-		// MSBs of the $C000-slot RAM bank. Decoded BEFORE the AY register-select
-		// port 0xFFFD, which shares the (addr&0xC002)==0xC000 decode — the Next
-		// gives 0xDFFD precedence over AY (ports.txt 0xdffd). Previously this
-		// fell through to the AY register select and the high-bank bits were
-		// lost (RAM banks >= 8 unreachable via the classic $C000 slot).
+		// MSBs of the $C000-slot RAM bank. Must be decoded before the AY
+		// register-select port 0xFFFD below, which shares the same
+		// (addr&0xC002)==0xC000 pattern — the Next gives 0xDFFD precedence
+		// over AY (ports.txt 0xdffd), or RAM banks >= 8 would be unreachable
+		// via the classic $C000 slot.
 		u.mem.SetDFFD(val)
 	} else if chip := u.activeAY(); chip != nil && (addr&0xC002) == 0xC000 {
 		// AY-3-8912 register select: port 0xFFFD on 128K+ models.
@@ -1534,12 +1549,10 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		// conflicts between 0x7FFD and 0x1FFD:
 		//   0x7FFD: mask=0xC002 value=0x4000 (A15=0, A14=1, A1=0)
 		//   0x1FFD: mask=0xF002 value=0x1000 (A15=0, A14=0, A13=0, A12=1, A1=0)
-		// Without ModelNext in this branch, OUT (0x1FFD), val
-		// fell through to the 0x7FFD case below (since 0x1FFD &
-		// 0x8002 = 0 matches the loose 7FFD pattern) and remapped
-		// slot 3 RAM bank — clobbering NextZXOS's stack
-		// at 0xFFxx. NextZXOS then RETed into zero RAM, hit DI
-		// at PC=0x0000, and boot deadlocked.
+		// ModelNext must be included in this branch: 0x1FFD also matches the
+		// loose 0x7FFD pattern below (0x1FFD & 0x8002 == 0), so without the
+		// strict decode here a $1FFD write would be misread as a $7FFD
+		// paging write and remap the wrong RAM bank into the $C000 slot.
 		if addr&0xC002 == 0x4000 {
 			u.mem.PageMemory(val)
 		} else if addr&0xF002 == 0x1000 {
@@ -1573,8 +1586,8 @@ func (u *ULA) Close() {
 // Cost: 192 rows × 256 pixels × {extract + compose + write} per
 // frame. At 50 Hz that's a few hundred thousand pixel touches —
 // well within budget per the §13.5 performance estimate. The
-// allocations are pooled by stack-escape: ulaScan and composed
-// fit comfortably below the 64K stack threshold.
+// row scratch buffers (compositorScan / compositorComposed /
+// compositorRow) are allocated once and reused across frames.
 func (u *ULA) applyNextCompositor() {
 	const w = 256
 	const h = 192
@@ -1583,8 +1596,12 @@ func (u *ULA) applyNextCompositor() {
 	// per scanline. Round to 64 for headroom; programs heavy on
 	// WAITs typically execute far fewer.
 	const copperInstrPerScanline = 64
-	ulaScan := make([]byte, w*4)
-	composed := make([]byte, w*4)
+	if u.compositorScan == nil {
+		u.compositorScan = make([]byte, w*4)
+		u.compositorComposed = make([]byte, w*4)
+	}
+	ulaScan := u.compositorScan
+	composed := u.compositorComposed
 	for y := 0; y < h; y++ {
 		// Tick the Copper BEFORE composing the row so MOVEs affecting
 		// the compositor palette / Layer 2 are visible to this row's
@@ -1620,7 +1637,10 @@ func (u *ULA) applyNextCompositor() {
 	// the 256×192 box; here we walk the FULL 320×240 image and only
 	// touch border pixels.
 	if u.nextCompositor.HasActiveTilemap() {
-		rowFull := make([]byte, TotalWidth*4)
+		if u.compositorRow == nil {
+			u.compositorRow = make([]byte, TotalWidth*4)
+		}
+		rowFull := u.compositorRow
 		for y := 0; y < TotalHeight; y++ {
 			imgRowStart := y * u.img.Stride
 			copy(rowFull, u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4])
@@ -1654,7 +1674,10 @@ func (u *ULA) applyNextCompositor() {
 		// sprite frame (top border 32): image row r = frame vcounter r + bias.
 		const spriteFrameH = 256
 		bias := (spriteFrameH - TotalHeight) / 2 // 8 for a 240-line image
-		rowFull := make([]byte, TotalWidth*4)
+		if u.compositorRow == nil {
+			u.compositorRow = make([]byte, TotalWidth*4)
+		}
+		rowFull := u.compositorRow
 		for y := 0; y < TotalHeight; y++ {
 			imgRowStart := y * u.img.Stride
 			copy(rowFull, u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4])
@@ -1799,6 +1822,7 @@ func (u *ULA) GetTapePlayer() *TapePlayer {
 // Reset resets the ULA to initial state
 func (u *ULA) Reset() {
 	u.BorderColour = 0
+	u.frameStartBorderColour = 0
 	u.Mic = false
 	u.TapeIn = false
 	u.tapeAudioEvents = u.tapeAudioEvents[:0]

@@ -472,7 +472,7 @@ func TestFReadDirOnFileHandleReturnsEWRTYPE(t *testing.T) {
 	}
 }
 
-// mapMountError coverage (iter 283). Three distinct branches:
+// mapMountError coverage. Three distinct branches:
 // ErrNotFound → ENOENT, ErrInvalidPath → EINVAL, default → EIO.
 func TestMapMountError_BranchCoverage(t *testing.T) {
 	tests := []struct {

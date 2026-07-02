@@ -8,15 +8,12 @@ import (
 
 // A user running `zx_go --next` with no env/config should get a
 // bootable card automatically when one is present at the standard
-// install location (<install-dir>/sd.img). the development log: the
-// FAT16 builder fallback is NOT bootable; users hit a black screen.
+// install location (<install-dir>/sd.img): the FAT16 builder
+// fallback is not bootable to NextZXOS, so this default matters.
 func TestSDCardImageDefaultsToInstallDirSDImg(t *testing.T) {
 	t.Setenv("ZX_GO_NEXT_SD_IMG", "")
-	// Redirect the install dir to a temp dir. An earlier version of
-	// this test used the REAL install dir (repo roms/next) and wrote
-	// + deleted sd.img there — destroying the developer's actual
-	// 1 GB card on every `go test ./pkg/next/install/` run (the
-	// exact clobber install.Path()'s doc comment warns about).
+	// Redirect the install dir to a temp dir so this test's sd.img
+	// writes never touch a developer's real install directory.
 	t.Setenv("ZX_GO_NEXT_ROM_DIR", t.TempDir())
 	old := ConfiguredSDImage
 	ConfiguredSDImage = ""

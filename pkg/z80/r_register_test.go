@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// R-register increment per M1 cycle (iter 271).
+// R-register increment per M1 cycle.
 //
 // Per Z80 spec, every M1 (opcode fetch) increments the low 7 bits of
 // the R register. Operand bytes are NOT M1 cycles — they don't
@@ -105,10 +105,10 @@ func TestR_DDCB_FDCB_IncrementBy2(t *testing.T) {
 	}
 }
 
-// TestR_DD_LD_IXh_n_IncrementBy2 is the regression test for the bug
-// found in iter 271: LD IXh,n was reading the immediate via c.fetch()
-// (which increments R) instead of c.readOperand() (which doesn't).
-// Same applies to LD IXl,n / LD IYh,n / LD IYl,n.
+// TestR_DD_LD_IXh_n_IncrementBy2 guards against LD IXh,n reading its
+// immediate via c.fetch() (which increments R) instead of
+// c.readOperand() (which doesn't). Same applies to LD IXl,n / LD
+// IYh,n / LD IYl,n.
 func TestR_DD_LD_IXh_n_IncrementBy2(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -189,7 +189,7 @@ func TestR_PreservesBit7AcrossM1(t *testing.T) {
 	defer cleanupTestROMs("test_roms_z80")
 	cpu.PC = 0x8000
 	cpu.SP = 0xFFF0
-	cpu.A = 0x80    // set bit 7
+	cpu.A = 0x80 // set bit 7
 	cpu.R = 0x00
 	mem.Write(0x8000, 0xED)
 	mem.Write(0x8001, 0x4F) // LD R,A

@@ -2,9 +2,8 @@ package divmmc
 
 import "testing"
 
-// iter 289: cover Pager accessors that wrap RAM/ROM access, port
-// I/O, and runtime hooks. These have no behavioural surprises but
-// their no-coverage status hides any future regression silently.
+// Covers Pager accessors that wrap RAM/ROM access, port I/O, and
+// runtime hooks.
 
 func TestReadWriteRAM_FlatAddressing(t *testing.T) {
 	p := New(nil)
@@ -30,7 +29,7 @@ func TestWriteRAM_StubProtection(t *testing.T) {
 		t.Fatal("StubProtected() should reflect SetStubProtected")
 	}
 	// Bank 1 offset $0009 — the protected stub byte. The dropped write
-	// leaves the byte at its prior value (power-on $FF — the development log).
+	// leaves the byte at its prior (power-on zero) value.
 	addr := BankSize + 0x0009
 	before := p.ReadRAM(addr)
 	p.WriteRAM(addr, 0x42)

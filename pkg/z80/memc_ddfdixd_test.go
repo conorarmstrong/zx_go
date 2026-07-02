@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 355: DD/FD (IX+d)/(IY+d) memory contention. The data access at
+// DD/FD (IX+d)/(IY+d) memory contention. The data access at
 // the effective address is routed through rd/wr, so a contended
 // target incurs position-dependent ULA contention.
 func TestMemContention_DDFDIXd(t *testing.T) {

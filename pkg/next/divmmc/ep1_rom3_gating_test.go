@@ -2,7 +2,8 @@ package divmmc
 
 import "testing"
 
-// EP1 ROM3-gated delayed automap tests (NextZXOS cold-boot, the development log).
+// EP1 ROM3-gated delayed automap tests, exercising the NextZXOS
+// cold-boot path.
 //
 // Per zxnext.vhd 2901-2905 the four NR$BB code entry points feed
 // divmmc_automap_rom3_delayed_on — and ONLY that signal:

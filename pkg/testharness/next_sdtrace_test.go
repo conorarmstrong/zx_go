@@ -97,9 +97,11 @@ func TestNextSDBusActive(t *testing.T) {
 		}
 	}
 	if w == 0 && r == 0 {
-		t.Logf("note: 0 SPI traffic — NextZXOS boot is stuck before the SD-card probe. " +
-			"The SPI emulator + FAT16 image are wired and unit-tested but currently " +
-			"untriggered because the boot doesn't reach the SD code path. Investigation " +
-			"continues; do not treat this as a regression test failure yet.")
+		// Zero traffic means the boot didn't reach the SD-card probe
+		// before RunFrames ran out — that's a property of the distro
+		// ROM under test, not necessarily a bug in the SPI wiring
+		// (which is covered by its own unit tests), so this is a
+		// log rather than a hard failure.
+		t.Logf("note: 0 SPI traffic — boot did not reach the SD-card probe within the frame budget")
 	}
 }

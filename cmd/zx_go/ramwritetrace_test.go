@@ -2,8 +2,8 @@ package main
 
 import "testing"
 
-// the development log: the wildcard form finds which physical bank backs
-// a logical sysvar when the OS remaps the slot.
+// The wildcard form finds which physical bank backs a logical sysvar
+// when the OS remaps the slot.
 func TestParseRAMWriteTraceSpec(t *testing.T) {
 	cases := []struct {
 		spec   string

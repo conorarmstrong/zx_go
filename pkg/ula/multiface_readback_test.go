@@ -18,10 +18,10 @@ import (
 //	$1F3F -> port $1FFD (low nibble: bits 7-4 = 0)
 //
 // NextZXOS's 128K-BASIC launch fires the MF NMI; its handler reads $7F3F and
-// $1F3F to snapshot paging into MF RAM ($3FCC/$3FFF). Ours returned open bus
-// ($FF), so $3FCC bit4 was 1 instead of 0, flipping a `cp $04; jr nz` test in
-// the MF ROM ($01F6) and routing the launch to the abort path instead of the
-// Sinclair 128 menu. (Found via the ours-vs-reference launch trace diff.)
+// $1F3F to snapshot paging into MF RAM ($3FCC/$3FFF), which a later routine
+// tests via `cp $04; jr nz` (MF ROM $01F6) to decide whether to continue to
+// the Sinclair 128 menu or abort — so these reads must return the real
+// paging registers, not open bus.
 func TestMultifacePagingReadback(t *testing.T) {
 	mem, err := memory.New("", roms.ModelNext)
 	if err != nil {
@@ -54,11 +54,10 @@ func TestMultifacePagingReadback(t *testing.T) {
 
 // Layer 2 port $123B readback. Per the FPGA source (zxnext.vhd:2822
 // `port_123b_rd_dat <= port_123b_dat`), an IN from $123B returns the LAST
-// value written to that port (a readback register, reset 0). Ours returned
-// open bus ($FF); the 128K launch's MF NMI handler reads $123B to snapshot
-// the Layer 2 state, so $FF (bit1 = Layer 2 visible) set NR$69 = $C0 and the
-// Layer 2 plane bled red striping into the 128 menu's top border (the reference's
-// NR$69 = $00, Layer 2 off). Found via the post-launch NR diff.
+// value written to that port (a readback register, reset 0). The 128K
+// launch's MF NMI handler reads $123B to snapshot the Layer 2 state, so
+// this must return the real latch, not open bus (which reads as bit1=1,
+// "Layer 2 visible", and would leave Layer 2 visibly enabled at the menu).
 func TestLayer2PortReadback(t *testing.T) {
 	mem, err := memory.New("", roms.ModelNext)
 	if err != nil {

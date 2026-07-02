@@ -144,8 +144,8 @@ func TestStepMaxInstrLimitsExecution(t *testing.T) {
 
 // TestMOVEIntoCopperOwnRegistersDoesNotCrash exercises the
 // re-entrant case where a MOVE instruction targets the Copper's
-// own data / control registers. The Sprint 8 design uses the
-// shared NextReg dispatcher as the RegWriter, so a MOVE to 0x60
+// own data / control registers. In production, the shared NextReg
+// dispatcher is the RegWriter, so a MOVE to 0x60
 // re-enters the Copper's WriteData via the dispatcher's OnWrite
 // callback. The guard is that Step doesn't reload pc / mode
 // fields mid-loop; this test pins that nothing crashes and the
@@ -195,10 +195,6 @@ func TestCursorWraps(t *testing.T) {
 		t.Errorf("Cursor after wrap = %#x, want 0", c.Cursor())
 	}
 }
-
-// ========================================================================
-// Additional Copper tests (iter 217).
-// ========================================================================
 
 // TestDecodeMOVE_RegMaskedTo7Bits verifies the 7-bit NextReg index
 // in MOVE (bits 14:8) is masked to 0..127 — bit 15 distinguishes

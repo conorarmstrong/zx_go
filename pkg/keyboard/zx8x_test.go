@@ -86,7 +86,7 @@ func TestZX8xLayoutCompleteMatrix(t *testing.T) {
 
 // rowBitLow reports whether matrix (row, mask) reads as pressed (active-low).
 func rowBitLow(k *Keyboard, row int, mask byte) bool {
-	addr := uint16(byte(^(1<<uint(row)))) << 8 // only `row` selected
+	addr := uint16(byte(^(1 << uint(row)))) << 8 // only `row` selected
 	return k.Scan(addr)&mask == 0
 }
 
@@ -104,18 +104,18 @@ func TestZX8xLayoutSymbolAndEditKeys(t *testing.T) {
 		row  int
 		mask byte
 	}{
-		{"RUBOUT=Shift+0", fyne.KeyBackspace, 4, 0x01}, // 0 = row4 bit0
-		{"= is Shift+L", fyne.KeyEqual, 6, 0x02},       // L
-		{"- is Shift+J", fyne.KeyMinus, 6, 0x08},       // J
-		{", is Shift+N", fyne.KeyComma, 7, 0x08},       // N
-		{"; is Shift+X", fyne.KeySemicolon, 0, 0x04},   // X
-		{"/ is Shift+V", fyne.KeySlash, 0, 0x10},       // V
-		{"( is Shift+I", fyne.KeyLeftBracket, 5, 0x04}, // I
+		{"RUBOUT=Shift+0", fyne.KeyBackspace, 4, 0x01},  // 0 = row4 bit0
+		{"= is Shift+L", fyne.KeyEqual, 6, 0x02},        // L
+		{"- is Shift+J", fyne.KeyMinus, 6, 0x08},        // J
+		{", is Shift+N", fyne.KeyComma, 7, 0x08},        // N
+		{"; is Shift+X", fyne.KeySemicolon, 0, 0x04},    // X
+		{"/ is Shift+V", fyne.KeySlash, 0, 0x10},        // V
+		{"( is Shift+I", fyne.KeyLeftBracket, 5, 0x04},  // I
 		{") is Shift+O", fyne.KeyRightBracket, 5, 0x02}, // O
-		{"+ is Shift+K", "+", 6, 0x04},                 // K (typed rune)
-		{": is Shift+Z", ":", 0, 0x02},                 // Z (typed rune)
-		{"\" is Shift+P", "\"", 5, 0x01},               // P (typed rune)
-		{"* is Shift+B", "*", 7, 0x10},                 // B (typed rune)
+		{"+ is Shift+K", "+", 6, 0x04},                  // K (typed rune)
+		{": is Shift+Z", ":", 0, 0x02},                  // Z (typed rune)
+		{"\" is Shift+P", "\"", 5, 0x01},                // P (typed rune)
+		{"* is Shift+B", "*", 7, 0x10},                  // B (typed rune)
 	}
 	for _, c := range cases {
 		k := New()

@@ -14,10 +14,10 @@
 //     [5, 2, 0, 1, 3, 4, 6, 7, 8, 9, ..., 111]
 //     where each block is present iff BankLoad[bank] is true.
 //
-// Sprint 4 lands the parser; Apply() loads parsed banks into a
-// pkg/memory.Memory and seeds SP / PC / border on the wired CPU.
-// Sprint 6 will extend Apply() to populate Layer 2 / palette /
-// Copper from the optional sections.
+// This package handles parsing only; the loader that applies a
+// parsed NEX into a pkg/memory.Memory (banks, SP/PC/border, and the
+// optional Layer 2 / palette / Copper sections) lives with its
+// caller.
 package nex
 
 import (
@@ -155,12 +155,10 @@ func ParseFile(path string) (*NEX, error) {
 // Parse reads a .NEX file from any io.Reader. Returns an error
 // (ErrBadMagic) if the magic does not match.
 //
-// Screen-mode sub-flag handling is conservative: Sprint 4 reads a
-// fixed 6912-byte classic ULA screen when HasScreen() is set and
-// the screen-mode sub-flags are zero. Layer 2 / HiRes / LoRes
-// screens are recorded only by size — the parser reads as many
-// bytes as the spec dictates per mode and stashes them in Screen
-// for the Sprint 6 video stack to consume.
+// Each loading-screen block set in ScreenFlags (Layer 2, classic
+// ULA, LoRes, HiRes, HiColour — a file may set more than one) is
+// read at its documented size and appended to Screen in file order;
+// interpreting those bytes for display is left to the caller.
 func Parse(r io.Reader) (*NEX, error) {
 	hdrBytes := make([]byte, HeaderSize)
 	if _, err := io.ReadFull(r, hdrBytes); err != nil {

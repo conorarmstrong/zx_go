@@ -107,8 +107,8 @@ func (m *Machine) setActive(x, y int, c color.RGBA) {
 	m.frame.SetRGBA(x+samBorderLeft, y+samBorderTop, c)
 }
 
-// borderColourIndex extracts the 4-bit CLUT index from a BORDER value: low three
-// bits plus bit 5 (SimCoupe BORDER_COLOUR / BORDER_COLOUR_MASK 0x27).
+// borderColourIndex extracts the 4-bit CLUT index from a BORDER value: low
+// three bits plus bit 5 (mask 0x27).
 func borderColourIndex(border byte) byte { return ((border & 0x20) >> 2) | (border & 0x07) }
 
 // borderColour resolves the current border colour through the CLUT and palette,
@@ -118,7 +118,7 @@ func (m *Machine) borderColour() color.RGBA { return m.clutColour(borderColourIn
 // renderLine draws one scan line in the current screen mode.
 func (m *Machine) renderLine(y int) {
 	mode := m.Mem.ScreenMode()
-	// SOFF blanks the screen in modes 3/4 only (SimCoupe ScreenDisabled).
+	// SOFF blanks the screen in modes 3/4 only.
 	if m.border&borderSOFF != 0 && mode >= 3 {
 		m.drawBlackLine(y)
 		return

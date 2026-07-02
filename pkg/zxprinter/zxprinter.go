@@ -24,10 +24,8 @@
 // one CPU frame's worth of cycles plus a bit — so the printer is
 // the slowest peripheral on the Spectrum.
 //
-// This implementation mirrors FUSE's peripherals/printer.c, but
-// without the file-output complexity — printed rows accumulate in
-// a Go image buffer which the UI can save as a PNG whenever the
-// user wants.
+// Printed rows accumulate in a Go image buffer which the UI can
+// save as a PNG whenever the user wants.
 package zxprinter
 
 import (
@@ -46,8 +44,7 @@ const LineWidth = 256
 // TstatesPerFrame is the 48K Spectrum's frame length. The printer
 // uses this to convert frame+cycle deltas into absolute T-state
 // counts. This constant lives here (rather than being passed in)
-// so the port model stays self-contained — it's a compile-time
-// constant in FUSE too.
+// so the port model stays self-contained.
 const TstatesPerFrame = 69888
 
 // Printer is a ZX Printer instance. Safe for concurrent use: the
@@ -91,9 +88,8 @@ func New() *Printer {
 	return &Printer{pixel: -1, ackPos: -1}
 }
 
-// Reset clears transient drum state but KEEPS accumulated rows —
-// a system reset should not throw away what's already been printed
-// (matching FUSE's printer_zxp_reset which is a no-op for output).
+// Reset clears transient drum state but KEEPS accumulated rows — a
+// system reset should not throw away what's already been printed.
 func (p *Printer) Reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -237,6 +233,23 @@ func (p *Printer) HandlePortWrite(port uint16, val byte, tstates int64) bool {
 		// Acknowledge the drum-advance signal — bit 0 of IN
 		// won't go high again until the drum passes x.
 		p.ackPos = x
+		// Speed bit: before the visible line has started (x<0,
+		// still in the sync window) there's no in-progress line to
+		// protect, so the new speed applies immediately. Once the
+		// line is under way it's queued in newSpeed and picked up
+		// by advance() at the next line wrap — the drum is
+		// mechanical and can't retime a line already spinning.
+		requested := 2
+		if val&0x02 != 0 {
+			requested = 1
+		}
+		if x < 0 {
+			p.speed = requested
+		} else if requested != p.speed {
+			p.newSpeed = requested
+		} else {
+			p.newSpeed = 0
+		}
 	}
 	return true
 }
@@ -244,8 +257,7 @@ func (p *Printer) HandlePortWrite(port uint16, val byte, tstates int64) bool {
 // drumPos returns the current drum X coordinate (in pixels)
 // relative to the visible line start. Ranges from -64 (before the
 // line starts, in the sync area) through 0..255 (visible pixels)
-// to 320+ (gap / next line). Mirrors FUSE's cycles-to-x math at
-// printer.c:440-460.
+// to 320+ (gap / next line).
 //
 // Must be called with p.mu held.
 func (p *Printer) drumPos(tstates int64) int {

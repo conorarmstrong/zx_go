@@ -98,11 +98,11 @@ func spectrumIcon() fyne.Resource {
 func drawChar(img *image.RGBA, pattern []string, ox, oy int, col color.Color) {
 	scale := 2
 	for row, line := range pattern {
-		for col_idx, ch := range line {
+		for colIdx, ch := range line {
 			if ch == '#' {
 				for dy := 0; dy < scale; dy++ {
 					for dx := 0; dx < scale; dx++ {
-						img.Set(ox+col_idx*scale+dx, oy+row*scale+dy, col)
+						img.Set(ox+colIdx*scale+dx, oy+row*scale+dy, col)
 					}
 				}
 			}

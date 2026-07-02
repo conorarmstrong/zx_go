@@ -159,14 +159,18 @@ func (u *ULA) readCTR() byte {
 
 // readNET returns the IF1 NET port read value. From if1.c:122-124:
 //
-//	bit 7    — TX  (RS-232 transmit clock; we never tx, leave high)
+//	bit 7    — TX  (RS-232 transmit clock)
 //	bit 6..1 — unused
-//	bit 0    — NET (SinclairNET data wire; we never net, leave high)
+//	bit 0    — NET (SinclairNET data wire)
 //
-// With both peripherals stubbed off there's nothing to do — the IF1
-// ROM polling for serial activity will see "no signal" and time out.
+// TX and NET are read straight off their wires (not inverted), and
+// both rest at the ~0V floating level when nothing is driving them —
+// see the IF1 service manual schematic notes on the RX DATA/NET
+// transistors. With no peripherals plugged in, both bits therefore
+// read low; the IF1 ROM's serial polling sees "no signal" and times
+// out.
 func (u *ULA) readNET() byte {
-	return 0xFF
+	return 0x7E
 }
 
 // writeCTR processes a write to the CTR (control) port. From the
@@ -203,6 +207,5 @@ func (u *ULA) writeCTR(val byte) {
 // no-op. The IF1 ROM uses this port to bit-bang RS-232 frames; with
 // nothing connected the writes simply go nowhere, which matches a
 // real Spectrum with an unplugged Interface 1 RS-232 socket.
-func (u *ULA) writeNET(val byte) {
-	_ = val
+func (u *ULA) writeNET(_ byte) {
 }

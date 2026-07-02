@@ -110,10 +110,6 @@ func TestATCaseInsensitive(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// Additional UART tests (iter 212).
-// =====================================================================
-
 // TestStatusTXAlwaysReady documents the stub's "TX FIFO has space"
 // invariant — we drop everything so there's always room.
 func TestStatusTXAlwaysReady(t *testing.T) {

@@ -12,10 +12,9 @@ import (
 // dispatcher's NR$8E OnWrite goes through the extended
 // (full-bit-semantics) path, not the legacy bits-1:0-only path.
 // Writing $08 (bit 3 only) must reset slot 3's RAM bank to 0,
-// matching the NextZXOS boot sequence captured under the reference
-// emulator. Without WireROMBank's extension, the write would
-// select ROM bank 0 but leave the previously-set RAM bank in
-// place — exactly the divergence seen in the live diff.
+// matching the NextZXOS boot sequence. Without WireROMBank's
+// extension, the write would select ROM bank 0 but leave the
+// previously-set RAM bank in place.
 func TestWireROMBankRoutesNR8EToExtendedHandler(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {
@@ -44,8 +43,6 @@ func TestWireROMBankRoutesNR8EToExtendedHandler(t *testing.T) {
 
 // TestWireROMBank_NR8E_7A covers NextZXOS's mid-boot pattern:
 // NR$8E=$7A = ROM bank 2 + RAM bank 7 at slot 3 + 1FFD bit 0 = 0.
-// Locked in as a regression guard because this exact value was
-// flagged in the reference-emulator NR-trace.
 func TestWireROMBank_NR8E_7A(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {

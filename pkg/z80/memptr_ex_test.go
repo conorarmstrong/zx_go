@@ -2,11 +2,10 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR updates for EX (SP),IX / EX (SP),IY (iter 305).
+// WZ/MEMPTR updates for EX (SP),IX / EX (SP),IY.
 //
 // Per Sean Young §A.1: EX (SP),HL/IX/IY all set MEMPTR to the new
-// value of the destination register (post-swap). EX (SP),HL was
-// fixed in an earlier iter; the IX/IY variants were missed.
+// value of the destination register (post-swap).
 
 func TestEX_SP_IX_WZIsNewIX(t *testing.T) {
 	cpu, mem := createTestCPU()

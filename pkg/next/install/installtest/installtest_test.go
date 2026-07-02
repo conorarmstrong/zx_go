@@ -8,8 +8,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 )
 
-// iter 291: cover the previously-untested public helpers.
-
 func TestRedirectConfig_SetsEnvAndReturnsPath(t *testing.T) {
 	dir := RedirectConfig(t)
 	if dir == "" {
@@ -57,11 +55,10 @@ func TestRedirectConfig_DistinctTempDirsPerInvocation(t *testing.T) {
 	}
 }
 
-// isUnderTempDir unit tests (iter 230). This helper guards against
-// the "test writes to developer's real install dir" footgun;
-// AssertSandboxed leans on it. Bugs here would let bad tests
-// silently clobber real ROMs — exactly the regression that motivated
-// the helper in the first place. So pin behaviour exhaustively.
+// isUnderTempDir unit tests. This helper guards against the "test
+// writes to developer's real install dir" footgun; AssertSandboxed
+// leans on it. Bugs here would let bad tests silently clobber real
+// ROMs, so behaviour is pinned exhaustively.
 
 func TestIsUnderTempDir_MacOSPaths(t *testing.T) {
 	cases := []string{

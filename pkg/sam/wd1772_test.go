@@ -73,6 +73,44 @@ func TestWD1772WriteSector(t *testing.T) {
 	}
 }
 
+// TestWD1772WriteSectorMultiple drives a WRITE SECTOR command with the
+// multiple-record flag (m=1) across a whole 10-sector track: DRQ must stay
+// asserted past the first sector boundary (the controller keeps transferring
+// into sector 2 instead of ending the command), and the command only
+// completes once it runs off the end of the track (sector 11 doesn't exist).
+func TestWD1772WriteSectorMultiple(t *testing.T) {
+	d := blankMGT() // 800K MGT: 10 sectors/track
+	f := NewWD1772()
+	f.InsertDisk(d)
+	f.cyl = 0
+	f.SetSide(0)
+	f.WriteSector(1)
+	f.WriteCommand(0xB0) // WRITE SECTOR, m=1 (multiple record)
+	const sectors = 10
+	for sec := 1; sec <= sectors; sec++ {
+		if f.ReadStatus()&wdDRQ == 0 {
+			t.Fatalf("sector %d: DRQ should be set mid-transfer", sec)
+		}
+		for i := 0; i < 512; i++ {
+			f.WriteData(byte(sec*0x10) + byte(i))
+		}
+	}
+	if f.ReadStatus()&(wdBusy|wdDRQ) != 0 {
+		t.Error("after running off the end of the track BUSY and DRQ should clear")
+	}
+	for sec := 1; sec <= sectors; sec++ {
+		got, ok := d.ReadSector(0, 0, sec)
+		if !ok {
+			t.Fatalf("sector %d not written", sec)
+		}
+		for i := 0; i < 512; i++ {
+			if want := byte(sec*0x10) + byte(i); got[i] != want {
+				t.Fatalf("sector %d byte %d = %#02x, want %#02x", sec, i, got[i], want)
+			}
+		}
+	}
+}
+
 func TestWD1772RecordNotFound(t *testing.T) {
 	f := NewWD1772()
 	f.InsertDisk(blankMGT())

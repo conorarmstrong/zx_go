@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
@@ -273,14 +274,14 @@ func fmtBytes(b []byte) string {
 // loadInstalledDivMMCROM reads the divMMC ROM from the install path
 // (same lookup the Spectrum Next emulator wiring uses). Returns nil
 // if the file isn't installed — xref skips the divmmc-rom scan in
-// that case.
+// that case. A read failure for any other reason is logged (rather
+// than swallowed) since that signals a real problem with the install
+// directory, not just an absent optional ROM.
 func loadInstalledDivMMCROM() []byte {
 	data, err := install.LoadROM(install.DivMMCROM)
 	if err != nil {
 		if !errors.Is(err, install.ErrROMNotInstalled) {
-			// Surface read errors quietly; xref tolerates "no divMMC
-			// ROM available" without failing.
-			return nil
+			slog.Warn("xref: divMMC ROM read failed", "err", err)
 		}
 		return nil
 	}

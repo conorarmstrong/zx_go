@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
@@ -24,13 +23,11 @@ import (
 //   - zes_nextregs.txt     Header line `# regs: PC=NN SP=NN ...`
 //     followed by 256 lines `NR $NN = NNH`
 //
-// Captured via ZRCP on a running the reference emulator TBBlue instance:
+// Captured via ZRCP on a running reference TBBlue instance:
 //
 //	set-memory-zone 0
 //	save-binary /tmp/zes_full_ram.bin 0 2097152
 //	(plus tbblue-get-register 0..255 loop)
-//
-// See docs/nextzxos-boot-flow.md iter 95-96 for context.
 func applyWarmBoot(cpu *z80.CPU, mem *memory.Memory, disp *nextregs.Dispatcher) error {
 	ram, err := install.LoadROM(install.WarmBootRAM)
 	if err != nil {
@@ -50,12 +47,11 @@ func applyWarmBoot(cpu *z80.CPU, mem *memory.Memory, disp *nextregs.Dispatcher) 
 	// (zxnext.vhd:2964). Our m.ram[N] indexes by OS bank, so we apply
 	// the +16 shift here.
 	//
-	// Without this shift, our warm-boot was loading FPGA ROM bytes
-	// into m.ram[0..15] and shifting all OS RAM by 16 banks — e.g.
-	// the ULA screen 0 (= m.ram[5]) received boot code instead of
-	// the welcome banner pixels, so the screen rendered as garbage
-	// even with a valid snapshot. See docs/nextzxos-boot-flow.md
-	// iter 116-117 for the trace.
+	// Without this shift, warm-boot would load FPGA ROM bytes into
+	// m.ram[0..15] and shift all OS RAM by 16 banks — e.g. the ULA
+	// screen 0 (= m.ram[5]) would receive boot code instead of the
+	// welcome banner pixels, rendering as garbage even with a valid
+	// snapshot.
 	const fpgaBankShift = 16
 	for bank := 0; bank < 128-fpgaBankShift; bank++ {
 		page := mem.GetPage(bank)
@@ -257,5 +253,4 @@ func parseWarmBootRegLine(line string, regs *warmBootRegs) {
 	}
 	regs.IFF1 = strings.Contains(line, "IFF12") || strings.Contains(line, "IFF1 ")
 	regs.IFF2 = strings.Contains(line, "IFF12") || strings.Contains(line, "IFF2 ")
-	_ = os.Getenv // placeholder to keep import
 }

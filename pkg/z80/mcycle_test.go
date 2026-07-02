@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// iter 349: per-opcode M-cycle reference table — the documented
+// Per-opcode M-cycle reference table — the documented
 // machine-cycle decomposition that is the companion to the T-state
 // table (Zilog UM008011 §"Instruction Set", Sean Young §A.1).
 //

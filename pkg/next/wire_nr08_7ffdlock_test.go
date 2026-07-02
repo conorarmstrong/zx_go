@@ -25,8 +25,7 @@ func nr08Harness(t *testing.T) (*nextregs.Dispatcher, *memory.Memory, *z80.CPU) 
 // TestNR08Bit7UnlocksPaging — NR$08 write with bit 7 set clears the
 // $7FFD paging lock (zxnext.vhd:3654-3656: nr_08_we and dat(7) →
 // port_7ffd_reg(5) <= '0'). NextZXOS's staging NR-pair list relies
-// on this RMW to keep paging unlocked across the engine install
-// (the development log).
+// on this RMW to keep paging unlocked across the engine install.
 func TestNR08Bit7UnlocksPaging(t *testing.T) {
 	d, mem, _ := nr08Harness(t)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,9 +262,8 @@ type remoteDebugger struct {
 
 	// watchZero, when set, makes BreakpointCheck halt as soon as
 	// M1 fetches from a region where the next 16 bytes ahead of PC
-	// are all $00. Pinpoints the bad jump that lands NextZXOS init
-	// into uninitialised RAM (#161 diagnostic). Atomic so the
-	// hot-path read is lock-free.
+	// are all $00 — pinpoints a bad jump into uninitialised RAM.
+	// Atomic so the hot-path read is lock-free.
 	watchZero atomic.Bool
 
 	// tracepoints is the gdb-style tracepoint store: PC -> hit
@@ -302,12 +302,13 @@ type remoteDebugger struct {
 	// contUntilCond is the one-shot conditional-continue guard
 	// (`cont-until EXPR`). When non-nil, BreakpointCheck evaluates
 	// it every M1 fetch; on first true, the CPU pauses and the
-	// pointer is cleared. Stored via atomic.Pointer so the hot path
-	// can short-circuit with a single nil check.
-	contUntilCond atomic.Pointer[debugger.Condition]
-	contUntilExpr string
+	// pointer is cleared. Stored via atomic.Pointer (condition and
+	// source expression together, so a fetch never observes one
+	// updated without the other) so the hot path can short-circuit
+	// with a single nil check.
+	contUntilCond atomic.Pointer[contUntilSpec]
 
-	// divMMCTrace is the runtime divMMC RAM write tracer (F7). When
+	// divMMCTrace is the runtime divMMC RAM write tracer. When
 	// armed via `trace-divmmc-ram`, every write satisfying the
 	// (bank, offset-range) filter emits slog.Info with the writer
 	// PC. Replaces any prior pager.SetWriteLogger callback.
@@ -492,14 +493,14 @@ func newRemoteDebugger(emu *emulator, port int, pauseAtStart bool, historySize i
 		// One-shot conditional-continue (`cont-until EXPR`). Evaluates
 		// the user expression every M1; on first true, pause + clear.
 		// Cheap when nil (one atomic load).
-		if condP := d.contUntilCond.Load(); condP != nil {
+		if specP := d.contUntilCond.Load(); specP != nil {
 			bank := d.currentROMBank()
-			if (*condP).Eval(d.condState(byte(bank))) {
+			if specP.cond.Eval(d.condState(byte(bank))) {
 				d.contUntilCond.Store(nil)
 				d.paused.Store(true)
 				slog.Debug("debugger: cont-until hit",
 					"pc", fmt.Sprintf("$%04X", pc),
-					"expr", d.contUntilExpr)
+					"expr", specP.expr)
 				d.snapshotOnBPHit(pc, "cont-until")
 				return true
 			}
@@ -539,7 +540,7 @@ func newRemoteDebugger(emu *emulator, port int, pauseAtStart bool, historySize i
 			"rom_bank", bank,
 			"cond", entry.Cond.String())
 		d.snapshotOnBPHit(pc, "breakpoint")
-		// BP-action chain (F4). When `do "cmd1; cmd2"` was given at
+		// BP-action chain. When `do "cmd1; cmd2"` was given at
 		// BP creation, run each command through HandleCommand and
 		// emit the response via slog.Info so the operator sees it
 		// without having to issue a follow-up read. Empty actions
@@ -819,85 +820,90 @@ func (d *remoteDebugger) connLoop(c net.Conn) {
 // atomic.Pointer for bpsMap) or manage the pause state directly,
 // so they're excluded.
 var commandsNeedingPause = map[string]bool{
-	"get-registers":    true,
-	"regs":             true,
-	"get-stack":        true,
-	"stack":            true,
-	"backtrace":        true,
-	"bt":               true,
-	"history":          true,
-	"hist":             true,
-	"prev":             true,
-	"p":                true,
-	"get-memory":       true,
-	"mem":              true,
-	"hexdump":          true,
-	"hd":               true,
-	"read-memory":      true,
-	"peek":             true,
-	"write-memory":     true,
-	"poke":             true,
-	"set-reg":          true,
-	"cold-reset":       true,
-	"disassemble":      true,
-	"disasm":           true,
-	"d":                true,
-	"get-mmu":          true,
-	"mmu":              true,
-	"get-divmmc":       true,
-	"divmmc":           true,
-	"nextreg-read":     true,
-	"nr-r":             true,
-	"nextreg-write":    true,
-	"nr-w":             true,
-	"bank-peek":        true,
-	"pool-scan":        true,
-	"bp-peek":          true,
-	"bank-poke":        true,
-	"bp-poke":          true,
-	"load-bin":         true,
-	"compare-foreign":  true,
-	"watch-reg":        true,
-	"wr":               true,
-	"list-watches":     true,
-	"clear-watch":      true,
-	"step-over":        true,
-	"n":                true,
-	"next":             true,
-	"watch-mem":        true,
-	"clear-watch-mem":  true,
-	"watch-read":       true,
-	"clear-watch-read": true,
-	"why-pc":           true,
-	"snapshot-on-bp":   true,
-	"hot":              true,
-	"disasm-bank":      true,
-	"watch-zero":       true,
-	"tp":               true,
-	"list-tp":          true,
-	"clear-tp":         true,
-	"watch-port":       true,
-	"nr-trace":         true,
-	"irq-stats":        true,
-	"catch":            true,
-	"nr-panel":         true,
-	"nrp":              true,
-	"copper-disasm":    true,
-	"copper":           true,
-	"layer-state":      true,
-	"layers":           true,
-	"sprite-list":      true,
-	"sprites":          true,
-	"palette-dump":     true,
-	"palette":          true,
-	"nr-snap":          true,
-	"nr-diff":          true,
-	"callgraph":        true,
-	"retgraph":         true,
-	"rstgraph":         true,
-	"nmi":              true,
-	"tt-snap":          true,
-	"tt-rewind":        true,
+	"get-registers":        true,
+	"regs":                 true,
+	"get-stack":            true,
+	"stack":                true,
+	"backtrace":            true,
+	"bt":                   true,
+	"history":              true,
+	"hist":                 true,
+	"prev":                 true,
+	"p":                    true,
+	"get-memory":           true,
+	"mem":                  true,
+	"hexdump":              true,
+	"hd":                   true,
+	"read-memory":          true,
+	"peek":                 true,
+	"write-memory":         true,
+	"poke":                 true,
+	"set-reg":              true,
+	"cold-reset":           true,
+	"disassemble":          true,
+	"disasm":               true,
+	"d":                    true,
+	"get-mmu":              true,
+	"mmu":                  true,
+	"get-divmmc":           true,
+	"divmmc":               true,
+	"nextreg-read":         true,
+	"nr-r":                 true,
+	"nextreg-write":        true,
+	"nr-w":                 true,
+	"bank-peek":            true,
+	"pool-scan":            true,
+	"bp-peek":              true,
+	"bank-poke":            true,
+	"bp-poke":              true,
+	"load-bin":             true,
+	"compare-foreign":      true,
+	"watch-reg":            true,
+	"wr":                   true,
+	"list-watches":         true,
+	"clear-watch":          true,
+	"step-over":            true,
+	"n":                    true,
+	"next":                 true,
+	"watch-mem":            true,
+	"clear-watch-mem":      true,
+	"watch-read":           true,
+	"clear-watch-read":     true,
+	"trace-divmmc-ram":     true,
+	"trace-writes":         true,
+	"why-pc":               true,
+	"snapshot-on-bp":       true,
+	"hot":                  true,
+	"disasm-bank":          true,
+	"watch-zero":           true,
+	"tp":                   true,
+	"list-tp":              true,
+	"clear-tp":             true,
+	"watch-port":           true,
+	"nr-trace":             true,
+	"trace-nextreg-deltas": true,
+	"nr-deltas":            true,
+	"irq-stats":            true,
+	"catch":                true,
+	"crash-detect":         true,
+	"nr-panel":             true,
+	"nrp":                  true,
+	"copper-disasm":        true,
+	"copper":               true,
+	"layer-state":          true,
+	"layers":               true,
+	"sprite-list":          true,
+	"sprites":              true,
+	"palette-dump":         true,
+	"palette":              true,
+	"nr-snap":              true,
+	"nr-diff":              true,
+	"callgraph":            true,
+	"retgraph":             true,
+	"rstgraph":             true,
+	"nmi":                  true,
+	"tt-snap":              true,
+	"tt-rewind":            true,
 }
 
 func (d *remoteDebugger) handleCommand(line string) string {
@@ -1392,7 +1398,7 @@ func (d *remoteDebugger) cmdSetBreakpoint(args []string) string {
 	if err != nil {
 		return "ERR " + err.Error()
 	}
-	// Bank-filter behaviour (F2):
+	// Bank-filter behaviour:
 	//   - explicit `bank=N` (0..3)           → that bank only
 	//   - explicit `any-bank`                → no filter
 	//   - omitted, ROM bank known            → default to current bank
@@ -1605,14 +1611,9 @@ func (d *remoteDebugger) cmdClearTp(args []string) string {
 	return fmt.Sprintf("OK removed tp @%s", annotateAddr(addr))
 }
 
-// sortUint16s sorts a slice of uint16 in ascending order. Inlined
-// here to avoid pulling sort + the slice-of-int conversion dance.
+// sortUint16s sorts a slice of uint16 in ascending order.
 func sortUint16s(s []uint16) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
 }
 
 // cmdWatchZero arms/disarms the zero-bank tracer.

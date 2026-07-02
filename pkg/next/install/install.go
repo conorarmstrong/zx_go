@@ -30,14 +30,12 @@ import (
 //
 // The directory is created if it does not already exist.
 //
-// History: earlier versions used os.UserConfigDir() (~/Library/
-// Application Support/zx_go/next on macOS, $XDG_CONFIG_HOME/zx_go/
-// next on Linux, %AppData%/zx_go/next on Windows). A test fixture
-// missed its RedirectConfig call once and clobbered a developer's
-// real installed ROM, so the layout moved repo-local where
-// .gitignore can keep the binaries out of source control and a
-// missing RedirectConfig at worst writes to ./roms/next/ inside
-// the repo.
+// Deliberately repo-local rather than a user config dir (e.g.
+// os.UserConfigDir()): .gitignore keeps the licensed ROM binaries
+// out of source control, and a test that forgets to sandbox this
+// path (via installtest.RedirectConfig) writes at worst to
+// ./roms/next/ inside the repo rather than a developer's real
+// profile directory.
 func Path() (string, error) {
 	dir := os.Getenv("ZX_GO_NEXT_ROM_DIR")
 	if dir == "" {
@@ -197,7 +195,7 @@ func sdVersionWarning(basename, installedHash string) string {
 //   - DistroROM is the NextZXOS boot ROM. Distributed as a 64 KB
 //     file in 24.11 (four 16 KB banks: 48K BASIC, 128K BASIC,
 //     NextBASIC, NextZXOS shell). pkg/memory.setupNext currently
-//     wires bank 0 only; multi-bank support arrives in Sprint 4.
+//     wires bank 0 only.
 //   - DivMMCROM is the 8 KB divMMC / esxDOS ROM the auto-pager
 //     swaps in on M1 trigger PCs.
 //   - FPGABootROM is the 8 KB FPGA boot loader that runs FIRST on
@@ -267,7 +265,7 @@ const (
 	// m.ram[5][0..0x1B00] in the warm-boot path — the ULA renders
 	// from m.ram[5] but the reference's "Machine RAM" dump (zone 0)
 	// doesn't include the bank-5 BRAM that holds the actual
-	// displayed pixels. See docs/nextzxos-boot-flow.md iter 120.
+	// displayed pixels. See docs/nextzxos-boot-flow.md.
 	WarmBootScreen = "zes_screen.scr"
 )
 
@@ -334,9 +332,8 @@ func SDCardImage() string {
 		return ConfiguredSDImage
 	}
 	// 3. <install-dir>/sd.img — the standard local card. The FAT16
-	// builder fallback is not bootable to NextZXOS (the development log);
-	// shipping/copying a FAT32 card here makes `zx_go --next` work
-	// out of the box.
+	// builder fallback is not bootable to NextZXOS; shipping/copying
+	// a FAT32 card here makes `zx_go --next` work out of the box.
 	if dir, err := Path(); err == nil {
 		img := filepath.Join(dir, "sd.img")
 		if _, err := os.Stat(img); err == nil {

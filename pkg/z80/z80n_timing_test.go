@@ -4,8 +4,8 @@ import (
 	"testing"
 )
 
-// iter 346: canonical Z80N (Spectrum Next extended) opcode T-state
-// cross-check. Each entry is measured end-to-end through
+// Canonical Z80N (Spectrum Next extended) opcode T-state cross-check.
+// Each entry is measured end-to-end through
 // StepInstruction on a VariantZ80N CPU and compared to the documented
 // total from the SpecNext wiki Extended_Z80_instruction_set page.
 // This catches prefix-fetch double-counting that a literal read of

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,27 +13,27 @@ func TestSNAHeaderParsing(t *testing.T) {
 	// Build a valid 48K SNA file with known register values.
 	// SNA header: 27 bytes + 48K RAM (49152 bytes) = 49179 bytes.
 	header := make([]byte, 27)
-	header[0] = 0x3F  // I
-	header[1] = 0x01  // L'
-	header[2] = 0x02  // H'
-	header[3] = 0x03  // E'
-	header[4] = 0x04  // D'
-	header[5] = 0x05  // C'
-	header[6] = 0x06  // B'
-	header[7] = 0x07  // F'
-	header[8] = 0x08  // A'
-	header[9] = 0x09  // L
-	header[10] = 0x0A // H
-	header[11] = 0x0B // E
-	header[12] = 0x0C // D
-	header[13] = 0x0D // C
-	header[14] = 0x0E // B
+	header[0] = 0x3F                                     // I
+	header[1] = 0x01                                     // L'
+	header[2] = 0x02                                     // H'
+	header[3] = 0x03                                     // E'
+	header[4] = 0x04                                     // D'
+	header[5] = 0x05                                     // C'
+	header[6] = 0x06                                     // B'
+	header[7] = 0x07                                     // F'
+	header[8] = 0x08                                     // A'
+	header[9] = 0x09                                     // L
+	header[10] = 0x0A                                    // H
+	header[11] = 0x0B                                    // E
+	header[12] = 0x0C                                    // D
+	header[13] = 0x0D                                    // C
+	header[14] = 0x0E                                    // B
 	binary.LittleEndian.PutUint16(header[15:17], 0x5678) // IY
 	binary.LittleEndian.PutUint16(header[17:19], 0x9ABC) // IX
-	header[19] = 0x04 // IFF2 set (bit 2)
-	header[20] = 0x7F // R
-	header[21] = 0xAA // F
-	header[22] = 0xBB // A
+	header[19] = 0x04                                    // IFF2 set (bit 2)
+	header[20] = 0x7F                                    // R
+	header[21] = 0xAA                                    // F
+	header[22] = 0xBB                                    // A
 	// SP points to 0xFF00 in bank 0 (0xC000-0xFFFF)
 	binary.LittleEndian.PutUint16(header[23:25], 0xFF00)
 	header[25] = 0x01 // IM 1
@@ -42,7 +43,7 @@ func TestSNAHeaderParsing(t *testing.T) {
 	ram := make([]byte, 49152)
 	// SP=0xFF00, which is at offset 0xFF00-0xC000=0x3F00 in bank 0 (third 16K block)
 	stackOffset := 0x8000 + 0x3F00 // past bank 5 (16K) + bank 2 (16K), then offset in bank 0
-	ram[stackOffset] = 0x34         // PC low byte
+	ram[stackOffset] = 0x34        // PC low byte
 	ram[stackOffset+1] = 0x12      // PC high byte
 
 	// Write temp SNA file
@@ -196,10 +197,10 @@ func TestSNARoundTrip(t *testing.T) {
 	}
 }
 
-// LoadBytes / SaveBytes coverage (iter 253). RZX embedding goes
-// through the byte-slice variants; format-dispatch needs same care
-// as file-path variants. Verifies symmetric round-trip via memory
-// for each supported format + unsupported-format error.
+// LoadBytes / SaveBytes coverage. RZX embedding goes through the
+// byte-slice variants, so format-dispatch needs the same care as the
+// file-path variants. Verifies symmetric round-trip via memory for
+// each supported format, plus the unsupported-format error.
 
 func TestLoadBytesSaveBytes_SNA_Roundtrip(t *testing.T) {
 	orig := New()
@@ -504,6 +505,39 @@ func TestLoadInvalidSZXSignature(t *testing.T) {
 	}
 }
 
+// TestSZXImplausibleBlockSizeRejected pins that a block header declaring
+// an implausibly large size (far beyond anything a real SZX block —
+// register sets, a 16K RAM page, small metadata — could need) is
+// rejected before the parser attempts to allocate a buffer of that
+// size. Guards against a corrupt or hostile length field driving a
+// multi-gigabyte allocation from a tiny file.
+func TestSZXImplausibleBlockSizeRejected(t *testing.T) {
+	var buf bytes.Buffer
+	hdr := szxHeader{
+		Signature:    [4]byte{'Z', 'X', 'S', 'T'},
+		MajorVersion: 1,
+		MinorVersion: 4,
+		MachineID:    ZXSTMID_48K,
+	}
+	_ = binary.Write(&buf, binary.LittleEndian, hdr)
+
+	block := szxBlockHeader{
+		ID:   [4]byte{'R', 'A', 'M', 'P'},
+		Size: 64*1024*1024 + 1, // one byte past the sanity cap
+	}
+	_ = binary.Write(&buf, binary.LittleEndian, block)
+	buf.Write([]byte{0x00, 0x01, 0x02}) // tiny actual payload
+
+	s := New()
+	err := s.LoadBytes(buf.Bytes(), FormatSZX)
+	if err == nil {
+		t.Fatal("LoadBytes: want error for implausible block size, got nil")
+	}
+	if !strings.Contains(err.Error(), "implausible") {
+		t.Errorf("error = %q, want it to mention the size was rejected as implausible", err.Error())
+	}
+}
+
 func TestLoadTruncatedZ80Header(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "truncated.z80")
@@ -582,32 +616,32 @@ func TestZ80V1LoadCompressed(t *testing.T) {
 	// Build a V1 Z80 file.
 	// Header (30 bytes) + compressed 48K memory + terminator 00 ED ED 00
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	header[0] = 0xAA // A
-	header[1] = 0x55 // F
-	header[2] = 0x11 // C
-	header[3] = 0x22 // B
-	header[4] = 0x33 // L
-	header[5] = 0x44 // H
-	binary.LittleEndian.PutUint16(header[6:8], 0x8000) // PC != 0 => V1
-	binary.LittleEndian.PutUint16(header[8:10], 0xFFFE) // SP
-	header[10] = 0x3F // I
-	header[11] = 0x00 // R (low 7 bits)
-	header[12] = 0x01 // flagsByte: bit0=R bit7, border=0
-	header[13] = 0x55 // E
-	header[14] = 0x66 // D
-	header[15] = 0x77 // C'
-	header[16] = 0x88 // B'
-	header[17] = 0x99 // E'
-	header[18] = 0xAA // D'
-	header[19] = 0xBB // L'
-	header[20] = 0xCC // H'
-	header[21] = 0xDD // A'
-	header[22] = 0xEE // F'
+	header[0] = 0xAA                                     // A
+	header[1] = 0x55                                     // F
+	header[2] = 0x11                                     // C
+	header[3] = 0x22                                     // B
+	header[4] = 0x33                                     // L
+	header[5] = 0x44                                     // H
+	binary.LittleEndian.PutUint16(header[6:8], 0x8000)   // PC != 0 => V1
+	binary.LittleEndian.PutUint16(header[8:10], 0xFFFE)  // SP
+	header[10] = 0x3F                                    // I
+	header[11] = 0x00                                    // R (low 7 bits)
+	header[12] = 0x01                                    // flagsByte: bit0=R bit7, border=0
+	header[13] = 0x55                                    // E
+	header[14] = 0x66                                    // D
+	header[15] = 0x77                                    // C'
+	header[16] = 0x88                                    // B'
+	header[17] = 0x99                                    // E'
+	header[18] = 0xAA                                    // D'
+	header[19] = 0xBB                                    // L'
+	header[20] = 0xCC                                    // H'
+	header[21] = 0xDD                                    // A'
+	header[22] = 0xEE                                    // F'
 	binary.LittleEndian.PutUint16(header[23:25], 0x5C3A) // IY
 	binary.LittleEndian.PutUint16(header[25:27], 0x1234) // IX
-	header[27] = 0xFF // IFF1
-	header[28] = 0xFF // IFF2
-	header[29] = 0x01 // IM 1
+	header[27] = 0xFF                                    // IFF1
+	header[28] = 0xFF                                    // IFF2
+	header[29] = 0x01                                    // IM 1
 
 	// Create 48K memory data filled with a pattern
 	memData := make([]byte, 49152)
@@ -689,11 +723,11 @@ func TestZ80V1LoadUncompressed(t *testing.T) {
 	// explicitly checked in our code -- the code just looks for the terminator).
 	// If the last 4 bytes are NOT the terminator, data is treated as uncompressed.
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	header[0] = 0x42 // A
-	header[1] = 0x00 // F
-	binary.LittleEndian.PutUint16(header[6:8], 0x1000) // PC != 0 => V1
+	header[0] = 0x42                                    // A
+	header[1] = 0x00                                    // F
+	binary.LittleEndian.PutUint16(header[6:8], 0x1000)  // PC != 0 => V1
 	binary.LittleEndian.PutUint16(header[8:10], 0xDEAD) // SP
-	header[12] = 0x00 // flagsByte
+	header[12] = 0x00                                   // flagsByte
 
 	// Create exactly 49152 bytes of uncompressed RAM.
 	// The last 4 bytes must NOT be 0x00 0xED 0xED 0x00.
@@ -751,22 +785,22 @@ func TestZ80V2Load48K(t *testing.T) {
 
 	// Build V1 header with PC=0 to signal V2/V3
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	header[0] = 0x42 // A
-	header[1] = 0xFF // F
-	binary.LittleEndian.PutUint16(header[6:8], 0x0000) // PC=0 => V2+
+	header[0] = 0x42                                    // A
+	header[1] = 0xFF                                    // F
+	binary.LittleEndian.PutUint16(header[6:8], 0x0000)  // PC=0 => V2+
 	binary.LittleEndian.PutUint16(header[8:10], 0xFFF0) // SP
-	header[10] = 0x3F // I
-	header[11] = 0x10 // R low7
-	header[12] = 0x05 // flagsByte: R bit7=1, border=2
-	header[27] = 0x01 // IFF1
-	header[28] = 0x01 // IFF2
-	header[29] = 0x02 // IM 2
+	header[10] = 0x3F                                   // I
+	header[11] = 0x10                                   // R low7
+	header[12] = 0x05                                   // flagsByte: R bit7=1, border=2
+	header[27] = 0x01                                   // IFF1
+	header[28] = 0x01                                   // IFF2
+	header[29] = 0x02                                   // IM 2
 
 	// Extended header: 23 bytes for V2
 	extHeaderLen := uint16(23)
 	extHeader := make([]byte, extHeaderLen)
 	binary.LittleEndian.PutUint16(extHeader[0:2], 0x8000) // PC
-	extHeader[2] = Z80_HW_48K // hardware mode = 48K
+	extHeader[2] = Z80_HW_48K                             // hardware mode = 48K
 
 	// Build memory blocks: pages 8 (bank 5), 4 (bank 2), 5 (bank 0)
 	type memBlock struct {
@@ -844,16 +878,16 @@ func TestZ80V2Load128K(t *testing.T) {
 	snap := New()
 
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	header[0] = 0x11 // A
-	binary.LittleEndian.PutUint16(header[6:8], 0x0000) // V2+
+	header[0] = 0x11                                    // A
+	binary.LittleEndian.PutUint16(header[6:8], 0x0000)  // V2+
 	binary.LittleEndian.PutUint16(header[8:10], 0xC000) // SP
-	header[12] = 0x01 // flagsByte
+	header[12] = 0x01                                   // flagsByte
 
 	extHeaderLen := uint16(23)
 	extHeader := make([]byte, extHeaderLen)
 	binary.LittleEndian.PutUint16(extHeader[0:2], 0x0000) // PC = 0x0000
-	extHeader[2] = Z80_HW_128K // hardware mode
-	extHeader[3] = 0x10        // Port7FFD
+	extHeader[2] = Z80_HW_128K                            // hardware mode
+	extHeader[3] = 0x10                                   // Port7FFD
 
 	// Per the .z80 spec, 128K page N holds RAM bank N-3:
 	// page 3=>bank0, 4=>bank1, 5=>bank2, 6=>bank3, 7=>bank4, 8=>bank5, 9=>bank6, 10=>bank7.
@@ -1137,10 +1171,10 @@ func TestZ80V3SaveRoundTrip128K(t *testing.T) {
 func TestZ80FlagsByteEncoding(t *testing.T) {
 	// Build a V1 header with flagsByte = 255 (should be treated as 1)
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	binary.LittleEndian.PutUint16(header[6:8], 0x1234) // PC!=0 => V1
+	binary.LittleEndian.PutUint16(header[6:8], 0x1234)  // PC!=0 => V1
 	binary.LittleEndian.PutUint16(header[8:10], 0xFFF0) // SP
-	header[11] = 0x42 // R (low 7 bits = 0x42)
-	header[12] = 0xFF // flagsByte = 255 => treat as 1
+	header[11] = 0x42                                   // R (low 7 bits = 0x42)
+	header[12] = 0xFF                                   // flagsByte = 255 => treat as 1
 
 	memData := make([]byte, 49152)
 	var fileBuf bytes.Buffer
@@ -1170,9 +1204,9 @@ func TestZ80FlagsByteEncoding(t *testing.T) {
 
 func TestZ80FlagsByteNormalBorder(t *testing.T) {
 	header := make([]byte, Z80_V1_HEADER_SIZE)
-	binary.LittleEndian.PutUint16(header[6:8], 0x1000) // V1
+	binary.LittleEndian.PutUint16(header[6:8], 0x1000)  // V1
 	binary.LittleEndian.PutUint16(header[8:10], 0xFFF0) // SP
-	header[11] = 0x00 // R low7 = 0
+	header[11] = 0x00                                   // R low7 = 0
 	// flagsByte: bit0=0 (R bit7=0), bits 1-3 = border color 5 => (5 << 1) = 0x0A
 	header[12] = 0x0A
 
@@ -1473,7 +1507,7 @@ func TestSZXRamPageInvalidBank(t *testing.T) {
 	// Build a ram page header with page number 8 (out of range 0-7)
 	data := make([]byte, 3+16384)
 	binary.LittleEndian.PutUint16(data[0:2], 0x0000) // flags: not compressed
-	data[2] = 8                                        // invalid page number
+	data[2] = 8                                      // invalid page number
 	snap := New()
 	err := snap.loadSZXRamPage(data)
 	if err == nil {

@@ -96,9 +96,9 @@ func TestParseSkipsLayer2LoadingScreen(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	buf.Write(hdr)
-	buf.Write(bytes.Repeat([]byte{0xAA}, 512))       // palette
-	buf.Write(bytes.Repeat([]byte{0xBB}, 49152))     // Layer 2 screen
-	buf.Write(bytes.Repeat([]byte{0x55}, BankSize))  // bank 5 payload
+	buf.Write(bytes.Repeat([]byte{0xAA}, 512))      // palette
+	buf.Write(bytes.Repeat([]byte{0xBB}, 49152))    // Layer 2 screen
+	buf.Write(bytes.Repeat([]byte{0x55}, BankSize)) // bank 5 payload
 
 	got, err := Parse(bytes.NewReader(buf.Bytes()))
 	if err != nil {
@@ -321,8 +321,7 @@ func TestParseHeaderFieldOffsets(t *testing.T) {
 }
 
 func TestParsePinsPreserveByteOffset(t *testing.T) {
-	// Regression: Sprint 4 was reading byte 132 instead of byte 134
-	// for the Preserve flag. Pin the correct offset.
+	// Pin the Preserve flag to its correct header offset (134, not 132).
 	data := buildNEX(buildOpts{preserve: 0xA5})
 	got, err := Parse(bytes.NewReader(data))
 	if err != nil {
@@ -362,8 +361,8 @@ func TestLoadOrderStartsCanonically(t *testing.T) {
 	}
 }
 
-// ParseFile coverage (iter 257). The on-disk wrapper just wraps
-// Parse but the open/close failure path needs its own test.
+// ParseFile coverage. The on-disk wrapper just wraps Parse but the
+// open/close failure path needs its own test.
 
 func TestParseFile_Roundtrip(t *testing.T) {
 	data := buildNEX(buildOpts{border: 4, sp: 0xC000, pc: 0x8000, entryBank: 5})

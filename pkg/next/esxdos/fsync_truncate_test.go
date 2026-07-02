@@ -8,8 +8,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// iter 365: F_FGETPOS / F_FTRUNCATE / F_SYNC esxDOS handlers.
-
 // F_FGETPOS returns the current cursor in BCDE after a seek.
 func TestFGetPos(t *testing.T) {
 	d, cpu, mem := setupFileAPI(t, map[string][]byte{

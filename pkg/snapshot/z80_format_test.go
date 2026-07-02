@@ -17,8 +17,10 @@ package snapshot
 //   - Version-1 flags byte (offset 12): bit 0 = bit 7 of R, bits 1-3 =
 //     border, bit 5 = memory is compressed. A value of 255 is treated
 //     as 1 for compatibility with very old files.
-//   - Hardware-mode byte: v2 mode 3/4 = 128K; v3 modes 4/5/12/13/14 are
-//     128K-family.
+//   - Hardware-mode byte: v2 mode 3/4 = 128K; v3 modes 4/5 (128K,
+//     128K+IF1), 7/8 (+3, including the "bugged" variant), and 12/13
+//     (+2, +2A) are 128K-family. Other 128K-capable hosts the emulator
+//     doesn't model (Pentagon, Scorpion, 128K+MGT) fall back to 48K.
 //   - Memory blocks (v2/v3): block length 0xFFFF is a sentinel meaning
 //     "16384 raw uncompressed bytes follow". Page numbers map to banks:
 //     48K uses pages 8/4/5 -> banks 5/2/0; 128K uses page = bank + 3.
@@ -269,12 +271,43 @@ func TestZ80V3Mode3Is48K(t *testing.T) {
 	}
 }
 
-// TestZ80V3Plus3Is128K pins that the +3 hardware mode (14) is treated as
+// TestZ80V3Plus3Is128K pins that the +3 hardware mode is treated as
 // 128K-family.
 func TestZ80V3Plus3Is128K(t *testing.T) {
 	s := buildZ80V2V3(t, 54, Z80_HW_PLUS3, 0x10)
 	if !s.Memory.Is128K {
-		t.Error("v3 +3 (mode 14) must be 128K-family")
+		t.Error("v3 +3 must be 128K-family")
+	}
+}
+
+// TestZ80V3Plus3ModeValueIs7 pins the on-disk value of the +3 hardware
+// mode byte to 7, per the .z80 v3 specification (values 7 and 8 both
+// denote a Spectrum +3; 8 is the "bugged" variant some old tools wrote).
+// Mode 14 is a different, non-128K machine (TC2048) and must not be
+// mistaken for +3.
+func TestZ80V3Plus3ModeValueIs7(t *testing.T) {
+	if Z80_HW_PLUS3 != 7 {
+		t.Fatalf("Z80_HW_PLUS3 = %d, want 7", Z80_HW_PLUS3)
+	}
+
+	s := buildZ80V2V3(t, 54, 7, 0x10)
+	if !s.Memory.Is128K {
+		t.Error("v3 mode 7 (+3) must be 128K-family")
+	}
+
+	sBugged := buildZ80V2V3(t, 54, 8, 0x10)
+	if !sBugged.Memory.Is128K {
+		t.Error("v3 mode 8 (+3, bugged variant) must be 128K-family")
+	}
+}
+
+// TestZ80V3Mode14IsTC2048Not128K pins that hardware mode 14 (TC2048, a
+// 48K-RAM Timex clone with no 128K-style bank switching) is NOT
+// classified as 128K — it must not be confused with the +3 mode.
+func TestZ80V3Mode14IsTC2048Not128K(t *testing.T) {
+	s := buildZ80V2V3(t, 54, 14, 0)
+	if s.Memory.Is128K {
+		t.Error("v3 mode 14 (TC2048) must not be treated as 128K-family")
 	}
 }
 
@@ -322,6 +355,41 @@ func TestZ80V2V3UncompressedSentinelBlock(t *testing.T) {
 		if b != 0x5A {
 			t.Fatalf("bank 5 byte %d = 0x%02X, want 0x5A (sentinel mis-read?)", i, b)
 		}
+	}
+}
+
+// TestZ80V2V3TruncatedTrailingBlockHeaderErrors pins that a file cut off
+// partway through a memory-block header (1 or 2 stray bytes after the
+// last complete block, rather than a clean end-of-file) is reported as
+// an error instead of being silently accepted as if those bytes were
+// never there.
+func TestZ80V2V3TruncatedTrailingBlockHeaderErrors(t *testing.T) {
+	var buf bytes.Buffer
+	hdr := make([]byte, Z80_V1_HEADER_SIZE)
+	buf.Write(hdr)
+	var lenField [2]byte
+	binary.LittleEndian.PutUint16(lenField[:], 23)
+	buf.Write(lenField[:])
+	ext := make([]byte, 23)
+	binary.LittleEndian.PutUint16(ext[0:2], 0x6000) // PC
+	ext[2] = 0                                      // 48K
+	buf.Write(ext)
+
+	// One complete, valid memory block.
+	raw := bytes.Repeat([]byte{0x5A}, 16384)
+	var blkHdr [3]byte
+	binary.LittleEndian.PutUint16(blkHdr[0:2], 0xFFFF) // sentinel
+	blkHdr[2] = 8                                      // page 8 -> bank 5
+	buf.Write(blkHdr[:])
+	buf.Write(raw)
+
+	// A stray 2-byte fragment of a would-be next block header: not a
+	// clean EOF, and not a full 3-byte header either.
+	buf.Write([]byte{0x01, 0x02})
+
+	s := New()
+	if err := s.LoadBytes(buf.Bytes(), FormatZ80); err == nil {
+		t.Fatal("LoadBytes: want error for a truncated trailing block header, got nil")
 	}
 }
 

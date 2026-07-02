@@ -42,8 +42,7 @@ func RedirectConfig(t testing.TB) string {
 // somewhere outside a temp directory. Call this from test fixtures
 // that are about to write to install.Path() so a missing
 // RedirectConfig call surfaces immediately instead of silently
-// truncating the developer's real NextZXOS ROM (see commit log:
-// real-ROM clobber happened once during Tier 4 development).
+// truncating the developer's real NextZXOS ROM.
 //
 // Heuristic: the path must be under one of the common temp-dir
 // prefixes (/tmp, /var/folders on macOS, Windows TEMP via the

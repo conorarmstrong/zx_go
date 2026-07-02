@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// classifyBranch test matrix (iter 247).
+// classifyBranch test matrix.
 //
 // classifyBranch attributes each PC transition to a BranchSource
 // category for the debugger's history view. Sources:

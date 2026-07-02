@@ -6,13 +6,12 @@ import (
 	"fmt"
 )
 
-// UDI ("UDI!") is FUSE's native raw-track disk image format. Unlike DSK
-// it preserves the full byte-stream view of each track including clock
+// UDI ("UDI!") is a raw-track disk image format. Unlike DSK it
+// preserves the full byte-stream view of each track including clock
 // marks, MFM/FM marks, and weak data bits — which is why it's the only
-// format that reliably round-trips copy-protected disks.
+// format handled here that reliably round-trips copy-protected disks.
 //
-// File layout (see fuse-1.6.0/peripherals/disk/disk.c:1018 for the
-// reference implementation):
+// File layout:
 //
 //	 0  4  "UDI!"
 //	 4  4  file length - 4  (little-endian uint32)
@@ -35,8 +34,8 @@ import (
 //
 // We accept types 0x00, 0x01, 0x02, and their 0x80-0x82 "already-read"
 // aliases. Compressed tracks (0xF0) and the multi-read weak-sector
-// block type (0x83) are not supported in this first pass — they're
-// rare and require additional decoder state.
+// block type (0x83) are not supported — they're rare and require
+// additional decoder state.
 const (
 	udiTypeFM      = 0x00
 	udiTypeMFM     = 0x01

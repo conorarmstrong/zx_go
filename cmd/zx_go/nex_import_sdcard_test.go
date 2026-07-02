@@ -6,15 +6,15 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 )
 
-// TestNexImportSDCardAvailableInFolderMode pins the fix for the File->Open
-// .nex flow being wrongly blocked with "needs a Spectrum Next SD card (none
-// is configured)".
+// TestNexImportSDCardAvailableInFolderMode guards the File->Open .nex flow
+// against being wrongly blocked with "needs a Spectrum Next SD card (none is
+// configured)".
 //
 // The .nex load path (main.go) and the importer (confirmImportNex) both gate
 // on emu.sdImageSrc != nil so the .nex can be written into the live in-memory
-// FAT32 image the guest reads. That field used to be set ONLY in raw-image
-// mode AND only under --sd-writeback. In folder mode (the default, roms/next/sd)
-// it stayed nil, so every GUI .nex load was blocked even with an SD configured.
+// FAT32 image the guest reads. That field must be populated whenever an SD
+// card is configured — folder mode (the default, roms/next/sd) included, not
+// just raw-image mode under --sd-writeback.
 //
 // Behaviour under test: when an SD card is configured (folder mode here, the
 // default the test harness uses), the emulator exposes the importable SD

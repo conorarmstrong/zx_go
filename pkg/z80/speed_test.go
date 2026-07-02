@@ -48,7 +48,7 @@ func TestSpeedSelectMasksHighBits(t *testing.T) {
 // game NextZXOS would otherwise run at 28 MHz.
 func TestLockUnlockSpeedSelect(t *testing.T) {
 	cpu, _ := createTestCPU()
-	cpu.SetSpeedSelect(3) // guest picks 28 MHz
+	cpu.SetSpeedSelect(3)  // guest picks 28 MHz
 	cpu.LockSpeedSelect(0) // user forces 3.5 MHz
 	if !cpu.SpeedLocked() {
 		t.Fatal("SpeedLocked() should be true after LockSpeedSelect")

@@ -4,10 +4,9 @@ import "testing"
 
 // The page logger must observe CONMEM (port $E3 bit 7) transitions —
 // the overlay's force-in override — alongside the automap latch
-// events. The launch-stall hunt (the development log+) needs the full
-// overlay-visibility timeline: NextZXOS's IM1 wrapper re-enters the
-// conmem window each tick via `out ($E3),A`, and a dropped/missing
-// write is invisible without these events.
+// events, to give a full overlay-visibility timeline: NextZXOS's IM1
+// wrapper re-enters the conmem window each tick via `out ($E3),A`,
+// and a dropped/missing write would otherwise be invisible.
 func TestPageLoggerFiresOnConmemTransitions(t *testing.T) {
 	p := New(makeROM())
 	var events []string

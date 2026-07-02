@@ -158,9 +158,9 @@ func TestParseChannels(t *testing.T) {
 		{"pc,nextreg,ports,bankswitch,screen",
 			Channels{PC: true, NextReg: true, Ports: true, BankSwitch: true, Screen: true},
 			false},
-		{"port", Channels{Ports: true}, false},  // alias
+		{"port", Channels{Ports: true}, false},      // alias
 		{"bank", Channels{BankSwitch: true}, false}, // alias
-		{",pc,", Channels{PC: true}, false},      // empty tokens tolerated
+		{",pc,", Channels{PC: true}, false},         // empty tokens tolerated
 		{"junk", Channels{}, true},
 	}
 	for _, c := range cases {

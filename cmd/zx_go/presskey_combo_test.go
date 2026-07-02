@@ -2,10 +2,10 @@ package main
 
 import "testing"
 
-// Task #256: BREAK = CAPS+SPACE pressed together; quote (") =
-// SYM+P. --press-key needs chords: `caps+space@100` must emit one
-// entry per key at the same frame so both are held (and released)
-// together by the scheduler.
+// BREAK = CAPS+SPACE pressed together; quote (") = SYM+P. --press-key
+// needs chords: `caps+space@100` must emit one entry per key at the
+// same frame so both are held (and released) together by the
+// scheduler.
 func TestParsePressKeySpecCombo(t *testing.T) {
 	got := parsePressKeySpec("caps+space@100")
 	if len(got) != 2 {

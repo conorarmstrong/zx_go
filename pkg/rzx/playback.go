@@ -220,4 +220,3 @@ func (p *Playback) Frame() (snap *SnapshotBlock, err error) {
 	p.finished = true
 	return snap, ErrPlaybackFinished
 }
-

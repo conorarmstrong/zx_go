@@ -170,6 +170,40 @@ func TestReadByteWalksTape(t *testing.T) {
 	}
 }
 
+// TestReadPastWindowRetainsLastByte verifies that once a window's
+// maxBytes have been transferred, further MDR reads return the same
+// byte as the last real transfer rather than the idle-bus 0xFF value.
+// The IF1 ULA's data port is a latch fed by the tape's serial-to-
+// parallel shifter: it only updates when the controller shifts in a
+// new byte, so reading it after the window closes (before the next
+// CTR/NET access restarts the drive) just samples the latch again.
+func TestReadPastWindowRetainsLastByte(t *testing.T) {
+	bus := NewMicrodriveBus()
+	c := microdrive.New(180)
+	for i := 0; i < microdrive.HeadLen; i++ {
+		c.SetDataAt(i, byte(0x10+i))
+	}
+	bus.Insert(0, c)
+	d := bus.Drive(0)
+	d.MotorOn = true
+
+	// We're in a header window — maxBytes = 15.
+	bus.RestartAll()
+	var last byte
+	for i := 0; i < microdrive.HeadLen; i++ {
+		last = bus.ReadDataPort()
+	}
+	if last != byte(0x10+microdrive.HeadLen-1) {
+		t.Fatalf("last in-window byte = %02X, want %02X", last, byte(0x10+microdrive.HeadLen-1))
+	}
+
+	for i := 0; i < 3; i++ {
+		if got := bus.ReadDataPort(); got != last {
+			t.Errorf("past window read %d: data port = %02X, want %02X (latched last byte)", i, got, last)
+		}
+	}
+}
+
 // TestReadStatusReturnsWriteProtect verifies that the GAP/SYNC bits
 // only fire on a formatted (syncOK) block, and that the WP bit
 // reflects the cartridge state.

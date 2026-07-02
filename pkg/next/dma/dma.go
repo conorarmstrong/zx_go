@@ -9,12 +9,9 @@
 // transfer runs when an ENABLE command arrives after a LOAD has latched
 // the configured addresses.
 //
-// This replaces an earlier stub that assumed a fixed seven-byte command
-// (src, length, dst, mode). That assumption is wrong: NextZXOS dot
-// commands — e.g. the NextGuide ".guide" viewer — program the DMA with
-// the real variable-length WR-register stream, so the stub mis-read the
-// register bytes as an address and triggered a multi-kilobyte garbage
-// transfer that corrupted RAM and crashed the viewer.
+// The command stream is variable-length: which follow bytes appear
+// depends on the bits set in the preceding base byte, so a fixed-size
+// command framing cannot parse it.
 //
 // Supported (the subset NextZXOS actually drives):
 //
@@ -28,9 +25,10 @@
 //     LOAD ($CF), ENABLE ($87); other status/continue commands are
 //     accepted as no-ops
 //
-// Memory<->memory transfers run synchronously to completion. Not
-// modelled: per-byte prescaler timing, I/O-port endpoints, the
-// interrupt/match logic, and DMA-vs-CPU bus contention.
+// Memory<->memory transfers run synchronously to completion; IO-port
+// endpoints and burst+prescaler transfers interleave with the CPU via
+// Step. Not modelled: the interrupt/match logic and DMA-vs-CPU bus
+// contention.
 package dma
 
 import (
@@ -39,7 +37,7 @@ import (
 )
 
 // dmaTrace logs every port-0x6B byte to stderr when ZX_GO_DMA_TRACE is
-// set — the diagnostic that pinned the command-stream mis-parse.
+// set, for diagnosing zxnDMA command-stream issues.
 var dmaTrace = os.Getenv("ZX_GO_DMA_TRACE") != ""
 
 func dmaLog(val byte) { fmt.Fprintf(os.Stderr, "DMA<-%02X\n", val) }
@@ -90,8 +88,8 @@ type DMA struct {
 	curA, curB uint16
 	counter    uint16
 
-	// Timing (Slice 2 fills these in): per-port cycle length (2..4) and the
-	// zxnDMA fixed-time prescaler, plus the transfer mode (continuous/burst).
+	// Timing: per-port cycle length (2..4) and the zxnDMA fixed-time
+	// prescaler, plus the transfer mode (continuous/burst).
 	aCycleLen byte
 	bCycleLen byte
 	prescaler byte

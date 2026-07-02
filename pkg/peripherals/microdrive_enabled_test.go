@@ -7,8 +7,8 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/microdrive"
 )
 
-// iter 322: cover IF1-enabled microdrive paths in PeripheralManager.
-// Existing tests only hit the disabled-IF1 nil-guard branches.
+// Covers the IF1-enabled microdrive paths in PeripheralManager; the
+// disabled-IF1 nil-guard branches are covered separately.
 
 func enabledIF1Manager(t *testing.T) *PeripheralManager {
 	t.Helper()

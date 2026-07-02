@@ -2,27 +2,23 @@
 // coprocessor: 1024 16-bit instructions, MOVE / WAIT / NOOP /
 // HALT, four start modes.
 //
-// Sprint 8 ships:
+// Implemented:
 //
 //   - Instruction storage (2 KB = 1024 × 16-bit)
 //   - NextReg 0x60 byte-by-byte data write with auto-increment
 //     into a current instruction-memory cursor
 //   - NextReg 0x61 / 0x62 control: 10-bit cursor index + 2-bit
 //     start mode
-//   - Decoded MOVE / WAIT / NOOP / HALT opcodes (a Decode helper
-//     test can run against synthesised programs)
+//   - Decoded MOVE / WAIT / NOOP / HALT opcodes
 //   - Step(scanline, hpos) that walks the program against the
 //     supplied raster position, executing MOVE writes through a
 //     callback and respecting WAIT
+//   - VBL auto-restart (StartOnVBL resets the program counter at
+//     the top of each frame)
 //
-// What's NOT in Sprint 8 (deferred):
-//
-//   - Tight raster-precise execution against per-T-state CPU
-//     stepping (Sprint 8 uses scanline+hpos quantum)
-//
-// VBL auto-restart (StartOnVBL resets the program counter at the top of
-// each frame) IS modelled. The execution model is otherwise functional
-// but not cycle-accurate.
+// Not implemented: tight raster-precise execution against per-T-state CPU
+// stepping — the execution model uses a scanline+hpos quantum instead, so
+// it is functional but not cycle-accurate.
 package copper
 
 // Instruction is one decoded copper opcode.
@@ -60,8 +56,7 @@ const MaxInstructions = 1024
 
 // RegWriter is the contract Copper uses to write NextRegs when
 // executing a MOVE. The compositor (or the bus's NextReg
-// dispatcher) implements it. Sprint 8 calls this once per MOVE
-// at Step time.
+// dispatcher) implements it. Step calls this once per MOVE.
 type RegWriter interface {
 	WriteReg(reg, val byte)
 }
@@ -210,9 +205,9 @@ func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 //
 // Re-entry guard: if a MOVE writes to NextRegs that mutate the
 // Copper's own state (0x60-0x62), the writes are buffered through
-// the dispatcher and applied as usual; Sprint 8's Step doesn't
-// reload its own pc / writePtr fields mid-loop, so a re-entrant
-// mutation only takes effect on the NEXT Step call.
+// the dispatcher and applied as usual; Step doesn't reload its own
+// pc / writePtr fields mid-loop, so a re-entrant mutation only takes
+// effect on the NEXT Step call.
 //
 // scanline is the raster line (vcount, 0..511). hcount is the raster
 // horizontal counter (0..511 in pixels) — the same units the FPGA's

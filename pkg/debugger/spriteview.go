@@ -26,13 +26,13 @@ type SpriteVizProvider interface {
 }
 
 // SpriteView renders the visible sprites' 16×16 patterns as an actual
-// pixel sheet (jnext's marquee inspector — the visual counterpart to
-// the sprite-list text command).
+// pixel sheet — the visual counterpart to the sprite-list text command.
 type SpriteView struct {
-	provider func() []SpriteSnapshot
-	img      *canvas.Image
-	info     *widget.Label
-	root     fyne.CanvasObject
+	provider  func() []SpriteSnapshot
+	img       *canvas.Image
+	info      *widget.Label
+	root      fyne.CanvasObject
+	lastCount int // sprite count from the most recent renderImage() read
 }
 
 const spriteScale = 3 // 16px → 48px cells
@@ -60,6 +60,7 @@ func (s *SpriteView) renderImage() image.Image {
 	if s.provider != nil {
 		snaps = s.provider()
 	}
+	s.lastCount = len(snaps)
 	if len(snaps) == 0 {
 		// 1×1 transparent placeholder; info label carries the message.
 		return image.NewRGBA(image.Rect(0, 0, SpriteDim, SpriteDim))
@@ -80,20 +81,19 @@ func (s *SpriteView) SetProvider(provider func() []SpriteSnapshot) {
 	s.Refresh()
 }
 
-// Refresh repaints from the current provider.
+// Refresh repaints from the current provider. Reads the provider
+// exactly once so the count label and the rendered sheet always agree,
+// even though the provider is reading live, concurrently-mutating
+// emulator sprite state.
 func (s *SpriteView) Refresh() {
 	if s.img == nil {
 		return
 	}
-	n := 0
-	if s.provider != nil {
-		n = len(s.provider())
-	}
-	if n == 0 {
+	s.img.Image = s.renderImage()
+	if s.lastCount == 0 {
 		s.info.SetText("Visible sprites: none")
 	} else {
-		s.info.SetText(fmt.Sprintf("Visible sprites: %d", n))
+		s.info.SetText(fmt.Sprintf("Visible sprites: %d", s.lastCount))
 	}
-	s.img.Image = s.renderImage()
 	s.img.Refresh()
 }

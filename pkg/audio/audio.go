@@ -18,10 +18,10 @@ type AYSource interface {
 }
 
 // DACSource is the minimal interface for the Spectrum Next's four
-// 8-bit DACs. Satisfied by *next/dac.Bank. v1.0 mixes at frame
-// granularity (current MixedLevel applied to every sample in the
-// buffer); v1.1 may upgrade to per-write event integration so
-// sample-playback chiptunes track DAC writes within a frame.
+// 8-bit DACs. Satisfied by *next/dac.Bank. Mixes at frame-snapshot
+// granularity: the current level is applied uniformly across the
+// whole buffer rather than integrating individual writes within
+// the frame (contrast pkg/audiodac's event-based reconstruction).
 type DACSource interface {
 	MixInto(buf []int16)
 }
@@ -55,6 +55,11 @@ const (
 	// never reaches the bottom.
 	queuePrefill = SamplesPerFrame * 4
 )
+
+// prefillSilence indexes queue (a [queueCapacity]int16 array) directly over
+// [0, queuePrefill); this compile-time check keeps that in bounds if either
+// constant's multiplier above is ever changed on its own.
+var _ [queueCapacity - queuePrefill]struct{}
 
 // AudioSystem handles audio output for the ZX Spectrum beeper and (on 128K+
 // machines) the AY-3-8912 sound chip.
@@ -200,9 +205,9 @@ func (as *AudioSystem) PushBeeperSamples(samples []int16) {
 // the held level while the ring buffer is starved. ~255/256 gives a ~6 ms
 // time constant: a brief gap is essentially held, but a sustained drain (a
 // pause, a model switch, or a heavy fast-load tick that starves the producer)
-// fades to silence rather than holding a flat DC plateau — which would step
-// back to the signal when production resumes and click. (Holding flat DC, as
-// the code used to, is exactly what produced the "battery click" on resume.)
+// fades to silence rather than holding a flat DC plateau — a flat plateau
+// would step abruptly back to the signal when production resumes, audible as
+// a click.
 const (
 	underrunDecayNum = 255
 	underrunDecayDen = 256
@@ -258,9 +263,8 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 		ay.MixInto(mixBuf)
 	}
 
-	// Step 2.5: mix in the Next DAC bank if attached. v1.0 contributes
-	// at frame-snapshot granularity; v1.1 may upgrade to per-write
-	// event integration.
+	// Step 2.5: mix in the Next DAC bank if attached (frame-snapshot
+	// granularity — see DACSource).
 	ar.audioSys.dacMu.RLock()
 	dac := ar.audioSys.dac
 	ar.audioSys.dacMu.RUnlock()

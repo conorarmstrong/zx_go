@@ -272,8 +272,7 @@ func TestEnvelopeTriangleShape(t *testing.T) {
 }
 
 // TestEnvelopeAttackShape pins shape 6 (single attack): the level RISES
-// 0,1,2,...,15. This is a datasheet shape our generator previously dropped to
-// zero — a genuine discrepancy fixed here.
+// 0,1,2,...,15.
 func TestEnvelopeAttackShape(t *testing.T) {
 	s := New()
 	s.WriteRegister(regEnv0, 0x80|(6<<1)) // shape 6 = single attack
@@ -333,8 +332,7 @@ func TestEnvelopeSingleShotLatches(t *testing.T) {
 // --- Envelope resolution bit (bit 4) ------------------------------------
 
 // TestEnvelopeResolutionBit pins bit 4: when set the generator runs at 3-bit
-// resolution, i.e. the level's LSB is masked (even levels only). This bit was
-// previously unmodelled — a genuine discrepancy fixed here.
+// resolution, i.e. the level's LSB is masked (even levels only).
 func TestEnvelopeResolutionBit(t *testing.T) {
 	s := New()
 	// Shape 2 (decay) at step 0 ⇒ level 15 normally; 3-bit ⇒ 14.

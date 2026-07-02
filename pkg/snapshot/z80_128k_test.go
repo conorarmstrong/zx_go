@@ -45,10 +45,9 @@ func buildV2_128K(t *testing.T, hwMode, port7FFD byte) []byte {
 
 // TestLoadZ80_128KBankMapping pins the .z80 spec page→bank mapping for 128K
 // snapshots: page N holds RAM bank N-3 (page 3→bank 0 … page 10→bank 7).
-// Ghouls 'n' Ghosts (a full 8-bank 128K dump) reset on load because pages 4
-// and 5 were mapped with the 48K interpretation (bank 2 / bank 0), leaving
-// bank 1 empty and overwriting bank 0 — scrambling memory under the running
-// program.
+// Applying the 48K page interpretation instead (pages 4/5 → banks 2/0) to a
+// 128K snapshot would leave bank 1 empty and overwrite bank 0, scrambling
+// memory under the running program.
 func TestLoadZ80_128KBankMapping(t *testing.T) {
 	data := buildV2_128K(t, Z80_HW_128K, 0x10)
 

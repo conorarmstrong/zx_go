@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// iter 326: cover parseDiskImage extension-dispatch branches by
-// LoadDisk-ing files with different suffixes. The parsers may
-// reject the synthesized data, but the dispatch case is hit
-// before that error path, which is what we're after.
-
+// TestLoadDisk_DispatchByExtension exercises parseDiskImage's
+// extension-dispatch branches by LoadDisk-ing files with different
+// suffixes. The parsers may reject the synthesized data, but the
+// dispatch case is hit before that error path, which is what we're after.
 func TestLoadDisk_DispatchByExtension(t *testing.T) {
 	dir := createTestROMDir(t)
 	mem := newTestMemory(t, dir)
@@ -44,4 +43,3 @@ func TestLoadDisk_BadPath(t *testing.T) {
 		t.Error("LoadDisk on missing file should return error")
 	}
 }
-

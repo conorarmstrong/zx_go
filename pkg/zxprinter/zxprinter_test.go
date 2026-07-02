@@ -97,7 +97,7 @@ func TestClearDropsRows(t *testing.T) {
 }
 
 // ========================================================================
-// Additional ZX Printer tests (iter 216).
+// Additional ZX Printer tests.
 // ========================================================================
 
 // TestResetClearsStateButPreservesOutput documents Reset()'s

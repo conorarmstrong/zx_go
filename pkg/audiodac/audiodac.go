@@ -91,6 +91,14 @@ func (d *DAC) GenerateFrame(samplesPerFrame, tstatesPerFrame int) []int16 {
 		out[i] = (int16(avg) - 128) * amplitude
 	}
 
+	// Any event at or after the frame's final sample boundary didn't land in
+	// a [sampleStart, sampleEnd) window above and so never updated level —
+	// without this it would be silently discarded below instead of carrying
+	// into the next frame.
+	if idx < len(d.events) {
+		level = d.events[len(d.events)-1].level
+	}
+
 	d.startLevel = level
 	d.events = d.events[:0]
 	return out

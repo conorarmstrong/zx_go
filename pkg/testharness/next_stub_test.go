@@ -150,3 +150,92 @@ func TestNextDACPortWritesRouteToDACBank(t *testing.T) {
 		}
 	}
 }
+
+// TestNextSpritePortWritesRouteToSpriteEngine exercises the
+// end-to-end sprite upload path: port $303B selects a sprite slot
+// and pattern-RAM cursor, $57 streams attribute bytes, and $5B
+// streams pattern bytes. This is the integration counterpart to the
+// unit tests in pkg/next/sprite — it proves the ULA port dispatch
+// actually reaches the sprite engine the compositor renders from,
+// not just that the engine itself decodes bytes correctly.
+func TestNextSpritePortWritesRouteToSpriteEngine(t *testing.T) {
+	installtest.RedirectConfig(t)
+	installtest.AssertSandboxed(t)
+	dir, err := install.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rom := make([]byte, 0x4000)
+	if err := os.WriteFile(filepath.Join(dir, install.DistroROM), rom, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := New(roms.ModelNext)
+	if err != nil {
+		t.Fatalf("New(ModelNext): %v", err)
+	}
+
+	// Select sprite slot 3 (also sets the pattern-RAM cursor to
+	// 3*256 = 768).
+	h.ULA().WritePort(0x303B, 0x03)
+
+	// Stream attribute bytes 0 (X LSB) and 1 (Y) via port $57.
+	h.ULA().WritePort(0x0057, 0x2A) // X = 0x2A
+	h.ULA().WritePort(0x0057, 0x10) // Y = 0x10
+
+	// Stream two pattern bytes via port $5B.
+	h.ULA().WritePort(0x005B, 0xAB)
+	h.ULA().WritePort(0x005B, 0xCD)
+
+	sprites := h.NextSprites()
+	if sprites == nil {
+		t.Fatal("NextSprites() = nil; sprite engine not wired on ModelNext harness")
+	}
+	sp := sprites.Sprite(3)
+	if sp == nil {
+		t.Fatal("Sprite(3) = nil")
+	}
+	if sp.X != 0x2A {
+		t.Errorf("sprite 3 X = %#x, want 0x2A", sp.X)
+	}
+	if sp.Y != 0x10 {
+		t.Errorf("sprite 3 Y = %#x, want 0x10", sp.Y)
+	}
+	if got := sprites.PatternByte(768); got != 0xAB {
+		t.Errorf("pattern[768] = %#x, want 0xAB", got)
+	}
+	if got := sprites.PatternByte(769); got != 0xCD {
+		t.Errorf("pattern[769] = %#x, want 0xCD", got)
+	}
+}
+
+// TestNextI2CPortClaimedByRTCBus verifies port $113B (i2c SDA
+// read-back for the bit-banged DS1307 RTC) is claimed by the ULA
+// port dispatch once the harness wires the RTC bus. Without this
+// wiring NextZXOS's menu clock read fails every frame (the read
+// falls through instead of returning the idle-high SDA level).
+func TestNextI2CPortClaimedByRTCBus(t *testing.T) {
+	installtest.RedirectConfig(t)
+	installtest.AssertSandboxed(t)
+	dir, err := install.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rom := make([]byte, 0x4000)
+	if err := os.WriteFile(filepath.Join(dir, install.DistroROM), rom, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := New(roms.ModelNext)
+	if err != nil {
+		t.Fatalf("New(ModelNext): %v", err)
+	}
+
+	val, ok := h.ULA().ReadPort(0x113B)
+	if !ok {
+		t.Fatal("port 0x113B not claimed — RTC i2c bus not wired")
+	}
+	if val&0x01 == 0 {
+		t.Errorf("SDA idle level = 0, want 1 (bus idles high)")
+	}
+}

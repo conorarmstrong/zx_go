@@ -10,9 +10,8 @@ package rtc
 // AND of the master latch and the slave's drive. NextZXOS bit-bangs
 // the standard DS1307 transaction (START, $D0, reg ptr, repeated
 // START, $D1, sequential reads) to render the menu's date/time line;
-// before this Bus existed the SDA read-back floated high, the clock
-// fetch failed every frame, and the menu engine degenerated into a
-// re-render storm (the development log).
+// without a slave that ACKs and drives SDA, the read-back floats high
+// and the clock fetch fails every frame.
 type Bus struct {
 	rtc *RTC
 

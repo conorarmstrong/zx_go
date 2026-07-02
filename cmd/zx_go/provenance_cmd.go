@@ -150,7 +150,7 @@ func (d *remoteDebugger) resolvePhysical(addr uint16) (bank16k int, off uint16, 
 // the return word most recently consumed off the stack. If that word
 // equals the current PC, the jump arrived via RET and the provenance
 // records name the instruction that pushed it — the causal link behind
-// a bad-jump / corrupt-stack trap (e.g. the bank-2 $0000 trap, #229).
+// a bad-jump / corrupt-stack trap (e.g. a bank-2 $0000 trap).
 func (d *remoteDebugger) cmdWhyPC(_ []string) string {
 	if !d.provenance.enabled.Load() {
 		return "ERR provenance not armed — run `provenance on` before the run"

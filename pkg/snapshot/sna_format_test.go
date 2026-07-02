@@ -146,10 +146,10 @@ func TestSNA48KIFF2Clear(t *testing.T) {
 	}
 }
 
-// TestSNA128KPagedBankRoundtripAllPages is the regression test for the
-// format bug where the 48K-dump's third page was hardcoded to bank 0
-// instead of the bank mapped at 0xC000. Every paged-bank selection must
-// round-trip all eight banks intact.
+// TestSNA128KPagedBankRoundtripAllPages pins that the 48K dump's third
+// page always follows whichever bank port 0x7FFD has mapped at 0xC000
+// (not a fixed bank), for every possible paged-bank selection — so all
+// eight RAM banks round-trip intact regardless of which one is paged in.
 func TestSNA128KPagedBankRoundtripAllPages(t *testing.T) {
 	for page := byte(0); page < 8; page++ {
 		orig := New()
@@ -242,6 +242,21 @@ func TestSNA128KPagedIs5RemainingSet(t *testing.T) {
 	wantSize := 27 + 3*16384 + 4 + 6*16384
 	if len(data) != wantSize {
 		t.Fatalf("paged=5 file size = %d, want %d (bank 5 stored twice)", len(data), wantSize)
+	}
+}
+
+// TestSNATruncated128KTailErrors pins that a file with 1-3 stray bytes
+// after the 48K dump (a 128K SNA cut short mid-way through the
+// PC/port7FFD/TR-DOS trailer, rather than a clean 49179-byte 48K file)
+// is reported as an error instead of silently being accepted as a
+// (bogus) 48K snapshot.
+func TestSNATruncated128KTailErrors(t *testing.T) {
+	data := build48KSNA(t, 0xFF00, 0x1234)
+	// Append a partial 128K trailer: only 2 of the 4 expected bytes.
+	data = append(data, 0x00, 0x60)
+	s := New()
+	if err := s.LoadBytes(data, FormatSNA); err == nil {
+		t.Fatal("LoadBytes: want error for a truncated 128K trailer, got nil")
 	}
 }
 

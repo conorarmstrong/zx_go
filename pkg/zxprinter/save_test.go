@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// iter 302: cover Save() + advance wraparound + read-during-print
-// states that weren't exercised by the existing test suite.
+// Covers Save() plus advance() wraparound and read-during-print states.
 
 func TestSave_WritesValidPNG(t *testing.T) {
 	p := New()

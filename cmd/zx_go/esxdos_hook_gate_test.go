@@ -2,14 +2,12 @@ package main
 
 import "testing"
 
-// the development log: when a raw SD-card IMAGE is configured the guest's
-// own divMMC/+3DOS code must do ALL filesystem work against the
-// image — installing the host-directory esxDOS RST8 shim alongside
-// it creates a split-brain FS (the shim answered "c:/nextzxos/
-// enMenus.cfg" from the host dir, which only has enMenus-example.cfg,
-// so the menu engine's first source-open failed and the staging gave
-// up — the Browser-ENTER reboot of task #255). The shim exists only
-// as a convenience for the host-dir (BuildFAT16) mode.
+// When a raw SD-card image is configured, the guest's own divMMC/+3DOS
+// code must do all filesystem work against that image — installing the
+// host-directory esxDOS RST8 shim alongside it would create a
+// split-brain filesystem (host dir and image can disagree on
+// contents). The shim exists only as a convenience for host-directory
+// (BuildFAT16) mode.
 func TestESXDOSHostHookGate(t *testing.T) {
 	cases := []struct {
 		img, root string

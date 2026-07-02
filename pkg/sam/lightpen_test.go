@@ -39,7 +39,8 @@ func TestHPENOutsideScreenReportsScreenHeight(t *testing.T) {
 }
 
 func TestHPENNotConstantOverFrame(t *testing.T) {
-	// The regression that hung the boot ROM: HPEN must change across the frame.
+	// The boot ROM busy-waits on HPEN to lock to the raster, so a value that
+	// stayed constant across the frame would hang it.
 	seen := map[byte]bool{}
 	for line := 0; line < 312; line++ {
 		m := samAt(t, line, 200)

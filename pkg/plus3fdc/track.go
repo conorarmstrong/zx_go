@@ -1,9 +1,8 @@
 package plus3fdc
 
-// Track-level disk representation. This mirrors FUSE's UDI internal model
-// (see fuse-1.6.0/peripherals/disk/disk.h:107 and disk.c:74) where each
-// track is stored as a stream of bytes representing what the FDC head
-// reads as the disk spins past it, plus two parallel bitmaps:
+// Track-level disk representation. Each track is stored as a stream of
+// bytes representing what the FDC head reads as the disk spins past it,
+// plus two parallel bitmaps:
 //
 //   clocks: 1 = the byte at this position has a missing-clock pattern
 //           (used to mark address marks: A1 with clock = sync, FE with
@@ -18,18 +17,16 @@ package plus3fdc
 //   - implement READ DIAGNOSTIC (return the entire spinning-disk byte
 //     stream including IDs and gaps)
 //
-// We use this representation as the canonical disk format. Sector parsing
-// (the old "list of Sector{}" view) is provided as a compatibility helper
-// that walks the track stream to find sector data — that lets the rest
-// of the FDC keep working unchanged while the underlying model is upgraded.
+// This is the canonical disk format. The Sector{} list view (disk.go)
+// is a helper built on top of it, walking the track stream to find
+// sector data for callers that just want CHRN + bytes.
 
 import (
 	"math/rand/v2"
 )
 
-// Default bytes-per-track for double-density (DD) MFM disks. This
-// matches FUSE's bpt for a standard DD format — the only density we
-// currently emit.
+// Default bytes-per-track for double-density (DD) MFM disks at 300RPM /
+// 250kbps — the only density this package emits.
 const bytesPerTrackDD = 6250
 
 // Address mark and gap byte values.
@@ -47,7 +44,7 @@ const (
 // gapKind selects which timing constants to use when laying out a track.
 // Different disk formats use different gap layouts — IBM34 for
 // CPC/+3, MGT for DISCiPLE/+D, TRDOS for Beta, and a FM variant for
-// single-density disks. Matches FUSE's gaps[] table in disk.c:82.
+// single-density disks.
 type gapKind int
 
 const (
@@ -68,12 +65,13 @@ type gapSpec struct {
 	gap     byte // filler byte for gap regions
 	sync    byte // sync byte
 	syncLen int
-	mark    int  // 0xA1 for MFM, -1 for FM (no separate sync mark)
+	mark    int // 0xA1 for MFM, -1 for FM (no separate sync mark)
 	len     [4]int
 }
 
-// gapSpecs maps gapKind to its spec. Numbers come from FUSE's gaps[]
-// table in disk.c:82.
+// gapSpecs maps gapKind to its spec — the byte counts for each gap
+// follow the IBM System 34 (MFM) / IBM 3740 (FM) track format used by
+// the CPC/+3, DISCiPLE/+D, and TR-DOS controllers.
 var gapSpecs = [...]gapSpec{
 	gapMFM:   {gap: gapByteMFM, sync: syncByte, syncLen: 12, mark: a1Mark, len: [4]int{80, 50, 22, 54}},
 	gapFM:    {gap: gapByteFM, sync: syncByte, syncLen: 6, mark: -1, len: [4]int{40, 26, 11, 27}},
@@ -155,10 +153,10 @@ func bitClear(bm []byte, i int) {
 	bm[i/8] &^= 1 << uint(i%8)
 }
 
-// trackBuilder assembles a Track's byte stream from a sector layout. It
-// mirrors FUSE's preindex_add / postindex_add / id_add / data_add /
-// gap4_add helpers (see disk.c:432-650). pos is the write head; all
-// builder methods return false if the track would overflow.
+// trackBuilder assembles a Track's byte stream region by region: pre-
+// index gap, sync, index mark, then per-sector ID and data fields, and
+// finally the trailing gap. pos is the write head; all builder methods
+// return false if the track would overflow.
 type trackBuilder struct {
 	t   *Track
 	gap gapKind
@@ -221,7 +219,7 @@ func (b *trackBuilder) emitMark() bool {
 }
 
 // preindexAdd writes the pre-index gap, sync, mark, and the index mark
-// (0xFC). FUSE-style: see disk.c:432.
+// (0xFC).
 func (b *trackBuilder) preindexAdd() bool {
 	g := gapSpecs[b.gap]
 	if !b.emitFiller(g.len[0]) {
@@ -284,7 +282,7 @@ func (b *trackBuilder) idAdd(c, h, r, n byte, crcError bool) bool {
 		crc = crcUpdate(crc, by)
 	}
 	if crcError {
-		crc ^= 1 // flip LSB to corrupt the CRC (matches FUSE)
+		crc ^= 1 // flip LSB to corrupt the stored CRC
 	}
 	b.t.data[b.pos] = byte(crc >> 8)
 	b.pos++
@@ -438,9 +436,7 @@ func (t *Track) readByte(i int) byte {
 // crcOK is false when the on-track CRC bytes don't match a freshly
 // computed CRC over the IDAM and CHRN. The walker still returns the
 // CHRN values so the caller can decide whether to skip the sector
-// (FUSE-style: skip + record ST1.DE) or use it anyway.
-//
-// This is the equivalent of FUSE's id_read function in disk.c:158.
+// (recording ST1.DE) or use it anyway.
 func (t *Track) idAt(start int) (c, h, r, n byte, idEnd int, ok bool) {
 	c, h, r, n, idEnd, _, ok = t.idAtCRC(start)
 	return

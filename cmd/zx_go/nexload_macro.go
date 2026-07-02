@@ -187,8 +187,12 @@ func (e *emulator) importAndRunNex(fileName string, data []byte) {
 // what was running before.
 func (e *emulator) startNexloadMacro(sdPath string) {
 	e.reboot()
-	e.paused.Store(false)
+	// Arm the macro before releasing pause: the emulation goroutine's
+	// run loop checks e.nexloadMacro on every frame it executes, so
+	// setting it first avoids a window where an unpaused frame runs
+	// with no macro driving it yet.
 	e.nexloadMacro = newNexloadMacro(sdPath)
+	e.paused.Store(false)
 }
 
 // releaseAll clears every key the macro might be holding.

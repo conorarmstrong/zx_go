@@ -174,6 +174,84 @@ func TestClassicFloatingBus48KOrigin(t *testing.T) {
 	}
 }
 
+// TestClassicBorderChangeScanlineUsesPerModelLineLength pins that a port
+// 0xFE border-colour write is converted to a scanline using the model's own
+// T-states-per-line (TStatesPerLineFor: 224 on 48K, 228 on 128K+) — the same
+// per-model line length the floating bus uses (TestClassicFloatingBus48KOrigin).
+// A 48K border write timestamped at exactly scanline 50 (50*224 T-states)
+// must take effect starting at that scanline's row, not one row earlier
+// (which is what dividing by the 128K's 228-T line would give).
+func TestClassicBorderChangeScanlineUsesPerModelLineLength(t *testing.T) {
+	testDir := "test_roms_classic_border_scanline"
+	createTestROMs(t, testDir)
+	t.Cleanup(func() { cleanupTestROMs(testDir) })
+
+	mem, err := memory.New(testDir, roms.Model48K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ts uint64
+	mem.TStates = &ts
+	u := New(mem, keyboard.New())
+
+	const tPerLine48K = 224
+	const targetScanline = 50 // within the displayed top border (frame scanlines 40..63)
+	ts = uint64(targetScanline * tPerLine48K)
+	u.WritePort(0xFE, 0x03) // border = magenta
+
+	img := u.Render()
+
+	const wantRow = targetScanline - (64 - BorderTop) // 50 - 40 = 10
+	gotNew := img.RGBAAt(0, wantRow)
+	wantNew := u.palette[0x03]
+	if gotNew != wantNew {
+		t.Errorf("row %d (the new-colour scanline): got %v, want new border colour %v", wantRow, gotNew, wantNew)
+	}
+	gotOld := img.RGBAAt(0, wantRow-1)
+	wantOld := u.palette[0] // initial BorderColour is 0 (black)
+	if gotOld != wantOld {
+		t.Errorf("row %d (one scanline before the change): got %v, want old border colour %v (the change landed a row early)", wantRow-1, gotOld, wantOld)
+	}
+}
+
+// TestClassicBorderColourCarriesOverBetweenFrames pins two related facts
+// about the per-scanline border map: a mid-frame border write must not
+// retroactively paint the scanlines before it (BorderColour is mutated live
+// by WritePort, so naively using it as the row-0 baseline paints the whole
+// border with the new colour from the start of the frame), and a frame with
+// no border writes at all must render the colour the previous frame ended on.
+func TestClassicBorderColourCarriesOverBetweenFrames(t *testing.T) {
+	testDir := "test_roms_classic_border_carryover"
+	createTestROMs(t, testDir)
+	t.Cleanup(func() { cleanupTestROMs(testDir) })
+
+	mem, err := memory.New(testDir, roms.Model48K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ts uint64
+	mem.TStates = &ts
+	u := New(mem, keyboard.New())
+
+	// Frame 1: border starts black; a write partway through the frame
+	// changes it to red. Row 0 (before the change) must still be black.
+	const tPerLine48K = 224
+	ts = uint64(100 * tPerLine48K)
+	u.WritePort(0xFE, 0x02) // border = red
+	img := u.Render()
+	if got, want := img.RGBAAt(0, 0), u.palette[0]; got != want {
+		t.Errorf("frame 1, row 0 (before the change): got %v, want black %v (retroactively painted)", got, want)
+	}
+
+	// Frame 2: no border writes at all. The whole border must render red —
+	// the colour frame 1 ended on — not black.
+	ts = 0
+	img = u.Render()
+	if got, want := img.RGBAAt(0, 0), u.palette[0x02]; got != want {
+		t.Errorf("frame 2, row 0 (no writes this frame): got %v, want carried-over red %v", got, want)
+	}
+}
+
 // TestClassicFloatingBusPlus3Disabled pins that the +2A/+3 ULA has no floating
 // bus (always 0xFF) — a documented hardware difference (the +3 ULA gates the
 // data bus). Mirrors the existing TestFloatingBusOnPlus3Returns0xFF but states

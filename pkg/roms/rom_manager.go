@@ -44,11 +44,9 @@ const (
 	ModelPlus2
 	ModelPlus2A
 	ModelPlus3
-	// ModelNext is the ZX Spectrum Next. Sprint 1 wires the enum
-	// only — there are no ROMs attached, no memory init path, and
-	// the menu entry is greyed out. Sprint 2 attaches Z80N opcodes,
-	// the NextReg dispatcher and the 8K MMU; Sprint 3 brings the
-	// distro ROM in via the user-installed first-run flow.
+	// ModelNext is the ZX Spectrum Next. Its ROMs are user-installed
+	// at runtime rather than mapped here — see the empty ModelNext
+	// entry in initMappings for why.
 	ModelNext
 	// ModelZX81 is the Sinclair ZX81 (8 KB ROM, 1–16 KB RAM, CPU-generated
 	// display). ModelZX80 is the earlier ZX80 (4 KB ROM, no SLOW mode).
@@ -316,6 +314,12 @@ func GetROMTypeName(romType ROMType) string {
 		return "TR-DOS"
 	case ROMPENTAGON:
 		return "Pentagon"
+	case ROMINTERFACE1:
+		return "Interface 1"
+	case ROMZX81:
+		return "ZX81 ROM"
+	case ROMZX80:
+		return "ZX80 ROM"
 	default:
 		return "Unknown ROM"
 	}

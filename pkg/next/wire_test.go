@@ -265,14 +265,12 @@ func TestWireAltROMRoutesWritesToMemory(t *testing.T) {
 	}
 }
 
-// TestWireResetSoftFiresOnEveryWrite locks in iter-131's
-// no-edge-detection semantics: the FPGA bootrom polls NR$02
-// after a write to check "did the reset fire?". With NR$02
-// default $01 (= "last reset was soft"), a subsequent write of
-// $01 must STILL trigger a soft reset — the OUT is a separate
-// write-strobe pulse on the bus, regardless of stored value.
-// Regression of this contract previously hung the boot at
-// JR $6F5D in an infinite self-loop.
+// TestWireResetSoftFiresOnEveryWrite locks in the no-edge-detection
+// semantics: the FPGA bootrom polls NR$02 after a write to check
+// "did the reset fire?". With NR$02 default $01 (= "last reset was
+// soft"), a subsequent write of $01 must STILL trigger a soft reset
+// — the OUT is a separate write-strobe pulse on the bus, regardless
+// of stored value.
 func TestWireResetSoftFiresOnEveryWrite(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {
@@ -284,7 +282,7 @@ func TestWireResetSoftFiresOnEveryWrite(t *testing.T) {
 
 	// Sanity: direct-boot cold default is $02 — the reset_type
 	// shift-history seeded at "010" (the FPGA bootrom's single soft
-	// reset already applied; zxnext.vhd:1736, the development log).
+	// reset already applied; zxnext.vhd:1736).
 	if got := disp.Raw(0x02); got != 0x02 {
 		t.Fatalf("cold NR$02 default = %#x, want $02", got)
 	}
@@ -435,8 +433,7 @@ func TestWireResetSoftPreservesNRFile(t *testing.T) {
 // `reset <= reset_hard or reset_soft`). The load-bearing bit is
 // NR$B8 bit 0 ($83): it re-traps the $0000 RST-0 automap entry so the
 // post-reset divMMC/esxDOS RST $00 vector pages in the divMMC ROM
-// instead of falling through to whatever ROM bank sits at $0000 (the
-// bank-2 $0000 NOP;JR trap — task #229).
+// instead of falling through to whatever ROM bank sits at $0000.
 func TestWireResetSoftReArmsDivMMCEntryPoints(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {
@@ -483,7 +480,7 @@ func TestWireResetSoftReArmsDivMMCEntryPoints(t *testing.T) {
 // soft-reset ($6D31) — losing the promote leaves NR$8C's active nibble
 // stale, which kills the (altrom_en AND alt_128_n) arm of the divMMC
 // rom3-automap gate (zxnext.vhd:3138) and with it the menu-era $0038
-// IM1 automap (the development log/D31g).
+// IM1 automap.
 func TestWireResetPromotesAltROMStagedNibble(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

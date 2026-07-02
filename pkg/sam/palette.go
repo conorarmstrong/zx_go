@@ -4,8 +4,7 @@ import "image/color"
 
 // samPalette is the SAM Coupé 128-colour master palette. Each 7-bit index maps
 // to three 3-bit channels with a shared low bit (the SAM's GGG/RRR/BBB + common
-// LSB layout), scaled linearly 0-7 → 0-255. (SimCoupe SAMIO.cpp Palette()
-// 904-930, plan Appendix D.)
+// LSB layout), scaled linearly 0-7 → 0-255.
 //
 //	red   = i.bit5·4 + i.bit1·2 + i.bit3   (bits {5,1,3})
 //	green = i.bit6·4 + i.bit2·2 + i.bit3   (bits {6,2,3})

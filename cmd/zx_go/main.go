@@ -377,12 +377,12 @@ func applyCRTFilterInto(dst, src *image.RGBA) {
 // the screen image underneath.
 type keyboardWidget struct {
 	widget.BaseWidget
-	onKeyDown    func(*fyne.KeyEvent)
-	onKeyUp      func(*fyne.KeyEvent)
-	onTypedRune  func(rune)
-	onMouseMove  func(dx, dy int)
-	onMouseBtn   func(btn int, pressed bool)
-	onFocusLost  func()
+	onKeyDown   func(*fyne.KeyEvent)
+	onKeyUp     func(*fyne.KeyEvent)
+	onTypedRune func(rune)
+	onMouseMove func(dx, dy int)
+	onMouseBtn  func(btn int, pressed bool)
+	onFocusLost func()
 
 	// lastMousePos holds the last MouseMoved position so we can
 	// compute deltas. Reset on MouseIn so the first move after
@@ -1036,6 +1036,7 @@ func (e *emulator) effectiveJoystick() JoystickType {
 //     writes apply normally;
 //   - otherwise pin the CPU to the chosen speed (1..4 -> selector 0..3), so a
 //     game NextZXOS would run too fast at 28 MHz can be played at 3.5 MHz.
+//
 // Idempotent, so it survives the reboot that File -> Open performs.
 func (e *emulator) applyForcedCPUSpeed() {
 	if e.cpu == nil {
@@ -1406,9 +1407,7 @@ func (e *emulator) reboot() {
 	// tilemap layer, Layer 2, MMU8, palette and divMMC pager also
 	// fall back to power-on state — otherwise the previous boot's
 	// tilemap stays enabled and renders stale bank-5 data over the
-	// fresh boot output, manifesting as the vertical-stripe
-	// corruption the user reported (see B.png from 2026-05-19).
-	//
+	// fresh boot output as vertical-stripe corruption.
 	if e.nextRegs != nil {
 		e.nextRegs.Reset()
 	}
@@ -1531,8 +1530,6 @@ func getFormatName(format snapshot.SnapshotFormat) string {
 	}
 }
 
-// applySnapshotToEmulator applies a loaded snapshot to the running emulator
-
 // fileSubmenu groups a run of menu items under a single labelled
 // parent entry (a fyne submenu via ChildMenu). Used to tame the
 // otherwise huge flat File menu into a handful of cohesive groups.
@@ -1595,6 +1592,7 @@ func (e *emulator) flushSDWriteback() {
 	slog.Info("sd-writeback complete", "path", e.sdImagePath, "backup", e.sdImagePath+".bak")
 }
 
+// applySnapshotToEmulator applies a loaded snapshot to the running emulator.
 func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
 	// Pause emulation during snapshot loading
 	wasPaused := emu.paused.Load()
@@ -2458,9 +2456,9 @@ func main() {
 	_, closeTrace := installTraceHooks(emu, flags)
 	defer closeTrace()
 
-	// --trace-db in GUI mode (the development log): same ring recorder as
-	// headless so a GUI-only crash flow can be captured and diffed
-	// against a healthy headless boot.
+	// --trace-db in GUI mode: same ring recorder as headless so a
+	// GUI-only crash flow can be captured and diffed against a
+	// healthy headless boot.
 	if flags.traceDB != "" {
 		if tdb := newTraceDB(flags.traceDBKeep); tdb != nil {
 			cpu := emu.cpu
@@ -2559,11 +2557,10 @@ func main() {
 	peripheralNeedsReboot := false
 	// Classic-bus peripherals (DISCiPLE, Multiface, IF1) do not
 	// exist on Spectrum Next hardware and their port decodes clash
-	// with the Next's I/O space — the DISCiPLE control port \$1F
+	// with the Next's I/O space — the DISCiPLE control port $1F
 	// shadows the Kempston read the TBBLUE firmware polls during
-	// boot, feeding it garbage and crashing the boot into a DI/HALT
-	// (the development log; the user-reported GUI black screen). Skip
-	// restoring them when the current model is the Next.
+	// boot, feeding it garbage and crashing the boot into a DI/HALT.
+	// Skip restoring them when the current model is the Next.
 	classicPeripheralsOK := currentModel != roms.ModelNext && !isZX8x(currentModel) && currentModel != roms.ModelSAM
 	if cfg.Disciple && classicPeripheralsOK {
 		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
@@ -2671,6 +2668,19 @@ func main() {
 		emu.zx8x = fresh.zx8x
 		emu.sam = fresh.sam
 		emu.samAudio = fresh.samAudio
+		// fresh.speccyDAC is non-nil only for classic-Spectrum targets
+		// (nil for ZX80/ZX81/SAM) — carry it over so the Peripherals
+		// menu's SpecDrum/Covox items track the NEW core's DAC instead
+		// of staying nil/stale from before the switch.
+		emu.speccyDAC = fresh.speccyDAC
+		// betaDisk is always nil on a freshly-built core (lazily created
+		// by ensureBeta on first TR-DOS mount) — drop any stale interface
+		// left over from before the switch. Without this, a Beta
+		// interface mounted before crossing into ZX80/ZX81/SAM and back
+		// would be "reused" by ensureBeta without ever being rewired to
+		// the new mem/ula/cpu, so a later TRD mount would silently not
+		// take effect.
+		emu.betaDisk = fresh.betaDisk
 		emu.model = newModel
 		emu.nextEsxdos, emu.nextDAC, emu.nextRegs = fresh.nextEsxdos, fresh.nextDAC, fresh.nextRegs
 		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
@@ -2746,6 +2756,11 @@ func main() {
 			}
 			return
 		}
+		// emu.model must track the switch immediately: the emulation
+		// goroutine's run loop reads it every frame (frameTStatesForModel)
+		// to pick the per-model T-state budget, independently of
+		// currentModel (a UI-only bookkeeping variable below).
+		emu.model = newModel
 
 		// Bring Next-only wiring up AFTER the memory swap when
 		// entering the Next: the subsystems' divMMC ROM mapping,
@@ -2754,7 +2769,7 @@ func main() {
 		if newModel == roms.ModelNext && !wasNext {
 			// Tear down edge-connector peripherals that clash with
 			// the Next's I/O space first — a lingering DISCiPLE
-			// (port $1F) crashes the firmware boot (the development log).
+			// (port $1F) crashes the firmware boot.
 			disableClassicBusPeripherals(emu)
 			if err := wireNextSubsystems(emu); err != nil {
 				slog.Error("failed to wire Next subsystems", "err", err)

@@ -6,9 +6,9 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// iter 362: cover the residual [partial] esxDOS branches — F_READ
-// multi-chunk + directory-handle refusal, F_SEEK FROM_CUR / negative
-// offset / bad-handle, F_FSTAT on a missing file, and F_READDIR name
+// Covers residual esxDOS file-handler branches: F_READ multi-chunk +
+// directory-handle refusal, F_SEEK FROM_CUR / negative offset /
+// bad-handle, F_FSTAT on a missing file, and F_READDIR name
 // truncation past 12 chars.
 
 // TestFReadMultiChunk reads a file larger than fReadChunkSize (4096)

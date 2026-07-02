@@ -26,8 +26,8 @@ func TestEmbeddedROM(t *testing.T) {
 		t.Errorf("machine should reset at $0000 reading DI, PC=%#04x byte=%#02x", m.CPU.PC, m.Mem.Read(0))
 	}
 
-	// Smoke: the genuine ROM 3.0 runs a frame of its power-on code (with the
-	// Sprint-0 stub I/O) without faulting and advances past the reset entry.
+	// Smoke: the genuine ROM 3.0 runs a frame of its power-on code without
+	// faulting and advances past the reset entry.
 	m.RunFrame()
 	if m.CPU.InstructionCount() == 0 {
 		t.Error("ROM 3.0 did not execute any instructions")

@@ -2,9 +2,8 @@ package ula
 
 import "testing"
 
-// iter 306: cover ULA recording nil-guard paths. Without an audio
-// system attached (the typical test fixture), Start/StopRecording
-// and Close must silently no-op.
+// ULA recording nil-guard paths: without an audio system attached (the
+// typical test fixture), Start/StopRecording and Close must silently no-op.
 
 func TestStartRecording_NilAudioReturnsNil(t *testing.T) {
 	u := &ULA{}

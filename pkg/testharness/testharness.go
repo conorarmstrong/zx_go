@@ -30,6 +30,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
+	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
@@ -69,6 +70,12 @@ type Harness struct {
 	// ModelNext, nil otherwise. Tests reach in here to verify the
 	// mixer contribution after exercising the CPU/ULA port path.
 	nextDAC *dac.Bank
+
+	// nextSprites is the Spectrum Next's hardware sprite engine when
+	// ModelNext, nil otherwise. Tests reach in here to verify sprite
+	// attribute/pattern state after exercising the $303B/$5B/$57
+	// port-write path.
+	nextSprites *sprite.Engine
 }
 
 // New constructs a fresh Harness for the given Spectrum model. The

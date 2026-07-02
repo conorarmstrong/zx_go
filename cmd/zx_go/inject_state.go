@@ -21,14 +21,14 @@ type divInjectTarget interface {
 	WritePort(uint16, byte) bool
 }
 
-// injectForeignState loads a reference-emulator "FX|" state export (produced
-// by the reference-emulator state-export tool under _tools/) and transplants
-// it into our emulator at the pre-ENTER checkpoint: working RAM banks 0-31,
-// the AltROM (NR$56 banks 236-239), every divMMC-RAM bank, the MMU/AltROM
-// NextRegs, the paging port $E3, and the full CPU register file. This is
-// the "is it state or execution?" experiment — after this, pressing
-// ENTER runs OUR launch code over the reference's EXACT state. White = our
-// execution is correct; black = our execution/timing is the bug.
+// injectForeignState loads a captured "FX|" state export (produced by the
+// state-export tool under _tools/) and transplants it into our emulator at
+// the pre-ENTER checkpoint: working RAM banks 0-31, the AltROM (NR$56 banks
+// 236-239), every divMMC-RAM bank, the MMU/AltROM NextRegs, the paging port
+// $E3, and the full CPU register file. This lets a known-good external state
+// be driven through our own execution/timing, isolating whether a boot
+// divergence originates in state (what we start with) or execution (what we
+// do with it).
 func injectForeignState(path string, mem *memory.Memory, cpu *z80.CPU, nr *nextregs.Dispatcher, div divInjectTarget) error {
 	f, err := os.Open(path)
 	if err != nil {

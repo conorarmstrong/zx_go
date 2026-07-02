@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-// iter 372: --watch-bank-write spec parser.
+// TestParsePoolWriteSpec covers the --watch-bank-write spec parser.
 func TestParsePoolWriteSpec(t *testing.T) {
 	got := parsePoolWriteSpec("111:$201C-$202B,5:0x10-0x10, 7:2000 ")
 	if len(got) != 3 {

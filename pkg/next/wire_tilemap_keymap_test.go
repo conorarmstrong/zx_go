@@ -9,7 +9,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 )
 
-// iter 323: cover WireTilemap (NR$6B/$6C/$6E/$6F) + WireKeymap
+// Covers WireTilemap (NR$6B/$6C/$6E/$6F) + WireKeymap
 // (NR$28/$29/$2B) dispatcher wiring.
 
 type tilemapBanks struct{ banks [16][]byte }

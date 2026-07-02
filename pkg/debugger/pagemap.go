@@ -3,6 +3,7 @@ package debugger
 import (
 	"fmt"
 	"image/color"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -243,17 +244,9 @@ func (w *PageMapWidget) refreshNext() {
 	}
 }
 
-// containsField returns true if needle appears as a whitespace-
-// separated token in haystack. Used to parse the divMMC state
-// string without pulling in strings.Contains for one call (and
-// to insulate against future format changes).
+// containsField reports whether needle appears anywhere in
+// haystack. Used to test for a "key=value" pair inside the
+// formatted divMMC state string.
 func containsField(haystack, needle string) bool {
-	// Cheap manual contains — same semantics as strings.Contains
-	// for our purposes; avoids the import in this small file.
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(haystack, needle)
 }

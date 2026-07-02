@@ -19,10 +19,10 @@ const (
 	Width  = Cols * 8 // 256 — active display width
 	Height = Rows * 8 // 192 — active display height
 
-	BorderLeft  = 32                  // left/right border (matches the Spectrum)
-	BorderTop   = 24                  // top/bottom border
-	TotalWidth  = Width + BorderLeft*2  // 320
-	TotalHeight = Height + BorderTop*2  // 240
+	BorderLeft  = 32                   // left/right border (matches the Spectrum)
+	BorderTop   = 24                   // top/bottom border
+	TotalWidth  = Width + BorderLeft*2 // 320
+	TotalHeight = Height + BorderTop*2 // 240
 )
 
 // Screen renders ZX80/ZX81 display bytes into a 256×192 monochrome picture.

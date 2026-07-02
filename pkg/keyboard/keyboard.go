@@ -27,8 +27,9 @@ type Keyboard struct {
 	// on the physical matrix, so symbols type correctly regardless of the host
 	// keyboard layout (a French AZERTY '.' is Shift+';'-key, which the physical
 	// key path can't express). While pulseFrames > 0, Scan applies pulseMatrix
-	// and releases CAPS SHIFT (so a host Shift used to reach the symbol doesn't
-	// corrupt it). pulseFrames counts down once per 50 Hz frame in Tick().
+	// and releases CAPS SHIFT, so a host Shift held to reach the symbol (as on
+	// AZERTY) doesn't leak into the injected combo. pulseFrames counts down
+	// once per 50 Hz frame in Tick().
 	pulseMatrix [8]byte
 	pulseFrames int
 }
@@ -294,8 +295,8 @@ func (k *Keyboard) initKeyMap() {
 		// their underlying string values (see fyne.io/fyne/v2/driver/
 		// desktop/key.go): "LeftControl", "RightControl", "LeftAlt",
 		// "RightAlt", "LeftSuper", "RightSuper". macOS's Cmd key
-		// arrives as LeftSuper / RightSuper — these were previously
-		// mapped to {} (silently ignored), so Cmd did nothing on Mac.
+		// arrives as LeftSuper / RightSuper, so it must be mapped
+		// here too for Cmd to act as SYMBOL SHIFT on Mac.
 		desktop.KeyControlLeft:  {{7, 0x02}},
 		desktop.KeyControlRight: {{7, 0x02}},
 		desktop.KeyAltLeft:      {{7, 0x02}},

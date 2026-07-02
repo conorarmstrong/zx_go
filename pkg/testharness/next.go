@@ -45,7 +45,7 @@ import (
 // The divMMC ROM is optional: if divMMC.rom is not installed the
 // pager is wired with a nil ROM, which behaves as open bus for any
 // fetch from 0x2000–0x3FFF while paged in. The boot path doesn't
-// touch the divMMC ROM area, so this is fine for Sprint 3.
+// touch the divMMC ROM area, so this is fine.
 func newNext() (*Harness, error) {
 	mem, err := memory.New("", roms.ModelNext)
 	if err != nil {
@@ -95,9 +95,14 @@ func newNext() (*Harness, error) {
 	comp.SetSprites(sprites)
 	comp.SetPrioritySource(prio)
 	u.SetNextCompositor(comp)
+	u.SetNextSpritePort(sprites) // port $303B select (write) / status (read); $5B/$57 upload
 	u.SetNextDMA(dmaEngine)
 	u.SetNextCopper(cop)
 	u.SetNextDAC(dacBank)
+	// i2c DS1307 RTC on ports $103B/$113B: NextZXOS bit-bangs this bus
+	// for the menu's date/time line, so the harness needs a slave to
+	// ACK or a real boot's clock read hangs.
+	u.SetNextI2C(rtcpkg.NewBus(rtcEngine))
 
 	// divMMC ROM is optional — the boot path doesn't read from
 	// the divMMC ROM area on a fresh harness. But ONLY the
@@ -129,8 +134,7 @@ func newNext() (*Harness, error) {
 	// (if installed). Without this the divMMC ROM's SD probe times
 	// out and NextZXOS never finds its system files.
 	if root := install.SDCardRoot(); root != "" {
-		// FAT32-LBA: the bootable format (#227; the old FAT16 image
-		// never booted NextZXOS — the development log).
+		// The NextZXOS bootrom expects a FAT32-LBA card.
 		img, err := sdcard.BuildFAT32(root, sdcard.FAT32Opts{
 			SizeMB:      256,
 			VolumeLabel: "ZXNEXT",
@@ -187,6 +191,7 @@ func newNext() (*Harness, error) {
 		nextEsxdos:  esx,
 		nextDivMMC:  pager,
 		nextDAC:     dacBank,
+		nextSprites: sprites,
 	}, nil
 }
 
@@ -195,6 +200,12 @@ func newNext() (*Harness, error) {
 // at channel state after exercising port writes through the CPU
 // / ULA dispatch path.
 func (h *Harness) NextDAC() *dac.Bank { return h.nextDAC }
+
+// NextSprites returns the Spectrum Next hardware sprite engine when
+// the harness was constructed with ModelNext, nil otherwise. Tests
+// use this to peek at sprite attribute/pattern state after
+// exercising the $303B/$5B/$57 port-write path.
+func (h *Harness) NextSprites() *sprite.Engine { return h.nextSprites }
 
 // MountSDCard installs a directory-backed SD card on the Spectrum
 // Next harness. Subsequent esxDOS F_OPEN / F_READ / F_FSTAT calls
@@ -235,9 +246,8 @@ func (h *Harness) MountSDCard(dir string) error {
 		// The default $00 = delayed_on, faithful to the FPGA: the
 		// overlay pages in on the M1 AFTER the trigger fetch. The
 		// esxDOS host-FS shim checks IsPagedIn() at the $0008 fetch
-		// itself, so a delayed page-in skips the dispatch and the
-		// synthesised RST 8 falls through (TestMountSDCardWiresFOpen
-		// regression after the delayed_on conformance work landed).
+		// itself, so a delayed page-in would skip the dispatch and
+		// the synthesised RST 8 would fall through unhandled.
 		h.nextDivMMC.SetEntryPointsTiming0(0xFF)
 	}
 	return nil
@@ -247,7 +257,7 @@ func (h *Harness) MountSDCard(dir string) error {
 // Next memory, then prepares the CPU to run from the .NEX entry
 // point (SP, PC, border set from the header).
 //
-// Banks 0..127 are all supported as of v1.0. Bank 0..7 covers the
+// Banks 0..127 are all supported. Bank 0..7 covers the
 // classic 128K RAM range, and banks 8..127 use the Next's 2 MB
 // memory map (allocated by memory.New when model == ModelNext).
 // The entry bank is paged at 0xC000 via classic 7FFD when the

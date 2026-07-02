@@ -16,23 +16,17 @@ const MaxSprites = 128
 
 // PatternRAMSize is the size in bytes of the shared sprite-pattern
 // storage. Real hardware fits 64 8-bit patterns (256 bytes each)
-// or 128 4-bit patterns (128 bytes each) here; addressing in
-// Sprint 7 is byte-linear from offset 0.
+// or 128 4-bit patterns (128 bytes each) here, addressed byte-linear
+// from offset 0.
 const PatternRAMSize = 16384
 
 // SpriteSize is the per-side dimension of an unscaled sprite.
 const SpriteSize = 16
 
-// Attr is one sprite's attribute record. Real hardware uses 4 or 5
-// bytes per sprite over the AY-style register file; Sprint 7
-// exposes just the fields the basic render needs. The full
-// 5-byte / mirror / rotate / scale word lands when scale/anchor
-// support follows.
-//
-// 8bpp pattern mode (256 bytes per pattern, 1 byte per pixel) is
-// deferred to a follow-up sprint — the dispatch path is the same
-// shape but the render path differs and isn't yet wired through
-// any NextReg handler.
+// Attr is one sprite's attribute record: real hardware uses 4 or 5
+// bytes per sprite over the AY-style register file. The 5th byte
+// (present when Extended is set) carries scale, mirror/rotate
+// inheritance, the 8bpp/4bpp select and the pattern N6 bit.
 type Attr struct {
 	X        int16 // signed; off-screen positions allowed (clipped at render)
 	Y        int16
@@ -200,8 +194,8 @@ func (e *Engine) ApplyAttrByte(idx int, val byte) {
 // Attribute Upload", ports.txt 0x57). Each sprite takes 4 bytes, or 5 when its
 // byte 3 bit 6 (the "5th byte present" flag) is set; once the sprite's bytes
 // are all written the current-sprite pointer auto-advances, wrapping 127->0,
-// and the byte cursor resets. This is how games (e.g. Nextoid) upload every
-// sprite each frame without re-selecting between them.
+// and the byte cursor resets, so guest code can upload every sprite each
+// frame without re-selecting between them.
 func (e *Engine) WriteAttr(val byte) {
 	e.ApplyAttrByte(e.attrCursor, val)
 	if e.attrCursor == 3 {
@@ -406,11 +400,10 @@ func (e *Engine) Set(idx int, a Attr) {
 	e.attrs[idx] = a
 }
 
-// SetPatternAddr installs the pattern-RAM write cursor. Real
-// hardware uses port 0x303B to set the sprite index; the pattern
-// cursor advances within whichever pattern that points at.
-// Sprint 7 takes the address directly so tests can drive without
-// the full port-routing dance.
+// SetPatternAddr installs the pattern-RAM write cursor directly,
+// bypassing the port $303B addressing (see SelectSlot) so callers
+// (mainly tests) can target a specific offset without the full
+// port-routing dance.
 func (e *Engine) SetPatternAddr(addr uint16) {
 	if int(addr) >= PatternRAMSize {
 		addr = PatternRAMSize - 1
@@ -438,7 +431,7 @@ func (e *Engine) PatternByte(addr uint16) byte {
 // row of the active display region. dst is Width bytes of
 // palette indices; the function overwrites pixels that any
 // visible sprite covers (excluding transparency, which is
-// palette index 0 in Sprint 7). dst must already hold the
+// palette index 0). dst must already hold the
 // "below-sprite" content (or palette index 0 / transparent if
 // the caller wants pure sprite output).
 //
@@ -456,8 +449,7 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 	// Sprite clip window (NextReg $19), resolved through the over-border /
 	// border-clip mode (NR$15 bits 1/5; sprites.vhd:1043-1066). With
 	// over-border OFF the window is shifted into the paper area, so the whole
-	// top-border band (Y<32 of the 320x256 frame) is hidden — this is what
-	// suppresses Sonic's row of HUD sprites parked at Y=1. The extra
+	// top-border band (Y<32 of the 320x256 frame) is hidden. The extra
 	// "y<224" gate matches the FPGA's (over_border or vcounter<224) term.
 	clipXs, clipXe := 0, width-1
 	if e.clipSet {
@@ -525,9 +517,7 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 		// full 256-byte slot (16 rows × 16 bytes, 1 px/byte). A 4bpp sprite
 		// uses one 128-byte half of the slot (16 rows × 8 bytes, 2 px/byte),
 		// selected by N6 (byte4 bit6). This matches the port $303B/$5B upload
-		// addressing: cursor = slot*256 + half*128. (Computing the address as
-		// (slot|N6<<6)*128 — the old code — read the wrong slot/half and made
-		// 4bpp sprites such as Sonic's character pull blank pattern data.)
+		// addressing: cursor = slot*256 + half*128.
 		base := slot * 256
 		span := 256
 		if !eightBit {

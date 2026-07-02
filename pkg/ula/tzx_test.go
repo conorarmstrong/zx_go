@@ -260,14 +260,14 @@ func TestSaveTZXHeaderIsValid(t *testing.T) {
 }
 
 // =========================================================================
-// TZX per-block parser tests (iter 200 — task #115).
+// TZX per-block parser tests.
 //
 // LoadTZX advances `offset` past every block type the spec defines. The
-// pre-iter-200 tests only covered the three "loadable" types (0x10,
-// 0x11, 0x14) via SaveTZX round-trip. These tests verify the OTHER
-// block IDs (0x12, 0x13, 0x15, 0x20-0x25, 0x2A, 0x2B, 0x30-0x33, 0x35,
-// 0x5A) parse without corrupting the loadable-blocks list and that a
-// final 0x10 block at the end is still found.
+// SaveTZX round-trip tests elsewhere only cover the three "loadable" types
+// (0x10, 0x11, 0x14); these tests verify the OTHER block IDs (0x12, 0x13,
+// 0x15, 0x20-0x25, 0x2A, 0x2B, 0x30-0x33, 0x35, 0x5A) parse without
+// corrupting the loadable-blocks list and that a final 0x10 block at the
+// end is still found.
 //
 // Reference: TZX format spec at https://worldofspectrum.net/TZXformat.html.
 // Each test builds a minimal valid TZX with the block under test

@@ -52,8 +52,9 @@ func TestTapeAudioMuted(t *testing.T) {
 		t.Error("idle (not playing) tape should not mute audio")
 	}
 
-	// Actively loading (playing, blocks remaining) with fast-tape on -> muted,
-	// regardless of the per-tick read activity (this is the inter-block-gap fix).
+	// Actively loading (playing, blocks remaining) with fast-tape on -> muted
+	// for the whole load, regardless of the per-tick read activity (so it
+	// does not blip on/off at each inter-block gap).
 	tp.Play()
 	if !emu.tapeAudioMuted() {
 		t.Error("fast-tape load in progress should mute audio across the whole load")

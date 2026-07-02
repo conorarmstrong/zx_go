@@ -6,9 +6,9 @@ import "testing"
 // currently-selected register number (zxnext.vhd:4603
 // `port_243b_dat <= nr_register`). NextZXOS's IM1 handler saves the
 // guest's selection with `IN` from $243B on entry and restores it
-// with `OUT (C),L` at $2040 on exit; a write-only $243B floats $FF
-// into that save and every interrupt then corrupts the guest's
-// NR-select (the development log).
+// with `OUT (C),L` at $2040 on exit, so a write-only $243B (floating
+// $FF into that save) would corrupt the guest's NR-select on every
+// interrupt.
 func TestNextRegSelectPortReadBack(t *testing.T) {
 	u := newTestULA(t)
 	f := &fakeNextRegs{}

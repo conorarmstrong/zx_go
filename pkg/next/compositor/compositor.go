@@ -1,18 +1,3 @@
-// Package compositor sums the Spectrum Next's display layers per
-// scanline. Sprint 6 v1 ships a ULA + Layer 2 compositor — enough
-// to start showing Layer 2 framebuffer content over the classic
-// ULA picture. Tilemap (Layer 3) and the 128 hardware sprites
-// land in Sprint 7; the priority modes of NextReg 0x15 land then
-// too.
-//
-// The compositor operates per-scanline at 256 pixels wide. Each
-// layer is asked for its row, then the rows are summed pixel by
-// pixel with the simple "Layer 2 over ULA where Layer 2's palette
-// index is non-transparent" rule. The transparency index is the live
-// NextReg $14 (global transparency colour, FPGA nr_14, default 0xE3),
-// wired into SetTransparency by cmd/zx_go/next.go; it defaults to 0xE3
-// and is exposed via SetTransparency for tests and future
-// callers.
 package compositor
 
 import (
@@ -24,8 +9,9 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 )
 
-// Width is the per-scanline pixel count Sprint 6 supports.
-// Layer 2's 320 / 640-pixel modes will widen this when they land.
+// Width is the per-scanline pixel count for the inner 256-wide screen
+// pass. Layer 2's 320/640-pixel hi-res modes are composited separately
+// through the wide paths (ComposeWideLayer2Row etc).
 const Width = 256
 
 // FullWidth is the per-scanline pixel count for full-screen passes
@@ -47,16 +33,14 @@ const BorderOffsetX = 32
 // when it asks the sprite layer for a paper row.
 const SpriteFrameYTop = 32
 
-// DefaultTransparency is the Next-default 9-bit palette index that
-// passes ULA through underneath. NextReg 0x4A overrides at
-// runtime; until that's wired, this is the value.
+// DefaultTransparency is the Next-default 8-bit palette-mapped colour
+// (NextReg 0x14 reset value) used as the global transparency colour for
+// Layer 2 and the sprite layer until a guest writes NextReg 0x14 / 0x4B.
 const DefaultTransparency byte = 0xE3
 
-// PriorityMode is the decoded layer-ordering selector. Sprint 7
-// cleanup honours the four pure modes; the tilemap-aware variants
-// follow when Tilemap (Layer 3) lands. Mirrors the same constants
-// in pkg/next but redeclared here to avoid the compositor importing
-// the umbrella package.
+// PriorityMode is the decoded layer-ordering selector (NextReg 0x15 bits
+// 4:2). Mirrors the same constants in pkg/next but redeclared here to
+// avoid the compositor importing the umbrella package.
 type PriorityMode byte
 
 const (
@@ -397,16 +381,15 @@ func (c *Compositor) Transparency() byte { return c.transparency }
 
 // ComposeScanline writes 256 composited RGBA pixels (1024 bytes)
 // to dst, given the ULA's already-rendered RGBA scanline (also
-// 1024 bytes) for row y. The compositor fetches Layer 2's row y
-// internally via its layer2.Layer2 reference, so callers don't
-// need to coordinate the layer-by-layer fetch order.
+// 1024 bytes) for row y. The compositor fetches Layer 2's, the
+// sprite engine's, and the tilemap's row y internally via their
+// respective references, so callers don't need to coordinate the
+// layer-by-layer fetch order.
 //
-// Rules (Sprint 6 v1):
-//   - If Layer 2 is nil or disabled, dst is copied straight from
-//     the ULA scanline.
-//   - Otherwise, per pixel: if the Layer 2 palette index equals
-//     the transparency value, the ULA pixel passes through; else
-//     the Layer 2 palette entry's RGB replaces it.
+// If every layer is nil/disabled, dst is copied straight from the ULA
+// scanline. Otherwise the layers are combined per pixel according to
+// the active NextReg 0x15 priority mode (see the ModeSLU/LSU/SUL/LUS
+// cases below).
 //
 // dst must have at least Width*4 bytes; extra bytes are not
 // touched.
@@ -663,6 +646,8 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			paintSprites(off, x)
 		case ModeLUS: // Layer 2 over ULA+TM over Sprites
 			paintSprites(off, x)
+			paintULAStencil(off)
+			paintTilemapOnULA(off, x)
 			paintL2(off, x)
 		}
 	}

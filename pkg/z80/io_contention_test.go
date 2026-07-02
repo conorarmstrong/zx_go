@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// iter 347: per-opcode I/O contention. Each I/O opcode routes its
+// Per-opcode I/O contention. Each I/O opcode routes its
 // port access through memory.ContendPort, so an access to a
 // contended ULA port (even port, address in $4000-$7FFF) must cost
 // MORE T-states when the CPU is positioned inside the contended

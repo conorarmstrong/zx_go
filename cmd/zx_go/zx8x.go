@@ -2,6 +2,7 @@ package main
 
 import (
 	"image"
+	"log/slog"
 
 	"fyne.io/fyne/v2"
 
@@ -27,7 +28,7 @@ func newZX8xEmulator(model roms.SpectrumModel) (*emulator, error) {
 	if path := userKeymapPath(); path != "" {
 		if err := m.KB.LoadOverrides(path); err != nil {
 			// non-fatal: fall back to the default ZX8x layout
-			_ = err
+			slog.Warn("failed to load custom keymap", "err", err)
 		}
 	}
 	// An inert peripheral manager: the ZX80/ZX81 have no Spectrum-bus

@@ -38,6 +38,7 @@ type BreakpointsWidget struct {
 
 	list   *widget.List
 	keys   []uint16
+	snap   map[uint16]BPEntry
 	status *canvas.Text
 	root   *fyne.Container
 }
@@ -71,13 +72,7 @@ func NewBreakpointsWidget(store BreakpointsStore) *BreakpointsWidget {
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			t := o.(*canvas.Text)
-			if id >= len(w.keys) {
-				t.Text = ""
-				t.Refresh()
-				return
-			}
-			pc := w.keys[id]
-			t.Text = w.store.List()[pc].FormatLine(pc)
+			t.Text = w.rowText(id)
 			t.Refresh()
 		},
 	)
@@ -125,7 +120,20 @@ func (w *BreakpointsWidget) Refresh() {
 }
 
 func (w *BreakpointsWidget) refreshKeys() {
-	w.keys = SortedKeys(w.store.List())
+	w.snap = w.store.List()
+	w.keys = SortedKeys(w.snap)
+}
+
+// rowText returns the formatted line for row id, or empty if id is
+// out of range. Reads from the snapshot refreshKeys() cached rather
+// than re-querying the store, so rendering N visible rows doesn't
+// re-copy the whole breakpoint map N times.
+func (w *BreakpointsWidget) rowText(id widget.ListItemID) string {
+	if id < 0 || id >= len(w.keys) {
+		return ""
+	}
+	pc := w.keys[id]
+	return w.snap[pc].FormatLine(pc)
 }
 
 func (w *BreakpointsWidget) onAdd() {

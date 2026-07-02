@@ -7,7 +7,6 @@ import "sync"
 // IN (active-low, bit r selects row r); row 8 (CONTROL + cursor keys) is read
 // only when the whole high byte is 0xFF. The low five columns of a row appear
 // on the keyboard port (0xFE) and the high three on the status port (0xF9).
-// (SimCoupe Keyboard.h / SAMIO.cpp:427-467, plan Appendix E.)
 type Keyboard struct {
 	mu     sync.Mutex
 	matrix [9]byte

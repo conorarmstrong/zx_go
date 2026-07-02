@@ -134,8 +134,8 @@ func TestEndToEndCartridgeRead(t *testing.T) {
 	}
 
 	i := New()
-	// We don't have a real IF1 ROM here so we don't bother loading
-	// one — Phase 9 only exercises the controller and ULA paths.
+	// No ROM loaded — this test exercises only the controller and
+	// ULA data path, not ROM paging.
 	i.ULA.Bus.Insert(0, cart)
 
 	// Bit-bang the motor-select sequence: clock high+data high,

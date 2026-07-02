@@ -16,9 +16,8 @@ import (
 //	SEQ R bBANK:OFF =VAL @PC
 //
 // e.g. `0 R b0:1f4f =c7 @27aa`. The insight: once two deterministic
-// Z80s share an IDENTICAL machine state at a checkpoint (which the
-// the reference emulator bisection can PROVE — see project_next_2026_05_31_mmu67_fix),
-// they can only diverge because a read returned a different byte
+// Z80s share an IDENTICAL machine state at a checkpoint, they can
+// only diverge because a read returned a different byte
 // (registers can't change spontaneously; only inputs can). So the FIRST
 // tape line whose VALUE differs between our run and the oracle's run is
 // the functional root cause — no bisection, no guessing in the gap.
@@ -108,7 +107,7 @@ func (rt *readTape) onReadAll(addr uint16, val byte) {
 
 // onPortWrite records one guest OUT (wire to the ULA port tracer,
 // write side). Port-level records are what disambiguate
-// multi-occupant RAM code in oracle diffs (the development log).
+// multi-occupant RAM code in oracle diffs.
 func (rt *readTape) onPortWrite(port uint16, val byte) {
 	if !rt.armed || rt.done {
 		return

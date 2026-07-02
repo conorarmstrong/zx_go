@@ -51,12 +51,12 @@ const (
 )
 
 // 4-bit volume table for the AY-3-8912 (output level for each volume value
-// 0..15), the levels measured from a real AY-3-8912 (the de-facto FUSE
-// table, 0..0xFFFF) scaled so the loudest channel alone tops out at 11650
-// — well below int16 saturation, leaving headroom for mixing the other two
-// channels and the beeper. This is the real chip's slightly-irregular
-// curve, not a uniform 3 dB-per-step approximation. The 5-bit envelope
-// reuses these 16 levels via envelopeLevel() & 0x0F.
+// 0..15), commonly-cited levels measured from a real AY-3-8912 (0..0xFFFF
+// full scale), scaled so the loudest channel alone tops out at 11650 — well
+// below int16 saturation, leaving headroom for mixing the other two channels
+// and the beeper. This is the real chip's slightly-irregular curve, not a
+// uniform 3 dB-per-step approximation. The 5-bit envelope reuses these 16
+// levels via envelopeLevel() & 0x0F.
 var volumeTable = [16]int16{
 	0, 160, 238, 336,
 	466, 686, 959, 1570,
@@ -601,6 +601,40 @@ func (a *AY) channelLevel(ch int) int16 {
 	return volumeTable[level]
 }
 
+// cyclesPerSample returns the number of stepClock ticks (post /16 divider)
+// per output audio sample. Shared by GenerateSamples and MixInto.
+func cyclesPerSample() float64 {
+	return float64(AYClock) / 16.0 / float64(SampleRate)
+}
+
+// advanceSample steps the internal clock by the fractional number of AY ticks
+// due for one audio sample (accumulating leftover fractional cycles in
+// clockAccum) and returns the summed three-channel mix, unclamped. Must be
+// called with the mutex held.
+func (a *AY) advanceSample(cps float64) int32 {
+	a.clockAccum += cps
+	steps := int(a.clockAccum)
+	a.clockAccum -= float64(steps)
+	for s := 0; s < steps; s++ {
+		a.stepClock()
+	}
+	// Sum the three channels and divide by 3 to keep the result within
+	// int16 range.
+	return (int32(a.channelLevel(0)) +
+		int32(a.channelLevel(1)) +
+		int32(a.channelLevel(2))) / 3
+}
+
+func clampSample(v int32) int16 {
+	if v > 32767 {
+		return 32767
+	}
+	if v < -32768 {
+		return -32768
+	}
+	return int16(v)
+}
+
 // GenerateSamples generates `count` audio samples (mono, signed 16-bit). The
 // caller is expected to upmix to stereo if needed.
 func (a *AY) GenerateSamples(count int) []int16 {
@@ -608,31 +642,9 @@ func (a *AY) GenerateSamples(count int) []int16 {
 	defer a.mu.Unlock()
 
 	out := make([]int16, count)
-	// stepClock represents one tone-generator tick = 16 master cycles, so we
-	// scale the AY clock down accordingly when computing how many ticks to
-	// run per audio sample.
-	cyclesPerSample := float64(AYClock) / 16.0 / float64(SampleRate)
-
+	cps := cyclesPerSample()
 	for i := 0; i < count; i++ {
-		a.clockAccum += cyclesPerSample
-		steps := int(a.clockAccum)
-		a.clockAccum -= float64(steps)
-		for s := 0; s < steps; s++ {
-			a.stepClock()
-		}
-
-		// Mix the three channels. Sum them and divide by 3 to keep the result
-		// within int16 range.
-		mix := int32(a.channelLevel(0)) +
-			int32(a.channelLevel(1)) +
-			int32(a.channelLevel(2))
-		mix /= 3
-		if mix > 32767 {
-			mix = 32767
-		} else if mix < -32768 {
-			mix = -32768
-		}
-		out[i] = int16(mix)
+		out[i] = clampSample(a.advanceSample(cps))
 	}
 	return out
 }
@@ -648,29 +660,9 @@ func (a *AY) MixInto(buf []int16) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// stepClock represents one tone-generator tick = 16 master cycles, so we
-	// scale the AY clock down accordingly when computing how many ticks to
-	// run per audio sample.
-	cyclesPerSample := float64(AYClock) / 16.0 / float64(SampleRate)
+	cps := cyclesPerSample()
 	for i := range buf {
-		a.clockAccum += cyclesPerSample
-		steps := int(a.clockAccum)
-		a.clockAccum -= float64(steps)
-		for s := 0; s < steps; s++ {
-			a.stepClock()
-		}
-
-		mix := int32(a.channelLevel(0)) +
-			int32(a.channelLevel(1)) +
-			int32(a.channelLevel(2))
-		mix /= 3
-
-		sum := int32(buf[i]) + mix
-		if sum > 32767 {
-			sum = 32767
-		} else if sum < -32768 {
-			sum = -32768
-		}
-		buf[i] = int16(sum)
+		mix := a.advanceSample(cps)
+		buf[i] = clampSample(int32(buf[i]) + mix)
 	}
 }

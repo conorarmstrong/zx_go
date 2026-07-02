@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR on interrupt acceptance + NMI (iter 307).
+// WZ/MEMPTR on interrupt acceptance + NMI.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.4, interrupt
 // acceptance behaves like a CALL: MEMPTR ← new PC. Same for NMI

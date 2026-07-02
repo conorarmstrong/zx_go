@@ -228,9 +228,9 @@ func (d *Dispatcher) handleFSync(cpu *z80.CPU, _ Memory) error {
 //	+8..9  size hi word
 //	+10    reserved
 //
-// Sprint 4 fills in size and the directory bit; date/time/attribute
-// stay zero — host mtime is available via ModTime if a future
-// sprint wants to convert it.
+// Only size and the directory bit are filled in; date/time/attribute
+// stay zero — host mtime is available via ModTime for a caller that
+// wants to convert it.
 func (d *Dispatcher) handleFStat(cpu *z80.CPU, mem Memory) error {
 	path := readPath(mem, cpu.HL())
 	fi, err := d.mount.Stat(path)
@@ -271,10 +271,9 @@ func (d *Dispatcher) handleFOpenDir(cpu *z80.CPU, mem Memory) error {
 // block. On end-of-directory return ESX_EWRTYPE so callers can
 // distinguish "no more" from a real error.
 //
-// Sprint 4 simplifies the entry: NULL-terminated name (max 13
-// chars), then the 11-byte stat block from F_FSTAT. Real esxDOS
-// uses a slightly different layout — Sprint 5 can fine-tune when
-// dot commands hit this path in earnest.
+// The entry layout here is a simplification: NULL-terminated name
+// (max 13 chars), then the 11-byte stat block from F_FSTAT. Real
+// esxDOS uses a slightly different layout.
 func (d *Dispatcher) handleFReadDir(cpu *z80.CPU, mem Memory) error {
 	fh, ok := d.files[cpu.A]
 	if !ok {

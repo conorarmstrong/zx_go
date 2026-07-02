@@ -42,11 +42,12 @@ func TestWireCPUSpeedReadBack(t *testing.T) {
 	disp := nextregs.New()
 	WireCPUSpeed(disp, cpu)
 
-	// Per zxnext.vhd:5897 the read shape is:
-	//   bit 7:6 = current cpu_speed (dynamic, == target for us)
-	//   bit 5:2 = 0
+	// Per zxnext.vhd:5902 the read shape is:
+	//   bit 7:6 = 0
+	//   bit 5:4 = current cpu_speed (dynamic, == target for us)
+	//   bit 3:2 = 0
 	//   bit 1:0 = target nr_07_cpu_speed
-	// So sel=$01 reads as $01 | ($01 << 6) = $41.
+	// So sel=$01 reads as $01 | ($01 << 4) = $11.
 	cpu.SetSpeedSelect(0x01) // 7 MHz
 	disp.Select(0x07)
 	if got := disp.ReadData(); got != 0x11 {
@@ -57,8 +58,7 @@ func TestWireCPUSpeedReadBack(t *testing.T) {
 // TestWireCPUSpeed_ReadShapeAllSpeeds verifies the zxnext.vhd:5902
 // read shape: `port_253b_dat <= "00" & cpu_speed & "00" &
 // nr_07_cpu_speed` — bits 7:6 = 00, bits 5:4 = CURRENT speed,
-// bits 3:2 = 00, bits 1:0 = programmed. (An earlier reading put
-// current in bits 7:6 — wrong per the VHDL concatenation order.)
+// bits 3:2 = 00, bits 1:0 = programmed.
 func TestWireCPUSpeed_ReadShapeAllSpeeds(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()

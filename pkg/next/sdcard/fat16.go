@@ -128,7 +128,7 @@ func BuildFAT16(dir string, opts BuildOpts) ([]byte, error) {
 	b.writeMBR()
 	b.writeBPB()
 	b.initFAT()
-	if err := b.addDirectory(dir, -1); err != nil {
+	if err := b.addDirectory(dir, -1, 0); err != nil {
 		return nil, err
 	}
 	b.mirrorFAT()
@@ -267,10 +267,13 @@ func (b *builder) clusterOffset(c uint16) int {
 	return b.dataOffset + int(c-2)*b.sectorsPerCluster*b.sectorSize
 }
 
-// addDirectory enumerates a host directory and writes entries
-// into the FAT directory at the given cluster (or root if
-// parentCluster == -1). Recurses into subdirectories.
-func (b *builder) addDirectory(hostPath string, parentCluster int) error {
+// addDirectory enumerates a host directory and writes entries into
+// the FAT directory at the given cluster (or root if parentCluster
+// == -1). dotDotCluster is the cluster this directory's ".." entry
+// must reference — its immediate parent's cluster, or 0 if that
+// parent is the root directory; ignored when parentCluster == -1.
+// Recurses into subdirectories.
+func (b *builder) addDirectory(hostPath string, parentCluster int, dotDotCluster uint16) error {
 	dirEntries, err := os.ReadDir(hostPath)
 	if err != nil {
 		return fmt.Errorf("sdcard: ReadDir %s: %w", hostPath, err)
@@ -295,11 +298,7 @@ func (b *builder) addDirectory(hostPath string, parentCluster int) error {
 		// Write "." and ".." entries.
 		b.writeDirEntry(dirBytes, entryIdx, ".", attrDir, uint16(parentCluster), 0)
 		entryIdx++
-		// ".." points to parent's own dir, but the actual cluster of the
-		// PARENT-of-this-subdir we don't know yet (it could be root, in
-		// which case ".." cluster is 0). We pass parentParent if caller
-		// gave it.
-		b.writeDirEntry(dirBytes, entryIdx, "..", attrDir, 0, 0)
+		b.writeDirEntry(dirBytes, entryIdx, "..", attrDir, dotDotCluster, 0)
 		entryIdx++
 	}
 
@@ -338,7 +337,11 @@ func (b *builder) addDirectory(hostPath string, parentCluster int) error {
 			}
 			b.writeDirEntry(dirBytes, entryIdx, short, attrDir, subCluster, 0)
 			entryIdx++
-			if err := b.addDirectory(hostFullPath, int(subCluster)); err != nil {
+			subDotDot := uint16(0)
+			if parentCluster != -1 {
+				subDotDot = uint16(parentCluster)
+			}
+			if err := b.addDirectory(hostFullPath, int(subCluster), subDotDot); err != nil {
 				return err
 			}
 		} else {
@@ -531,6 +534,12 @@ func sanitiseFAT(s string) string {
 }
 
 func splitName(short string) (base, ext string) {
+	// "." and ".." are literal directory-navigation entries, not
+	// name.ext composites — splitting on the last dot would treat
+	// their dots as an extension separator and corrupt the dirent.
+	if short == "." || short == ".." {
+		return short, ""
+	}
 	dot := strings.LastIndex(short, ".")
 	if dot < 0 {
 		return short, ""

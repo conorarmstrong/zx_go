@@ -54,10 +54,9 @@ func TestConfigureClassicIntTiming(t *testing.T) {
 // TestConfigureClassicIntTimingNext pins that switching to the Spectrum Next via
 // the Machine menu (switchModel -> configureClassicIntTiming) installs the
 // hardware-faithful narrow frame-INT pulse. The Next boots in +3/128K timing
-// (NR$03 "011"). Without this, the menu-switch path left the CPU in whatever
-// INT mode the previous model used (e.g. 48K's held-whole-frame), re-firing the
-// frame INT across DI'd ISR boundaries — the cause of garbled software sprites
-// on the Next in 128K personality even though plain 128K was already fixed.
+// (NR$03 "011"). The menu-switch path must not leave the CPU in whatever INT
+// mode the previous model used (e.g. 48K's held-whole-frame): a held INT
+// re-fires across DI'd ISR boundaries, garbling software sprites.
 func TestConfigureClassicIntTimingNext(t *testing.T) {
 	// The function only reads the model argument, not CPU memory, so any
 	// memory model backs the CPU fine.

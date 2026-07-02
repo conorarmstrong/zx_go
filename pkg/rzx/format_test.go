@@ -59,8 +59,8 @@ func buildSyntheticFile() *File {
 	}
 }
 
-// File IO wrapper coverage (iter 255). ReadFile + File.WriteFile
-// + Recording.WriteFile + Playback.Stop are 0%-cov public APIs.
+// File IO wrapper coverage: ReadFile, File.WriteFile, Recording.WriteFile
+// and Playback.Stop.
 
 func TestReadFileWriteFile_Roundtrip(t *testing.T) {
 	src := buildSyntheticFile()

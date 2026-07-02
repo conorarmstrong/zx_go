@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR updates for block input INI / IND (iter 299).
+// WZ/MEMPTR updates for block input INI / IND.
 //
 // Per Sean Young's "Undocumented Z80 Documented" §3.4 / §4.2:
 //   INI: WZ = BC + 1 (BC read at port-access time, pre-decrement of B)

@@ -1,11 +1,11 @@
 package sam
 
-// SAM ASIC memory/IO contention (SimCoupe Memory.cpp:88-133, SAMIO.h:163-171,
-// plan Appendix H). The ASIC holds the bus when the CPU touches internal memory
-// during the active display: accesses are rounded up to an 8-T boundary in the
-// screen window and a 4-T boundary elsewhere. Three per-T-state delay tables are
-// precomputed (mode 1 contends extra alternating bands; modes 2/3/4 only in the
-// main screen; 4T is the screen-disabled/border baseline).
+// SAM ASIC memory/IO contention. The ASIC holds the bus when the CPU touches
+// internal memory during the active display: accesses are rounded up to an
+// 8-T boundary in the screen window and a 4-T boundary elsewhere. Three
+// per-T-state delay tables are precomputed (mode 1 contends extra alternating
+// bands; modes 2/3/4 only in the main screen; 4T is the screen-disabled/border
+// baseline).
 
 const (
 	samContentionOffset = 4 // CPU_CYCLES_SCREEN_CONTENTION_OFFSET

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// SLL / SLI undocumented opcode tests (iter 199 — task #114).
+// SLL / SLI undocumented opcode tests.
 //
 // SLL ("Shift Left Logical" — sometimes called SLI for "Shift Left
 // and Insert") is the CB-prefix opcode set $30-$37 (one per register

@@ -64,8 +64,9 @@ func sectorSizeCode(size int) (byte, bool) {
 // MGT / IMG (DISCiPLE / +D)
 // ----------------------------------------------------------------------
 
-// ParseMGT parses an in-memory MGT image. The geometry is guessed
-// from the file size, matching FUSE's open_img_mgt_opd heuristic.
+// ParseMGT parses an in-memory MGT image. MGT/IMG files carry no
+// geometry header, so the geometry is inferred from the file size
+// against the known DISCiPLE/+D disk sizes (see guessMGTGeometry).
 // MGT stores tracks in "side-alternating" order — cyl 0 head 0,
 // cyl 0 head 1, cyl 1 head 0, ...
 func ParseMGT(data []byte) (*Disk, error) {
@@ -118,8 +119,9 @@ func parseRawSideAlternating(data []byte, altSides bool) (*Disk, error) {
 }
 
 // guessMGTGeometry returns (sides, cylinders, sectorsPerTrack,
-// sectorSize) for a given MGT/IMG file size. Mirrors FUSE's heuristic
-// in disk.c:1131-1153.
+// sectorSize) for a given MGT/IMG file size, matched against the
+// standard DISCiPLE/+D disk sizes (single/double-sided, 40/80 track,
+// 10×512 or 18×256 byte sectors).
 func guessMGTGeometry(size int) (sides, cyls, sectors, seclen int, err error) {
 	switch size {
 	case 2 * 80 * 10 * 512:

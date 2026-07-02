@@ -41,8 +41,8 @@ func TestEngineSelectChip(t *testing.T) {
 
 // NextReg 0x06 audio-chip mode (bits 1-0): only 11 ("hold all AY in reset")
 // silences the engine. Crucially, bit 2 is PS/2 mode and must NOT disable AY —
-// NextZXOS sets it during boot, and reading it as "AY disable" muted 128K music
-// on the Next.
+// NextZXOS sets it during boot, and misreading it as "AY disable" would mute
+// AY music whenever the Next boots.
 func TestEngineAudioChipMode(t *testing.T) {
 	for _, c := range []struct {
 		val      byte
@@ -53,7 +53,7 @@ func TestEngineAudioChipMode(t *testing.T) {
 		{0x01, false, "AY mode active"},
 		{0x02, false, "ZXN-8950 active"},
 		{0x03, true, "hold all AY in reset"},
-		{0x04, false, "bit 2 = PS/2 mode, NOT AY-disable (the bug)"},
+		{0x04, false, "bit 2 = PS/2 mode, not AY-disable"},
 		{0xA0, false, "reset default (bits 1-0 = 00)"},
 		{0xF8, false, "high bits set but bits 1-0 = 00 → active"},
 		{0xFF, true, "bits 1-0 = 11 → hold in reset, even with high bits set"},
@@ -121,10 +121,6 @@ func TestEngineResetClears(t *testing.T) {
 		t.Errorf("after Reset: Disabled = true, want false")
 	}
 }
-
-// ============================================================
-// Additional engine tests (iter 220).
-// ============================================================
 
 // TestEngineResetClearsAllChips — Engine.Reset() must call Reset()
 // on every chip so register state is wiped, not just the engine's

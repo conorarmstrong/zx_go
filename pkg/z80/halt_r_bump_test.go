@@ -2,11 +2,11 @@ package z80
 
 import "testing"
 
-// HALT state R-register bump (iter 315).
+// HALT state R-register bump.
 //
 // Per Sean Young §5 / Zilog datasheet: while the CPU is HALTed it
 // continuously issues M1 cycles for the HALT opcode internally,
-// each of which bumps R. Without this our HALT loop leaves R
+// each of which bumps R. Without this a HALT loop would leave R
 // frozen, so software using R as a PRNG seed (e.g. ZX 48K
 // keyboard scan after a HALT) would see stale entropy.
 

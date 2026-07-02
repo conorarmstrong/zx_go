@@ -20,10 +20,10 @@ import (
 // during these tests — they only exercise the IN-port intercept path,
 // which uses an injectable peripheral byte source.
 type rzxTestRig struct {
-	cpu  *z80.CPU
-	mem  *memory.Memory
-	ula  *ula.ULA
-	dir  string
+	cpu *z80.CPU
+	mem *memory.Memory
+	ula *ula.ULA
+	dir string
 }
 
 // newRZXTestRig builds a fresh emulator instance backed by stub ROMs.

@@ -229,10 +229,10 @@ func (c *CPU) pixeldn() {
 func (c *CPU) pixelad() {
 	y, x := c.D, c.E
 	addr := uint16(0x4000)
-	addr |= (uint16(y) & 0xC0) << 5  // Y bits 7-6 -> A12-A11
-	addr |= (uint16(y) & 0x07) << 8  // Y bits 2-0 -> A10-A8
-	addr |= (uint16(y) & 0x38) << 2  // Y bits 5-3 -> A7-A5
-	addr |= uint16(x) >> 3           // X bits 7-3 -> A4-A0
+	addr |= (uint16(y) & 0xC0) << 5 // Y bits 7-6 -> A12-A11
+	addr |= (uint16(y) & 0x07) << 8 // Y bits 2-0 -> A10-A8
+	addr |= (uint16(y) & 0x38) << 2 // Y bits 5-3 -> A7-A5
+	addr |= uint16(x) >> 3          // X bits 7-3 -> A4-A0
 	c.setHL(addr)
 }
 

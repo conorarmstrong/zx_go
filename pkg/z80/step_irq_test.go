@@ -4,7 +4,7 @@ import "testing"
 
 // TestStepInstruction_HaltedBurnsTstatesOnly verifies the c.Halted
 // fast path: while halted, StepInstruction burns 4 T-states without
-// touching PC or executing anything. Iter 282.
+// touching PC or executing anything.
 func TestStepInstruction_HaltedBurnsTstatesOnly(t *testing.T) {
 	cpu, _ := createTestCPU()
 	defer cleanupTestROMs("test_roms_z80")

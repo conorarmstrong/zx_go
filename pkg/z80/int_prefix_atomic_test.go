@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// INT acceptance between prefix bytes (iter 272).
+// INT acceptance between prefix bytes.
 //
 // Per Z80 spec: an INT cannot be accepted between a prefix byte
 // (DD/FD/CB/ED) and the following opcode byte. The prefix + opcode

@@ -17,9 +17,9 @@ import (
 // can succeed in tests that need a constructed harness.
 //
 // MUST be preceded by installtest.RedirectConfig(t) — the
-// AssertSandboxed guard fails the test loudly otherwise. (A real
-// developer ROM was clobbered once during Tier 4 development when a
-// caller missed the redirect; never again.)
+// AssertSandboxed guard fails the test loudly otherwise, since
+// without the redirect this would write into the developer's real
+// install directory.
 func installFakeDistroForLoad(t *testing.T) {
 	t.Helper()
 	installtest.AssertSandboxed(t)
@@ -41,12 +41,12 @@ func buildTinyNEX(t *testing.T) string {
 	hdr := make([]byte, nex.HeaderSize)
 	copy(hdr[0:4], nex.Magic[:])
 	copy(hdr[4:8], []byte("V1.2"))
-	hdr[11] = 5                                     // border = magenta
+	hdr[11] = 5                                       // border = magenta
 	binary.LittleEndian.PutUint16(hdr[12:14], 0xFEDC) // SP
 	binary.LittleEndian.PutUint16(hdr[14:16], 0xBEEF) // PC
 	binary.LittleEndian.PutUint16(hdr[16:18], 1)      // 1 bank
-	hdr[18+5] = 1                                   // bank 5 present
-	hdr[139] = 5                                    // entry bank = 5
+	hdr[18+5] = 1                                     // bank 5 present
+	hdr[139] = 5                                      // entry bank = 5
 
 	bank5 := bytes.Repeat([]byte{0xA5}, nex.BankSize)
 
@@ -124,7 +124,7 @@ func buildExtendedBankNEX(t *testing.T) string {
 	hdr[18+50] = 1                                    // bank 50 present
 	hdr[139] = 5                                      // entry bank = 5 (classic-addressable)
 
-	bank5 := bytes.Repeat([]byte{0xC5}, nex.BankSize)   // 0xC5 = "bank 5"
+	bank5 := bytes.Repeat([]byte{0xC5}, nex.BankSize)  // 0xC5 = "bank 5"
 	bank50 := bytes.Repeat([]byte{0x32}, nex.BankSize) // 0x32 = 50
 
 	path := filepath.Join(t.TempDir(), "extended.nex")
@@ -149,11 +149,9 @@ func buildExtendedBankNEX(t *testing.T) string {
 	return path
 }
 
-// TestLoadNEXAcceptsExtendedBanks is the v1.0 regression test for
-// .NEX banks 8+ support. Previously the testharness silently
-// dropped banks > 7 because memory.Memory only allocated 8 banks.
-// Now ModelNext allocates 128 banks (2 MB) and the loader writes
-// the full payload. We verify both a classic bank (5) and an
+// TestLoadNEXAcceptsExtendedBanks verifies .NEX banks 8+ load
+// correctly: ModelNext allocates 128 banks (2 MB) and the loader
+// writes the full payload. We verify both a classic bank (5) and an
 // extended bank (50) land correctly. Bank 50 isn't addressable via
 // classic paging — we read it back via the raw GetPage accessor.
 func TestLoadNEXAcceptsExtendedBanks(t *testing.T) {
@@ -188,9 +186,9 @@ func TestLoadNEXAcceptsExtendedBanks(t *testing.T) {
 	}
 
 	// Sanity: a bank we didn't load must remain at the cold-boot
-	// zero-fill — memory.New defaults Next banks to zero (matching the
-	// the reference emulator; see memory.TestColdRAMZeroByDefault). This
-	// verifies the loader didn't accidentally write to unrelated banks.
+	// zero-fill — memory.New defaults Next banks to zero (see
+	// memory.TestColdRAMZeroByDefault). This verifies the loader
+	// didn't accidentally write to unrelated banks.
 	page75 := h.MemoryBus().GetPage(75)
 	if page75 == nil {
 		t.Fatalf("GetPage(75) returned nil — extended banks not allocated for ModelNext")
@@ -202,9 +200,9 @@ func TestLoadNEXAcceptsExtendedBanks(t *testing.T) {
 	}
 }
 
-// TestExtendedBankExecutableViaMMU is the v1.0 regression test
-// for "banks 8+ are reachable from CPU execution", not just
-// allocated. It pokes a tiny program (LD A,n; LD (nn),A; HALT)
+// TestExtendedBankExecutableViaMMU verifies banks 8+ are reachable
+// from CPU execution, not just allocated. It pokes a tiny program
+// (LD A,n; LD (nn),A; HALT)
 // into 16K bank 50, configures the 8K MMU so bank 50's lower
 // half maps to 0x6000-0x7FFF, runs from there, and verifies the
 // program both fetched correctly (LD A took 0xAB) and the store

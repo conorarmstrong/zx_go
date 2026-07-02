@@ -48,10 +48,10 @@ var ErrCompetitionRollbackForbidden = errors.New("rzx: competition mode: rollbac
 //  4. For each emulator frame:
 //     a. RecordIN(b) is called by the ULA hook for every IN read
 //     b. StoreFrame(instructions) closes the frame, capturing the
-//        per-frame instruction count and the IN bytes accumulated
-//        since the previous StoreFrame
-//  5. Optionally AddSnap(snap, true) — insert an autosave (Phase 7
-//     uses this for rollback)
+//     per-frame instruction count and the IN bytes accumulated
+//     since the previous StoreFrame
+//  5. Optionally AddSnap(snap, true) — insert an autosave, which
+//     Rollback/RollbackTo can later restore
 //  6. Stop() / Bytes() — serialise the file and write it out
 type Recording struct {
 	file *File
@@ -91,8 +91,8 @@ func NewRecording() *Recording {
 }
 
 // AddSnap appends a snapshot block to the recording. The automatic
-// flag distinguishes intermediate snapshots (autosaves used by
-// rollback in Phase 7) from the user-driven initial / final snapshot.
+// flag distinguishes intermediate snapshots (autosaves that Rollback /
+// RollbackTo can restore) from the user-driven initial / final snapshot.
 //
 // libspectrum_rzx_add_snap implicitly stops any active input block
 // before inserting the snapshot (rzx.c:297). We do the same so the
@@ -263,7 +263,9 @@ func (r *Recording) pruneAutosaves() {
 // Bytes serialises the recording to a fresh byte slice using the
 // supplied options. Closes any active input block first so the file
 // is in a consistent state. Competition-mode recordings force the
-// Signed header flag, even though DSA signing itself is a TODO.
+// Signed header flag; the caller is responsible for adding the
+// sign-start/sign-end blocks and calling Sign (see sign.go) before
+// serialising, since a recording may exist unsigned in the interim.
 func (r *Recording) Bytes(opts WriteOptions) ([]byte, error) {
 	r.stopInput()
 	if r.CompetitionMode {
@@ -392,18 +394,23 @@ func (r *Recording) Finalise() {
 	// Pass 2: merge adjacent input blocks. Walking forward, if we
 	// see two BlockInput in a row, append the second's frames to
 	// the first and drop the second. The non_repeat index needs to
-	// be re-anchored to the merged block.
+	// be re-anchored to the merged block — but only when the second
+	// block actually has frames; a block left empty (StartInput with
+	// no StoreFrame before the next block) has no meaningful
+	// nonRepeat, and re-anchoring it anyway would point one past the
+	// end of the survivor's Frames.
 	merged := make([]Block, 0, len(pruned))
 	for _, b := range pruned {
 		if b.Type == BlockInput && len(merged) > 0 && merged[len(merged)-1].Type == BlockInput {
 			prev := merged[len(merged)-1].Input
-			offset := len(prev.Frames)
-			prev.Frames = append(prev.Frames, b.Input.Frames...)
-			prev.nonRepeat = offset + b.Input.nonRepeat
+			if len(b.Input.Frames) > 0 {
+				offset := len(prev.Frames)
+				prev.Frames = append(prev.Frames, b.Input.Frames...)
+				prev.nonRepeat = offset + b.Input.nonRepeat
+			}
 			continue
 		}
 		merged = append(merged, b)
 	}
 	r.file.Blocks = merged
 }
-

@@ -224,6 +224,40 @@ func TestRecordingFinaliseMergesInputBlocks(t *testing.T) {
 	}
 }
 
+// TestRecordingFinaliseMergeWithEmptyBlockKeepsNonRepeatInBounds covers
+// merging an input block that has zero frames (StartInput called with
+// no StoreFrame before the next block) into a preceding non-empty one.
+// The merge must leave the survivor's frames untouched — including its
+// nonRepeat index, which must stay a valid index into Frames so a later
+// StoreFrame's repeat-collapsing check doesn't index past the end.
+func TestRecordingFinaliseMergeWithEmptyBlockKeepsNonRepeatInBounds(t *testing.T) {
+	r := NewRecording()
+	r.StartInput(0)
+	r.RecordIN(0xAA)
+	mustStoreFrame(t, r, 10) // one frame, non-repeat, in the first block
+
+	r.StartInput(100) // second input block, left with zero frames
+
+	r.Finalise()
+
+	blocks := r.file.Blocks
+	if len(blocks) != 1 || blocks[0].Type != BlockInput {
+		t.Fatalf("after Finalise, blocks = %+v, want a single merged input block", blocks)
+	}
+	merged := blocks[0].Input
+	if merged.nonRepeat >= len(merged.Frames) {
+		t.Fatalf("nonRepeat = %d, out of bounds for %d frames", merged.nonRepeat, len(merged.Frames))
+	}
+
+	// Resume recording against the merged block: StoreFrame must not
+	// panic when its repeat-collapsing check consults nonRepeat.
+	r.activeInput = merged
+	r.RecordIN(0xBB)
+	if err := r.StoreFrame(20); err != nil {
+		t.Fatalf("StoreFrame after merge: %v", err)
+	}
+}
+
 func TestRecordingSnapshotPoints(t *testing.T) {
 	r := NewRecording()
 	r.AddSnap(&SnapshotBlock{Format: SnapshotFormatSZX, Data: []byte{0x01}}, false)

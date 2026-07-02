@@ -2,9 +2,9 @@ package debugger
 
 import "testing"
 
-// iter 363: cover the residual condition-evaluator branches —
-// `peek` alias, `0x` hex literal form, strict `<`/`>` comparison
-// eval, empty-condition String(), and a register absent from State.
+// Covers the residual condition-evaluator branches — `peek` alias,
+// `0x` hex literal form, strict `<`/`>` comparison eval,
+// empty-condition String(), and a register absent from State.
 
 func TestCondition_PeekAlias(t *testing.T) {
 	s := fakeState{mem: map[uint16]byte{0x4000: 0x7E}}

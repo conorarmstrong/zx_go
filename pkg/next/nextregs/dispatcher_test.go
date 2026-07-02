@@ -13,20 +13,18 @@ func TestNewDispatcherDefaults(t *testing.T) {
 	expectDefault := map[byte]byte{
 		0x00: defaultMachineID,
 		0x01: defaultCoreVersion,
-		0x02: 0x01, // bit 0 = "last reset was soft reset" — matches
-		// the reference emulator at cold boot, verified by the iter
-		// 131 lockstep diff at PC=$0171 where the FPGA bootrom reads
-		// NR$02 and the reference returns A=$01. The reference's FPGA
+		0x02: 0x01, // bit 0 = "last reset was soft reset" — the FPGA
 		// reset cascade makes the implicit power-on reset look like a
-		// soft reset to the bootrom. WireReset OnWrite must NOT use
-		// edge-detection for this to work — see wire.go for details.
+		// soft reset to the bootrom, which reads A=$01 here at $0171.
+		// WireReset's OnWrite must NOT use edge-detection on this bit
+		// — see wire.go for details.
 		0x05: 0x01,
 		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
 		0x0E: defaultCoreSubMinor, // NR$0E = core version sub-minor
 		0x0F: defaultBoardID,      // NR$0F = board ID
-		// 0x10 default: 0 (Core ID — generic, matches our reference
-		// emulator). Don't list it (zero default is the implicit case).
+		// 0x10 default: 0 (Core ID — generic). Don't list it (zero
+		// default is the implicit case).
 		0x12: 0x08,
 		0x13: 0x0B,
 		0x14: 0xE3,
@@ -38,8 +36,7 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		// nr_6e_tilemap_base = "101100" ($2C) and nr_6f_tilemap_tiles =
 		// "001100" ($0C). NextZXOS relies on these defaults (it does not
 		// write NR$6E/$6F before reading them at boot), so a $00 default
-		// makes it compute the wrong tilemap address. Verified divergent vs
-		// the reference at $3F1B via --next-nrdiff; reference = VHDL = $2C/$0C.
+		// would make it compute the wrong tilemap address.
 		0x6E: 0x2C,
 		0x6F: 0x0C,
 		0x50: 0xFF,
@@ -177,9 +174,8 @@ func TestOnReadHandlerOverrides(t *testing.T) {
 	}
 }
 
-// OnWriteFn + GetTracer getter coverage (iter 259). Both are
-// chained-handler helpers; ensure they return whatever was last
-// installed (or nil).
+// OnWriteFn and GetTracer are chained-handler helpers; both should
+// return whatever was last installed (or nil).
 
 func TestOnWriteFnGetter(t *testing.T) {
 	d := New()
@@ -278,20 +274,18 @@ func TestResetRestoresDefaults(t *testing.T) {
 	expect := map[byte]byte{
 		0x00: defaultMachineID,
 		0x01: defaultCoreVersion,
-		0x02: 0x01, // bit 0 = "last reset was soft reset" — matches
-		// the reference emulator at cold boot, verified by the iter
-		// 131 lockstep diff at PC=$0171 where the FPGA bootrom reads
-		// NR$02 and the reference returns A=$01. The reference's FPGA
+		0x02: 0x01, // bit 0 = "last reset was soft reset" — the FPGA
 		// reset cascade makes the implicit power-on reset look like a
-		// soft reset to the bootrom. WireReset OnWrite must NOT use
-		// edge-detection for this to work — see wire.go for details.
+		// soft reset to the bootrom, which reads A=$01 here at $0171.
+		// WireReset's OnWrite must NOT use edge-detection on this bit
+		// — see wire.go for details.
 		0x05: 0x01,
 		0x06: 0xA0, // hotkey enables: bit7 cpu-speed + bit5 50/60 (zxnext.vhd:5161-5165)
 		0x08: 0x10,
 		0x0E: defaultCoreSubMinor, // NR$0E = core version sub-minor
 		0x0F: defaultBoardID,      // NR$0F = board ID
-		// 0x10 default: 0 (Core ID — generic, matches our reference
-		// emulator). Don't list it (zero default is the implicit case).
+		// 0x10 default: 0 (Core ID — generic). Don't list it (zero
+		// default is the implicit case).
 		0x12: 0x08,
 		0x13: 0x0B,
 		0x14: 0xE3,
@@ -303,8 +297,7 @@ func TestResetRestoresDefaults(t *testing.T) {
 		// nr_6e_tilemap_base = "101100" ($2C) and nr_6f_tilemap_tiles =
 		// "001100" ($0C). NextZXOS relies on these defaults (it does not
 		// write NR$6E/$6F before reading them at boot), so a $00 default
-		// makes it compute the wrong tilemap address. Verified divergent vs
-		// the reference at $3F1B via --next-nrdiff; reference = VHDL = $2C/$0C.
+		// would make it compute the wrong tilemap address.
 		0x6E: 0x2C,
 		0x6F: 0x0C,
 		0x50: 0xFF,

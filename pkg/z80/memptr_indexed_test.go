@@ -2,7 +2,7 @@ package z80
 
 import "testing"
 
-// WZ/MEMPTR updates for indexed addressing (iter 318).
+// WZ/MEMPTR updates for indexed addressing.
 //
 // Per Sean Young §3.4: EVERY instruction that uses (IX+d) or
 // (IY+d) addressing sets MEMPTR = IX/IY + d. This covers:
@@ -13,10 +13,10 @@ import "testing"
 //   - INC/DEC (IX+d) / INC/DEC (IY+d)
 //   - ADD/ADC/SUB/SBC/AND/OR/XOR/CP A,(IX+d) / (IY+d)
 //
-// (DDCB / FDCB are covered separately by iter 297.)
+// (DDCB / FDCB are covered separately.)
 //
-// Our loadIXd/storeIXd/loadIYd/storeIYd helpers were missing the
-// MEMPTR update. A subsequent BIT n,(HL) would read stale F3/F5.
+// loadIXd/storeIXd/loadIYd/storeIYd update MEMPTR; without it a
+// subsequent BIT n,(HL) would read stale F3/F5.
 
 func TestLD_r_IXd_SetsWZ(t *testing.T) {
 	cpu, mem := createTestCPU()
@@ -114,8 +114,8 @@ func TestNegativeDisplacement_SetsWZ(t *testing.T) {
 	}
 }
 
-// Confirm ALU ops on (IX+d) also pick up the WZ fix (they all
-// route through loadIXd). iter 319 — regression coverage.
+// Confirm ALU ops on (IX+d) also pick up the WZ update (they all
+// route through loadIXd).
 
 func TestADD_A_IXd_SetsWZ(t *testing.T) {
 	cpu, mem := createTestCPU()

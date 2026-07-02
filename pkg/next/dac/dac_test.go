@@ -17,12 +17,12 @@ func TestWritePortRoutesPerChannel(t *testing.T) {
 		port uint16
 		want Channel
 	}{
-		{"A 0x0F", 0x0F, ChannelA},
+		{"A 0x1F", 0x1F, ChannelA},
 		{"A 0xF1", 0xF1, ChannelA},
-		{"B 0x1F", 0x1F, ChannelB},
+		{"B 0x0F", 0x0F, ChannelB},
 		{"B 0xF3", 0xF3, ChannelB},
+		{"C 0x4F", 0x4F, ChannelC},
 		{"C 0xF9", 0xF9, ChannelC},
-		{"C 0xDF Specdrum", 0xDF, ChannelC},
 		{"D 0xFB", 0xFB, ChannelD},
 	}
 	for _, c := range cases {
@@ -57,7 +57,7 @@ func TestWritePortRejectsUnknownPort(t *testing.T) {
 func TestHighBitsOfPortIgnored(t *testing.T) {
 	// Real hardware decodes DAC ports on the low byte only.
 	b := New()
-	b.WritePort(0xABCD&0xFF00|0x0F, 0x55) // 0xAB0F should hit channel A
+	b.WritePort(0xABCD&0xFF00|0x1F, 0x55) // 0xAB1F should hit channel A
 	if b.Level(ChannelA) != 0x55 {
 		t.Errorf("port with high bits set should still hit channel A: Level=%#x", b.Level(ChannelA))
 	}

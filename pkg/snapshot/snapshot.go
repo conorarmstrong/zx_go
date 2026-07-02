@@ -45,8 +45,8 @@ type CPUState struct {
 
 // MemoryState represents the memory contents
 type MemoryState struct {
-	RAM     [8][]byte // 8 banks of 16KB each
-	Is128K  bool
+	RAM      [8][]byte // 8 banks of 16KB each
+	Is128K   bool
 	Port7FFD byte // 128K paging register
 }
 
@@ -98,7 +98,7 @@ func (s *Snapshot) Load(path string) error {
 	defer func() { _ = file.Close() }()
 
 	s.Format = format
-	
+
 	switch format {
 	case FormatSNA:
 		return s.loadSNA(file)

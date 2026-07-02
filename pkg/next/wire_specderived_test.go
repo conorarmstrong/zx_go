@@ -11,7 +11,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
-// Spec-derived tests for NextReg write handlers (iter 186 — task #107).
+// Spec-derived tests for NextReg write handlers.
 //
 // Each test pins a code path that exists in the canonical FPGA VHDL at
 // `_tools/reference/tbblue-fpga/cores/zxnext/src/zxnext.vhd`. The test
@@ -116,7 +116,7 @@ func TestSpec_NR0A_MFTypeAndSDSwap_GatedOnConfigMode(t *testing.T) {
 	// Exit config mode. Bits 7:6 + bit 5 must freeze.
 	mem.ClearConfigMode()
 	// Write 0x1F (= bits 7:5 all 0). Bits 4,3,1,0 should update; bits 7:5 should stay.
-	// Bit 2 reads as 0 per spec (iter 223).
+	// Bit 2 reads as 0 per spec.
 	disp.WriteReg(0x0A, 0x1F)
 	got := disp.ReadReg(0x0A)
 	if got&0xE0 != 0xE0 {
@@ -127,14 +127,6 @@ func TestSpec_NR0A_MFTypeAndSDSwap_GatedOnConfigMode(t *testing.T) {
 			got&0x1B)
 	}
 }
-
-// (TestSpec_NR11_VideoTiming_GatedOnConfigMode is superseded by
-// TestSpec_NR11_VideoTiming_ConfigModeGate further down — the
-// WireVideoTiming function landed in iter 190 with the gate + bit
-// masking + special-case-of-111 behaviour fully wired.)
-
-// (TestSpec_NR05_BitReorderingOnRead is implemented at line 303
-// — iter 191 added WireJoystickMode to satisfy the spec.)
 
 // TestSpec_NR08_ContentionDisableBit6 verifies that NR$08 bit 6
 // controls the RAM contention disable flag (NOT bit 1). Per VHDL
@@ -258,8 +250,7 @@ func (f *fakeMAPRAMClearer) ClearMAPRAM() { f.calls++ }
 //	elsif nr_09_we = '1' and nr_wr_dat(3) = '1' then
 //	    port_e3_reg(6) <= '0';
 //
-// where port_e3_reg(6) is the MAPRAM latch. Iter 191 added
-// WirePeripheral3 to implement this side-effect.
+// where port_e3_reg(6) is the MAPRAM latch.
 func TestSpec_NR09_Bit3ClearsMAPRAM(t *testing.T) {
 	disp := nextregs.New()
 	mc := &fakeMAPRAMClearer{}
@@ -301,8 +292,7 @@ func TestSpec_NR09_NilPagerSafe(t *testing.T) {
 }
 
 // TestSpec_NR05_BitReorderingOnRead verifies the documented write-
-// to-read bit re-mapping of NR$05. Iter 191 added WireJoystickMode
-// to implement the spec.
+// to-read bit re-mapping of NR$05.
 //
 // VHDL zxnext.vhd write (~5156):
 //
@@ -321,9 +311,7 @@ func TestSpec_NR09_NilPagerSafe(t *testing.T) {
 // i.e. [7:6]=joy0[1:0] [5:4]=joy1[1:0] [3]=joy0[2] [2]=eff 50/60Hz
 // [1]=joy1[2] [0]=eff scandouble. The write places joy0/joy1 at exactly
 // those positions, so the mode bits read back where written; bits 2 and
-// 0 reflect effective video config (not modelled), reading 0. (An earlier
-// version of this test cited a fictional "~6113" layout with '0' fillers
-// and asserted $FF→$DD; that did not match the VHDL and is corrected.)
+// 0 reflect effective video config (not modelled), reading 0.
 func TestSpec_NR05_BitReorderingOnRead(t *testing.T) {
 	disp := nextregs.New()
 	WireJoystickMode(disp)
@@ -363,7 +351,6 @@ func TestSpec_NR05_BitReorderingOnRead(t *testing.T) {
 // Bits 3:0 are the "default" config (alt-rom-enable, write-only,
 // lock-ROM1, lock-ROM0 defaults). Bits 7:4 are the "live" config
 // that the OS toggles at runtime. Reset restores live from default.
-// Fix landed in iter 191 (pkg/memory/memory.go::Reset).
 func TestSpec_NR8C_ResetSemantics(t *testing.T) {
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {
@@ -407,9 +394,6 @@ func TestSpec_NR8C_ResetSemantics(t *testing.T) {
 //	bit 2 = Disables ULA frame interrupt
 //	bit 1 = Enables line interrupt
 //	bit 0 = MSB of 9-bit line-target value
-//
-// Old impl read enable from bit 7 and frame-disable from bit 6 — both
-// wrong. Iter 191 corrected.
 func TestSpec_NR22_LineInterruptBitPositions(t *testing.T) {
 	_, _ = withConfigMode(t, false) // mem unused here; just need ROMs
 	cpu := newSpecTestCPU(t)
@@ -465,7 +449,7 @@ func newSpecTestCPU(t *testing.T) *z80.CPU {
 //	bits 2:1 = Current Z80 IM mode (READ-only)
 //	bit 0 = Maskable INT mode: pulse(0) or hw IM 2(1)
 //
-// Iter 193 added WireInterruptControl. Bits 2:1 are masked to 0 on
+// Bits 2:1 are masked to 0 on
 // write (read-only field placeholder); other writable bits stored.
 // Full CPU integration (programmable IM 2 vector, stackless NMI) is
 // follow-up work.
@@ -499,7 +483,7 @@ func TestSpec_NRC0_InterruptControl(t *testing.T) {
 }
 
 // TestSpec_NRC4_InterruptEnable0 verifies that NR$C4 writes alias
-// the line-int enable bit (bit 1) into NR$22. Iter 193 wired this.
+// the line-int enable bit (bit 1) into NR$22.
 // Per VHDL line 5610 the write directly updates nr_22_line_interrupt_en.
 func TestSpec_NRC4_InterruptEnable0(t *testing.T) {
 	cpu := newSpecTestCPU(t)
@@ -613,7 +597,7 @@ func TestSpec_NRC4_Bit0_ULAIntEn_NotDerived(t *testing.T) {
 }
 
 // TestSpec_NR0B_JoystickIOMode verifies storage layout for NR$0B
-// joystick I/O mode register. Iter 193 wired this.
+// joystick I/O mode register.
 //
 // Per nextreg.txt + zxnext.vhd:
 //
@@ -682,7 +666,7 @@ func TestSpec_NR50_57_MMU8_RoundTrip(t *testing.T) {
 }
 
 // =============================================================================
-// NR$81-$8A peripheral / bus enable masks (iter 195 — task #110).
+// NR$81-$8A peripheral / bus enable masks.
 // Each test cites the VHDL write block at line 5488-5530 and the read
 // block at 6122-6155. These NRs are config / mask registers — the FPGA
 // stores only the documented bits and reads back zeros in the reserved
@@ -706,8 +690,7 @@ func TestSpec_NR50_57_MMU8_RoundTrip(t *testing.T) {
 // We don't have ROMCS pin modelling, so bit 7 read should always be 0
 // for cold-boot tests. Bits 2, 1, 0 are always 0 (reserved/hardwired).
 //
-// Real handler (iter 195): WirePeripheralMasks stores val&$78 so
-// bits 7, 2, 1, 0 are masked out on storage.
+// WirePeripheralMasks stores val&$78, masking out bits 7, 2, 1, 0.
 func TestSpec_NR81_ExpansionBus_ReservedBitsMaskedOnRead(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
@@ -772,7 +755,7 @@ func TestSpec_NR83_84_InternalPortEnable_AllBitsStored(t *testing.T) {
 // Read at line 6137 reconstructs: bit 7 || "000" || bits 3:0.
 // So writing $FF reads $8F (bits 7 + 3:0, bits 6:4 zeroed).
 //
-// Real handler (iter 195): WirePeripheralMasks stores val&$8F.
+// WirePeripheralMasks stores val&$8F.
 func TestSpec_NR85_SplitField_ReservedBitsMaskedOnRead(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
@@ -812,7 +795,7 @@ func TestSpec_NR86_87_88_BusPortEnable_AllBitsStored(t *testing.T) {
 //
 // Read at line 6149: bit 7 || "000" || bits 3:0.
 //
-// Real handler (iter 195): WirePeripheralMasks stores val&$8F.
+// WirePeripheralMasks stores val&$8F.
 func TestSpec_NR89_SplitField_ReservedBitsMaskedOnRead(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
@@ -837,7 +820,7 @@ func TestSpec_NR89_SplitField_ReservedBitsMaskedOnRead(t *testing.T) {
 //
 // Read at line 6152: "00" || bits 5:0. Bits 7:6 always read as 0.
 //
-// Real handler (iter 195): WirePeripheralMasks stores val&$3F.
+// WirePeripheralMasks stores val&$3F.
 func TestSpec_NR8A_BusPortPropagate_ReservedBitsMaskedOnRead(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
@@ -853,7 +836,7 @@ func TestSpec_NR8A_BusPortPropagate_ReservedBitsMaskedOnRead(t *testing.T) {
 }
 
 // =============================================================================
-// NR$10 (Anti-Brick / Core ID) read-shape (iter 197 — task #112).
+// NR$10 (Anti-Brick / Core ID) read-shape.
 // VHDL zxnext.vhd:5681-5705 (write) + :5923 (read).
 //
 // Write semantics (issue 2/3 board):
@@ -889,7 +872,7 @@ func TestSpec_NR68_ReservedBit1_ZeroOnRead(t *testing.T) {
 }
 
 // =============================================================================
-// NR$4A / $4B / $4C transparent-control regs (iter 203 — task #118).
+// NR$4A / $4B / $4C transparent-control regs.
 // VHDL zxnext.vhd:5406-5413 (write), :6050-6056 (read).
 // =============================================================================
 
@@ -923,7 +906,7 @@ func TestSpec_NR4B_SpriteTransparentIndex_AllBitsStored(t *testing.T) {
 // VHDL zxnext.vhd:5413: `nr_4c_tm_transparent_index <= nr_wr_dat(3 downto 0)`.
 // Read at :6056: `port_253b_dat <= "0000" & nr_4c_tm_transparent_index`.
 //
-// Real handler (iter 203) added to WirePeripheralMasks.
+// Masked by WirePeripheralMasks.
 func TestSpec_NR4C_TilemapTransparentIndex_ReservedBitsMasked(t *testing.T) {
 	disp := nextregs.New()
 	WirePeripheralMasks(disp)
@@ -944,7 +927,7 @@ func TestSpec_NR4C_TilemapTransparentIndex_ReservedBitsMasked(t *testing.T) {
 }
 
 // =========================================================================
-// NR$6E / NR$6F tilemap-base / tiles-base — bit 6 dropped (iter 205).
+// NR$6E / NR$6F tilemap-base / tiles-base — bit 6 dropped.
 //
 // VHDL zxnext.vhd:5467-5473 (write) + :6107-6111 (read). The FPGA
 // stores bit 7 (bank-select-high) + bits 5:0 (offset). Bit 6 is
@@ -992,7 +975,7 @@ func TestSpec_NR6F_TilesBase_Bit6Dropped(t *testing.T) {
 }
 
 // =========================================================================
-// NR$70 / NR$71 layer2 resolution + scrollX (iter 205).
+// NR$70 / NR$71 layer2 resolution + scrollX.
 // =========================================================================
 
 // TestSpec_NR70_Layer2Resolution_ReservedBitsMasked.
@@ -1040,7 +1023,7 @@ func TestSpec_NR71_Layer2ScrollX_OnlyBit0(t *testing.T) {
 }
 
 // =====================================================================
-// Additional reserved-bit masks (iter 213).
+// Additional reserved-bit masks.
 // =====================================================================
 
 // TestSpec_NR2F_TilemapScrollXHigh_OnlyBits1to0.

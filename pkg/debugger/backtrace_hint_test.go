@@ -2,9 +2,8 @@ package debugger
 
 import "testing"
 
-// iter 363: pin Hint() for the RST and conditional-CALL origin
-// classes (the plain-CALL and speculative arms are covered in
-// backtrace_test.go).
+// Pins Hint() for the RST and conditional-CALL origin classes (the
+// plain-CALL and speculative arms are covered in backtrace_test.go).
 
 func TestBacktraceHint_RstAndCallCond(t *testing.T) {
 	rst := Frame{Origin: OriginRst, CallTarget: 0x38, CallSite: 0x6001}

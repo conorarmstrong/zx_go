@@ -10,29 +10,35 @@ import (
 
 // SZX format constants
 const (
-	SZX_SIGNATURE = "ZXST"
+	SZX_SIGNATURE     = "ZXST"
 	SZX_VERSION_MAJOR = 1
 	SZX_VERSION_MINOR = 4
+	// szxMaxBlockSize bounds the block-length field read from an SZX
+	// block header before it is used as an allocation size. Real SZX
+	// blocks (register sets, a compressed 16K RAM page, small metadata)
+	// are at most tens of kilobytes; this cap is far above that, so it
+	// only rejects a corrupt or hostile length field, not real content.
+	szxMaxBlockSize = 64 * 1024 * 1024
 )
 
 // SZX block types
 const (
-	ZXSTBID_CREATOR    = "CRTR"
-	ZXSTBID_Z80REGS    = "Z80R"
-	ZXSTBID_SPECREGS   = "SPCR"
-	ZXSTBID_RAMPAGE    = "RAMP"
-	ZXSTBID_AY         = "AY\x00\x00"
-	ZXSTBID_TIMINGS    = "TMNG"
-	ZXSTBID_KEYBOARD   = "KEYB"
-	ZXSTBID_MOUSE      = "AMXM"
-	ZXSTBID_JOYSTICK   = "JOY\x00"
-	ZXSTBID_COVOX      = "COVX"
-	ZXSTBID_SOUNDDEV   = "SDEV"
-	ZXSTBID_OPUS       = "OPUS"
-	ZXSTBID_PLUSD      = "PLSD"
-	ZXSTBID_DISCIPLE   = "DSC\x00"
-	ZXSTBID_MULTIFACE  = "MFCE"
-	ZXSTBID_ROM        = "ROM\x00"
+	ZXSTBID_CREATOR   = "CRTR"
+	ZXSTBID_Z80REGS   = "Z80R"
+	ZXSTBID_SPECREGS  = "SPCR"
+	ZXSTBID_RAMPAGE   = "RAMP"
+	ZXSTBID_AY        = "AY\x00\x00"
+	ZXSTBID_TIMINGS   = "TMNG"
+	ZXSTBID_KEYBOARD  = "KEYB"
+	ZXSTBID_MOUSE     = "AMXM"
+	ZXSTBID_JOYSTICK  = "JOY\x00"
+	ZXSTBID_COVOX     = "COVX"
+	ZXSTBID_SOUNDDEV  = "SDEV"
+	ZXSTBID_OPUS      = "OPUS"
+	ZXSTBID_PLUSD     = "PLSD"
+	ZXSTBID_DISCIPLE  = "DSC\x00"
+	ZXSTBID_MULTIFACE = "MFCE"
+	ZXSTBID_ROM       = "ROM\x00"
 )
 
 // SZX machine IDs
@@ -85,11 +91,11 @@ type szxZ80Regs struct {
 
 // Spectrum registers block structure
 type szxSpecRegs struct {
-	Border       byte
-	Port7FFD     byte
-	Port1FFD     byte
-	PortFE       byte
-	Reserved     [4]byte
+	Border   byte
+	Port7FFD byte
+	Port1FFD byte
+	PortFE   byte
+	Reserved [4]byte
 }
 
 // RAM page block structure
@@ -106,12 +112,12 @@ func (s *Snapshot) loadSZX(file io.Reader) error {
 	if err := binary.Read(file, binary.LittleEndian, &header); err != nil {
 		return fmt.Errorf("failed to read SZX header: %w", err)
 	}
-	
+
 	// Verify signature
 	if string(header.Signature[:]) != SZX_SIGNATURE {
 		return fmt.Errorf("invalid SZX signature: %s", string(header.Signature[:]))
 	}
-	
+
 	// Set machine type based on machine ID
 	switch header.MachineID {
 	case ZXSTMID_16K, ZXSTMID_48K, ZXSTMID_NTSC48K:
@@ -121,7 +127,7 @@ func (s *Snapshot) loadSZX(file io.Reader) error {
 	default:
 		s.Memory.Is128K = false // Default to 48K for unknown machines
 	}
-	
+
 	// Process blocks
 	for {
 		var blockHeader szxBlockHeader
@@ -132,39 +138,42 @@ func (s *Snapshot) loadSZX(file io.Reader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read block header: %w", err)
 		}
-		
+
 		blockID := string(blockHeader.ID[:])
 		blockSize := blockHeader.Size
-		
+		if blockSize > szxMaxBlockSize {
+			return fmt.Errorf("SZX block %q declares implausible size %d bytes (max %d)", blockID, blockSize, szxMaxBlockSize)
+		}
+
 		// Read block data
 		blockData := make([]byte, blockSize)
 		if _, err := io.ReadFull(file, blockData); err != nil {
 			return fmt.Errorf("failed to read block data for %s: %w", blockID, err)
 		}
-		
+
 		// Process block based on ID
 		switch blockID {
 		case ZXSTBID_Z80REGS:
 			if err := s.loadSZXZ80Regs(blockData); err != nil {
 				return fmt.Errorf("failed to load Z80 registers: %w", err)
 			}
-			
+
 		case ZXSTBID_SPECREGS:
 			if err := s.loadSZXSpecRegs(blockData); err != nil {
 				return fmt.Errorf("failed to load Spectrum registers: %w", err)
 			}
-			
+
 		case ZXSTBID_RAMPAGE:
 			if err := s.loadSZXRamPage(blockData); err != nil {
 				return fmt.Errorf("failed to load RAM page: %w", err)
 			}
-			
+
 		default:
 			// Skip unknown blocks
 			continue
 		}
 	}
-	
+
 	return nil
 }
 
@@ -173,12 +182,12 @@ func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 	if len(data) < 37 {
 		return fmt.Errorf("z80 registers block too small: %d bytes", len(data))
 	}
-	
+
 	var regs szxZ80Regs
 	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &regs); err != nil {
 		return fmt.Errorf("failed to parse Z80 registers: %w", err)
 	}
-	
+
 	// Convert from SZX format to our CPU state
 	s.CPU.A = byte(regs.AF >> 8)
 	s.CPU.F = byte(regs.AF & 0xFF)
@@ -188,7 +197,7 @@ func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 	s.CPU.E = byte(regs.DE & 0xFF)
 	s.CPU.H = byte(regs.HL >> 8)
 	s.CPU.L = byte(regs.HL & 0xFF)
-	
+
 	s.CPU.A_ = byte(regs.AF_ >> 8)
 	s.CPU.F_ = byte(regs.AF_ & 0xFF)
 	s.CPU.B_ = byte(regs.BC_ >> 8)
@@ -197,7 +206,7 @@ func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 	s.CPU.E_ = byte(regs.DE_ & 0xFF)
 	s.CPU.H_ = byte(regs.HL_ >> 8)
 	s.CPU.L_ = byte(regs.HL_ & 0xFF)
-	
+
 	s.CPU.IX = regs.IX
 	s.CPU.IY = regs.IY
 	s.CPU.SP = regs.SP
@@ -207,7 +216,7 @@ func (s *Snapshot) loadSZXZ80Regs(data []byte) error {
 	s.CPU.IFF1 = (regs.IFF1 != 0)
 	s.CPU.IFF2 = (regs.IFF2 != 0)
 	s.CPU.IM = regs.IM
-	
+
 	return nil
 }
 
@@ -216,15 +225,15 @@ func (s *Snapshot) loadSZXSpecRegs(data []byte) error {
 	if len(data) < 8 {
 		return fmt.Errorf("spectrum registers block too small: %d bytes", len(data))
 	}
-	
+
 	var regs szxSpecRegs
 	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &regs); err != nil {
 		return fmt.Errorf("failed to parse Spectrum registers: %w", err)
 	}
-	
+
 	s.CPU.BorderColor = regs.Border & 0x07
 	s.Memory.Port7FFD = regs.Port7FFD
-	
+
 	return nil
 }
 
@@ -233,18 +242,18 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 	if len(data) < 3 {
 		return fmt.Errorf("ram page block too small: %d bytes", len(data))
 	}
-	
+
 	var ramPage szxRamPage
 	if err := binary.Read(bytes.NewReader(data[:3]), binary.LittleEndian, &ramPage); err != nil {
 		return fmt.Errorf("failed to parse RAM page header: %w", err)
 	}
-	
+
 	pageData := data[3:]
 	bankNum := int(ramPage.PageNumber)
-	
+
 	// Check if data is compressed
 	isCompressed := (ramPage.Flags & 0x01) != 0
-	
+
 	var memData []byte
 	if isCompressed {
 		// Decompress using zlib
@@ -253,8 +262,12 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 			return fmt.Errorf("failed to create zlib reader: %w", err)
 		}
 		defer func() { _ = reader.Close() }()
-		
-		decompressed, err := io.ReadAll(reader)
+
+		// A RAM page is always exactly 16384 bytes uncompressed, so cap
+		// the read just above that. Without this, a small hostile zlib
+		// stream could inflate to an arbitrarily large buffer (a
+		// "decompression bomb") before the excess is discarded below.
+		decompressed, err := io.ReadAll(io.LimitReader(reader, 16384+1))
 		if err != nil {
 			return fmt.Errorf("failed to decompress RAM page %d: %w", bankNum, err)
 		}
@@ -262,13 +275,13 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 	} else {
 		memData = pageData
 	}
-	
+
 	// SZX page numbers map directly to RAM bank numbers (0-7)
 	if bankNum < 0 || bankNum > 7 {
 		return fmt.Errorf("unknown RAM page number: %d", bankNum)
 	}
 	targetBank := bankNum
-	
+
 	// Copy data to RAM bank
 	if len(memData) >= 16384 {
 		copy(s.Memory.RAM[targetBank], memData[:16384])
@@ -279,7 +292,7 @@ func (s *Snapshot) loadSZXRamPage(data []byte) error {
 			s.Memory.RAM[targetBank][i] = 0
 		}
 	}
-	
+
 	return nil
 }
 
@@ -292,28 +305,28 @@ func (s *Snapshot) saveSZX(file io.Writer) error {
 		MinorVersion: SZX_VERSION_MINOR,
 		Flags:        0,
 	}
-	
+
 	// Set machine ID based on our memory configuration
 	if s.Memory.Is128K {
 		header.MachineID = ZXSTMID_128K
 	} else {
 		header.MachineID = ZXSTMID_48K
 	}
-	
+
 	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
 		return fmt.Errorf("failed to write SZX header: %w", err)
 	}
-	
+
 	// Write Z80 registers block
 	if err := s.saveSZXZ80Regs(file); err != nil {
 		return fmt.Errorf("failed to write Z80 registers: %w", err)
 	}
-	
+
 	// Write Spectrum registers block
 	if err := s.saveSZXSpecRegs(file); err != nil {
 		return fmt.Errorf("failed to write Spectrum registers: %w", err)
 	}
-	
+
 	// Write RAM pages
 	if s.Memory.Is128K {
 		// Write all 8 banks for 128K
@@ -331,7 +344,7 @@ func (s *Snapshot) saveSZX(file io.Writer) error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -345,7 +358,7 @@ func (s *Snapshot) saveSZXZ80Regs(file io.Writer) error {
 	if err := binary.Write(file, binary.LittleEndian, blockHeader); err != nil {
 		return err
 	}
-	
+
 	// Create Z80 registers structure
 	regs := szxZ80Regs{
 		AF:               uint16(s.CPU.A)<<8 | uint16(s.CPU.F),
@@ -368,19 +381,19 @@ func (s *Snapshot) saveSZXZ80Regs(file io.Writer) error {
 		Flags:            0,
 		MemPtr:           0,
 	}
-	
+
 	if s.CPU.IFF1 {
 		regs.IFF1 = 1
 	}
 	if s.CPU.IFF2 {
 		regs.IFF2 = 1
 	}
-	
+
 	// Write registers data
 	if err := binary.Write(file, binary.LittleEndian, regs); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -394,20 +407,20 @@ func (s *Snapshot) saveSZXSpecRegs(file io.Writer) error {
 	if err := binary.Write(file, binary.LittleEndian, blockHeader); err != nil {
 		return err
 	}
-	
+
 	// Create Spectrum registers structure
 	regs := szxSpecRegs{
 		Border:   s.CPU.BorderColor,
 		Port7FFD: s.Memory.Port7FFD,
-		Port1FFD: 0, // Not used in our emulator
+		Port1FFD: 0,                 // Not used in our emulator
 		PortFE:   s.CPU.BorderColor, // Same as border
 	}
-	
+
 	// Write registers data
 	if err := binary.Write(file, binary.LittleEndian, regs); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -422,10 +435,10 @@ func (s *Snapshot) saveSZXRamPage(file io.Writer, bankNum int) error {
 	if err := writer.Close(); err != nil {
 		return err
 	}
-	
+
 	compressed := compressedData.Bytes()
 	blockSize := uint32(3 + len(compressed)) // 3 bytes header + compressed data
-	
+
 	// Write block header
 	blockHeader := szxBlockHeader{
 		ID:   [4]byte{'R', 'A', 'M', 'P'},
@@ -434,25 +447,25 @@ func (s *Snapshot) saveSZXRamPage(file io.Writer, bankNum int) error {
 	if err := binary.Write(file, binary.LittleEndian, blockHeader); err != nil {
 		return err
 	}
-	
+
 	// SZX page numbers map directly to internal bank numbers
 	pageNum := byte(bankNum)
-	
+
 	// Create RAM page header
 	ramPage := szxRamPage{
 		Flags:      0x01, // Compressed
 		PageNumber: pageNum,
 	}
-	
+
 	// Write RAM page header
 	if err := binary.Write(file, binary.LittleEndian, ramPage); err != nil {
 		return err
 	}
-	
+
 	// Write compressed data
 	if _, err := file.Write(compressed); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
