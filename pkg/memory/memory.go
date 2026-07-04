@@ -76,6 +76,8 @@ type Memory struct {
 	port7FFD      byte
 	port1FFD      byte
 	portDFFD      byte // $DFFD bits 3:0 = high RAM-bank extension for the $C000 slot
+	portEFF7Reg2  bool // $EFF7 bit 2 latch (Pentagon-1024 mapping-mode gate; not otherwise modelled)
+	portEFF7Reg3  bool // $EFF7 bit 3 latch: 1 = RAM bank 0, not ROM, is revealed at $0000-$3FFF
 
 	// ROM manager for handling multiple ROM types
 	romManager *roms.ROMManager
@@ -563,12 +565,17 @@ func (m *Memory) SetDFFD(val byte) {
 		return // frozen (Multiface) or special paging owns all four slots
 	}
 	ramPage := int(m.portDFFD)<<3 | int(m.port7FFD&0x07)
-	old := m.memoryPageReadMap[3]
 	m.memoryPageReadMap[3] = ramPage
 	m.memoryPageWriteMap[3] = ramPage
-	if ramPage != old {
-		m.syncMMUFromPage(3)
-	}
+	// zxnext.vhd:4677-4681 (see the identical fix + rationale in
+	// PageMemory above): MMU6/7 are reloaded from port_7ffd_bank on
+	// every port_memory_change_dly event, which port_dffd_wr feeds
+	// unconditionally (zxnext.vhd:3813) — not gated on whether the
+	// resulting RAM page actually changed. Must be unconditional here
+	// too, for the same reason (a repeated $DFFD write reasserting the
+	// same bank must still reclaim $C000-$DFFF from an NR$56/$57
+	// override).
+	m.syncMMUFromPage(3)
 	// Like any classic paging-port write, a $DFFD write reveals the ROM in the
 	// bottom 16K — MMU0/MMU1 <= $FF (zxnext.vhd 4643-4644; ports.txt: "a write
 	// to 0x7ffd/0xdffd/0x1ffd/0xeff7 sets mmu0=0xff and mmu1=0xff"). selectROM
@@ -580,6 +587,56 @@ func (m *Memory) SetDFFD(val byte) {
 // (bits 3:0). Exposed mainly for tests; production callers should
 // derive bank mappings through ResolvePage/GetMMU instead.
 func (m *Memory) DFFDValue() byte { return m.portDFFD }
+
+// SetEFF7 applies a write to port $EFF7 (decoded as address&$F0FF==$E0F7,
+// zxnext.vhd:2604 — high nibble $E, low byte $F7; a classic incompletely
+// decoded Pentagon/Scorpion-style port carried through on the Next).
+//
+// Unlike $7FFD/$1FFD/$DFFD, the $EFF7 latch is NOT gated by the paging
+// lock (port_7ffd_locked) at all — zxnext.vhd:3777-3782 updates
+// port_eff7_reg_2/3 unconditionally on every write, and port_eff7_wr
+// feeds port_memory_change_dly (zxnext.vhd:3813) without the "and not
+// port_7ffd_locked" term that gates 7FFD/1FFD. So this method does not
+// check PagingEnabled.
+//
+// Bit 3 (portEFF7Reg3) is a standalone override: when set, RAM bank 0
+// (not ROM) is revealed at $0000-$3FFF regardless of the ROM-select
+// bits — see selectROM. Bit 2 (portEFF7Reg2) only ever feeds the
+// Pentagon-1024 mapping-mode enable in the real core
+// (nr_8f_mapping_mode_pentagon_1024_en), which this emulator does not
+// model (nr_8f_mapping_mode_profi is hardwired to '0' in this FPGA
+// core revision too — zxnext.vhd's own comment disables it — so that
+// whole compatibility-mode family is out of scope); it is latched here
+// only so a read-back of $EFF7's state stays accurate.
+func (m *Memory) SetEFF7(val byte) {
+	m.portEFF7Reg2 = val&0x04 != 0
+	m.portEFF7Reg3 = val&0x08 != 0
+	if m.PagingFrozen || m.specialPaging {
+		return // frozen (Multiface) or special paging owns all four slots
+	}
+	// zxnext.vhd:4677-4681: MMU6/7 reload from port_7ffd_bank on every
+	// port_memory_change_dly event, which an $EFF7 write triggers just
+	// like a 7FFD/1FFD/DFFD write, even though $EFF7 itself doesn't
+	// carry a $C000 bank — see the identical reasoning in PageMemory.
+	m.syncMMUFromPage(3)
+	// selectROM re-evaluates MMU0/1 from portEFF7Reg3 (see above) plus
+	// the usual ROM-select bits.
+	m.selectROM("EFF7")
+}
+
+// EFF7Value returns the current $EFF7 latch as it reads back on real
+// hardware: bit 3 = portEFF7Reg3, bit 2 = portEFF7Reg2, all other bits 0.
+// Exposed mainly for tests.
+func (m *Memory) EFF7Value() byte {
+	var v byte
+	if m.portEFF7Reg2 {
+		v |= 0x04
+	}
+	if m.portEFF7Reg3 {
+		v |= 0x08
+	}
+	return v
+}
 
 // IsMMUOverridden reports whether the given 8K slot was last
 // written through the MMU rather than through classic paging.
@@ -1100,6 +1157,8 @@ func (m *Memory) Reset() error {
 	m.port7FFD = 0
 	m.port1FFD = 0
 	m.portDFFD = 0
+	m.portEFF7Reg2 = false
+	m.portEFF7Reg3 = false
 	m.specialPaging = false
 	m.PagingFrozen = false
 	for i := range m.slotBank {
@@ -1884,7 +1943,14 @@ func (m *Memory) selectROM(source string) {
 		m.currentModel == roms.ModelPlus2A ||
 		m.currentModel == roms.ModelNext
 	prev := m.memoryPageReadMap[0]
-	if plus3Style {
+	if m.portEFF7Reg3 {
+		// zxnext.vhd:4636-4644: port_eff7 bit 3 is a standalone
+		// override of MMU0/1 that takes precedence over the ROM-index
+		// selection entirely — RAM bank 0 (not a ROM index) is
+		// revealed at $0000-$3FFF regardless of the 7FFD/1FFD ROM
+		// bits, until bit 3 is cleared again.
+		m.memoryPageReadMap[0] = 0
+	} else if plus3Style {
 		// 4 ROMs: low bit from 7FFD bit 4, high bit from 1FFD bit 2
 		romIndex := int((m.port7FFD >> 4) & 1)
 		romIndex |= int((m.port1FFD >> 1) & 2)
@@ -1898,7 +1964,11 @@ func (m *Memory) selectROM(source string) {
 	}
 	m.syncMMUFromPage(0)
 	if m.bankTracer != nil && m.memoryPageReadMap[0] != prev {
-		m.bankTracer(0xFF, m.memoryPageReadMap[0]-16, source)
+		if m.memoryPageReadMap[0] >= 16 {
+			m.bankTracer(0xFF, m.memoryPageReadMap[0]-16, source)
+		} else {
+			m.bankTracer(0xFF, m.memoryPageReadMap[0], source)
+		}
 	}
 }
 
@@ -1949,11 +2019,15 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 		// Normal paging mode. On real +2A/+3 hardware, writes to
 		// 0x1FFD with bit 0 = 0 affect ROM selection (combined
 		// with 7FFD bit 4) and bit 4 (disk motor) — they do NOT
-		// reset the RAM bank in slot 3 or the screen/middle slots.
-		// Reset the slot map ONLY when transitioning out of
-		// special paging, so a saved return address on the stack
-		// at 0xC000–0xFFFF doesn't get clobbered by a bank-swap
-		// the user didn't request.
+		// reset the RAM bank in the $4000/$8000 slots (MMU2-5).
+		// zxnext.vhd:4653-4667: MMU2-5 are only reloaded to their
+		// fixed defaults ($0A/$0B, $04/$05) on the one-cycle
+		// port_1ffd_special_old pulse — i.e. exactly the
+		// special-paging-exit transition, never on an ordinary
+		// $1FFD write that was already in normal mode. So this
+		// reset stays gated to that transition only, so a saved
+		// return address at 0xC000-0xFFFF doesn't get clobbered by
+		// a bank-swap the caller didn't request.
 		//
 		// (NextZXOS hits this: it pushes a stack frame at SP in
 		// 0xFF55-0xFF58, then writes 0x1FFD with bit 0 = 0 to
@@ -1974,8 +2048,15 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 			m.memoryPageWriteMap[3] = ramPage
 			m.syncMMUFromPage(1)
 			m.syncMMUFromPage(2)
-			m.syncMMUFromPage(3)
 		}
+		// zxnext.vhd:4677-4681: unlike MMU2-5, MMU6/7 reload from
+		// port_7ffd_bank on EVERY relevant paging-port write
+		// (port_memory_ram_change_dly is true for any ordinary
+		// $1FFD write, not just the special-exit transition) — the
+		// same rule PageMemory/SetDFFD apply for their own port
+		// writes. So this call is unconditional here too, not
+		// nested inside the transition-only block above.
+		m.syncMMUFromPage(3)
 	}
 
 	// Update ROM selection when 0x1FFD changes (bit 2 is high bit of ROM index)

@@ -1528,6 +1528,15 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		// selects are 0x00-0x0F, so there is no overlap. (NextReg 0x06 does
 		// NOT select the chip.)
 		u.nextAY.SelectChip(0xFF - val)
+	} else if u.mem.GetCurrentModel() == roms.ModelNext && (addr&0xF0FF) == 0xE0F7 {
+		// Port 0xEFF7 (zxnext.vhd:2604): incompletely decoded on address
+		// bits 15:12="1110" and low byte $F7 only — bits 11:8 are don't-
+		// care, so $E0F7-$EFF7 all alias this port (a classic Pentagon/
+		// Scorpion-style port carried through on the Next). Checked
+		// before the AY/DFFD patterns below since 0xF0FF doesn't
+		// overlap them, but ordering it early keeps the loose-decode
+		// port from ever being shadowed by a future broader pattern.
+		u.mem.SetEFF7(val)
 	} else if u.mem.GetCurrentModel() == roms.ModelNext && (addr&0xF002) == 0xD000 {
 		// Port 0xDFFD (Spectrum Next high RAM-bank extension): bits 3:0 are the
 		// MSBs of the $C000-slot RAM bank. Must be decoded before the AY

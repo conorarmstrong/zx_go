@@ -4,6 +4,39 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.6]
+
+### Fixed
+
+Closed out the rest of the MMU-sync bug class the v1.3.5 fix belonged to —
+an audit found the identical pattern in two more places, plus an entirely
+unimplemented paging port, all cross-checked against `zxnext.vhd`.
+
+- **`Memory.SetDFFD` had the identical "only re-sync if the bank changed"
+  bug as v1.3.5's `PageMemory` fix** — a repeated `$DFFD` write reasserting
+  the same high-bank nibble could never reclaim MMU slots 6/7 from an
+  earlier NextReg `$56`/`$57` override. Fixed the same way: the re-sync is
+  now unconditional.
+- **`Memory.PageMemoryPlus3` never re-synced MMU6/7 from the classic bank on
+  an ordinary `$1FFD` write at all** — only on the special-paging-exit
+  transition. Real hardware re-syncs MMU6/7 on every `$1FFD` write
+  regardless (the fixed defaults for MMU2-5 genuinely *are* transition-only,
+  per `zxnext.vhd:4653-4667` — that narrower rule is unchanged and now has
+  its own regression test). Added a test recreating the specific historical
+  NextZXOS boot-stack incident this file's transition-only logic was
+  originally protecting, to prove the wider re-sync doesn't reopen it.
+- **Port `$EFF7` was entirely unimplemented** — a classic Pentagon/Scorpion-
+  style incompletely-decoded port ($E0F7-$EFF7 all alias it) that reveals
+  RAM bank 0 instead of ROM at `$0000-$3FFF` when its bit 3 is set, and
+  (like the other paging ports) re-syncs MMU6/7 on every write. Implemented
+  `Memory.SetEFF7`/`EFF7Value` and wired the port decode into
+  `ULA.WritePort`.
+- Added a systematic test matrix (`pkg/memory/mmu_sync_matrix_test.go`)
+  covering every paging-port write source (`$7FFD`, `$1FFD` normal-mode,
+  `$DFFD`, `$EFF7`) against both a changed-value and a repeated-value write —
+  the category of test that was missing and would have caught all of the
+  above before they shipped.
+
 ## [v1.3.5]
 
 ### Fixed
