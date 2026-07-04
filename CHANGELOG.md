@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.5]
+
+### Fixed
+
+- **Spectrum Next classic-paging → MMU6/7 re-sync was conditional on the RAM
+  bank number changing** — `Memory.PageMemory` only re-synced the Next's 8K MMU
+  slots 6/7 from the classic `$7FFD` RAM bank when the encoded bank actually
+  differed from the previous write. Real hardware (`zxnext.vhd`) re-syncs on
+  every `$7FFD`-family port write regardless of whether the value changed; the
+  narrow exception that *does* exist is unrelated (a NextReg `$8E` write with
+  bit 3 clear), and was already modelled correctly and separately. Because the
+  old check was too broad, a game that re-asserts the same classic bank every
+  frame (Night-Knight does, via its interrupt handler) could never reclaim
+  `$C000-$DFFF` back from an earlier, unrelated NextReg `$56`/`$57` override —
+  the CPU ended up executing stale data as code, leaking stack every frame
+  until the game livelocked. Fixed by making the re-sync unconditional,
+  matching the FPGA source exactly.
+
 ## [v1.3.4]
 
 ### Fixed

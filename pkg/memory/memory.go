@@ -1825,7 +1825,6 @@ func (m *Memory) PageMemory(val byte) {
 		return
 	}
 
-	oldRAMPage := m.port7FFD & 0x07
 	m.port7FFD = val
 
 	// Bit 3: Screen page (0 for page 5, 1 for page 7)
@@ -1844,21 +1843,21 @@ func (m *Memory) PageMemory(val byte) {
 		ramPage := int(m.portDFFD)<<3 | int(val&0x07)
 		m.memoryPageReadMap[3] = ramPage
 		m.memoryPageWriteMap[3] = ramPage
-		// zxnext.vhd:4677-4681: on a port write the 8K MMU6/7 are
-		// reset to the new 7FFD RAM bank ONLY when the RAM-page bits
-		// (0-2) actually change (port_memory_ram_change_dly). A 7FFD
-		// write that leaves the RAM page the same — a ROM- or
-		// screen-bit change, or a re-write of the same value — must
-		// NOT touch MMU6/7, so an NR$56/$57 (slot 6/7) override the
-		// guest set via the 8K MMU survives it. NextZXOS dot commands
-		// (e.g. the NextGuide viewer) keep their code in an MMU-paged
-		// slot-6 overlay and do exactly this; resetting slot 6/7
-		// unconditionally dropped the override, mapped guide *data*
-		// into $C000-$DFFF, and the guest RET'd into that data — the
-		// "Guide" menu-item crash.
-		if byte(ramPage) != oldRAMPage {
-			m.syncMMUFromPage(3)
-		}
+		// zxnext.vhd:4677-4681: MMU6/7 are reloaded from port_7ffd_bank
+		// whenever port_memory_change_dly fires — which happens on
+		// EVERY 7FFD/1FFD/DFFD/EFF7 port write (zxnext.vhd:3810-3814),
+		// not just ones where bits 0-2 change. The gating term in that
+		// same line, port_memory_ram_change_dly, is NOT about whether
+		// the RAM-page bits changed — it's `not (nr_8e_we and not
+		// nr_wr_dat(3))`, which only ever goes false for the single
+		// cycle of a NextReg $8E write whose bit 3 is clear (already
+		// modelled correctly and separately in SetROMBankExtended).
+		// For a plain 7FFD port write nr_8e_we is false, so this term
+		// is always true: real hardware re-syncs MMU6/7 from
+		// port_7ffd_bank on every ordinary 7FFD write, including ones
+		// that only touch the ROM-select or screen-select bits and
+		// leave bits 0-2 unchanged. So this call must be unconditional.
+		m.syncMMUFromPage(3)
 
 		// Bit 4: ROM select (syncs slot 0 internally)
 		m.selectROM("7FFD")
