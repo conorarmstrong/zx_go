@@ -58,3 +58,67 @@ func TestULARoutesDMACommandAndReadback(t *testing.T) {
 		t.Errorf("byte counter read-back = $%02X%02X, want $0008", hi, lo)
 	}
 }
+
+// Port 0x0B reaches the same DMA but selects the Z80-DMA-compatible mode
+// (ports.txt 0x0b/0x6b "accessing port selects DMA mode"; zxnext.vhd:1817
+// dma_mode <= port_0b_lsb): the identical command stream moves length+1
+// bytes, and reads at 0x0B are claimed by the DMA too.
+func TestULARoutesDMAPort0BAsZ80Mode(t *testing.T) {
+	dir := "test_roms_dma0b"
+	createTestROMs(t, dir)
+	defer cleanupTestROMs(dir)
+	mem, err := memory.New(dir, roms.Model48K)
+	if err != nil {
+		t.Fatalf("memory.New: %v", err)
+	}
+	for i := uint16(0); i < 9; i++ {
+		mem.Write(0x6000+i, byte(0x20+i))
+	}
+	u := New(mem, keyboard.New())
+	d := dma.New(mem)
+	u.SetNextDMA(d)
+
+	stream := []byte{
+		0xC3,
+		0x7D, 0x00, 0x60, 0x08, 0x00, // WR0 A->B src=$6000 len=8
+		0x14,             // WR1 port A increment, mem
+		0x10,             // WR2 port B increment, mem
+		0xAD, 0x00, 0x70, // WR4 continuous, port B=$7000
+		0xCF, 0x87, // LOAD, ENABLE
+	}
+	for _, b := range stream {
+		u.WritePort(0x000B, b)
+	}
+	// z80 mode: length 8 moves 9 bytes.
+	for i := uint16(0); i < 9; i++ {
+		if got, want := mem.Read(0x7000+i), byte(0x20+i); got != want {
+			t.Fatalf("mem[$%04X] = $%02X, want $%02X (z80-mode DMA via port $0B)", 0x7000+i, got, want)
+		}
+	}
+
+	// The counter loaded -1, so after 9 bytes it reads back 8 through $0B.
+	u.WritePort(0x000B, 0xBB)
+	u.WritePort(0x000B, 0x06)
+	lo, ok := u.ReadPort(0x000B)
+	if !ok {
+		t.Fatal("ReadPort(0x0B) not claimed by the DMA")
+	}
+	hi, _ := u.ReadPort(0x000B)
+	if lo != 0x08 || hi != 0x00 {
+		t.Errorf("byte counter read-back = $%02X%02X, want $0008", hi, lo)
+	}
+
+	// Touching port $6B re-latches zxn mode: the same program moves 8 bytes.
+	for i := uint16(0); i < 9; i++ {
+		mem.Write(0x7000+i, 0x00)
+	}
+	for _, b := range stream {
+		u.WritePort(0x006B, b)
+	}
+	if got := mem.Read(0x7007); got != 0x27 {
+		t.Errorf("mem[$7007] = $%02X, want $27 (zxn mode via port $6B)", got)
+	}
+	if got := mem.Read(0x7008); got != 0x00 {
+		t.Errorf("mem[$7008] = $%02X, want untouched (zxn mode moves len, not len+1)", got)
+	}
+}

@@ -130,14 +130,17 @@ func TestDirectionBtoA(t *testing.T) {
 	}
 }
 
-// TestLengthZeroMeans64K verifies the "length 0 == 65536" rule.
-func TestLengthZeroMeans64K(t *testing.T) {
+// TestLengthZeroMovesOneByte: the FPGA transfer FSM always moves one byte
+// before testing the counter against the block length (dma.vhd
+// TRANSFERING_WRITE_4: repeat while counter < length), so a zero length moves
+// exactly one byte — not 65536, which no zxnDMA document actually specifies.
+func TestLengthZeroMovesOneByte(t *testing.T) {
 	count := 0
 	mem := &countingMem{count: &count}
 	d := New(mem)
 	feed(d, transferCmd(0x0000, 0x0000, 0, addrFixed, addrFixed, true))
-	if count != 65536 {
-		t.Errorf("write count = %d, want 65536", count)
+	if count != 1 {
+		t.Errorf("write count = %d, want 1", count)
 	}
 }
 

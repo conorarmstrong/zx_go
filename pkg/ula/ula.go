@@ -312,13 +312,16 @@ type NextSpritePort interface {
 	ReadStatus() byte
 }
 
-// NextDMA is the contract for port 0x6B (zxnDMA command stream).
-// pkg/next/dma.DMA satisfies it: WriteCommand consumes the WR-register byte
-// stream; ReadCommand returns the next register in the read-mask sequence (an
-// IO read of port 0x6B).
+// NextDMA is the contract for the zxnDMA ports $6B and $0B (ports.txt: the
+// accessing port selects the DMA mode). pkg/next/dma.DMA satisfies it:
+// WriteCommand consumes the WR-register byte stream; ReadCommand returns the
+// next register in the read-mask sequence; SetZ80Mode latches the mode on
+// every access — false for $6B (zxn dma), true for $0B (Z80-DMA compatible),
+// mirroring zxnext.vhd:1817 (dma_mode <= port_0b_lsb on any DMA rd/wr).
 type NextDMA interface {
 	WriteCommand(val byte)
 	ReadCommand() byte
+	SetZ80Mode(on bool)
 }
 
 // NextI2C is the contract for the Spectrum Next's bit-banged i2c bus
@@ -1048,9 +1051,12 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		return u.beta.ReadPort(addr), true
 	}
 
-	// Port 0x6B: zxnDMA register read-back (status / byte counter / port
-	// addresses, selected by the read mask). Decoded on the low 8 bits.
-	if u.nextDMA != nil && (addr&0xFF) == 0x6B {
+	// Ports 0x6B / 0x0B: zxnDMA register read-back (status / byte counter /
+	// port addresses, selected by the read mask). Decoded on the low 8 bits;
+	// the accessing port latches the DMA mode ($6B = zxn, $0B = z80 —
+	// zxnext.vhd:1817, on reads as well as writes).
+	if lsb := addr & 0xFF; u.nextDMA != nil && (lsb == 0x6B || lsb == 0x0B) {
+		u.nextDMA.SetZ80Mode(lsb == 0x0B)
 		return u.nextDMA.ReadCommand(), true
 	}
 
@@ -1389,8 +1395,10 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		}
 	}
 
-	// Port 0x6B: zxnDMA command stream. Decoded on low 8 bits only.
-	if u.nextDMA != nil && (addr&0xFF) == 0x6B {
+	// Ports 0x6B / 0x0B: zxnDMA command stream. Decoded on low 8 bits only;
+	// the accessing port latches the DMA mode ($6B = zxn, $0B = z80).
+	if lsb := addr & 0xFF; u.nextDMA != nil && (lsb == 0x6B || lsb == 0x0B) {
+		u.nextDMA.SetZ80Mode(lsb == 0x0B)
 		u.nextDMA.WriteCommand(val)
 		return
 	}

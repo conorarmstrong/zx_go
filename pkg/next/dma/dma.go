@@ -1,8 +1,11 @@
 // Package dma implements the Spectrum Next's zxnDMA controller driven
-// through its Z80-DMA-compatible command protocol on I/O port 0x6B.
+// through its Z80-DMA-compatible command protocol on I/O ports 0x6B and
+// 0x0B. The access port selects the mode (ports.txt 0x0b/0x6b, zxnext.vhd
+// dma_mode): $6B = zxn dma (a block moves length bytes), $0B = Z80-DMA
+// compatible (the counter loads -1, so a block moves length+1 bytes).
 //
-// The controller is programmed by a stream of bytes written to port
-// 0x6B. Each byte is either a base register byte (WR0..WR6) — whose bit
+// The controller is programmed by a stream of bytes written to the
+// port. Each byte is either a base register byte (WR0..WR6) — whose bit
 // pattern both selects the register group and flags which extra
 // "follow" bytes come next — or one of those announced follow bytes, or
 // (for WR6) a command byte: RESET / LOAD / ENABLE / .... A memory
@@ -82,6 +85,14 @@ type DMA struct {
 	bIsIO      bool   // WR2 D3: port B is an IO endpoint (else memory)
 	loaded     bool   // a LOAD command has latched the addresses
 
+	// zMode is the FPGA's dma_mode input: false = zxn dma, true = Z80-DMA
+	// compatible. The access port selects it — $6B = zxn, $0B = z80
+	// (zxnext.vhd:1817 dma_mode <= port_0b_lsb) — so the ULA re-latches it on
+	// every DMA port read/write. In z80 mode LOAD/CONTINUE/auto-restart seed
+	// the byte counter with -1 (dma.vhd:664 "z80 dma loads -1"), making a
+	// block move length+1 bytes, the classic Z80 DMA convention.
+	zMode bool
+
 	// Internal counters the chip exposes via the read mask. LOAD copies the
 	// start addresses into curA/curB and zeroes counter; a transfer advances
 	// them; Continue zeroes the counter without touching the pointers.
@@ -111,10 +122,11 @@ type DMA struct {
 
 	// Read-back: a WR6 "read mask follows" ($BB) selects which of the seven
 	// internal registers (status, byte-counter lo/hi, port A lo/hi, port B
-	// lo/hi — bits 0..6) appear in the read sequence; IO reads of port 0x6B
-	// return them in order, cycling. Power-up mask is 0x7F.
+	// lo/hi — bits 0..6) appear in the read sequence; IO reads of the DMA
+	// port return them in order, cycling. Power-up mask is 0x7F. readReg is
+	// the FPGA's reg_rd_seq_s: the register (0..6) the NEXT read returns.
 	readMask byte
-	readIdx  int
+	readReg  int
 
 	// cycleSink, when set, is called with a continuous-mode transfer's T-state
 	// duration so the emulator can charge it to the CPU clock (the DMA stalls
@@ -151,6 +163,12 @@ func New(mem MemoryBus) *DMA {
 
 // SetIOBus attaches the port bus used for IO endpoints. Optional.
 func (d *DMA) SetIOBus(io IOBus) { d.io = io }
+
+// SetZ80Mode latches the DMA mode (the FPGA's dma_mode): false = zxn dma,
+// true = Z80-DMA compatible. The ULA calls it on every DMA port access with
+// port == $0B, mirroring zxnext.vhd:1817 (dma_mode <= port_0b_lsb on any DMA
+// port read or write).
+func (d *DMA) SetZ80Mode(on bool) { d.zMode = on }
 
 // SetCycleSink attaches the callback used to charge a continuous-mode
 // transfer's T-state duration to the CPU clock. Optional.
@@ -310,19 +328,20 @@ func (d *DMA) interruptControl() func(byte) {
 // command executes a WR6 command byte.
 func (d *DMA) command(val byte) {
 	switch val {
-	case 0xC3: // RESET — clear configuration + state machine (keep the buses)
+	case 0xC3: // RESET — clear configuration + state machine (keep the buses;
+		// dma_mode lives outside the core in the FPGA, so it survives too)
 		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink, clock: d.clock,
-			aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
+			zMode: d.zMode, aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
 		d.loaded = true
 		d.curA = d.portAStart
 		d.curB = d.portBStart
-		d.counter = 0
+		d.counter = d.counterInit()
 		d.endOfBlock = false // dma.vhd:654: LOAD clears status_endofblock_n='1'
-	case 0xD3: // CONTINUE — zero the byte counter; a following ENABLE repeats
+	case 0xD3: // CONTINUE — reseed the byte counter; a following ENABLE repeats
 		// the block from the CURRENT pointers (not the start addresses).
 		d.loaded = true
-		d.counter = 0
+		d.counter = d.counterInit()
 		d.endOfBlock = false // dma.vhd:671: Continue clears status_endofblock_n='1'
 	case 0x87: // ENABLE — run the configured transfer
 		if d.loaded {
@@ -331,10 +350,13 @@ func (d *DMA) command(val byte) {
 	case 0xBB: // READ MASK FOLLOWS — next byte sets the read mask
 		d.pending = []func(byte){func(m byte) {
 			d.readMask = m & 0x7F
-			d.readIdx = 0
+			d.readReg = d.firstReadReg()
 		}}
 	case 0xA7: // INITIATE READ SEQUENCE — reset the read cursor
-		d.readIdx = 0
+		d.readReg = d.firstReadReg()
+	case 0xBF: // READ STATUS BYTE (dma.vhd:687): the next port read returns
+		// the status register, wherever the sequence stood.
+		d.readReg = 0
 	case 0x8B: // REINITIALIZE STATUS BYTE (dma.vhd:690): endofblock_n='1'
 		d.endOfBlock = false
 	default:
@@ -344,21 +366,29 @@ func (d *DMA) command(val byte) {
 }
 
 // Trigger runs the configured transfer to completion from the current internal
-// pointers. Block length 0 means 65536 per the zxnDMA convention. Each byte is
-// read from the source endpoint (memory or IO) and written to the destination
-// endpoint, advancing each port's pointer per its address mode. On end of block
-// the DMA either auto-restarts (reload start addresses, stay armed) or clears
-// its loaded flag.
+// pointers. Each byte is read from the source endpoint (memory or IO) and
+// written to the destination endpoint, advancing each port's pointer per its
+// address mode. On end of block the DMA either auto-restarts (reload start
+// addresses, stay armed) or clears its loaded flag.
+//
+// The byte count mirrors the FPGA transfer loop (dma.vhd TRANSFERING_WRITE_1
+// increments the counter; TRANSFERING_WRITE_4 repeats while counter <
+// block length): the counter was seeded by LOAD/CONTINUE — 0 in zxn mode, -1
+// in z80 mode — so zxn moves exactly blockLen bytes and z80 moves blockLen+1.
+// The FSM always moves one byte before testing, so a zero length moves one.
 func (d *DMA) Trigger() {
-	length := int(d.blockLen)
-	if length == 0 {
-		length = 65536
+	moved := 0
+	for c := d.counter; ; {
+		moved++
+		c++
+		if c >= d.blockLen {
+			break
+		}
 	}
 	if dmaTrace {
 		fmt.Fprintf(os.Stderr, "DMA xfer A=%04X B=%04X len=%d aIO=%v bIO=%v mode=%d presc=%d\n",
-			d.curA, d.curB, length, d.aIsIO, d.bIsIO, d.mode, d.prescaler)
+			d.curA, d.curB, moved, d.aIsIO, d.bIsIO, d.mode, d.prescaler)
 	}
-	moved := length - int(d.counter)
 	d.lastDuration = uint64(moved) * d.perByteCycles()
 
 	// Burst mode with a fixed-time prescaler interleaves with the CPU: defer
@@ -396,10 +426,20 @@ func (d *DMA) finishBlock() {
 	if d.autoRestart {
 		d.curA = d.portAStart
 		d.curB = d.portBStart
-		d.counter = 0
+		d.counter = d.counterInit() // dma.vhd:482: z80 mode reloads -1
 	} else {
 		d.loaded = false
 	}
+}
+
+// counterInit is the byte-counter seed LOAD/CONTINUE/auto-restart apply:
+// 0 in zxn mode, -1 in z80 mode (dma.vhd:664 "z80 dma loads -1" — the source
+// of the Z80 DMA's length+1 transfer convention).
+func (d *DMA) counterInit() uint16 {
+	if d.zMode {
+		return 0xFFFF
+	}
+	return 0
 }
 
 // Step advances an interleaved burst transfer: it transfers every byte whose
@@ -519,35 +559,40 @@ func (d *DMA) Duration() uint64 { return d.lastDuration }
 // Mode returns the transfer mode (continuous or burst) from the last WR4 write.
 func (d *DMA) Mode() byte { return d.mode }
 
-// ReadCommand returns the next register value in the read sequence (an IO read
-// of port 0x6B), advancing and wrapping the cursor. The read mask selects which
-// of the seven registers participate. If the mask is empty it returns 0xFF.
+// ReadCommand returns the next register value in the read sequence (an IO
+// read of the DMA port), then advances the cursor exactly as the FPGA's read
+// FSM does. The read mask selects which of the seven registers participate;
+// with an empty mask every read returns the status byte (the FSM's RD_STATUS
+// fallback) — never a floating value.
 func (d *DMA) ReadCommand() byte {
-	regs := d.readSequence()
-	if len(regs) == 0 {
-		return 0xFF
-	}
-	if d.readIdx >= len(regs) {
-		d.readIdx = 0
-	}
-	v := d.regValue(regs[d.readIdx])
-	d.readIdx++
-	if d.readIdx >= len(regs) {
-		d.readIdx = 0
-	}
+	v := d.regValue(d.readReg)
+	d.readReg = d.nextReadReg(d.readReg)
 	return v
 }
 
-// readSequence returns the register indices (0..6) selected by the read mask,
-// in ascending order.
-func (d *DMA) readSequence() []int {
-	var seq []int
-	for bit := 0; bit < 7; bit++ {
-		if d.readMask&(1<<bit) != 0 {
-			seq = append(seq, bit)
+// nextReadReg mirrors the FPGA read FSM's next-state chains (dma.vhd RD_*):
+// the first mask-selected register scanning forward from cur, wrapping past
+// port B high back to status; status (0) when the mask selects nothing.
+func (d *DMA) nextReadReg(cur int) int {
+	for i := 1; i <= 7; i++ {
+		reg := (cur + i) % 7
+		if d.readMask&(1<<reg) != 0 {
+			return reg
 		}
 	}
-	return seq
+	return 0
+}
+
+// firstReadReg is the sequence-start register applied by a new read mask or
+// $A7 (initiate read sequence): the lowest mask-selected register, or status
+// when the mask is empty (dma.vhd R6_BYTE_0 / the $A7 handler).
+func (d *DMA) firstReadReg() int {
+	for reg := 0; reg < 7; reg++ {
+		if d.readMask&(1<<reg) != 0 {
+			return reg
+		}
+	}
+	return 0
 }
 
 // regValue returns the current value of read-mask register reg:

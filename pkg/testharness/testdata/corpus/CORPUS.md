@@ -51,32 +51,36 @@ block through a fast-load trap on the ROM's LD-BYTES ($0556). The test then
 runs on the real DMA engine and draws the A->B / B->A transfer-mode grids and
 the DMA timing rows. MIT (`LICENSES/ZXSpectrumNextTests.MIT.txt`).
 
-The golden shows **red cells** — investigated 2026-07-09, three real zxnDMA
-gaps (not expected patterns), confirmed against `zxnext.vhd` and the test's own
-documented "TBBLue zxnDMA core 3.1.5" reference:
+The original golden (2026-07-09) showed **red cells**; the investigation found
+three real zxnDMA gaps, all confirmed against `zxnext.vhd` and **FIXED the
+same day**. The regenerated golden's readback line is byte-identical to the
+test's own documented "TBBLue zxnDMA core 3.1.5" reference
+(`3A3A1A03042A1A1A03D1041A1A03D508`) and the transfer-mode grids are green:
 
-1. **Port $0B is not decoded.** The test defaults to DMA port **$0B**; our ULA
-   routes the DMA only at **$6B** (`pkg/ula/ula.go` `(addr&0xFF)==0x6B`), so at
-   $0B every read returns floating `$FF` and no transfer happens (the default
-   golden's grids are mostly red). The FPGA decodes BOTH — `port_dma_6b_io_en`
-   (enable bit 5) and `port_dma_0b_io_en` (enable bit 25) — and the port used
-   selects `dma_mode` (`dma_mode <= port_0b_lsb`; `0 = zxn dma, 1 = z80 dma`,
-   zxnext.vhd:1778/1817). We model neither the $0B decode nor `dma_mode`.
-2. **Read-sequence address readback is one low.** Cycled to $6B, the readback
-   reads `3A 00 1A030329 1A 1A03D003 1A 1A03D306` vs the FPGA reference
-   `3A 3A 1A03042A 1A 1A03D104 1A 1A03D508`: the portA/portB LSBs are each 1
-   below the FPGA (`03/29` vs `04/2A`, …). The ReadMe documents the zxnDMA
-   reporting the destination address as start+N+1; our read-SEQUENCE path
-   reports start+N. (Our `dma_readback_test.go` only covers the simpler counter
-   readback, which is correct — this read-sequence path was uncovered.) The
-   off-by-one also lands chained transfers one byte short, so cells go red at
-   $6B too.
-3. **Read-status-byte returns `00` instead of `3A`** (the `SS` field).
+1. **Port $0B was not decoded.** The test defaults to DMA port **$0B**; our
+   ULA routed the DMA only at **$6B**. The FPGA decodes BOTH
+   (`port_dma_6b_io_en` / `port_dma_0b_io_en`, enables default on) and the
+   accessing port latches `dma_mode` (`dma_mode <= port_0b_lsb`; `0 = zxn dma,
+   1 = z80 dma`, zxnext.vhd:1778/1817; ports.txt 0x0b/0x6b). The ULA now
+   routes both ports and re-latches the mode on every DMA read/write.
+2. **z80 mode moves length+1 bytes.** In z80 mode LOAD/CONTINUE/auto-restart
+   seed the byte counter with -1 (dma.vhd:664 "z80 dma loads -1"), and the
+   transfer loop repeats while counter < block length — so a block moves
+   length+1 bytes, the classic Z80 DMA convention the test expects. This was
+   the "addresses one low" symptom: not a readback bug but a missing byte.
+   (The same loop shows a zero length moves ONE byte, not 65536 — the old
+   "0 = 65536" rule had no source and was corrected too.)
+3. **$BF (Read Status Byte) was ignored.** It points the read sequence at the
+   status register (dma.vhd:687), so the next port read returns the status
+   byte ($3A / $1A), not whatever the cycling sequence held. The read cursor
+   now mirrors the FPGA read FSM exactly, including the RD_STATUS fallback
+   for an empty read mask.
 
-The golden captures this current behaviour as a regression guard; fixing the
-three gaps is scoped as a separate zxnDMA change (the DMA core is otherwise
-FPGA-golden-verified, so it needs care not to regress the read-mask/counter
-paths).
+Unit guards: `dma_z80mode_test.go` (z80-mode length+1 / counter-from--1 /
+auto-restart / $BF / empty mask) and `TestULARoutesDMAPort0BAsZ80Mode`
+(port-selects-mode routing). The pre-existing GHDL FPGA golden
+(`fpga_golden_test.go`) still passes unchanged — zxn-mode behaviour is
+untouched.
 
 ## Hardware exercised
 

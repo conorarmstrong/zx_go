@@ -4,6 +4,38 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.9]
+
+zxnDMA: the three gaps the compatibility-corpus ZilogDMA conformance test
+exposed, fixed against `zxnext.vhd` / `device/dma.vhd`. The regenerated
+corpus golden's register readback is now byte-identical to the test's
+documented "TBBLue zxnDMA core 3.1.5" hardware capture
+(`3A3A1A03042A1A1A03D1041A1A03D508`), and the transfer-mode grids pass.
+
+### Fixed
+
+- **DMA port `$0B` is decoded, and the accessing port selects the DMA
+  mode** (`ports.txt` `0x0b`/`0x6b`; `zxnext.vhd:1817`
+  `dma_mode <= port_0b_lsb` on any DMA read or write): `$6B` = zxn dma,
+  `$0B` = Z80-DMA compatible. Reads and writes at `$0B` previously fell
+  through to the floating bus, so software driving the documented Z80-DMA
+  port saw `$FF` and no transfers.
+- **z80 mode moves length+1 bytes.** LOAD/CONTINUE/auto-restart seed the
+  byte counter with -1 in z80 mode (`dma.vhd:664` "z80 dma loads -1"), and
+  the transfer loop repeats while counter < block length — reproducing the
+  classic Z80 DMA length+1 convention, the raw-counter readback, and the
+  final port addresses exactly. zxn mode (`$6B`) is unchanged: the
+  pre-existing GHDL FPGA golden passes untouched.
+- **`$BF` (Read Status Byte) is implemented** (`dma.vhd:687`): the next
+  port read returns the status register wherever the read sequence stood.
+  The read cursor now mirrors the FPGA read FSM state machine exactly,
+  including its RD_STATUS fallback for an empty read mask (previously a
+  synthetic `$FF`).
+- **A zero block length moves one byte, not 65536.** The FPGA FSM always
+  transfers once before testing the counter (`dma.vhd`
+  `TRANSFERING_WRITE_4`); the old "0 = 65536" rule had no source in the
+  zxnDMA documentation and did not match the hardware.
+
 ## [v1.3.8]
 
 Follow-up hardening after the v1.3.7 NextZXOS Browser fixes: a systematic
