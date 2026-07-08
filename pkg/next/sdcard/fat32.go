@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -123,6 +124,55 @@ func BuildFAT32(dir string, opts FAT32Opts) ([]byte, error) {
 	}
 	b.mirrorFAT()
 	return img, nil
+}
+
+// FAT32 image-size clamps for the folder-mode ("files instead of an
+// image") card builder. The whole image is allocated in RAM, so the
+// upper bound caps memory use; a user whose card exceeds it should
+// use a real .img file instead (BuildFAT32's "disk full" warnings
+// then flag whatever didn't fit).
+const (
+	minFAT32SizeMB = 256
+	maxFAT32SizeMB = 2048
+)
+
+// RecommendedFAT32SizeMB returns a FAT32 image size in megabytes big
+// enough to hold every file under dir, with slack for cluster
+// rounding and FAT/LFN directory overhead, clamped to
+// [minFAT32SizeMB, maxFAT32SizeMB].
+//
+// Folder mode uses this so the user's whole card fits: a fixed size
+// silently drops every file past its capacity (see BuildFAT32's
+// "disk full" path), which — together with a boot-time skip filter —
+// is what hid all but a handful of a user's files in the NextZXOS
+// Browser.
+func RecommendedFAT32SizeMB(dir string) int {
+	const clusterSlack = 32 * 1024 // generous per-entry rounding allowance
+	var total int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entries just don't count toward the size
+		}
+		if d.IsDir() {
+			total += clusterSlack
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		total += info.Size() + clusterSlack
+		return nil
+	})
+	// 25% headroom for the two FAT copies, LFN entries and free space.
+	mb := int(total/(1024*1024))*5/4 + 32
+	if mb < minFAT32SizeMB {
+		mb = minFAT32SizeMB
+	}
+	if mb > maxFAT32SizeMB {
+		mb = maxFAT32SizeMB
+	}
+	return mb
 }
 
 func clustersFor(partSectors, spc int) uint32 {

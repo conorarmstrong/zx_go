@@ -1525,11 +1525,7 @@ func wireNextSubsystems(e *emulator) error {
 		// FAT32-LBA is the bootable format: NextZXOS requires it, and
 		// a FAT32 image built from the host tree boots to the welcome
 		// screen and launches menu items. A FAT16 image does not boot.
-		img, err := sdcard.BuildFAT32(root, sdcard.FAT32Opts{
-			SizeMB:      256,
-			VolumeLabel: "ZXNEXT",
-			SkipFile:    sdcard.NextBootFilter(),
-		})
+		img, err := buildNextSDImage(root)
 		if err != nil {
 			slog.Warn("next: SD card image build failed; booting without SD card", "root", root, "err", err)
 		} else {
@@ -1824,6 +1820,22 @@ func parseRAMWriteTraceSpec(spec string) (bank int, lo, hi uint16, ok bool) {
 // would create a split-brain filesystem.
 func useESXDOSHostHook(sdImage, sdRoot string) bool {
 	return sdImage == "" && sdRoot != ""
+}
+
+// buildNextSDImage builds the in-memory FAT32 card served in folder
+// ("files instead of an image") mode from the host SD directory.
+//
+// The ENTIRE tree is included — deliberately NOT NextBootFilter()'d.
+// The user browses this card in NextZXOS and expects every file they
+// put on it to appear; the boot-time filter is only for the bundled
+// minimal card and, applied here, hid all but a handful of root
+// entries (issue #9). The image is sized to the directory's contents
+// so a large card isn't silently truncated.
+func buildNextSDImage(root string) ([]byte, error) {
+	return sdcard.BuildFAT32(root, sdcard.FAT32Opts{
+		SizeMB:      sdcard.RecommendedFAT32SizeMB(root),
+		VolumeLabel: "ZXNEXT",
+	})
 }
 
 // parseRTCFixed parses ZX_GO_RTC_FIXED (RFC3339). ok=false when
