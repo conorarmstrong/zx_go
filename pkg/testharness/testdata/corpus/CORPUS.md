@@ -38,6 +38,21 @@ https://github.com/MrKWatkins/ZXSpectrumNextTests (`release/`).
 (`mrk_int_skip_narrowint`) — the timing the 128K/+3/Next use. The narrow-pulse
 run is the integration guard for the `pkg/z80` frameIntPulse fix (see below).
 
+## zxnDMA conformance (Next, tape-loaded)
+
+| File | Test | SHA-256 |
+|------|------|---------|
+| `bin/zilogdma.tap` | Zilog/Z80 DMA transfer modes + timing (MrKWatkins) | `00fce5ea0a8331d435c67a9950b62d232ac7ade831125993107eb19881a645a8` |
+
+`mrk_zilogdma` runs on **ModelNext** — the machine that has the zxnDMA the test
+drives. The Next boots to 48K BASIC on the embedded 48K ROM (no proprietary
+NextZXOS), the corpus types `LOAD""`, and `Harness.LoadTAP` injects each tape
+block through a fast-load trap on the ROM's LD-BYTES ($0556). The test then
+runs on the real DMA engine and draws the A->B / B->A transfer-mode grids and
+the DMA timing rows. Golden captures current behaviour; the DMA subsystem has
+separate FPGA-derived unit coverage, so this is an end-to-end integration
+guard. MIT (`LICENSES/ZXSpectrumNextTests.MIT.txt`).
+
 ## Hardware exercised
 
 - **zxnext_layer2_tilemap** — Layer 2 256x192 background composited under a

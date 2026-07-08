@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"fyne.io/fyne/v2"
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 	"github.com/conorarmstrong/zx_go/pkg/next/install/installtest"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
@@ -23,6 +24,7 @@ type loadKind int
 const (
 	loadNEX      loadKind = iota // Next .nex via the ROM-independent LoadNEX
 	loadSnapshot                 // .sna/.z80 via LoadSnapshot
+	loadTAP                      // .tap: boot to 48K BASIC, LoadTAP + type LOAD""
 )
 
 // corpusProgram is one vendored, redistributable program booted as a
@@ -71,6 +73,14 @@ var corpusPrograms = []corpusProgram{
 	// that fix flips these blocks back to the !ERR! state. assert=58/pulse=32
 	// are the 48K machine's own narrow-pulse constants (next.FrameIntTiming).
 	{name: "mrk_int_skip_narrowint", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2, intAssert: 58, intPulse: 32},
+
+	// zxnDMA conformance (MrKWatkins ZilogDMA), tape-loaded onto the Next. The
+	// Next has the zxnDMA the test drives; it boots to 48K BASIC on the
+	// embedded 48K ROM (no proprietary NextZXOS), then LOAD"" pulls the tape in
+	// via the LD-BYTES fast-load trap. Renders the A->B / B->A transfer grids +
+	// timing rows on the real DMA engine. Output is deterministic (verified
+	// stable across run lengths).
+	{name: "mrk_zilogdma", file: "zilogdma.tap", model: roms.ModelNext, kind: loadTAP, frames: 600, minColours: 6},
 }
 
 // TestCorpusGoldenFrames boots each vendored program headless and asserts its
@@ -105,6 +115,12 @@ func TestCorpusGoldenFrames(t *testing.T) {
 				if err := h.LoadSnapshot(binPath); err != nil {
 					t.Fatalf("LoadSnapshot(%s): %v", p.file, err)
 				}
+			case loadTAP:
+				h.RunFrames(200) // boot to the 48K BASIC prompt
+				if err := h.LoadTAP(binPath); err != nil {
+					t.Fatalf("LoadTAP(%s): %v", p.file, err)
+				}
+				typeLoadCommand(h) // LOAD"" — the trap injects each block
 			}
 			if p.intPulse > 0 {
 				h.CPU().IntAssertTstate = p.intAssert
@@ -158,6 +174,27 @@ func installOpenBottomROM(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, install.DistroROM), rom, 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// typeLoadCommand types `LOAD""` + ENTER at the 48K BASIC prompt (K cursor):
+// J = the LOAD keyword, SymbolShift+P = ", twice, then ENTER. Each key is held
+// a few frames and released with a gap so the ROM's ~50 Hz keyboard scan
+// registers distinct presses (the two quotes especially need the gap).
+func typeLoadCommand(h *Harness) {
+	tapKey := func(k fyne.KeyName) {
+		h.PressKey(k)
+		h.RunFrames(4)
+		h.ReleaseKey(k)
+		h.RunFrames(8)
+	}
+	tapKey(fyne.KeyJ) // LOAD
+	h.PressSymbolShift(true)
+	h.RunFrames(2)
+	tapKey(fyne.KeyP) // "
+	tapKey(fyne.KeyP) // "
+	h.PressSymbolShift(false)
+	h.RunFrames(4)
+	tapKey(fyne.KeyReturn)
 }
 
 func distinctColours(img *image.RGBA) int {
