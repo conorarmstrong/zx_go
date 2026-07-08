@@ -4,6 +4,40 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.7]
+
+### Fixed
+
+Resolved GitHub issues #9 and #10 (NextZXOS Browser: missing directories,
+search crash, `.tap` files not launching). Two root causes.
+
+- **NextReg `$8E` writes with bit 3 clear no longer reload MMU6/7** — the
+  one paging write whose MMU reload real hardware suppresses
+  (`zxnext.vhd:3814`: `port_memory_ram_change_dly <= not (nr_8e_we and not
+  nr_wr_dat(3))`). NextZXOS's ROM-swap trampolines in sysvars RAM
+  (`NEXTREG $8E,n : RET` at `$5B3E-$5B53`) run with the OS stack in an
+  MMU-mapped bank at `$C000-$FFFF`; our `$8E` handler routed its
+  `port_1FFD` update through `PageMemoryPlus3`, whose (v1.3.6,
+  correct-for-real-`$1FFD`-writes) unconditional MMU6/7 re-sync swapped
+  the stack bank out mid-trampoline — the `RET` popped `$0000` from the
+  wrong bank and the OS crashed into its error handler. Root-caused by
+  instruction-level comparison against a reference at the exact fork
+  (`$5B42`: `RET` to `$0941` vs `$0000`). This single fix cures BOTH the
+  Browser search crash (issues #9/#10 — any typed search character
+  aborted or corrupted the screen) and the `.tap` launch abort (issue #10
+  — `tapload.bas` died at its `.$ metadata` statement before showing the
+  TAP Loader menu). Verified end-to-end: Browser search matches and
+  highlights correctly in both image and folder modes, and ENTER on a
+  `.tap` now reaches the mode menu and loads + runs the tape (128K mode).
+- **Folder mode ("files instead of an image") now serves the user's whole
+  SD directory** (issue #9) — the boot-card `NextBootFilter()` was wrongly
+  applied to user-configured folders, hiding all but 6 root entries; the
+  image is also sized to the folder's contents instead of a fixed 256 MB.
+- New regression tests: `pkg/memory` NR`$8E`-bit3/MMU6-7 suppression matrix
+  + genuine-`$1FFD`-still-reloads guard; `cmd/zx_go` full-tree folder-mode
+  card build; env-gated end-to-end reproductions for the Browser search
+  and `.tap` launch (`ZX_GO_DIAG=1`, need local ROMs/SD content).
+
 ## [v1.3.6]
 
 ### Fixed

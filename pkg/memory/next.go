@@ -250,7 +250,14 @@ func (m *Memory) SetROMBankExtended(val byte) {
 	// Preserve any bits we don't model in port_1FFD.
 	merged := (m.port1FFD &^ 0x07) | new1FFD
 	if merged != m.port1FFD {
-		m.PageMemoryPlus3(merged)
+		// MMU6/7 reload suppressed when bit 3 is clear — zxnext.vhd:3814
+		// (port_memory_ram_change_dly = not(nr_8e_we and not bit3)). The
+		// NextZXOS sysvars trampolines (`NEXTREG $8E,n : RET`) rely on
+		// this: their stack lives in an MMU-mapped bank at $C000-$FFFF,
+		// and an unsuppressed reload swaps it out under the RET (the
+		// issue-#10 tap-launch abort — fork proven against the FPGA
+		// oracle at $5B42: RET target $0941 popped as $0000).
+		m.pageMemoryPlus3(merged, val&0x08 != 0)
 	}
 }
 

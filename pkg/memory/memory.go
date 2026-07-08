@@ -1974,6 +1974,25 @@ func (m *Memory) selectROM(source string) {
 
 // PageMemoryPlus3 handles the +3/+2A special paging via port 0x1FFD.
 func (m *Memory) PageMemoryPlus3(val byte) {
+	m.pageMemoryPlus3(val, true)
+}
+
+// pageMemoryPlus3 is PageMemoryPlus3 with the MMU6/7 reload made
+// explicit. Per zxnext.vhd:3814
+//
+//	port_memory_ram_change_dly <= not (nr_8e_we and not nr_wr_dat(3));
+//
+// every paging-port write reloads MMU6/7 from the 7FFD bank EXCEPT a
+// NextReg $8E write with bit 3 clear — the NextZXOS ROM-swap
+// trampolines (`NEXTREG $8E,n : RET` in sysvars RAM at $5B3E-$5B53)
+// depend on that suppression to swap ROM banks without pulling the
+// $C000-$FFFF mapping (and the stack under their own RET) out from
+// under the OS. Genuine port $1FFD writes pass reloadSlot67=true;
+// SetROMBankExtended passes its bit 3. The special-paging arms are
+// unaffected: the VHDL suppression term gates only the normal-mode
+// MMU6/7 reload, and the special-exit transition reloads regardless
+// via port_1ffd_special_old.
+func (m *Memory) pageMemoryPlus3(val byte, reloadSlot67 bool) {
 	if !m.PagingEnabled {
 		if m.pagingTracer != nil {
 			m.pagingTracer("1FFD", val, false, m.specialPaging, m.specialPaging)
@@ -2052,11 +2071,14 @@ func (m *Memory) PageMemoryPlus3(val byte) {
 		// zxnext.vhd:4677-4681: unlike MMU2-5, MMU6/7 reload from
 		// port_7ffd_bank on EVERY relevant paging-port write
 		// (port_memory_ram_change_dly is true for any ordinary
-		// $1FFD write, not just the special-exit transition) — the
-		// same rule PageMemory/SetDFFD apply for their own port
-		// writes. So this call is unconditional here too, not
-		// nested inside the transition-only block above.
-		m.syncMMUFromPage(3)
+		// $1FFD write) — the same rule PageMemory/SetDFFD apply for
+		// their own port writes. The ONE exception is an NR$8E write
+		// with bit 3 clear (reloadSlot67=false), whose reload the
+		// FPGA suppresses (vhd:3814); the special-exit transition
+		// (port_1ffd_special_old) reloads regardless.
+		if reloadSlot67 || specialBefore {
+			m.syncMMUFromPage(3)
+		}
 	}
 
 	// Update ROM selection when 0x1FFD changes (bit 2 is high bit of ROM index)

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/install/installtest"
@@ -389,5 +390,71 @@ func TestROMMappingNR8E_Read(t *testing.T) {
 					tc.p7ffd, tc.p1ffd, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSetROMBankExtended_Bit3ClearPreservesSlot67 — the NextZXOS
+// ROM-swap trampolines in sysvars RAM ($5B3E/$5B44/$5B4A/$5B50 =
+// `NEXTREG $8E,n : RET` with n = $01/$02/$03/$00) run with the OS
+// stack in an MMU-mapped bank at $C000-$FFFF. Per zxnext.vhd:3814
+//
+//	port_memory_ram_change_dly <= not (nr_8e_we and not nr_wr_dat(3));
+//
+// an NR$8E write with bit 3 CLEAR is the one paging write whose
+// MMU6/7 reload is suppressed — the trampoline must swap ROM banks
+// WITHOUT pulling the $C000-$FFFF mapping (and the stack under its
+// own RET) out from under NextZXOS.
+//
+// Regression (issue #10 tap-launch abort): SetROMBankExtended routed
+// its port_1FFD update through PageMemoryPlus3, whose normal-mode
+// branch reloads slot 3 from the 7FFD bank unconditionally. The
+// trampoline's RET target ($0941) then popped from the wrong bank as
+// $0000, crashing tapload.bas into its ON ERROR handler.
+func TestSetROMBankExtended_Bit3ClearPreservesSlot67(t *testing.T) {
+	for _, val := range []byte{0x01, 0x02, 0x03, 0x00} {
+		t.Run(fmt.Sprintf("val_%02X", val), func(t *testing.T) {
+			m := newNextMem(t)
+
+			// NextZXOS-style setup: slots 6/7 MMU-mapped away from the
+			// classic 7FFD bank, stack content in the mapped bank.
+			m.SetMMU(6, 0xDE)
+			m.SetMMU(7, 0xDF)
+			m.Write(0xFF20, 0x41)
+			m.Write(0xFF21, 0x09)
+
+			m.SetROMBankExtended(val) // bit 3 clear: ROM swap only
+
+			if !m.IsMMUOverridden(6) || !m.IsMMUOverridden(7) {
+				t.Errorf("NR$8E=$%02X (bit3=0) must not clear slot 6/7 MMU overrides", val)
+			}
+			if got := m.GetMMU(6); got != 0xDE {
+				t.Errorf("slot 6 after NR$8E=$%02X: $%02X, want $DE (unchanged)", val, got)
+			}
+			if got := m.GetMMU(7); got != 0xDF {
+				t.Errorf("slot 7 after NR$8E=$%02X: $%02X, want $DF (unchanged)", val, got)
+			}
+			if lo, hi := m.Read(0xFF20), m.Read(0xFF21); lo != 0x41 || hi != 0x09 {
+				t.Errorf("stack image after NR$8E=$%02X: %02X %02X, want 41 09 (same bank)", val, lo, hi)
+			}
+		})
+	}
+}
+
+// A genuine port $1FFD write must still reload MMU6/7 from the 7FFD
+// bank (vhd:4677-4681 — port_memory_ram_change_dly is true for every
+// paging-port write except the NR$8E-bit3=0 case). Guards the v1.3.6
+// behaviour the NR$8E fix must not regress.
+func TestPageMemoryPlus3_StillReloadsSlot67(t *testing.T) {
+	m := newNextMem(t)
+	m.SetMMU(6, 0xDE)
+	m.SetMMU(7, 0xDF)
+
+	m.PageMemoryPlus3(0x04) // normal mode, ROM high bit — plain 1FFD write
+
+	if m.IsMMUOverridden(6) || m.IsMMUOverridden(7) {
+		t.Errorf("plain $1FFD write must clear slot 6/7 MMU overrides (last-writer-wins)")
+	}
+	if got := m.GetMMU(6); got != 0x00 {
+		t.Errorf("slot 6 after $1FFD write: $%02X, want $00 (7FFD bank 0 lo)", got)
 	}
 }
