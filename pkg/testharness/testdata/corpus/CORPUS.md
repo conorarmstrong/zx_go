@@ -49,9 +49,34 @@ drives. The Next boots to 48K BASIC on the embedded 48K ROM (no proprietary
 NextZXOS), the corpus types `LOAD""`, and `Harness.LoadTAP` injects each tape
 block through a fast-load trap on the ROM's LD-BYTES ($0556). The test then
 runs on the real DMA engine and draws the A->B / B->A transfer-mode grids and
-the DMA timing rows. Golden captures current behaviour; the DMA subsystem has
-separate FPGA-derived unit coverage, so this is an end-to-end integration
-guard. MIT (`LICENSES/ZXSpectrumNextTests.MIT.txt`).
+the DMA timing rows. MIT (`LICENSES/ZXSpectrumNextTests.MIT.txt`).
+
+The golden shows **red cells** — investigated 2026-07-09, three real zxnDMA
+gaps (not expected patterns), confirmed against `zxnext.vhd` and the test's own
+documented "TBBLue zxnDMA core 3.1.5" reference:
+
+1. **Port $0B is not decoded.** The test defaults to DMA port **$0B**; our ULA
+   routes the DMA only at **$6B** (`pkg/ula/ula.go` `(addr&0xFF)==0x6B`), so at
+   $0B every read returns floating `$FF` and no transfer happens (the default
+   golden's grids are mostly red). The FPGA decodes BOTH — `port_dma_6b_io_en`
+   (enable bit 5) and `port_dma_0b_io_en` (enable bit 25) — and the port used
+   selects `dma_mode` (`dma_mode <= port_0b_lsb`; `0 = zxn dma, 1 = z80 dma`,
+   zxnext.vhd:1778/1817). We model neither the $0B decode nor `dma_mode`.
+2. **Read-sequence address readback is one low.** Cycled to $6B, the readback
+   reads `3A 00 1A030329 1A 1A03D003 1A 1A03D306` vs the FPGA reference
+   `3A 3A 1A03042A 1A 1A03D104 1A 1A03D508`: the portA/portB LSBs are each 1
+   below the FPGA (`03/29` vs `04/2A`, …). The ReadMe documents the zxnDMA
+   reporting the destination address as start+N+1; our read-SEQUENCE path
+   reports start+N. (Our `dma_readback_test.go` only covers the simpler counter
+   readback, which is correct — this read-sequence path was uncovered.) The
+   off-by-one also lands chained transfers one byte short, so cells go red at
+   $6B too.
+3. **Read-status-byte returns `00` instead of `3A`** (the `SS` field).
+
+The golden captures this current behaviour as a regression guard; fixing the
+three gaps is scoped as a separate zxnDMA change (the DMA core is otherwise
+FPGA-golden-verified, so it needs care not to regress the read-mask/counter
+paths).
 
 ## Hardware exercised
 
