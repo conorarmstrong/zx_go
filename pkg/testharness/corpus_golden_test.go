@@ -18,21 +18,44 @@ import (
 // against them: `go test ./pkg/testharness -run TestCorpus -update`.
 var updateCorpusGolden = flag.Bool("update", false, "regenerate corpus golden frames")
 
-// corpusProgram is one vendored, redistributable Next program booted as a
+type loadKind int
+
+const (
+	loadNEX      loadKind = iota // Next .nex via the ROM-independent LoadNEX
+	loadSnapshot                 // .sna/.z80 via LoadSnapshot
+)
+
+// corpusProgram is one vendored, redistributable program booted as a
 // faithfulness regression. See testdata/corpus/CORPUS.md for provenance and
-// per-file licenses. Binaries load through the emulator's own ROM-independent
-// .nex loader, so no proprietary NextZXOS/ROM is involved.
+// per-file licenses. Nothing here uses a proprietary OS: Next demos load
+// through the emulator's own ROM-independent .nex loader, and the classic
+// conformance snapshots run on the 48K model with the emulator's embedded
+// (redistributable) 48K ROM.
 type corpusProgram struct {
-	name       string // golden basename (testdata/corpus/golden/<name>.png)
-	file       string // binary under testdata/corpus/bin/
-	frames     int    // frames to run before capturing the screen
-	minColours int    // liveness floor — a real render has many distinct colours
+	name       string             // golden basename (testdata/corpus/golden/<name>.png)
+	file       string             // binary under testdata/corpus/bin/
+	model      roms.SpectrumModel // machine to boot
+	kind       loadKind           // how to load file
+	frames     int                // frames to run before capturing the screen
+	minColours int                // liveness floor — catches a blanked/garbage frame
 }
 
 var corpusPrograms = []corpusProgram{
-	{name: "layer2_tilemap", file: "zxnext_layer2_tilemap.nex", frames: 250, minColours: 12},
-	{name: "tilemap", file: "zxnext_tilemap.nex", frames: 250, minColours: 6},
-	{name: "specbong", file: "SpecBong.nex", frames: 250, minColours: 5},
+	// Next hardware demos — rendered from Next hardware alone (Layer 2,
+	// tilemap, hardware sprites), loaded via the ROM-independent .nex loader.
+	{name: "layer2_tilemap", file: "zxnext_layer2_tilemap.nex", model: roms.ModelNext, kind: loadNEX, frames: 250, minColours: 12},
+	{name: "tilemap", file: "zxnext_tilemap.nex", model: roms.ModelNext, kind: loadNEX, frames: 250, minColours: 6},
+	{name: "specbong", file: "SpecBong.nex", model: roms.ModelNext, kind: loadNEX, frames: 250, minColours: 5},
+
+	// Classic Z80/ULA conformance tests (MrKWatkins), on the 48K model. Each
+	// draws a pass/fail result screen — a genuine hardware oracle. The golden
+	// captures our CURRENT output; see CORPUS.md for which currently show
+	// errors (int_skip, z80bltst) versus pass (ccffrm, DIHalt).
+	{name: "mrk_z80bltst", file: "z80bltst.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 4},
+	{name: "mrk_ccffrm", file: "ccffrm.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 4},
+	{name: "mrk_dihalt", file: "DIHalt.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 3},
+	{name: "mrk_int_skip", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2},
+	{name: "mrk_ulavssjs", file: "ULAvsSJS.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 3},
 }
 
 // TestCorpusGoldenFrames boots each vendored program headless and asserts its
@@ -45,16 +68,28 @@ func TestCorpusGoldenFrames(t *testing.T) {
 	for _, p := range corpusPrograms {
 		p := p
 		t.Run(p.name, func(t *testing.T) {
-			installtest.RedirectConfig(t)
-			installOpenBottomROM(t)
+			// The Next demos need a sandboxed install dir with the open
+			// bottom ROM in place before New(); the 48K conformance tests
+			// use the model's own embedded ROM and need no setup.
+			if p.model == roms.ModelNext {
+				installtest.RedirectConfig(t)
+				installOpenBottomROM(t)
+			}
 
-			h, err := New(roms.ModelNext)
+			h, err := New(p.model)
 			if err != nil {
-				t.Fatalf("New(ModelNext): %v", err)
+				t.Fatalf("New(%v): %v", p.model, err)
 			}
 			binPath := filepath.Join("testdata", "corpus", "bin", p.file)
-			if err := h.LoadNEX(binPath); err != nil {
-				t.Fatalf("LoadNEX(%s): %v", p.file, err)
+			switch p.kind {
+			case loadNEX:
+				if err := h.LoadNEX(binPath); err != nil {
+					t.Fatalf("LoadNEX(%s): %v", p.file, err)
+				}
+			case loadSnapshot:
+				if err := h.LoadSnapshot(binPath); err != nil {
+					t.Fatalf("LoadSnapshot(%s): %v", p.file, err)
+				}
 			}
 			h.RunFrames(p.frames)
 			got := h.ScreenImage()
