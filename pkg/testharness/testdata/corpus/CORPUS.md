@@ -33,6 +33,11 @@ https://github.com/MrKWatkins/ZXSpectrumNextTests (`release/`).
 | `bin/int_skip.sna` | Interrupt acceptance across long DD/FD prefix blocks (Ped7g) | `cfaeacda9a2266289da6e6f0e8d659b5c2ebef64ec915d7de9b2f3b857121065` |
 | `bin/ULAvsSJS.sna` | Keyboard/joystick port read-back matrix (Ped7g) | `be48097a7cc02d4a961103df920202c5fe760558736b03e9a758fd1fe6969372` |
 
+`bin/int_skip.sna` is booted twice: once on the default 48K held-INT model
+(`mrk_int_skip`) and once with a faithful ~32T narrow /INT pulse
+(`mrk_int_skip_narrowint`) — the timing the 128K/+3/Next use. The narrow-pulse
+run is the integration guard for the `pkg/z80` frameIntPulse fix (see below).
+
 ## Hardware exercised
 
 - **zxnext_layer2_tilemap** — Layer 2 256x192 background composited under a
@@ -62,6 +67,17 @@ https://github.com/MrKWatkins/ZXSpectrumNextTests (`release/`).
   spanning the pulse window raised the INT late) WAS fixed in
   `pkg/z80` `frameIntPulse` — it improves the Next/128K/+3 narrow-pulse models
   but does not change this 48K golden.
+- **int_skip (narrow /INT)** — the same test with a faithful ~32T narrow /INT
+  pulse (`intAssert=58`, `intPulse=32`) instead of the held-INT approximation.
+  Here the DD/FD/DDFD prefix blocks read **`0 !OK inhibits ISR`** — the correct
+  hardware result — because the atomic prefix block spans the narrow pulse and
+  the interrupt is lost, exactly as the frameIntPulse window fix models. This
+  golden is the end-to-end guard for that fix: reverting it flips the blocks
+  back to `43 !ERR! allows ISR` (verified). It represents the interrupt
+  behaviour of the 128K/+3/Next, which the 48K memory model can host because
+  int_skip is a ZX48/ZX128 program (a real 128K memory model renders 48K
+  snapshots as garbage, so the memory stays 48K while only the INT timing is
+  switched to the narrow pulse those machines use).
 - **ULAvsSJS** — interactive keyboard test; the captured frame is the idle
   (no-key) state.
 

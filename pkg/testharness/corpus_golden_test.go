@@ -38,6 +38,11 @@ type corpusProgram struct {
 	kind       loadKind           // how to load file
 	frames     int                // frames to run before capturing the screen
 	minColours int                // liveness floor — catches a blanked/garbage frame
+	// Optional narrow frame-INT pulse override (assert tstate + pulse width).
+	// When intPulse > 0 the CPU is switched from the legacy "held-INT whole
+	// frame" model to a fixed-width pulse — the faithful behaviour the
+	// 128K/+3/Next use — before the program runs. Zero leaves the default.
+	intAssert, intPulse uint64
 }
 
 var corpusPrograms = []corpusProgram{
@@ -56,6 +61,16 @@ var corpusPrograms = []corpusProgram{
 	{name: "mrk_dihalt", file: "DIHalt.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 3},
 	{name: "mrk_int_skip", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2},
 	{name: "mrk_ulavssjs", file: "ULAvsSJS.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 3},
+
+	// Same int_skip test, but with a faithful ~32T narrow /INT pulse (the
+	// timing the 128K/+3/Next use) instead of the 48K legacy held-INT
+	// approximation. Here the DD/FD prefix blocks correctly INHIBIT interrupt
+	// acceptance (result "0 !OK inhibits ISR"), where mrk_int_skip on the
+	// held-INT model shows "43 !ERR! allows ISR". This golden is the
+	// integration guard for the pkg/z80 frameIntPulse window fix: reverting
+	// that fix flips these blocks back to the !ERR! state. assert=58/pulse=32
+	// are the 48K machine's own narrow-pulse constants (next.FrameIntTiming).
+	{name: "mrk_int_skip_narrowint", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2, intAssert: 58, intPulse: 32},
 }
 
 // TestCorpusGoldenFrames boots each vendored program headless and asserts its
@@ -90,6 +105,10 @@ func TestCorpusGoldenFrames(t *testing.T) {
 				if err := h.LoadSnapshot(binPath); err != nil {
 					t.Fatalf("LoadSnapshot(%s): %v", p.file, err)
 				}
+			}
+			if p.intPulse > 0 {
+				h.CPU().IntAssertTstate = p.intAssert
+				h.CPU().IntPulseTstates = p.intPulse
 			}
 			h.RunFrames(p.frames)
 			got := h.ScreenImage()
