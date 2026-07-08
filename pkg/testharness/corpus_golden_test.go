@@ -226,7 +226,7 @@ func writePNG(t *testing.T, path string, img image.Image) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func readPNG(t *testing.T, path string) *image.RGBA {
 	if err != nil {
 		t.Fatalf("read golden %s: %v (regenerate with -update)", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	src, err := png.Decode(f)
 	if err != nil {
 		t.Fatalf("decode golden %s: %v", path, err)
