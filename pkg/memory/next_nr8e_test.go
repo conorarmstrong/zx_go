@@ -252,22 +252,61 @@ func TestSetROMBankExtended_AllOnes(t *testing.T) {
 	}
 }
 
-// TestSetROMBankExtended_Bit7_TargetsDFFD_NotModelled documents a
-// known divergence: VHDL block 2 (lines 3696-3702) routes NR$8E bit 7
-// (when bit 3 set) to port_DFFD[0], the high-bank-extension bit used
-// to address RAM banks 8-15 in classic-paging mode. Our model does
-// not implement port_DFFD at all (see project memory todo list).
+// TestSetROMBankExtended_Bit7_TargetsDFFD pins VHDL block 2
+// (zxnext.vhd:3696-3702): a NR$8E write with bit 3 set routes bit 7
+// into port_DFFD[0] (the high-bank-extension bit that addresses RAM
+// banks 8-15 at the $C000 slot). $A8 = bit7 + bit3 + bits6:4=010 →
+// combined $C000 bank = {dffd0=1, 7ffd[2:0]=010} = bank 10.
+func TestSetROMBankExtended_Bit7_TargetsDFFD(t *testing.T) {
+	m := newNextMem(t)
+
+	m.SetROMBankExtended(0xA8)
+
+	if got := m.DFFDValue() & 0x01; got != 1 {
+		t.Errorf("NR$8E=$A8: port_DFFD[0] = %d, want 1", got)
+	}
+	if got := m.memoryPageReadMap[3]; got != 10 {
+		t.Errorf("NR$8E=$A8: slot 3 RAM bank = %d, want 10 (DFFD[0]=1 << 3 | 2)", got)
+	}
+}
+
+// TestSetROMBankExtended_Bit3SetClampsDFFDHighBits pins the exact
+// port_DFFD write shape of VHDL block 2 (zxnext.vhd:3698-3702):
 //
-// The current implementation discards bit 7 (it briefly assigns it
-// to port_1FFD[0] then immediately overwrites that with the bit-2
-// value four lines later). For now this is acceptable because the
-// NextZXOS cold-boot trace does not exercise banks 8-15 via NR$8E
-// — but the next test will FAIL once port_DFFD lands, which is the
-// signal to add the proper routing.
+//	if nr_wr_dat(3) = '1' then port_dffd_reg(3) <= '0'; end if;
+//	if nr_wr_dat(3) = '1' then port_dffd_reg(2 downto 0) <= "00" & nr_wr_dat(7); end if;
 //
-// Skipped to record the gap without forcing a build break.
-func TestSetROMBankExtended_Bit7_TargetsDFFD_NotModelled(t *testing.T) {
-	t.Skip("port_DFFD modelling not yet implemented — see ROADMAP.md")
+// i.e. a NR$8E write with bit 3 set CLEARS port_DFFD bits 3:1 and sets
+// bit 0 from data bit 7. The whole $C000 RAM bank is therefore clamped
+// to the 0-15 range NextReg $8E can address — any prior $DFFD high-
+// nibble extension (which would put the bank at 16+) is wiped.
+//
+// Regression: the previous implementation cleared only DFFD bit 0
+// (`portDFFD &^ 0x01`), leaving a stale high nibble in place. After a
+// program had paged a bank >= 16 via $DFFD, a subsequent NR$8E bit-3
+// write (e.g. NextZXOS's `NEXTREG $8E,$08` sizing-exit) would resolve
+// $C000 to bank (staleDFFD<<3 | 0) instead of bank 0 — the same class
+// of stale-high-bank fault as the NBI "590" and tap-launch bugs.
+func TestSetROMBankExtended_Bit3SetClampsDFFDHighBits(t *testing.T) {
+	m := newNextMem(t)
+
+	// Page a high bank via $DFFD first: DFFD nibble $0E → the $C000
+	// bank sits at (0x0E<<3 | 7ffd[2:0]).
+	m.SetDFFD(0x0E)
+	if got := m.DFFDValue(); got != 0x0E {
+		t.Fatalf("setup: DFFDValue = %#x, want $0E", got)
+	}
+
+	// NR$8E=$28: bit 3 set, bits 6:4 = 010 (bank 2), bit 7 = 0.
+	// Per VHDL, DFFD is clamped to $00, so the $C000 bank is exactly 2.
+	m.SetROMBankExtended(0x28)
+
+	if got := m.DFFDValue(); got != 0x00 {
+		t.Errorf("NR$8E=$28 must clamp DFFD high bits to 0, got %#x", got)
+	}
+	if got := m.memoryPageReadMap[3]; got != 2 {
+		t.Errorf("slot 3 RAM bank after NR$8E=$28 = %d, want 2 (DFFD cleared, not stale high bank)", got)
+	}
 }
 
 // TestSetROMBankExtended_SequentialWrites_AreLastWinForGatedBits

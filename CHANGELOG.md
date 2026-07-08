@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.8]
+
+Follow-up hardening after the v1.3.7 NextZXOS Browser fixes: a systematic
+audit of every paging/MMU gate condition in `zxnext.vhd`, cross-checked
+against `pkg/memory`. One more real bug of the same class, the rest pinned
+with FPGA-derived tests.
+
+### Fixed
+
+- **NextReg `$8E` with bit 3 set now clamps the `$DFFD` high-bank nibble**
+  (`zxnext.vhd:3698-3702`: `port_dffd_reg(3)<='0'`,
+  `port_dffd_reg(2:0)<="00"&dat(7)`). The handler previously cleared only
+  `$DFFD` bit 0, leaving a stale high nibble — so after a program paged a
+  RAM bank ≥16 via `$DFFD`, a subsequent `$8E` bit-3 write (e.g. NextZXOS's
+  `NEXTREG $8E,$08` RAM-sizing exit) resolved `$C000` to `staleNibble<<3`
+  instead of the intended 0-15 bank. Same stale-high-bank class as the
+  NBI-590 and tap-launch faults. Found by the gate audit, proven by both a
+  unit test and the FPGA golden (`W8E 40 → $C000 bank 4`).
+
+### Added
+
+- **The FPGA-derived paging golden now exercises the NR`$8E`/`$EFF7` gate
+  class.** `_tools/paging-vhdl-test` (the GHDL extract of the real MMU
+  decode) gained an `$EFF7` stimulus input and testbench sequences for the
+  `$8E` bit-3 suppression, the bit-3-set reload, the `$DFFD` clamp, and the
+  `$EFF7` bit-3 RAM-at-`$0000` behaviour. Regenerated
+  `testdata/paging_golden.txt` (144 mappings) and taught the replay the
+  `WEFF7` op. Confirmed the golden has teeth: reverting the `$DFFD`-clamp
+  fix makes it fail (`$C000` 228 vs 4).
+- Unit-level `TestNR8E_GateMatrix` mirroring the same suppress/reload/clamp
+  cases beside the unconditional-port matrix.
+- `docs/internal/hardware-audit/paging-gate-catalogue.md` — the full
+  catalogue of paging/MMU gates with per-rule status (fixed / modelled /
+  deliberately deferred), so the exception rules are documented rather than
+  rediscovered bug-by-bug. Two rules are recorded as conscious deviations
+  (NR`$8E` under a locked pager; the SounDrive DAC F1/F9 port-conflict
+  suppression and Pentagon-1024 `$8F` mode), both unreachable on a stock
+  Next personality.
+
 ## [v1.3.7]
 
 ### Fixed

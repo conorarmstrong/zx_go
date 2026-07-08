@@ -24,6 +24,7 @@ import (
 //	RESET                  start a fresh machine (paging at soft-reset defaults)
 //	W7FFD <v> / W1FFD <v>  classic 128K / +3 paging-port write
 //	WDFFD <v>              Next high-bank extension port write
+//	WEFF7 <v>              Pentagon/Scorpion $EFF7 port write (bit 3 = RAM@$0000)
 //	MMU <slot> <page>      NextReg $50+slot = 8K page
 //	W8E <v>                NextReg $8E (128K memory-mapping) write
 //	MAP <addrHex> <page>   assert: a CPU read at addr maps to 8K page <page>
@@ -67,6 +68,8 @@ func TestPagingMatchesFPGAGolden(t *testing.T) {
 			m.PageMemoryPlus3(byte(atoi(p[1])))
 		case "WDFFD":
 			m.SetDFFD(byte(atoi(p[1])))
+		case "WEFF7":
+			m.SetEFF7(byte(atoi(p[1])))
 		case "MMU":
 			m.SetMMU(byte(atoi(p[1])), byte(atoi(p[2])))
 		case "W8E":

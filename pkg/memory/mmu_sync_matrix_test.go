@@ -279,6 +279,66 @@ func TestEFF7_Bit3RevealsRAMBank0AtBottomInsteadOfROM(t *testing.T) {
 	}
 }
 
+// TestNR8E_GateMatrix is the NextReg $8E counterpart to the port-write
+// matrix above. Unlike the classic ports (which reload MMU6/7 on every
+// write), $8E's MMU6/7 reload is GATED by data bit 3 — zxnext.vhd:3814
+// `port_memory_ram_change_dly <= not (nr_8e_we and not nr_wr_dat(3))`.
+// So the table has to express the asymmetry the mmuSyncCase shape can't:
+// a bit-3-clear write must LEAVE an NR$56/$57 override on slots 6/7 in
+// place (the tap-launch/trampoline case), while a bit-3-set write must
+// RECLAIM those slots from the 7FFD bank, additionally clamping any
+// $DFFD high-nibble extension (zxnext.vhd:3698-3702). This is the fast
+// unit-level mirror of the same cases the FPGA golden proves from the
+// HDL (TestPagingMatchesFPGAGolden).
+func TestNR8E_GateMatrix(t *testing.T) {
+	cases := []struct {
+		name         string
+		presetDFFD   byte // $DFFD written before the $8E write (0 = none)
+		val          byte // the NR$8E write value
+		wantOverride bool // must slots 6/7 stay MMU-overridden after?
+		wantSlot6    byte // expected slot-6 bank when the override is cleared
+	}{
+		// bit 3 clear: the four NextZXOS trampoline values. MMU6/7 reload
+		// is suppressed, so the NR$56/$57 override survives untouched.
+		{"bit3clear_01", 0x00, 0x01, true, 0},
+		{"bit3clear_02", 0x00, 0x02, true, 0},
+		{"bit3clear_03", 0x00, 0x03, true, 0},
+		{"bit3clear_00", 0x00, 0x00, true, 0},
+		// bit 3 set: MMU6/7 reload from the 7FFD bank, reclaiming the
+		// override. $38 → 7ffd[2:0]=3 → bank 6 at slot 6.
+		{"bit3set_38_reclaims", 0x00, 0x38, false, 6},
+		// bit 3 set with a stale $DFFD high nibble ($0E): the clamp wipes
+		// it, so $28 (bank 2 in 7ffd[2:0]) yields slot-6 bank 4, NOT the
+		// stale (0x0E<<3 | 2) = 114.
+		{"bit3set_28_clamps_dffd", 0x0E, 0x28, false, 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newNextMem(t)
+			if tc.presetDFFD != 0 {
+				m.SetDFFD(tc.presetDFFD)
+			}
+			m.SetMMU(6, 0xDE)
+			m.SetMMU(7, 0xDF)
+
+			m.SetROMBankExtended(tc.val)
+
+			if got := m.IsMMUOverridden(6); got != tc.wantOverride {
+				t.Errorf("NR$8E=$%02X: slot 6 overridden = %v, want %v", tc.val, got, tc.wantOverride)
+			}
+			if tc.wantOverride {
+				if got := m.GetMMU(6); got != 0xDE {
+					t.Errorf("NR$8E=$%02X: slot 6 = %#x, want $DE (override preserved)", tc.val, got)
+				}
+			} else {
+				if got := m.GetMMU(6); got != tc.wantSlot6 {
+					t.Errorf("NR$8E=$%02X: slot 6 = %#x, want %#x (reloaded from 7FFD bank)", tc.val, got, tc.wantSlot6)
+				}
+			}
+		})
+	}
+}
+
 // TestEFF7_ReadBack pins the bit 2/3 latch read-back shape.
 func TestEFF7_ReadBack(t *testing.T) {
 	m := newMemoryForMMUTest(t, roms.ModelNext)

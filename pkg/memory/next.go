@@ -215,7 +215,16 @@ func (m *Memory) SetROMBankExtended(val byte) {
 		// instead of bank 8 — breaking NextZXOS's inter-bank RST $00 calls
 		// into the high banks (e.g. the SPRITE AT sprite-attribute cache,
 		// the NBI "590 Integer out of range" root cause).
-		m.portDFFD = (m.portDFFD &^ 0x01) | ((val >> 7) & 0x01)
+		//
+		// Per zxnext.vhd:3698-3702 the write CLAMPS the DFFD high nibble:
+		//   if nr_wr_dat(3)='1' then port_dffd_reg(3) <= '0'; end if;
+		//   if nr_wr_dat(3)='1' then port_dffd_reg(2:0) <= "00" & dat(7); end if;
+		// so bits 3:1 are cleared and bit 0 = data bit 7. The $C000 bank
+		// is thereby clamped to the 0-15 range NR$8E addresses — a stale
+		// $DFFD extension (bank 16+) must NOT survive, or an NR$8E bit-3
+		// write resolves $C000 to the wrong high bank (same stale-high-
+		// bank class as the NBI-590 / tap-launch faults).
+		m.portDFFD = (m.portDFFD &^ 0x0F) | ((val >> 7) & 0x01)
 		// Per zxnext.vhd: a NR$8E write with bit 3 set asserts
 		// port_memory_ram_change_dly (= NOT(nr_8e_we AND NOT bit3),
 		// line 3814), and the paging process then reloads MMU6/MMU7
@@ -257,6 +266,20 @@ func (m *Memory) SetROMBankExtended(val byte) {
 		// and an unsuppressed reload swaps it out under the RET (the
 		// issue-#10 tap-launch abort — fork proven against the FPGA
 		// oracle at $5B42: RET target $0941 popped as $0000).
+		//
+		// KNOWN DEVIATION (paging-gate audit, rule C3/E1): the FPGA
+		// applies a NR$8E write to port_1ffd_reg and the MMU reload
+		// UNCONDITIONALLY — the nr_8e_we terms at zxnext.vhd:3718 and
+		// :3813 carry no `and not port_7ffd_locked`, so $8E bypasses the
+		// classic paging lock. pageMemoryPlus3 early-returns when
+		// PagingEnabled is false (our model of that lock), so a NR$8E
+		// write made WHILE paging is locked drops its 1FFD ROM-high-bit
+		// update here. This is left as-is deliberately: NR$8E is a
+		// Next-only register and the paging lock is a 48K/128K-BASIC
+		// mechanism, so the two do not co-occur in real software (the
+		// bit-3 RAM-bank + ROM-low-bit paths above are already applied
+		// unconditionally). Revisit if a guest is ever found writing
+		// NR$8E with 7FFD bit 5 set.
 		m.pageMemoryPlus3(merged, val&0x08 != 0)
 	}
 }

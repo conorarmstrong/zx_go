@@ -6,7 +6,7 @@ import (
 )
 
 func TestVersionString(t *testing.T) {
-	if Version != "v1.3.7" {
+	if Version != "v1.3.8" {
 		t.Errorf("Version = %q, want v1.3.6", Version)
 	}
 	if !strings.HasPrefix(String(), "zx_go ") || !strings.Contains(String(), Version) {
