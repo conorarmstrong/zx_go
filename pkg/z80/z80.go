@@ -737,11 +737,24 @@ func (c *CPU) frameIntPulse(frameStart uint64) {
 		return
 	}
 	assertAt := frameStart + c.IntAssertTstate*uint64(c.SpeedMultiplier())
+	windowEnd := assertAt + c.IntPulseTstates
 	switch {
-	case !c.frameIntFired && c.tstates >= assertAt:
+	case !c.frameIntFired && c.tstates >= assertAt && c.tstates < windowEnd:
+		// An M1 sample point fell inside the pulse window — latch the INT.
 		c.IRQPending.Store(true)
 		c.frameIntFired = true
-	case c.frameIntFired && !c.frameIntDeasct && c.tstates >= assertAt+c.IntPulseTstates:
+	case !c.frameIntFired && c.tstates >= windowEnd:
+		// No M1 boundary landed inside the window: a single long/atomic
+		// instruction (e.g. a block of chained DD/FD prefixes, which the
+		// model executes as one uninterruptible unit) spanned the whole
+		// pulse. On real hardware the narrow /INT line deasserts unsampled
+		// and the interrupt is LOST — it must NOT be raised late at the
+		// next boundary. Mark the pulse spent without raising it.
+		// (Verified against MrKWatkins int_skip: prefix blocks must count
+		// ~0 interrupts, not one per block boundary.)
+		c.frameIntFired = true
+		c.frameIntDeasct = true
+	case c.frameIntFired && !c.frameIntDeasct && c.tstates >= windowEnd:
 		// pulse window elapsed; interrupt() clears IRQPending on
 		// acceptance, so a still-set latch here means it was missed.
 		c.IRQPending.Store(false)

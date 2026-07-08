@@ -46,12 +46,22 @@ https://github.com/MrKWatkins/ZXSpectrumNextTests (`release/`).
 - **DIHalt** — green border (the CPU stays HALTed with interrupts disabled and
   no NMI, as it should): pass.
 - **z80bltst** — some pass/fail cells are red. Mixed; captured as-is.
-- **int_skip** — reports **`!ERR! allows ISR`** for DD/FD prefix blocks,
-  i.e. our CPU appears to accept a maskable interrupt part-way through a long
-  chain of DD/FD prefixes, where a Z80 should defer it until the prefixed
-  opcode completes. A probable faithfulness bug in interrupt acceptance vs
-  prefix handling — flagged for a follow-up hunt; the golden guards against it
-  changing further meanwhile.
+- **int_skip** — reports **`!ERR! allows ISR`** for DD/FD prefix blocks.
+  Investigated (2026-07-09): the original "interrupt accepted mid-prefix-chain"
+  hypothesis was DISPROVEN — the model executes a chained DD/FD block as one
+  atomic instruction (confirmed), so an interrupt cannot be taken mid-chain.
+  The real cause is the classic 48K interrupt model: it uses the deliberate
+  legacy "held-INT for the whole frame" approximation (`cmd/zx_go/main.go`,
+  `IntPulseTstates == 0`), whereas the test expects a ~32T narrow /INT pulse
+  that a long prefix block would span and lose. Making it pass would require
+  migrating the classic 48K/128K INT model to a narrow pulse AND finer INT
+  sampling across atomic instructions — a broad change to a proven,
+  FPGA-bit-exact CPU that a conscious decision currently avoids. Left as a
+  documented limitation; the golden guards the current behaviour. A related
+  genuine narrow-pulse bug found during this hunt (an atomic instruction
+  spanning the pulse window raised the INT late) WAS fixed in
+  `pkg/z80` `frameIntPulse` — it improves the Next/128K/+3 narrow-pulse models
+  but does not change this 48K golden.
 - **ULAvsSJS** — interactive keyboard test; the captured frame is the idle
   (no-key) state.
 
