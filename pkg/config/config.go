@@ -20,10 +20,15 @@ import (
 // config files on disk.
 type Config struct {
 	Model       string   `json:"model,omitempty"`        // "48K" / "128K" / "+2" / "+2A" / "+3" / "Next"
-	Scale       int      `json:"scale,omitempty"`        // 100, 125, 150, 200, 300 (percent)
+	Scale       int      `json:"scale,omitempty"`        // 100, 125, 150, 200, 300, 400 (percent)
 	Joystick    string   `json:"joystick,omitempty"`     // "None" / "Kempston" / "Sinclair1" / "Sinclair2" / "Cursor"
 	CRTFilter   bool     `json:"crt_filter,omitempty"`   // CRT scanline post-process
 	RecentFiles []string `json:"recent_files,omitempty"` // absolute paths, most-recent first
+
+	// IntegerScale snaps the emulator image to a whole-number pixel multiple
+	// (crisp pixels, black bars for any remainder) rather than stretching it to
+	// fill the window. Pointer so an absent value defaults to enabled: nil == on.
+	IntegerScale *bool `json:"integer_scale,omitempty"`
 
 	// Peripheral enable states. Restored at startup, saved on each toggle.
 	Disciple      bool   `json:"disciple,omitempty"`

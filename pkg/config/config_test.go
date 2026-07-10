@@ -60,6 +60,41 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 }
 
+func TestIntegerScaleRoundtrip(t *testing.T) {
+	// nil (never set) must survive as nil so callers can apply the
+	// "default on" policy — it must NOT serialise as false.
+	t.Run("nil stays nil", func(t *testing.T) {
+		redirectConfig(t)
+		if err := (&Config{Scale: 100}).Save(); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		got, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got.IntegerScale != nil {
+			t.Errorf("IntegerScale = %v, want nil", *got.IntegerScale)
+		}
+	})
+
+	for _, want := range []bool{true, false} {
+		t.Run("explicit", func(t *testing.T) {
+			redirectConfig(t)
+			v := want
+			if err := (&Config{IntegerScale: &v}).Save(); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			got, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got.IntegerScale == nil || *got.IntegerScale != want {
+				t.Errorf("IntegerScale = %v, want %v", got.IntegerScale, want)
+			}
+		})
+	}
+}
+
 func TestAddRecentDedupesAndCaps(t *testing.T) {
 	c := &Config{}
 	c.AddRecent("a")

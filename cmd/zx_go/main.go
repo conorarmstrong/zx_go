@@ -2208,6 +2208,77 @@ func (a *aspectRatioLayout) Layout(objects []fyne.CanvasObject, containerSize fy
 	objects[0].Resize(fyne.NewSize(float32(w), float32(h)))
 }
 
+// integerScaleLayout draws its single child (the emulator frame) at the largest
+// whole-number multiple of the native pixel grid that fits the container,
+// centred, so every source pixel maps to an exact square block of physical
+// pixels — crisp, never softened by a fractional stretch. The black background
+// stacked behind it fills any remainder. The factor is computed in PHYSICAL
+// pixels via the canvas density, so it stays pixel-exact on HiDPI or
+// fractionally-scaled (e.g. Windows 125%) displays where a logical-integer
+// scale would otherwise land between physical pixels.
+type integerScaleLayout struct {
+	canvas     fyne.Canvas // nil-safe: a nil canvas means density 1
+	srcW, srcH float32     // native frame size in source pixels (320x240)
+}
+
+func (l *integerScaleLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(l.srcW, l.srcH)
+}
+
+func (l *integerScaleLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	density := float32(1)
+	if l.canvas != nil {
+		if s := l.canvas.Scale(); s > 0 {
+			density = s
+		}
+	}
+	factor := integerScaleFactor(size.Width, size.Height, l.srcW, l.srcH, density)
+	// Image size in LOGICAL units: factor physical pixels per source pixel,
+	// converted back through the density fyne applies when it rasterises.
+	w := l.srcW * float32(factor) / density
+	h := l.srcH * float32(factor) / density
+	objects[0].Move(fyne.NewPos((size.Width-w)/2, (size.Height-h)/2))
+	objects[0].Resize(fyne.NewSize(w, h))
+}
+
+// screenLayoutFor returns the layout for the emulator-image container: the
+// integer (crisp-pixel) layout when on, else the 4:3 aspect-fit layout that
+// stretches to fill the window. 320x240 is the native ULA frame (256x192
+// display plus the authentic border).
+func screenLayoutFor(integer bool, canvas fyne.Canvas) fyne.Layout {
+	if integer {
+		return &integerScaleLayout{canvas: canvas, srcW: 320, srcH: 240}
+	}
+	return &aspectRatioLayout{ratio: 4.0 / 3.0}
+}
+
+// integerScaleFactor returns the largest whole-number pixel-scaling factor
+// (>=1) at which a srcW x srcH image fits inside a containerW x containerH area,
+// measured in physical pixels (logical size x canvas density). A factor of N
+// means each source pixel occupies an N x N block of physical pixels.
+func integerScaleFactor(containerW, containerH, srcW, srcH, density float32) int {
+	if srcW <= 0 || srcH <= 0 {
+		return 1
+	}
+	if density <= 0 {
+		density = 1
+	}
+	physW := containerW * density
+	physH := containerH * density
+	f := physW / srcW
+	if physH/srcH < f {
+		f = physH / srcH
+	}
+	factor := int(f) // truncation toward zero == floor for positive f
+	if factor < 1 {
+		factor = 1
+	}
+	return factor
+}
+
 // modelToConfigString maps a roms.SpectrumModel to its on-disk
 // config representation. Stable strings so future renames in the
 // roms package don't invalidate existing config files.
@@ -2288,10 +2359,10 @@ func configStringToMultifaceVariant(s string) multiface.MultifaceType {
 	return multiface.Multiface128
 }
 
-// scaleToWindowSize maps a percentage (100/125/150/200/300) to the fyne window
-// size. The returned height is padded by the menu-bar height so the emulator
-// image keeps its intended scale rather than being squashed by the menu. Unknown
-// values fall back to 200%.
+// scaleToWindowSize maps a percentage (100/125/150/200/300/400) to the fyne
+// window size. The returned height is padded by the menu-bar height so the
+// emulator image keeps its intended scale rather than being squashed by the
+// menu. Unknown values fall back to 200%.
 func scaleToWindowSize(scale int) (float32, float32) {
 	w, h := float32(640), float32(480) // 200% — the existing default
 	switch scale {
@@ -2303,6 +2374,8 @@ func scaleToWindowSize(scale int) (float32, float32) {
 		w, h = 480, 360
 	case 300:
 		w, h = 960, 720
+	case 400:
+		w, h = 1280, 960
 	}
 	return w, h + menuBarHeight()
 }
@@ -2431,6 +2504,9 @@ func main() {
 	if cfg.Scale != 0 {
 		currentScale = cfg.Scale
 	}
+	// Integer (crisp) pixel scaling defaults ON — a nil config value means the
+	// user has never chosen, so give them square pixels out of the box.
+	integerScaleOn := cfg.IntegerScale == nil || *cfg.IntegerScale
 
 	w := a.NewWindow(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(currentModel)))
 	w.SetIcon(spectrumIcon())
@@ -2531,6 +2607,8 @@ func main() {
 		cfg.Scale = currentScale
 		cfg.Joystick = joystickToConfigString(emu.joystickType)
 		cfg.CRTFilter = emu.crtFilter.Load()
+		intScale := integerScaleOn
+		cfg.IntegerScale = &intScale
 		cfg.Disciple = emu.peripherals.IsDiscipleEnabled()
 		cfg.Interface1 = emu.peripherals.IsInterface1Enabled()
 		cfg.KempstonMouse = emu.peripherals.IsKempstonMouseEnabled()
@@ -3008,6 +3086,10 @@ func main() {
 		refreshRecentMenu()
 		fyne.Do(func() { w.MainMenu().Refresh() })
 	})
+
+	// Forward-declared so the View-menu "Integer Scaling" toggle can swap the
+	// screen container's layout in place; assigned where the container is built.
+	var aspectScreen *fyne.Container
 
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
@@ -3725,6 +3807,28 @@ func main() {
 				currentScale = 300
 				saveConfig()
 			}),
+			fyne.NewMenuItem("400% (1280x960)", func() {
+				w.SetFullScreen(false)
+				w.Resize(fyne.NewSize(scaleToWindowSize(400)))
+				currentScale = 400
+				saveConfig()
+			}),
+			fyne.NewMenuItemSeparator(),
+			func() *fyne.MenuItem {
+				item := fyne.NewMenuItem("Integer Scaling (Crisp Pixels)", nil)
+				item.Checked = integerScaleOn
+				item.Action = func() {
+					integerScaleOn = !integerScaleOn
+					item.Checked = integerScaleOn
+					if aspectScreen != nil {
+						aspectScreen.Layout = screenLayoutFor(integerScaleOn, w.Canvas())
+						aspectScreen.Refresh()
+					}
+					saveConfig()
+					fyne.Do(func() { w.MainMenu().Refresh() })
+				}
+				return item
+			}(),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Full Screen", func() {
 				w.SetFullScreen(true)
@@ -4223,9 +4327,11 @@ func main() {
 	)
 	w.SetMainMenu(mainMenu)
 
-	// 4:3 aspect ratio container with black letterbox/pillarbox bars
+	// Screen container with black letterbox/pillarbox bars. Integer scaling
+	// (default) snaps to whole-number pixel multiples for crisp pixels; the
+	// 4:3 aspect-fit layout stretches to fill. The View menu swaps the layout.
 	blackBG := canvas.NewRectangle(color.Black)
-	aspectScreen := container.New(&aspectRatioLayout{ratio: 4.0 / 3.0}, screen)
+	aspectScreen = container.New(screenLayoutFor(integerScaleOn, w.Canvas()), screen)
 	content := container.NewStack(blackBG, aspectScreen, keyboardWidget)
 
 	// Show the splash artwork briefly, then swap to the real

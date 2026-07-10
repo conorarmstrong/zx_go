@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.0]
+
+Crisp, square pixels at every zoom, plus a 400% view. Resolves
+[#11](https://github.com/conorarmstrong/zx_go/issues/11): at fractional
+window sizes or on HiDPI displays with a non-integer OS display-scale the
+image was stretched to fill, softening the ZX pixel grid.
+
+### Added
+
+- **Integer scaling (crisp pixels)** — a checkable `View` menu item, on by
+  default. The emulator image is drawn at the largest whole-number multiple
+  of its native 320x240 grid that fits, centred, with black bars for any
+  remainder, so every source pixel maps to an exact square block of
+  physical pixels. The multiple is computed in physical pixels via the
+  canvas density, so it stays pixel-exact on HiDPI and fractionally-scaled
+  (e.g. Windows 125%) displays. Turn it off to stretch-to-fill as before;
+  the choice is persisted (`integer_scale` in config.json).
+- **400% (1280x960)** view preset in the `View` menu.
+
+### Notes
+
+- 100% is 320x240, not 256x192: that is the full native ULA frame — the
+  256x192 display plus the authentic border a real Spectrum drew. The
+  standard 100/200/300/400% presets are exact integer multiples of it.
+
 ## [v1.3.9]
 
 zxnDMA: the three gaps the compatibility-corpus ZilogDMA conformance test
