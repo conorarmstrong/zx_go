@@ -1364,7 +1364,11 @@ func (m *Memory) readValue(addr uint16) byte {
 				}
 				slot16k := int(slot8k >> 1)
 				pageIndex := m.memoryPageReadMap[slot16k]
-				if pageIndex >= 16 {
+				// ROM only ever lives in the $0000-$3FFF slot; slots 1-3
+				// always carry a RAM bank, which the $DFFD extension makes
+				// 0..127 (see syncMMUFromPage). Without the slot guard a
+				// $DFFD-extended bank indexes m.rom and panics.
+				if pageIndex >= 16 && slot16k == 0 {
 					romOffset := (uint16(slot8k&1) << 13) | offset
 					return m.rom[pageIndex-16][romOffset]
 				}
@@ -1394,7 +1398,16 @@ func (m *Memory) readValue(addr uint16) byte {
 	pageIndex := m.memoryPageReadMap[addr>>14]
 	offset := addr & (PageSize - 1)
 
-	if pageIndex >= 16 { // ROM area
+	// ">= 16 means ROM index" is the classic page-map encoding, and it holds
+	// for every slot on every classic model (the ZX80/ZX81 even mirror ROM
+	// into slot 2). The one exception is the Next's $C000 slot: there the bank
+	// is port_7ffd_bank = port_dffd_reg(3:0) & port_7ffd_reg(2:0), a 7-bit RAM
+	// bank 0..127, so a $DFFD write of 2+ produces a value >= 16 that is RAM,
+	// not a ROM index. Without this exclusion banks 16-19 read ROM 0 (while
+	// the write, which flags ROM with -1, correctly landed in RAM) and banks
+	// 20+ indexed past the four-entry ROM array and panicked.
+	nextHighBank := m.currentModel == roms.ModelNext && addr >= 0xC000
+	if pageIndex >= 16 && !nextHighBank { // ROM area
 		// Check if a peripheral ROM overrides this address
 		if m.PeripheralRead != nil {
 			if val, ok := m.PeripheralRead(addr); ok {

@@ -66,9 +66,8 @@ func NewMachine(model roms.SpectrumModel, romPath string) (*Machine, error) {
 	m.KB.UseZX8xLayout()
 
 	cpu := z80.New(mem, m)
-	cpu.FrameIntDisabled = true  // the ZX8x drives its own INT, not a frame INT
-	cpu.HaltWakeOnInt = true     // INT pulse wakes the display loop's HALT
-	cpu.RefreshDuringHalt = true // R counts during HALT so /INT (R bit 6) fires
+	cpu.FrameIntDisabled = true // the ZX8x drives its own INT, not a frame INT
+	cpu.HaltWakeOnInt = true    // INT pulse wakes the display loop's HALT
 	cpu.M1FetchHook = m.onM1Fetch
 	m.CPU = cpu
 	return m, nil
@@ -125,8 +124,8 @@ func (m *Machine) RunFrame() {
 			}
 		}
 		// Maskable /INT follows NOT(R bit 6); request it on the falling edge.
-		// R advances during HALT (RefreshDuringHalt), so this fires even while
-		// the display loop is halted waiting for the end-of-scanline INT.
+		// R advances during HALT, so this fires even while the display loop
+		// is halted waiting for the end-of-scanline INT.
 		if m.prevR&0x40 != 0 && m.CPU.R&0x40 == 0 {
 			m.CPU.IRQPending.Store(true)
 		}

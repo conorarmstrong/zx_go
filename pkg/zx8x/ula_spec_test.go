@@ -266,8 +266,8 @@ func TestCharacterCodeMaskedTo6Bits(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Maskable interrupt: "INTs are generated when Bit 6 of the R register becomes
 // zero" (Nocash). RunFrame samples R bit 6 on its falling edge and asserts the
-// CPU IRQ latch. R must advance during HALT (RefreshDuringHalt) so the INT still
-// fires while the display loop is halted.
+// CPU IRQ latch. R must advance during HALT so the INT still fires while the
+// display loop is halted.
 // ---------------------------------------------------------------------------
 
 // The CPU must be configured with the ZX8x invariants: own INT (no frame INT),
@@ -281,11 +281,18 @@ func TestZX8xCPUInvariants(t *testing.T) {
 	if !m.CPU.HaltWakeOnInt {
 		t.Error("HaltWakeOnInt must be true — INT wakes the display-loop HALT")
 	}
-	if !m.CPU.RefreshDuringHalt {
-		t.Error("RefreshDuringHalt must be true — R bit 6 drives /INT during HALT")
-	}
 	if m.CPU.M1FetchHook == nil {
 		t.Error("M1FetchHook must be set — it is the CPU-generated display path")
+	}
+	// R counting during HALT is what makes the R-bit-6 /INT fire while the
+	// display loop is halted. It is a property of the CPU's halted step
+	// rather than a configuration flag, so assert the behaviour.
+	m.CPU.Halted = true
+	m.CPU.IFF1 = false
+	before := m.CPU.R
+	m.CPU.StepInstructionWithIRQ()
+	if m.CPU.R == before {
+		t.Errorf("R must advance during HALT — R bit 6 drives /INT; stuck at $%02X", before)
 	}
 }
 
@@ -550,7 +557,7 @@ func TestResetClearsVideoAndSyncState(t *testing.T) {
 		t.Errorf("Reset left clocks: line=%d prevR=%02X", m.line, m.prevR)
 	}
 	// Invariants must survive a reset (CPU hook config is preserved).
-	if !m.CPU.RefreshDuringHalt || !m.CPU.HaltWakeOnInt || !m.CPU.FrameIntDisabled {
+	if !m.CPU.HaltWakeOnInt || !m.CPU.FrameIntDisabled {
 		t.Error("Reset must preserve the ZX8x CPU invariants")
 	}
 }

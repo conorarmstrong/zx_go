@@ -74,11 +74,6 @@ type CPU struct {
 	// true because NextZXOS uses DI; HALT as an idle pattern.
 	HaltWakeOnInt bool
 
-	// RefreshDuringHalt, when true, advances the R register on each HALT cycle
-	// (faithful Z80 refresh behaviour). Off by default; the ZX80/ZX81 enable it
-	// so /INT — derived from R bit 6 — fires while the display loop is halted.
-	RefreshDuringHalt bool
-
 	// BranchSource records the cause of the most-recent non-
 	// sequential PC change for the debugger's history annotation.
 	// Set by JP/JR/CALL/RET/RST/INT/NMI/RESET paths; sampled and
@@ -688,14 +683,8 @@ func (c *CPU) ExecuteRZXFrame(instructions uint64) {
 				c.NMI()
 				continue
 			}
-			// Per Sean Young §5: while halted, the CPU keeps
-			// running M1 cycles internally for the HALT opcode.
-			// Each M1 bumps R. Without this software using R
-			// as a PRNG (ZX 48K keyboard scan after a HALT)
-			// sees stale entropy.
-			c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
+			c.haltTick()
 			c.instructionCount++
-			c.tstates += 4
 			continue
 		}
 		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
@@ -863,7 +852,10 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 				c.IRQPending.Store(false)
 				continue
 			}
-			c.tstates++
+			// A halted Z80 issues an M1 cycle for the HALT opcode every 4
+			// T-states, and every M1 bumps R (Sean Young §5). Matches the
+			// other three execution loops; see halt_refresh_paths_test.go.
+			c.haltTick()
 			continue
 		}
 		if c.BreakpointCheck != nil && c.BreakpointCheck(c.PC) {
@@ -1090,10 +1082,23 @@ func (c *CPU) RemovePostFetchHook(name string) {
 // per-instruction state evolution as bulk-frame execution.
 func (c *CPU) StepInstruction() {
 	if c.Halted {
-		c.tstates += 4
+		c.haltTick()
 		return
 	}
 	c.executeInstruction()
+}
+
+// haltTick advances the CPU by one halted M1 cycle. A HALTed Z80 does not
+// stop the clock: it keeps fetching the HALT opcode internally, one M1 every
+// 4 T-states, and each of those M1 cycles drives a refresh that bumps R
+// (Sean Young §5 / Zilog datasheet). Software reads the result — the 48K
+// keyboard scan seeds its PRNG from R after a HALT, and the ZX80/ZX81 derive
+// /INT from R bit 6 so their display loop only wakes because R keeps counting.
+// All four execution loops route their halted step through here so they cannot
+// drift apart again.
+func (c *CPU) haltTick() {
+	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
+	c.tstates += 4
 }
 
 // stepFrameBudget is the per-frame T-state count used by
@@ -1182,15 +1187,7 @@ func (c *CPU) StepInstructionWithIRQ() {
 			c.IRQPending.Store(false)
 			return
 		}
-		if c.RefreshDuringHalt {
-			// A real Z80 keeps executing internal NOPs while halted, so the
-			// refresh register R keeps counting. The ZX80/ZX81 derive /INT from
-			// R bit 6, so this must advance during HALT for the display loop's
-			// HALT-waits-for-INT to wake. Opt-in (default off) to leave classic
-			// Spectrum behaviour unchanged.
-			c.R = (c.R & 0x80) | ((c.R + 1) & 0x7f)
-		}
-		c.tstates += 4
+		c.haltTick()
 		return
 	}
 

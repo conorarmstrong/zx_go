@@ -145,6 +145,17 @@ type DMA struct {
 	remaining   int
 	nextDue     uint64
 
+	// inTransfer is set while a block is moving. An IO endpoint can be any
+	// port, including the DMA's own command port ($6B / $0B) — the emulator
+	// hands IO-endpoint accesses to the ULA's port dispatch, which routes
+	// those two straight back to WriteCommand. A transferred byte that
+	// happens to be ENABLE ($87) would then start a nested Trigger, and the
+	// nesting is unbounded: `fatal error: stack overflow`, which no recover()
+	// can catch. The FPGA has no such hazard because it is a state machine
+	// already sitting in its transfer state, so an ENABLE arriving mid-block
+	// is not a second transfer. This flag reproduces that.
+	inTransfer bool
+
 	// pending holds the setters for the follow bytes the most recent
 	// base byte announced; each subsequent WriteCommand consumes one.
 	pending []func(byte)
@@ -377,6 +388,12 @@ func (d *DMA) command(val byte) {
 // in z80 mode — so zxn moves exactly blockLen bytes and z80 moves blockLen+1.
 // The FSM always moves one byte before testing, so a zero length moves one.
 func (d *DMA) Trigger() {
+	if d.inTransfer || d.activeBurst {
+		// Re-entered from an IO endpoint pointed at our own command port, or
+		// an ENABLE arrived while an interleaved burst is still draining.
+		// The chip is already transferring; this is not a second block.
+		return
+	}
 	moved := 0
 	for c := d.counter; ; {
 		moved++
@@ -403,11 +420,13 @@ func (d *DMA) Trigger() {
 	}
 
 	srcIsA := d.aToB // port A is the source when transferring A -> B
+	d.inTransfer = true
 	for remaining := moved; remaining > 0; remaining-- {
 		b := d.portRead(srcIsA)
 		d.portWrite(!srcIsA, b)
 		d.counter++
 	}
+	d.inTransfer = false
 	// Continuous mode stalls the CPU for the whole transfer; charge the time
 	// to the CPU clock. Burst mode lets the CPU run, so it is not charged.
 	if d.mode == modeContinuous && d.cycleSink != nil {
@@ -453,6 +472,9 @@ func (d *DMA) Step(now uint64) {
 	}
 	per := d.perByteCycles()
 	srcIsA := d.aToB
+	// Same self-port re-entry hazard as Trigger: a pumped byte can land back
+	// in WriteCommand through an IO endpoint aimed at $6B / $0B.
+	d.inTransfer = true
 	for d.remaining > 0 && now >= d.nextDue {
 		b := d.portRead(srcIsA)
 		d.portWrite(!srcIsA, b)
@@ -460,6 +482,7 @@ func (d *DMA) Step(now uint64) {
 		d.remaining--
 		d.nextDue += per
 	}
+	d.inTransfer = false
 	if d.remaining == 0 {
 		d.activeBurst = false
 		d.finishBlock()

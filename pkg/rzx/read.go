@@ -147,7 +147,7 @@ func readSnapshot(payload []byte) (Block, error) {
 		// mismatch. Bounding the read this way means a small, hostile
 		// zlib stream can't be used to inflate an arbitrarily large
 		// buffer before the length check below rejects it.
-		raw, err := zlibInflateLimit(body, uncompressedLen)
+		raw, err := zlibInflateLimit(body, uint64(uncompressedLen))
 		if err != nil {
 			return Block{}, fmt.Errorf("snapshot: zlib inflate: %w", err)
 		}
@@ -184,9 +184,21 @@ func readInput(payload []byte) (Block, error) {
 
 	var frameBytes []byte
 	if flags&irbFlagCompressed != 0 {
-		raw, err := zlibInflate(body)
+		// The block has no declared uncompressed length, but it does declare
+		// its frame count, and a frame is at most maxFrameBytes. Bounding the
+		// inflate by that keeps a small hostile zlib stream from expanding to
+		// arbitrary memory before readFrames gets to reject it — the same
+		// hazard zlibInflateLimit guards on the snapshot path.
+		limit := uint64(frameCount) * maxFrameBytes
+		if limit > maxInputStreamBytes {
+			limit = maxInputStreamBytes
+		}
+		raw, err := zlibInflateLimit(body, limit)
 		if err != nil {
 			return Block{}, fmt.Errorf("input: zlib inflate: %w", err)
+		}
+		if uint64(len(raw)) > limit {
+			return Block{}, fmt.Errorf("input: frame stream inflates past the %d bytes %d frames can hold", limit, frameCount)
 		}
 		frameBytes = raw
 	} else {
@@ -202,6 +214,17 @@ func readInput(payload []byte) (Block, error) {
 		Input: &InputBlock{Tstates: tstates, Frames: frames},
 	}, nil
 }
+
+// maxFrameBytes is the largest a single input frame can be on the wire:
+// 2 bytes instruction count + 2 bytes IN count + at most 0xFFFF IN bytes.
+// maxInputStreamBytes is the absolute ceiling applied on top, so a hostile
+// 32-bit frame count cannot turn the frame-derived bound back into "unlimited".
+// It is far above any real recording — libspectrum's own RZX files run to a
+// few MB — while still bounding a decompression bomb.
+const (
+	maxFrameBytes       = 4 + 0xFFFF
+	maxInputStreamBytes = 256 << 20
+)
 
 // readFrames parses `count` frames from a flat byte slice. Each frame
 // is 2 bytes instruction count + 2 bytes IN count, optionally followed
@@ -276,29 +299,13 @@ func nullTerminated(b []byte) string {
 	return string(b)
 }
 
-// zlibInflate decompresses a zlib (RFC 1950) stream into a fresh byte
-// slice. Used for compressed input frame streams, which have no
-// declared uncompressed length to bound the read by.
-func zlibInflate(data []byte) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = r.Close() }()
-	out, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// zlibInflateLimit decompresses a zlib stream like zlibInflate, but
-// stops reading at limit+1 bytes. Used for compressed snapshot bodies,
-// where the block header already declares the expected uncompressed
-// length: the caller compares the returned length against that
-// declaration, so reading one byte past it is enough to prove a
+// zlibInflateLimit decompresses a zlib (RFC 1950) stream, stopping at
+// limit+1 bytes. Every caller knows an upper bound on the legitimate
+// uncompressed size — the snapshot block declares it outright, the input
+// block derives it from its frame count — and compares the returned length
+// against that bound. Reading one byte past the limit is enough to prove a
 // mismatch without inflating the rest of a hostile stream.
-func zlibInflateLimit(data []byte, limit uint32) ([]byte, error) {
+func zlibInflateLimit(data []byte, limit uint64) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err

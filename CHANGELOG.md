@@ -4,6 +4,72 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.1]
+
+A robustness sweep over the parts of the emulator that untrusted input
+reaches: guest code on the bus, and the file formats we parse. Found by
+driving randomised guest programs through the real CPU on every model and
+by fuzzing the format readers.
+
+### Fixed
+
+- **`$DFFD` extended RAM banks in the `$C000` slot were read as ROM.** On
+  the Next the `$C000` bank is `port_7ffd_bank = port_dffd_reg(3:0) &
+  port_7ffd_reg(2:0)`, a 7-bit value, but the classic read dispatch applied
+  the page-map's ">= 16 means ROM index" encoding to all four 16K slots.
+  Banks 16-19 silently returned ROM 0 bytes while the *write* path, which
+  flags ROM with `-1`, correctly put the data in RAM — so reads and writes
+  disagreed. Banks 20-127 indexed past the four-entry ROM array and
+  panicked, taking the whole emulator down; there is no `recover()` in the
+  tree. Three guest instructions reach it: `ld bc,$DFFD : ld a,3 : out
+  (c),a` then a read of `$C000`. The 8K MMU "ROM half" path had the same
+  fault, reachable via `NR$56=$FF` after a `$DFFD` write. The `$0000-$3FFF`
+  ROM slot and the ZX80/ZX81 ROM mirror at slot 2 are unaffected and now
+  covered by their own regression.
+- **`LD A,R` after a `HALT` returned a frozen value on every Spectrum and
+  Next model.** A HALTed Z80 does not stop the clock: it keeps fetching the
+  HALT opcode internally, one M1 every 4 T-states, and each M1 refresh bumps
+  R (Sean Young §5). The emulator has four execution loops and they had
+  drifted apart — `ExecuteFrame`, the production loop, advanced 1 T-state
+  per halted tick and never touched R, and ignored the `RefreshDuringHalt`
+  opt-in entirely. All four now share one `haltTick`, so the 48K keyboard
+  scan's PRNG seed and anything else sampling R sees real entropy. The
+  `RefreshDuringHalt` flag is gone: the behaviour is unconditional, which is
+  what the hardware does.
+- **A zxnDMA IO endpoint aimed at the DMA's own command port crashed the
+  process.** IO-endpoint accesses go to the ULA's port dispatch, which
+  routes `$6B`/`$0B` straight back to `WriteCommand`, so a transferred byte
+  that happened to be ENABLE (`$87`) started a nested `Trigger` without
+  bound: `fatal error: stack overflow`, which no `recover()` can catch. The
+  FPGA has no such hazard — it is a state machine already sitting in its
+  transfer state, so an ENABLE arriving mid-block is not a second transfer.
+  Modelled with a re-entrancy guard covering both the synchronous transfer
+  and the interleaved burst pump.
+- **RZX input-recording blocks inflated without bound.** The frame stream
+  carries no declared uncompressed length, so a small hostile zlib stream
+  could expand to arbitrary memory before `readFrames` rejected the frame
+  count. The read is now bounded by what the declared frame count can hold
+  (4 + `0xFFFF` bytes per frame) under an absolute ceiling. The snapshot
+  block was already bounded this way.
+
+### Added
+
+- **`TestGuestPortStress`** — randomised guest programs run through the real
+  CPU on all seven models: `OUT`/`IN` across the whole 16-bit port space,
+  Z80N `NEXTREG` writes over the whole register space, reads and writes
+  across the whole address space, then a render so the video stack sees the
+  registers the stream left behind. This is what surfaced the `$DFFD` fault.
+- **Fuzz targets for the disk-image and RZX readers** — `FuzzParseDiskImage`
+  (DSK / EDSK / UDI / SAD, including the sector walk the FDC performs on
+  every read) and `FuzzRead` (the RZX block walker). Both clean at 60s.
+- **`make race` and a CI race-detector job.** The race detector costs about
+  10x, and `cmd/zx_go` alone runs ~9 minutes under it with no Next ROMs
+  installed — already inside `go test`'s 10-minute *default* timeout, and
+  past it once the ROM-backed boot tests unskip. A bare `go test -race ./...`
+  therefore aborted mid-package and reported a timeout instead of a result,
+  which is how the emulator loop's concurrency went unchecked. With an
+  explicit timeout the full run is clean: no data races in any package.
+
 ## [v1.4.0]
 
 Crisp, square pixels at every zoom, plus a 400% view. Resolves

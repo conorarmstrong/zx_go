@@ -54,6 +54,30 @@ jobs:
       - name: Test
         run: go test -short -cover ./...
 
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
+
+      - name: Test with the race detector
+        # The emulator loop, the debugger backend and the GUI share state
+        # across goroutines, so this is the job that actually checks that
+        # wiring. It needs an explicit timeout: cmd/zx_go alone runs ~9
+        # minutes under -race here, inside go test's 10-minute DEFAULT, so
+        # the bare command aborts mid-package and reports a timeout rather
+        # than a result. Same reasoning as `make race`.
+        timeout-minutes: 45
+        run: go test -race -timeout 40m ./...
+
   conformance:
     name: Z80 conformance (zexdoc + zexall)
     runs-on: ubuntu-latest
