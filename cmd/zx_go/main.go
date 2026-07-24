@@ -204,6 +204,17 @@ type emulator struct {
 	// it. Sized lazily on first use; reused across frames.
 	crtScratch *image.RGBA
 
+	// surround is the rectangle stacked behind the emulator image, filling
+	// whatever gap the layout leaves between the scaled frame and the window
+	// edge. Tracks the emulated border colour (frameBorderColor) so the
+	// picture is surrounded by border the way a Spectrum fills a TV. Touched
+	// only from the UI thread, via fyne.Do in the render tick. nil in
+	// headless runs.
+	surround *canvas.Rectangle
+	// lastSurround is the colour last written to surround, so the render tick
+	// only repaints when the border actually changes.
+	lastSurround color.Color
+
 	// Currently active joystick interface. Mutated only from the UI thread.
 	joystickType JoystickType
 
@@ -1369,12 +1380,24 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							displayImg = e.crtScratch
 						}
 
+						// The surround follows the frame's border colour, so
+						// the gap the layout leaves is border rather than a
+						// black picture frame. Sampled from the un-filtered
+						// frame: the CRT scratch has the scanline darkening
+						// applied and would tint the surround.
+						border := frameBorderColor(newImage)
+
 						// Update UI on main thread
 						fyne.Do(func() {
 							if screen.Image != displayImg {
 								screen.Image = displayImg
 							}
 							screen.Refresh()
+							if e.surround != nil && border != e.lastSurround {
+								e.lastSurround = border
+								e.surround.FillColor = border
+								e.surround.Refresh()
+							}
 						})
 
 						lastRender = now
@@ -2272,11 +2295,36 @@ func integerScaleFactor(containerW, containerH, srcW, srcH, density float32) int
 	if physH/srcH < f {
 		f = physH / srcH
 	}
-	factor := int(f) // truncation toward zero == floor for positive f
+	// Truncation toward zero == floor for positive f. The epsilon protects the
+	// exact-multiple case the View presets are built to hit: 960/320 is 3.0 in
+	// real arithmetic, but a float32 division landing on 2.9999997 would floor
+	// to 2 and halve the image. It only ever rescues a value already within a
+	// ten-thousandth of the next whole number, so it cannot promote a genuinely
+	// fractional fit.
+	factor := int(f + 1e-4)
 	if factor < 1 {
 		factor = 1
 	}
 	return factor
+}
+
+// frameBorderColor returns the colour of the emulated frame's outermost pixel.
+//
+// Every model's frame starts with border at (0,0) — the 320x240 we render is
+// itself a crop of the full ULA frame, the bulk of which is border — so this
+// is the colour the picture is surrounded by on real hardware. The window uses
+// it to fill the gap between the scaled frame and the window edge, which is
+// both what a Spectrum on a TV looks like and what stops a residual gap
+// reading as a black picture frame. Black for a nil/empty image.
+func frameBorderColor(img image.Image) color.Color {
+	if img == nil {
+		return color.Black
+	}
+	b := img.Bounds()
+	if b.Empty() {
+		return color.Black
+	}
+	return img.At(b.Min.X, b.Min.Y)
 }
 
 // modelToConfigString maps a roms.SpectrumModel to its on-disk
@@ -2360,9 +2408,8 @@ func configStringToMultifaceVariant(s string) multiface.MultifaceType {
 }
 
 // scaleToWindowSize maps a percentage (100/125/150/200/300/400) to the fyne
-// window size. The returned height is padded by the menu-bar height so the
-// emulator image keeps its intended scale rather than being squashed by the
-// menu. Unknown values fall back to 200%.
+// window size, padded by the window chrome so the CONTENT box ends up exactly
+// the requested size. Unknown values fall back to 200%.
 func scaleToWindowSize(scale int) (float32, float32) {
 	w, h := float32(640), float32(480) // 200% — the existing default
 	switch scale {
@@ -2377,7 +2424,26 @@ func scaleToWindowSize(scale int) (float32, float32) {
 	case 400:
 		w, h = 1280, 960
 	}
-	return w, h + menuBarHeight()
+	return windowSizeForFrame(w, h, menuBarHeight(), windowContentPadding())
+}
+
+// windowSizeForFrame returns the window size that leaves a content box of
+// exactly w x h logical pixels, given the menu-bar height and the padding fyne
+// applies around window content.
+//
+// The distinction matters because the presets exist to give a whole-number
+// pixel multiple: at "300%" every ZX pixel should be a crisp 3x3 block. Sizing
+// the WINDOW to 960x720 left a 952x742 content box, and 952/320 = 2.975 floors
+// to 2 — the user asked for 300% and silently got 200%, with the lost third of
+// the window showing as a thick surround around the picture.
+func windowSizeForFrame(w, h, menuH, pad float32) (float32, float32) {
+	return w + 2*pad, h + menuH + 2*pad
+}
+
+// windowContentPadding is the padding fyne lays out around the window's
+// content, on each edge. Read from the theme so it tracks theme/DPI changes.
+func windowContentPadding() float32 {
+	return fyne.CurrentApp().Settings().Theme().Size(theme.SizeNamePadding)
 }
 
 // menuBarHeight returns the vertical space the window's main menu bar occupies.
@@ -4327,12 +4393,16 @@ func main() {
 	)
 	w.SetMainMenu(mainMenu)
 
-	// Screen container with black letterbox/pillarbox bars. Integer scaling
-	// (default) snaps to whole-number pixel multiples for crisp pixels; the
-	// 4:3 aspect-fit layout stretches to fill. The View menu swaps the layout.
-	blackBG := canvas.NewRectangle(color.Black)
+	// Screen container. Integer scaling (default) snaps to whole-number pixel
+	// multiples for crisp pixels; the 4:3 aspect-fit layout stretches to fill.
+	// The View menu swaps the layout. Whatever gap either layout leaves is
+	// filled with the emulated border colour rather than black — see
+	// frameBorderColor — so the picture is surrounded by the border the way a
+	// real Spectrum fills a TV, instead of sitting in a black frame.
+	surroundBG := canvas.NewRectangle(color.Black)
+	emu.surround = surroundBG
 	aspectScreen = container.New(screenLayoutFor(integerScaleOn, w.Canvas()), screen)
-	content := container.NewStack(blackBG, aspectScreen, keyboardWidget)
+	content := container.NewStack(surroundBG, aspectScreen, keyboardWidget)
 
 	// Show the splash artwork briefly, then swap to the real
 	// content and grab keyboard focus. The emulation goroutine
