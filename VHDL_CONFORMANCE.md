@@ -95,7 +95,13 @@ Source: zxnext.vhd port decode (`port_*`). Tests: scattered. **Confirmed gap thi
 session:** port **$FF** (Timex/SCLD) — bit6 = ULA-frame-INT disable
 (`port_ff_interrupt_disable`, vhd 3635/6711/6750) is **not implemented** in
 WritePort. ⚠️ $FE,$7FFD,$1FFD,$243B/$253B,$E3/$E7/$EB,$6B,$DFFD,AY ports present
-but no port-by-port VHDL decode conformance test.
+but no port-by-port VHDL decode conformance test. **This gap bit in v1.4.1:**
+`$DFFD` latched its bank correctly but the *read* path applied the classic page
+map's ">= 16 means ROM index" encoding to the `$C000` slot, where the bank is
+`port_7ffd_bank = port_dffd_reg(3:0) & port_7ffd_reg(2:0)` — a 7-bit RAM bank.
+Banks 16-19 read ROM while the write landed in RAM; 20+ panicked. Pinned now by
+`pkg/memory/dffd_highbank_test.go`, but the port-by-port decode test is still
+the thing that would have caught it by enumeration rather than by fuzzing.
 
 ## Axis 5 — Interrupts / timing  (zxula_timing.vhd + zxnext.vhd 2014-2033)
 Tests: `pkg/z80/int_timing_test.go` (narrow pulse, DI-across-pulse, speed-scaled

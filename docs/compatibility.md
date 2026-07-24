@@ -254,9 +254,31 @@ The file parsers are fuzzed (Go native fuzzing) so corrupt or hostile
 input is rejected, never crashes:
 
 ```bash
-go test ./pkg/snapshot/ -run x -fuzz FuzzLoadBytes -fuzztime 60s   # .sna/.z80/.szx
-go test ./pkg/betadisk/ -run x -fuzz FuzzLoadImage -fuzztime 60s   # .trd
-go test ./pkg/ula/      -run x -fuzz FuzzLoadTAP  -fuzztime 60s    # .tap (+ FuzzLoadTZX)
+go test ./pkg/snapshot/ -run x -fuzz FuzzLoadBytes      -fuzztime 60s  # .sna/.z80/.szx
+go test ./pkg/betadisk/ -run x -fuzz FuzzLoadImage      -fuzztime 60s  # .trd
+go test ./pkg/ula/      -run x -fuzz FuzzLoadTAP        -fuzztime 60s  # .tap (+ FuzzLoadTZX)
+go test ./pkg/plus3fdc/ -run x -fuzz FuzzParseDiskImage -fuzztime 60s  # .dsk/.edsk/.udi/.sad
+go test ./pkg/rzx/      -run x -fuzz FuzzRead           -fuzztime 60s  # .rzx
 ```
 
 The seed corpora run as part of the normal `go test ./...`.
+
+`FuzzParseDiskImage` also walks every track of a successfully parsed image
+for sectors, because that is what the FDC does on each read — parsing
+cleanly is not enough if the resulting track structure then trips the
+walker.
+
+## Guest-code stress
+
+Parsers are only half the untrusted surface: the other half is whatever an
+emulated program puts on the bus. `TestGuestPortStress` (`pkg/testharness`)
+runs randomised guest programs through the real CPU on all seven models —
+`OUT`/`IN` across the whole 16-bit port space, Z80N `NEXTREG` writes over
+the whole register space, reads and writes across the whole address space —
+then renders, so the video stack sees the registers the stream left behind.
+
+Any value a program can write has to be survivable. There is no `recover()`
+in the emulator, by design: a panic is a modelling failure and should be
+loud rather than swallowed. That makes this test a gate, not a nicety — it
+is what caught the `$DFFD` extended-RAM-bank fault in v1.4.1, a crash three
+guest instructions could reach. It runs in seconds, so it stays in CI.

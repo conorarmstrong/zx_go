@@ -37,6 +37,7 @@ The binary launches with the bundled 48K ROM. Switch models via the
 ```
 go test -short ./...     # fast feedback — ~30s
 go test ./...            # full suite including conformance — ~3-4 min
+make race                # race detector — ~25 min, see below
 go vet ./...
 go build ./...
 ```
@@ -49,6 +50,17 @@ Three test gating levels exist:
 3. **`-run TestZex`** — Frank Cringle's zexdoc + zexall instruction
    exerciser. ~85s combined. Runs in the dedicated `conformance` CI
    job; required to pass before merge if you touched `pkg/z80`.
+
+Use `make race`, not a bare `go test -race ./...`. The race detector's
+~10x cost puts packages past `go test`'s 10-minute **default per-package**
+timeout, so the bare command aborts mid-package and reports a timeout
+instead of a result. The target sets an explicit timeout for `cmd/zx_go`
+(~20 minutes under `-race`) and passes `-short` to drop the Cringle
+exerciser, which needs over an hour while being single-goroutine — the
+race detector has nothing to find in it, and it has its own CI job. There
+is a matching `Race detector` CI job; the emulator loop, the debugger
+backend and the GUI share state across goroutines, so that job is what
+actually checks the wiring.
 
 Linting:
 
