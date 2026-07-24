@@ -62,13 +62,16 @@ by fuzzing the format readers.
 - **Fuzz targets for the disk-image and RZX readers** — `FuzzParseDiskImage`
   (DSK / EDSK / UDI / SAD, including the sector walk the FDC performs on
   every read) and `FuzzRead` (the RZX block walker). Both clean at 60s.
-- **`make race` and a CI race-detector job.** The race detector costs about
-  10x, and `cmd/zx_go` alone runs ~9 minutes under it with no Next ROMs
-  installed — already inside `go test`'s 10-minute *default* timeout, and
-  past it once the ROM-backed boot tests unskip. A bare `go test -race ./...`
-  therefore aborted mid-package and reported a timeout instead of a result,
-  which is how the emulator loop's concurrency went unchecked. With an
-  explicit timeout the full run is clean: no data races in any package.
+- **`make race` and a CI race-detector job.** The race detector's ~10x cost
+  puts a bare `go test -race ./...` past `go test`'s 10-minute *default*
+  per-package timeout: it aborted mid-package and reported a timeout instead
+  of a result, which is how the emulator loop's concurrency went unchecked.
+  Two things fix that — an explicit timeout for `cmd/zx_go`, ~20 minutes
+  under `-race` once the ROM-backed boot tests unskip, and `-short` to drop
+  the Cringle Z80 exerciser, which pushes past even an hour while being
+  single-goroutine, so the race detector has nothing to find in it. It keeps
+  its own CI job, at full speed and without `-short`. The resulting run is
+  clean: 50 packages, no data races anywhere.
 
 ## [v1.4.0]
 

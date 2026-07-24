@@ -71,12 +71,14 @@ jobs:
       - name: Test with the race detector
         # The emulator loop, the debugger backend and the GUI share state
         # across goroutines, so this is the job that actually checks that
-        # wiring. It needs an explicit timeout: cmd/zx_go alone runs ~9
-        # minutes under -race here, inside go test's 10-minute DEFAULT, so
-        # the bare command aborts mid-package and reports a timeout rather
-        # than a result. Same reasoning as `make race`.
-        timeout-minutes: 45
-        run: go test -race -timeout 40m ./...
+        # wiring. Two flags make it viable, both explained in `make race`:
+        # an explicit timeout, because the race detector's ~10x cost puts
+        # packages past go test's 10-minute DEFAULT, and -short to drop the
+        # Cringle Z80 exerciser — single-goroutine, so nothing for the race
+        # detector to find, and over an hour of runtime. The conformance
+        # job below still runs it, at full speed and without -short.
+        timeout-minutes: 30
+        run: go test -race -short -timeout 25m ./...
 
   conformance:
     name: Z80 conformance (zexdoc + zexall)

@@ -43,15 +43,18 @@ $(BIN_DIR):
 test:
 	$(GO) test ./...
 
-# The race detector costs roughly 10x, and cmd/zx_go alone runs for ~9
-# minutes under it even with no Next ROMs installed — already inside go
-# test's 10-minute DEFAULT timeout, and well past it once the ROM-backed
-# boot tests are unskipped. A bare `go test -race ./...` therefore aborts
-# mid-package and reports a timeout instead of a result, which is how the
-# emulator loop's concurrency went unchecked. The explicit timeout is the
-# whole point of this target.
+# The race detector costs roughly 10x, which puts a bare
+# `go test -race ./...` past go test's 10-minute DEFAULT per-package
+# timeout: it aborts mid-package and reports a timeout instead of a
+# result, which is how the emulator loop's concurrency went unchecked.
+# Two things fix that. The explicit timeout covers cmd/zx_go, ~20 minutes
+# under -race once the ROM-backed boot tests are unskipped. And -short
+# drops the Cringle Z80 exerciser (TestZexdoc / TestZexall, the only two
+# tests in the tree that honour -short): billions of instructions through
+# a single goroutine, so the race detector learns nothing from it while
+# costing over an hour. It keeps its own CI job at full speed.
 race:
-	$(GO) test -race -timeout 60m ./...
+	$(GO) test -race -short -timeout 40m ./...
 
 vet:
 	$(GO) vet ./...
