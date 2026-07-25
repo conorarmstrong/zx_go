@@ -4,6 +4,40 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.2]
+
+Reported as "the border is now black". The emulated frame was never wrong:
+the emulator's own screenshot is a correct 320x240 with a white border, and
+every model renders byte-identically to v1.4.0. The window around it was.
+
+### Fixed
+
+- **The View presets sized the window, not the content box.** They exist to
+  give a whole-number pixel multiple — at 300% every ZX pixel should be a
+  crisp 3x3 block — but fyne pads the content and puts the menu above it, so
+  asking for a 960x720 window left a 952x742 box, and 952/320 = 2.975 floors
+  to 2. Picking "300%" silently gave 200%, and the lost third of the window
+  became surround, which is what read as a thick black frame. The presets now
+  add the chrome so the box is exact. Measured on a real run: container
+  952x742 → 960x750, factor 2 → 3, image 640x480 → **960x720**.
+- **An exact multiple could be lost to float32 rounding.** `integerScaleFactor`
+  floored a float32 division, so a 960/320 landing on 2.9999997 dropped a whole
+  step and halved the image. Guarded with an epsilon tight enough that it can
+  only rescue an already-exact fit, never promote a genuinely fractional one.
+
+### Changed
+
+- **The surround is the emulated border colour, not black.** A freely-resized
+  window can never be an exact multiple, so some gap always remains, and it
+  should not read as a black picture frame. This is also the faithful answer:
+  the 320x240 we render is a crop of the full ULA frame, the bulk of which is
+  border, so continuing the border out to the window edge is what a Spectrum
+  puts on a TV. Sampled from the un-filtered frame, since the CRT scratch
+  buffer would tint it.
+
+  Known limitation: the surround is one flat colour taken from the frame's
+  corner, so a rainbow-border effect will not continue its stripes outward.
+
 ## [v1.4.1]
 
 A robustness sweep over the parts of the emulator that untrusted input

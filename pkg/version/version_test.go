@@ -6,8 +6,8 @@ import (
 )
 
 func TestVersionString(t *testing.T) {
-	if Version != "v1.4.1" {
-		t.Errorf("Version = %q, want v1.4.1", Version)
+	if Version != "v1.4.2" {
+		t.Errorf("Version = %q, want v1.4.2", Version)
 	}
 	if !strings.HasPrefix(String(), "zx_go ") || !strings.Contains(String(), Version) {
 		t.Errorf("String() = %q, want it to embed the product name + version", String())
