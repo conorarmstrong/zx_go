@@ -54,6 +54,23 @@ const (
 // 16-bit words.
 const MaxInstructions = 1024
 
+// ClocksPerHCount is how many copper clocks elapse per horizontal-counter
+// tick. hcount advances at the 7 MHz pixel clock (448 columns across a
+// 224 T-state line), while the copper is clocked from i_CLK_28
+// (zxnext.vhd:3942-3944) — so four copper clocks per hcount.
+const ClocksPerHCount = 4
+
+// InstructionsPerScanline is the most copper instructions that can retire
+// during one scanline of hcountPerLine columns. A MOVE occupies two copper
+// clocks — one to raise copper_dout_s and one to clear it
+// (device/copper.vhd:88-108) — so the worst case is half the clock budget.
+//
+// The copper is clocked from the video domain, so this is independent of the
+// CPU speed: a caller must NOT scale it by the Z80 clock.
+func InstructionsPerScanline(hcountPerLine int) int {
+	return hcountPerLine * ClocksPerHCount / 2
+}
+
 // RegWriter is the contract Copper uses to write NextRegs when
 // executing a MOVE. The compositor (or the bus's NextReg
 // dispatcher) implements it. Step calls this once per MOVE.

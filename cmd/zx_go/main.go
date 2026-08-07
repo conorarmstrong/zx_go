@@ -1195,15 +1195,23 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 	// Main emulation loop - completely independent of UI events
 	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond) // 50Hz
-		defer ticker.Stop()
+		// Pace to the MODEL's real frame period rather than a flat 50 Hz,
+		// and re-read it every frame so the machine-switch menu takes effect
+		// immediately. The pacer keeps the frames on a fixed wall-clock grid
+		// (no accumulated drift) and drops missed frames instead of running
+		// them back-to-back — see framepacing.go.
+		pacer := newFramePacer(time.Now(), frameDurationForModel(e.model))
+		timer := time.NewTimer(frameDurationForModel(e.model))
+		defer timer.Stop()
 
 		frameCount := 0
 		lastRender := time.Now()
 
 		for {
 			select {
-			case <-ticker.C:
+			case <-timer.C:
+				period := frameDurationForModel(e.model)
+				timer.Reset(pacer.next(time.Now(), period))
 				if !e.paused.Load() {
 					// Honour the remote debugger's pause state.
 					// WaitIfPaused is nil-safe and a no-op when
@@ -1359,9 +1367,9 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					// still loading) — see applyForcedCPUSpeed.
 					e.applyForcedCPUSpeed()
 
-					// Render at 50Hz
+					// Render at the model's own frame rate.
 					now := time.Now()
-					if now.Sub(lastRender) >= 20*time.Millisecond {
+					if now.Sub(lastRender) >= period {
 						newImage := e.renderFrame()
 
 						// In plain mode, screen.Image already points at the

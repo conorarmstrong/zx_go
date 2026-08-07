@@ -80,7 +80,7 @@ subsystems cleanly.
 | Layer 2 | ✅ 256×192 8bpp **and** 320×256 / 640×256 hi-res modes |
 | Tilemap (Layer 3) | ✅ tile + 1bpp text modes; per-tile mirror / rotate, pixel scroll, clip window |
 | Sprites (128) | ✅ position, pattern, palette, scale (1/2/4/8×), mirror, rotate, 8bpp, anchor groups (composite + unified), and the `$303B` status port (collision + max-per-line, clear-on-read) |
-| Compositor (NextReg 0x15) | ✅ all four priority modes (SLU / LSU / SUL / LUS), the per-pixel SUL "below" stencil + Layer 2 priority bit, and NR$14 / NR$4A transparency |
+| Compositor (NextReg 0x15) | ✅ all eight priority modes (SLU / LSU / SUL / LUS / USL / ULS + the two additive blend orderings), the per-pixel SUL "below" stencil + Layer 2 priority bit, and NR$14 / NR$4A transparency. The blend modes use NR$68's reset blend selection; NR$68 itself is not yet wired |
 | Copper coprocessor | ✅ instruction store / decode / per-line Step, driven by a per-T-state beam-position model so WAITs release on the correct scanline + hpos (full per-pixel hpos is the precision limit of a per-scanline renderer) |
 | zxnDMA (port 0x6B) | ⚠️ memory-to-memory + the variable-length Z80-DMA WR-group protocol work; per-byte prescaler timing and descriptor mode (port 0xDB) deferred |
 | RTC | ✅ host clock via the esxDOS M_GETDATE API **and** the i2c DS1307 bus on ports `$103B`/`$113B` (the NextZXOS date/time line renders) |

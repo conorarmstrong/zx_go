@@ -18,17 +18,21 @@ const (
 // SaveTZX writes the currently loaded blocks back to a TZX file.
 // Each block is emitted using the same TZX block-ID it parsed as on
 // load: standard-speed (0x10), turbo (0x11), or pure-data (0x14).
-// TZX-only metadata that LoadTZX skipped (pure tone, pulse sequence,
-// group / archive info, text, etc.) is not preserved — a save-after-
-// load roundtrip keeps only the playable blocks.
+// Only data blocks are written: metadata LoadTZX skipped (group /
+// archive info, text) and the signal-only and flow-control blocks
+// (pure tone, pulse sequence, direct recording, pause, jump, loops)
+// are dropped, so a save-after-load roundtrip keeps only the bytes.
 func (tp *TapePlayer) SaveTZX(path string) error {
 	tp.mu.Lock()
-	blocks := make([]tapeBlock, len(tp.blocks))
-	for i, b := range tp.blocks {
+	blocks := make([]tapeBlock, 0, len(tp.blocks))
+	for _, b := range tp.blocks {
+		if b.kind != kindData {
+			continue
+		}
 		cp := make([]byte, len(b.data))
 		copy(cp, b.data)
-		blocks[i] = b
-		blocks[i].data = cp
+		b.data = cp
+		blocks = append(blocks, b)
 	}
 	tp.mu.Unlock()
 
@@ -229,10 +233,12 @@ parseLoop:
 			if offset+4 > len(data) {
 				break parseLoop
 			}
-			// pulseLen := binary.LittleEndian.Uint16(data[offset : offset+2])
-			// pulseCount := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:      kindPureTone,
+				toneLen:   binary.LittleEndian.Uint16(data[offset : offset+2]),
+				toneCount: binary.LittleEndian.Uint16(data[offset+2 : offset+4]),
+			})
 			offset += 4
-			// Skipped — pure tone blocks are rare in practice
 
 		case 0x13: // Pulse sequence
 			if offset+1 > len(data) {
@@ -240,7 +246,15 @@ parseLoop:
 			}
 			count := int(data[offset])
 			offset++
-			offset += count * 2 // Skip pulse lengths
+			if offset+count*2 > len(data) {
+				break parseLoop
+			}
+			seq := make([]uint16, count)
+			for i := 0; i < count; i++ {
+				seq[i] = binary.LittleEndian.Uint16(data[offset+i*2 : offset+i*2+2])
+			}
+			tp.blocks = append(tp.blocks, tapeBlock{kind: kindPulseSeq, seq: seq})
+			offset += count * 2
 
 		case 0x14: // Pure data block
 			if offset+10 > len(data) {
@@ -274,15 +288,31 @@ parseLoop:
 			if offset+8 > len(data) {
 				break parseLoop
 			}
+			sampleT := binary.LittleEndian.Uint16(data[offset : offset+2])
+			pause := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			usedBits := data[offset+4]
 			length := uint32(data[offset+5]) | uint32(data[offset+6])<<8 | uint32(data[offset+7])<<16
 			offset += 8
+			if offset+int(length) > len(data) {
+				break parseLoop
+			}
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:          kindDirect,
+				data:          data[offset : offset+int(length)],
+				sampleTStates: sampleT,
+				pause:         pause,
+				usedBits:      usedBits,
+			})
 			offset += int(length)
 
-		case 0x20: // Pause/stop the tape
+		case 0x20: // Pause (or, when zero, stop the tape)
 			if offset+2 > len(data) {
 				break parseLoop
 			}
-			// pause := binary.LittleEndian.Uint16(data[offset : offset+2])
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:  kindPause,
+				pause: binary.LittleEndian.Uint16(data[offset : offset+2]),
+			})
 			offset += 2
 
 		case 0x21: // Group start
@@ -295,19 +325,41 @@ parseLoop:
 		case 0x22: // Group end
 			// No data
 
-		case 0x23: // Jump to block
+		case 0x23: // Jump to block (signed, relative to this block)
+			if offset+2 > len(data) {
+				break parseLoop
+			}
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:       kindJump,
+				jumpOffset: int16(binary.LittleEndian.Uint16(data[offset : offset+2])),
+			})
 			offset += 2
 
 		case 0x24: // Loop start
+			if offset+2 > len(data) {
+				break parseLoop
+			}
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:      kindLoopStart,
+				loopCount: binary.LittleEndian.Uint16(data[offset : offset+2]),
+			})
 			offset += 2
 
 		case 0x25: // Loop end
-			// No data
+			tp.blocks = append(tp.blocks, tapeBlock{kind: kindLoopEnd})
 
 		case 0x2A: // Stop the tape if in 48K mode
+			tp.blocks = append(tp.blocks, tapeBlock{kind: kindStop48K})
 			offset += 4
 
 		case 0x2B: // Set signal level
+			if offset+5 > len(data) {
+				break parseLoop
+			}
+			tp.blocks = append(tp.blocks, tapeBlock{
+				kind:  kindSetLevel,
+				level: data[offset+4]&1 != 0,
+			})
 			offset += 5
 
 		case 0x30: // Text description

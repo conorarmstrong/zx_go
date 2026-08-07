@@ -313,7 +313,11 @@ func (b *tzxBuilder) writeAndLoad(t *testing.T) (int, error) {
 // blockSandwich runs a block-spec test: load a TZX with two standard
 // 0x10 blocks bracketing the block-under-test. Both standards should
 // be present iff the parser correctly advanced past the test block.
-func blockSandwich(t *testing.T, name string, blockBytes []byte) {
+//
+// contributes is how many tapeBlocks the sandwiched block itself adds.
+// Metadata-only blocks (group markers, text, archive info) add none; the
+// playable and flow-control blocks each add one.
+func blockSandwich(t *testing.T, name string, blockBytes []byte, contributes int) {
 	t.Helper()
 	b := newTZXBuilder()
 	b.standardBlock([]byte{0xAA})
@@ -323,9 +327,9 @@ func blockSandwich(t *testing.T, name string, blockBytes []byte) {
 	if err != nil {
 		t.Fatalf("%s: LoadTZX failed: %v", name, err)
 	}
-	if n != 2 {
-		t.Errorf("%s: block count = %d, want 2 (sandwich block confused the parser)",
-			name, n)
+	if want := 2 + contributes; n != want {
+		t.Errorf("%s: block count = %d, want %d (sandwich block confused the parser)",
+			name, n, want)
 	}
 }
 
@@ -336,7 +340,7 @@ func TestTZX_Block12_PureTone(t *testing.T) {
 		0x12,
 		0x14, 0x08, // pulse length = 2068
 		0xE7, 0x03, // pulse count = 999
-	})
+	}, 1)
 }
 
 // TestTZX_Block13_PulseSequence verifies skip-by-(N*2) for count
@@ -347,7 +351,7 @@ func TestTZX_Block13_PulseSequence(t *testing.T) {
 		0x13,
 		0x03, // count = 3
 		0x10, 0x00, 0x20, 0x00, 0x30, 0x00,
-	})
+	}, 1)
 }
 
 // TestTZX_Block15_DirectRecording skip-by-(8 + 3-byte length).
@@ -361,76 +365,76 @@ func TestTZX_Block15_DirectRecording(t *testing.T) {
 		0x04, 0x00, 0x00, // length = 4
 		0xAA, 0x55, 0xAA, 0x55, // samples
 	}
-	blockSandwich(t, "0x15 DirectRecording", payload)
+	blockSandwich(t, "0x15 DirectRecording", payload, 1)
 }
 
 // TestTZX_Block20_PauseStop verifies skip 2 bytes (pause duration).
 func TestTZX_Block20_PauseStop(t *testing.T) {
-	blockSandwich(t, "0x20 PauseStop", []byte{0x20, 0xE8, 0x03})
+	blockSandwich(t, "0x20 PauseStop", []byte{0x20, 0xE8, 0x03}, 1)
 }
 
 // TestTZX_Block21_GroupStart verifies skip 1 + name-length bytes.
 func TestTZX_Block21_GroupStart(t *testing.T) {
 	name := "hello"
 	payload := append([]byte{0x21, byte(len(name))}, []byte(name)...)
-	blockSandwich(t, "0x21 GroupStart", payload)
+	blockSandwich(t, "0x21 GroupStart", payload, 0)
 }
 
 // TestTZX_Block22_GroupEnd verifies zero-byte payload doesn't break.
 func TestTZX_Block22_GroupEnd(t *testing.T) {
-	blockSandwich(t, "0x22 GroupEnd", []byte{0x22})
+	blockSandwich(t, "0x22 GroupEnd", []byte{0x22}, 0)
 }
 
 // TestTZX_Block23_JumpToBlock verifies skip 2 bytes.
 func TestTZX_Block23_JumpToBlock(t *testing.T) {
-	blockSandwich(t, "0x23 JumpToBlock", []byte{0x23, 0x05, 0x00})
+	blockSandwich(t, "0x23 JumpToBlock", []byte{0x23, 0x05, 0x00}, 1)
 }
 
 // TestTZX_Block24_LoopStart verifies skip 2 bytes (loop count).
 func TestTZX_Block24_LoopStart(t *testing.T) {
-	blockSandwich(t, "0x24 LoopStart", []byte{0x24, 0x0A, 0x00})
+	blockSandwich(t, "0x24 LoopStart", []byte{0x24, 0x0A, 0x00}, 1)
 }
 
 // TestTZX_Block25_LoopEnd zero-byte payload.
 func TestTZX_Block25_LoopEnd(t *testing.T) {
-	blockSandwich(t, "0x25 LoopEnd", []byte{0x25})
+	blockSandwich(t, "0x25 LoopEnd", []byte{0x25}, 1)
 }
 
 // TestTZX_Block2A_Stop48K verifies skip 4 bytes (length word x 2).
 func TestTZX_Block2A_Stop48K(t *testing.T) {
-	blockSandwich(t, "0x2A Stop48K", []byte{0x2A, 0x00, 0x00, 0x00, 0x00})
+	blockSandwich(t, "0x2A Stop48K", []byte{0x2A, 0x00, 0x00, 0x00, 0x00}, 1)
 }
 
 // TestTZX_Block2B_SignalLevel verifies skip 5 bytes.
 func TestTZX_Block2B_SignalLevel(t *testing.T) {
-	blockSandwich(t, "0x2B SignalLevel", []byte{0x2B, 0x01, 0x00, 0x00, 0x00, 0x01})
+	blockSandwich(t, "0x2B SignalLevel", []byte{0x2B, 0x01, 0x00, 0x00, 0x00, 0x01}, 1)
 }
 
 // TestTZX_Block30_TextDescription verifies skip 1 + text-length bytes.
 func TestTZX_Block30_TextDescription(t *testing.T) {
 	text := "Made by Mike Smith"
 	payload := append([]byte{0x30, byte(len(text))}, []byte(text)...)
-	blockSandwich(t, "0x30 TextDescription", payload)
+	blockSandwich(t, "0x30 TextDescription", payload, 0)
 }
 
 // TestTZX_Block31_Message verifies skip 2 + text-length bytes.
 func TestTZX_Block31_Message(t *testing.T) {
 	text := "Hello"
 	payload := append([]byte{0x31, 0x05, byte(len(text))}, []byte(text)...)
-	blockSandwich(t, "0x31 Message", payload)
+	blockSandwich(t, "0x31 Message", payload, 0)
 }
 
 // TestTZX_Block32_ArchiveInfo verifies skip 2-byte len + payload.
 func TestTZX_Block32_ArchiveInfo(t *testing.T) {
 	payload := []byte{0x32, 0x06, 0x00, 0x00, 0x04, 0x41, 0x42, 0x43, 0x44}
-	blockSandwich(t, "0x32 ArchiveInfo", payload)
+	blockSandwich(t, "0x32 ArchiveInfo", payload, 0)
 }
 
 // TestTZX_Block33_HardwareType verifies skip 1 + (count*3).
 func TestTZX_Block33_HardwareType(t *testing.T) {
 	// 2 entries × 3 bytes each = 6 bytes payload after count.
 	payload := []byte{0x33, 0x02, 0x00, 0x00, 0x01, 0x01, 0x02, 0x00}
-	blockSandwich(t, "0x33 HardwareType", payload)
+	blockSandwich(t, "0x33 HardwareType", payload, 0)
 }
 
 // TestTZX_Block35_CustomInfo verifies skip 20 + 4-byte length field.
@@ -442,13 +446,13 @@ func TestTZX_Block35_CustomInfo(t *testing.T) {
 	}
 	payload = append(payload, 0x04, 0x00, 0x00, 0x00)
 	payload = append(payload, 0xAA, 0xBB, 0xCC, 0xDD)
-	blockSandwich(t, "0x35 CustomInfo", payload)
+	blockSandwich(t, "0x35 CustomInfo", payload, 0)
 }
 
 // TestTZX_Block5A_Glue verifies skip 9 bytes (block 0x5A is a "glue"
 // marker that joins concatenated TZX files; tape data follows).
 func TestTZX_Block5A_Glue(t *testing.T) {
-	blockSandwich(t, "0x5A Glue", []byte{0x5A, 'X', 'T', 'a', 'p', 'e', '!', 0x1A, 1, 20})
+	blockSandwich(t, "0x5A Glue", []byte{0x5A, 'X', 'T', 'a', 'p', 'e', '!', 0x1A, 1, 20}, 0)
 }
 
 // TestTZX_UnknownBlock_SkippedViaLengthField verifies the default-case
@@ -460,16 +464,17 @@ func TestTZX_UnknownBlock_SkippedViaLengthField(t *testing.T) {
 		0x99,                   // unknown ID
 		0x04, 0x00, 0x00, 0x00, // payload length = 4
 		0xDE, 0xAD, 0xBE, 0xEF,
-	})
+	}, 0)
 }
 
 // TestTZX_NoLoadableBlocks_Errors verifies a TZX containing only
-// non-loadable blocks (e.g. all 0x20 pause blocks) returns an error
-// rather than silently producing an empty tape.
+// metadata blocks (text descriptions, archive info) returns an error
+// rather than silently producing an empty tape. Pause blocks no longer
+// qualify — they carry a real signal (silence) and are played.
 func TestTZX_NoLoadableBlocks_Errors(t *testing.T) {
 	b := newTZXBuilder()
-	b.raw(0x20, 0xE8, 0x03)
-	b.raw(0x20, 0x10, 0x00)
+	b.raw(0x30, 0x03, 'a', 'b', 'c')
+	b.raw(0x30, 0x01, 'z')
 	dir := t.TempDir()
 	p := filepath.Join(dir, "empty.tzx")
 	if err := os.WriteFile(p, b.buf.Bytes(), 0o644); err != nil {

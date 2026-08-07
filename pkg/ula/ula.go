@@ -1608,11 +1608,16 @@ func (u *ULA) Close() {
 func (u *ULA) applyNextCompositor() {
 	const w = 256
 	const h = 192
-	// At 3.5 MHz the Copper runs ~one instruction per 4 CPU
-	// T-states. A scanline is 228 T-states, so ~57 instructions
-	// per scanline. Round to 64 for headroom; programs heavy on
-	// WAITs typically execute far fewer.
-	const copperInstrPerScanline = 64
+	// The Copper is clocked from the 28 MHz video domain, NOT from the CPU
+	// clock, so its per-scanline throughput is fixed by the line length:
+	// hcount ticks at the 7 MHz pixel clock (two columns per T-state) and
+	// the copper gets four clocks per column. The earlier budget of 64 was
+	// derived from CPU T-states and starved any list with more than 64
+	// instructions on one line.
+	// Mirrors copper.InstructionsPerScanline, which pkg/ula cannot import
+	// (the copper reaches the ULA through the NextCopper interface to keep
+	// the dependency one-way).
+	copperInstrPerScanline := TStatesPerLineFor(u.mem.GetCurrentModel()) * 2 * 4 / 2
 	if u.compositorScan == nil {
 		u.compositorScan = make([]byte, w*4)
 		u.compositorComposed = make([]byte, w*4)
@@ -1801,6 +1806,13 @@ func (u *ULA) FEReadCount() uint64 {
 // jumping forward by the whole elapsed run.
 func (u *ULA) SetTapePlayer(tp *TapePlayer) {
 	u.tape = tp
+	if tp != nil {
+		// TZX block 0x2A stops the tape only on a 48K machine, so give the
+		// player a live view of the model.
+		tp.SetIs48K(func() bool {
+			return u.mem != nil && u.mem.GetCurrentModel() == roms.Model48K
+		})
+	}
 	if u.mem != nil && u.mem.TStates != nil {
 		u.lastTapeTstate = *u.mem.TStates
 	}

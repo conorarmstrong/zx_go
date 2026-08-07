@@ -48,7 +48,43 @@ const (
 	ModeLSU PriorityMode = 1 // Layer 2 over Sprites over ULA
 	ModeSUL PriorityMode = 2 // Sprites over ULA over Layer 2
 	ModeLUS PriorityMode = 3 // Layer 2 over ULA over Sprites
+	ModeUSL PriorityMode = 4 // ULA over Sprites over Layer 2
+	ModeULS PriorityMode = 5 // ULA over Layer 2 over Sprites
+	// ModeBlend and ModeBlend5 are the two additive blend orderings: the
+	// Layer 2 pixel is summed with the ULA pixel per 3-bit channel, either
+	// clamped at 7 (ModeBlend) or with the hardware's minus-5 curve applied
+	// (ModeBlend5). See blendChannel / blend5Channel.
+	ModeBlend  PriorityMode = 6
+	ModeBlend5 PriorityMode = 7
 )
+
+// expand3 widens a 3-bit hardware channel to a full 8-bit one using the same
+// bit-replication palette.RGB uses ('abc' becomes 'abcabcab').
+func expand3(v byte) byte { return (v << 5) | (v << 2) | (v >> 1) }
+
+// blendChannel sums two 3-bit channels and clamps at 7 — the ModeBlend
+// arithmetic from zxnext.vhd:7196-7355 (Mix() case 6).
+func blendChannel(a, b byte) byte {
+	if v := int(a) + int(b); v <= 7 {
+		return byte(v)
+	}
+	return 7
+}
+
+// blend5Channel sums two 3-bit channels and applies the hardware's minus-5
+// curve (Mix() case 7): sums of 4 or less floor to 0, sums of 12 or more
+// saturate to 7, and everything between loses 5.
+func blend5Channel(a, b byte) byte {
+	v := int(a) + int(b)
+	switch {
+	case v <= 4:
+		return 0
+	case (v>>2)&3 == 3: // >= 12
+		return 7
+	default:
+		return byte((v + 11) & 0x0F)
+	}
+}
 
 // PrioritySource is the contract for reading the active priority
 // mode. pkg/next.LayerPriority satisfies it via Mode().
@@ -619,6 +655,83 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 		dst[off+2] = b
 		dst[off+3] = 0xFF
 	}
+	// --- the two additive blend orderings (NR$15 = 110 / 111) ---
+	//
+	// These do not fit the "ULA at the bottom" chain: under NR$68's reset
+	// blend selection the plain ULA layer never surfaces on its own
+	// (zxnext.vhd:7140-7180 leaves mix_top / mix_bot on the tilemap), and
+	// contributes only through the additive sum with Layer 2. A pixel with
+	// nothing to show falls back to NR$4A rather than to the ULA.
+	paintFallback := func(off int) {
+		dst[off+0], dst[off+1] = c.fallback[0], c.fallback[1]
+		dst[off+2], dst[off+3] = c.fallback[2], c.fallback[3]
+	}
+	// ulaChannels3 recovers the ULA pixel's original 3-bit channels from the
+	// already-expanded RGBA scanline (palette.RGB puts the source bits in the
+	// top 3). A transparent ULA pixel adds nothing, matching Mix()'s
+	// ulaMixRGB being zero when ulaMixTransparent.
+	ulaChannels3 := func(off int) (byte, byte, byte) {
+		if ulaTransparentAt(off) {
+			return 0, 0, 0
+		}
+		return ulaRGBA[off+0] >> 5, ulaRGBA[off+1] >> 5, ulaRGBA[off+2] >> 5
+	}
+	paintBlend := func(off, x int) {
+		if !doL2 {
+			return
+		}
+		idx := l2Scanline[x]
+		if c.l2Transparent(l2Pal, idx) {
+			return
+		}
+		v := l2Pal.Get(idx)
+		lr, lg, lb := byte((v>>6)&7), byte((v>>3)&7), byte(v&7)
+		ur, ug, ub := ulaChannels3(off)
+		mix := blendChannel
+		if mode == ModeBlend5 {
+			mix = blend5Channel
+		}
+		dst[off+0], dst[off+1] = expand3(mix(lr, ur)), expand3(mix(lg, ug))
+		dst[off+2], dst[off+3] = expand3(mix(lb, ub)), 0xFF
+	}
+	paintBlendPriority := func(off, x int) {
+		if !doL2 || !l2Pal.HasPriority(l2Scanline[x]) {
+			return
+		}
+		paintBlend(off, x)
+	}
+	// paintTilemapRaw applies the strict FPGA transparency rule
+	// (tilemap.vhd:427) with no on_top gating — the blend chain expresses
+	// above/below through paint ORDER instead.
+	paintTilemapRaw := func(off, x int) {
+		if !doTilemap {
+			return
+		}
+		idx := tilemapScan[x]
+		if (idx & 0x0F) == tmTransparentNibble {
+			return
+		}
+		r, g, b := tilemapPal.RGB(idx)
+		dst[off+0], dst[off+1], dst[off+2], dst[off+3] = r, g, b, 0xFF
+	}
+
+	if mode == ModeBlend || mode == ModeBlend5 {
+		for x := 0; x < Width; x++ {
+			off := x * 4
+			paintFallback(off)
+			paintBlend(off, x) // Layer 2 opaque -> the additive sum
+			if !tmOnTop {
+				paintTilemapRaw(off, x) // mix_bot
+			}
+			paintSprites(off, x)
+			if tmOnTop {
+				paintTilemapRaw(off, x) // mix_top
+			}
+			paintBlendPriority(off, x) // NR$44 priority bit wins outright
+		}
+		return
+	}
+
 	for x := 0; x < Width; x++ {
 		off := x * 4
 		// First lay down ULA, then mix the tilemap onto ULA (the
@@ -649,6 +762,23 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			paintULAStencil(off)
 			paintTilemapOnULA(off, x)
 			paintL2(off, x)
+		case ModeUSL: // ULA+TM over Sprites over Layer 2
+			// Mix() case 4 resolves top-down as
+			// L2-priority > ULA+TM > sprites > Layer 2, so paint the
+			// reverse of that.
+			paintL2(off, x)
+			paintSprites(off, x)
+			paintULAStencil(off)
+			paintTilemapOnULA(off, x)
+			paintL2Priority(off, x)
+		case ModeULS: // ULA+TM over Layer 2 over Sprites
+			// Mix() case 5: L2-priority > ULA+TM > Layer 2 > sprites.
+			// Only the sprite/Layer 2 order differs from USL.
+			paintSprites(off, x)
+			paintL2(off, x)
+			paintULAStencil(off)
+			paintTilemapOnULA(off, x)
+			paintL2Priority(off, x)
 		}
 	}
 }

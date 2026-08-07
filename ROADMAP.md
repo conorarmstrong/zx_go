@@ -104,6 +104,35 @@ downstream symptoms — see the development log.
   fictional layout citing a non-existent VHDL line — the only real read is
   zxnext.vhd:5897 = the input layout, so the mask is now `val&0xFA`).
   TestSpec_NR05_BitReorderingOnRead corrected.
+- [ ] **[should-do] Per-scanline latching of CPU mid-frame NextReg writes.**
+  The Next layers are composited at END OF FRAME (`ula.applyNextCompositor`,
+  driven from `Render`), reading whatever the registers hold at that moment.
+  The Copper is fine — it is stepped inside the row loop, so its MOVEs do
+  land per scanline — but a **CPU** write partway down the screen (an
+  interrupt handler or raster-wait loop touching Layer 2 scroll, a tile base
+  pointer, NR$15 or the transparency registers) applies retroactively to the
+  whole frame. Raster splits driven from the CPU rather than the Copper are
+  therefore not reproduced.
+
+  Design sketch: journal `(scanline, reg, oldValue, newValue)` for a
+  **whitelist** of purely-visual registers (L2 scroll NR$16/$17/$71, tilemap
+  base NR$6E/$6F, NR$15, NR$14/$4A/$4B/$4C) during frame execution; in
+  `applyNextCompositor`, rewind each journalled register to its frame-start
+  value, then apply entries in row order as the loop walks down. The
+  whitelist matters: replaying arbitrary NextReg writes through the
+  dispatcher at render time would re-trigger side effects (palette
+  auto-increment, sprite uploads, MMU paging).
+
+  Not attempted so far because it touches the Next render path, which is
+  pixel-golden against real software (Sonic, Nextoid, NBI, the Guide) — it
+  wants its own change with that corpus green before and after.
+
+  Related and also open: the Copper is stepped once per scanline at
+  end-of-line hcount, so a WAIT resolves to a whole line. Intra-line
+  (mid-scanline) raster precision would need a per-pixel renderer. The
+  per-scanline INSTRUCTION BUDGET is now hardware-correct
+  (`copper.InstructionsPerScanline`, v1.5.0) — it was previously a
+  CPU-clock-derived 64, which starved long lists.
 - [⊘] **[nice-to-have] #243/#245 compare-foreign bisect UX** + #244
   the reference emulator DZRP RunToInstruction polish — debugger ergonomics.
 - [⊘] **[v1.1] #237/#239 GHDL gate-level oracle testbench** — research;

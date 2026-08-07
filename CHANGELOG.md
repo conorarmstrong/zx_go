@@ -4,6 +4,87 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.5.0]
+
+A fidelity pass driven by an external review. Several of the reported items
+turned out to be already implemented (zexall and zexdoc both pass in CI, the
+debugger has had conditional breakpoints and a NextReg/palette/sprite widget
+set for some time, Microdrive and TR-DOS are first-class packages), but four
+were real and are fixed here. Everything below is derived from the FPGA core
+sources rather than from folklore, with the VHDL line references in the code.
+
+### Fixed
+
+- **Memory contention was wrong on every model.** `contentionDelay` hardcoded
+  a 228 T-state scanline and a single start T-state for all machines, and
+  decided contention purely on the address `0x4000-0x7FFF`. Three separate
+  faults, all now fixed against `zxnext.vhd:4489-4493` and `zxula.vhd:582-583`:
+  - The 48K ULA runs a **224 T-state line**, not 228. Keying it off 228 drifted
+    the contention window 4 T-states per line, so from display line 1 onward
+    most lines were charged at the wrong offsets — line 1 was charged nothing
+    at all where hardware charges 6. The window now advances by the model's
+    own line length.
+  - **Contention is decided by the paged bank, not the address.** The 48K
+    contends bank 5, the 128K family the odd banks (1/3/5/7), and the +2A/+3
+    banks >= 4; banks above 7 and ROM never contend. A contended bank paged
+    into `0xC000` was previously charged nothing (the old code's own comment
+    described the rule it did not implement), and the +3's all-RAM special
+    paging mode now correctly contends all four slots.
+  - **The +2A/+3 have their own delay pattern.** `zxula.vhd:583` ORs in a
+    second contended term for `i_timing_p3`, taking the line from 6 contended
+    T-states of every 8 to 7. They were using the 48K/128K table.
+
+- **Four of the eight NR$15 layer-priority modes did nothing.** The register
+  decodes bits 4:2 as a 3-bit field, but the live compositor only had cases
+  for 0-3. Modes 4 (USL), 5 (ULS) and the two additive blend orderings (6, 7)
+  fell through the switch with no case at all, so **Layer 2 and the sprite
+  layer vanished entirely** and the frame showed bare ULA. All eight now
+  render, matching the orderings in the FPGA-golden `Mix()` reference that
+  was already in the tree but unwired. The blend modes use NR$68's reset
+  blend selection; NR$68 itself is still not wired.
+
+- **TZX blocks were parsed and silently discarded.** Pure tone (0x12), pulse
+  sequence (0x13) and direct recording (0x15) never reached the pulse stream,
+  and 0x20 / 0x23 / 0x24 / 0x25 / 0x2A / 0x2B were consumed as no-ops so a
+  tape's **flow control was ignored** — jumps, counted loops and stops all had
+  no effect, and multi-load or protected tapes played their blocks in raw file
+  order. All of these are now played or executed. Note that parsing never
+  failed here; the content was dropped after a successful parse, which is why
+  it went unnoticed. **Still not implemented: 0x18 (CSW) and 0x19 (generalised
+  data block)** — both are separate compressed-stream formats, and they remain
+  skipped via their length field.
+
+- **The Copper's per-scanline instruction budget was derived from the CPU
+  clock.** It was a flat 64, reasoned from "one instruction per 4 CPU
+  T-states". The Copper is clocked from `i_CLK_28` (`zxnext.vhd:3942-3944`),
+  so its throughput is set by the video clock and does not move with the CPU
+  speed at all. A list with more than 64 instructions on one line was being
+  starved. The budget is now `copper.InstructionsPerScanline`, derived from
+  the line length: 912 instructions on a 456-column line.
+
+### Changed
+
+- **Frame pacing follows the machine, and no longer drifts.** The emulation
+  loop ran on a flat 20 ms `time.Ticker` for every model. No Sinclair machine
+  runs at 50.000 Hz — the 48K is 19.968 ms, the 128K family 19.992 ms, and the
+  Pentagon 20.480 ms — and a tick the host was too slow to service was
+  silently lost with nothing to correct for it. Frames are now scheduled
+  against a fixed wall-clock grid derived from the model's frame length and
+  CPU clock, so service time cannot accumulate as drift, an overrun drops the
+  frames it missed instead of running them back-to-back, and switching machine
+  takes effect on the next frame. Rendering follows the same period.
+
+### Known limitations
+
+- **Mid-frame NextReg writes from the CPU are not latched per scanline.** The
+  Next layers composite at end of frame, so a CPU write partway down the
+  screen applies retroactively to the whole frame. Copper-driven raster splits
+  are unaffected — the Copper is stepped inside the row loop. See ROADMAP.md
+  for the design sketch; it wants its own change with the pixel-golden corpus
+  green before and after.
+- **The Copper resolves WAITs to a whole scanline.** Intra-line raster
+  precision would need a per-pixel renderer.
+
 ## [v1.4.2]
 
 Reported as "the border is now black". The emulated frame was never wrong:

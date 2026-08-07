@@ -701,10 +701,97 @@ func (m *Memory) SetTStatePtr(p *uint64) {
 // Contention delay pattern (repeats every 8 T-states in contended region)
 var contentionPattern = [8]uint64{6, 5, 4, 3, 2, 1, 0, 0}
 
-// isContendedAddr returns true if the address is in contended memory (screen RAM).
-func (m *Memory) isContendedAddr(addr uint16) bool {
-	// 0x4000-0x7FFF is always contended (bank 5 = screen memory).
-	// On 128K, the contended banks are 1, 3, 5, 7 when paged into 0xC000.
+// plus3ContentionPattern is the +2A/+3 delay table. zxula.vhd:583 ORs a second
+// contended term in when i_timing_p3 is set:
+//
+//	wait_s <= '1' when ((hc_adj(3 downto 2) /= "00") or
+//	                    (hc_adj(3 downto 1) = "000" and i_timing_p3 = '1')) and ...
+//
+// The first term contends 12 of every 16 pixel slots (6 T-states of 8, the
+// classic pattern above); the +3 term lifts that to 14 of 16 — 7 contended
+// T-states of every 8, leaving one free slot. That is the documented
+// 1,0,7,6,5,4,3,2.
+var plus3ContentionPattern = [8]uint64{1, 0, 7, 6, 5, 4, 3, 2}
+
+// contentionTiming is the machine-timing personality that selects the
+// contended bank set and the stall pattern (zxnext.vhd machine_timing_48 /
+// _128 / _p3).
+type contentionTiming int
+
+const (
+	timingNone contentionTiming = iota // no contended memory at all
+	timing48
+	timing128
+	timingP3
+)
+
+// contentionTimingFor maps a model to its ULA timing personality.
+func contentionTimingFor(model roms.SpectrumModel) contentionTiming {
+	switch model {
+	case roms.Model48K:
+		return timing48
+	case roms.Model128K, roms.ModelPlus2:
+		return timing128
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		return timingP3
+	case roms.ModelNext:
+		// The Next boots in 128K timing; its selectable personality is not
+		// yet routed down to the contention model.
+		return timing128
+	}
+	return timingNone
+}
+
+// tStatesPerLineFor returns the model's ULA scanline length in 3.5 MHz
+// T-states: 224 on the 48K (zxula_timing.vhd c_max_hc = 447, so 448 pixel
+// columns at 2 pixels per T-state), 228 on the 128K family (c_max_hc = 455).
+// Mirrors ula.TStatesPerLineFor, which pkg/memory cannot import because
+// pkg/ula already depends on pkg/memory.
+func tStatesPerLineFor(model roms.SpectrumModel) int {
+	if model == roms.Model48K {
+		return 224
+	}
+	return 228
+}
+
+// isContendedBank reports whether the 16K bank currently paged at addr is a
+// contended one.
+//
+// Faithful to zxnext.vhd:4489-4493, where contention is decided by the PAGE
+// being accessed, not by the address:
+//
+//	mem_contend <= '0' when mem_active_page(7 downto 4) /= "0000" else
+//	               '1' when machine_timing_48  = '1' and mem_active_page(3 downto 1) = "101" else
+//	               '1' when machine_timing_128 = '1' and mem_active_page(1) = '1' else
+//	               '1' when machine_timing_p3  = '1' and mem_active_page(3) = '1' else
+//	               '0';
+//
+// mem_active_page counts 8K pages, so "bits 7:4 = 0000" is 16K banks 0-7,
+// "bits 3:1 = 101" is 16K bank 5, "bit 1" is the odd 16K banks, and "bit 3"
+// is 16K banks >= 4. This is what makes a contended bank paged into 0xC000
+// contend, and what gives the +3 its all-RAM special-paging behaviour.
+func (m *Memory) isContendedBank(addr uint16) bool {
+	page := m.memoryPageReadMap[addr>>14]
+	if page < 0 || page > 7 {
+		// A ROM page (>= 16), an unmapped slot, or a bank above 7 reached
+		// through the Next's $DFFD extension: never contended.
+		return false
+	}
+	switch contentionTimingFor(m.currentModel) {
+	case timing48:
+		return page == 5
+	case timing128:
+		return page&1 == 1
+	case timingP3:
+		return page >= 4
+	}
+	return false
+}
+
+// isContendedPortAddr reports whether a PORT address falls in the contended
+// address range. I/O contention keys off A15/A14 of the port number itself,
+// not off what is paged there, so this stays a pure address test.
+func (m *Memory) isContendedPortAddr(addr uint16) bool {
 	return addr >= 0x4000 && addr < 0x8000
 }
 
@@ -737,20 +824,40 @@ func (m *Memory) contentionDelay() uint64 {
 	if mult > 1 {
 		return 0
 	}
-	tstate := *m.TStates / mult
-	if tstate >= 14335 && tstate < 57344 {
-		line := (tstate - 14335) / 228
-		if line < 192 {
-			pos := (tstate - 14335) % 228
-			if pos < 128 {
-				// Scale the ULA hold (in ULA cycles) up to CPU T-states:
-				// at N× turbo a 6-cycle ULA hold stalls the CPU for 6*N
-				// of its own (faster) T-states. ×1 at 3.5 MHz.
-				return contentionPattern[pos%8] * mult
-			}
-		}
+	timing := contentionTimingFor(m.currentModel)
+	if timing == timingNone {
+		return 0
 	}
-	return 0
+
+	// The contention window must advance by the MODEL's own scanline length:
+	// the 48K ULA runs a 224-T line and the 128K family a 228-T one. Keying
+	// every model off 228 drifted the window 4 T-states per line on the 48K,
+	// so most display lines were charged at the wrong offsets (and some, like
+	// display line 1, were charged nothing at all).
+	tPerLine := uint64(tStatesPerLineFor(m.currentModel))
+
+	// Display line 0's fetch begins 64 scanlines into the frame; the ULA
+	// prefetches one T-state ahead of it, so the first contended T-state is
+	// the one before — the canonical 14335 on the 48K's 224-T line. This is
+	// the same 64-line display origin pkg/ula uses for the floating bus and
+	// border timing, so contention and the raster cannot disagree.
+	start := 64*tPerLine - 1
+	tstate := *m.TStates / mult
+	if tstate < start {
+		return 0
+	}
+	off := tstate - start
+	if off/tPerLine >= 192 { // past the last display line
+		return 0
+	}
+	pos := off % tPerLine
+	if pos >= 128 { // the ULA only fetches for 128 T-states of each line
+		return 0
+	}
+	if timing == timingP3 {
+		return plus3ContentionPattern[pos%8]
+	}
+	return contentionPattern[pos%8]
 }
 
 // ContendMemory adds contention delay if the address is in contended memory.
@@ -758,7 +865,7 @@ func (m *Memory) ContendMemory(addr uint16) {
 	if !m.ContentionEnabled || m.TStates == nil || m.RAMContentionDisabled {
 		return
 	}
-	if m.isContendedAddr(addr) {
+	if m.isContendedBank(addr) {
 		*m.TStates += m.contentionDelay()
 	}
 }
@@ -778,7 +885,7 @@ func (m *Memory) ContendPort(addr uint16) {
 	}
 
 	isULAPort := (addr & 0x01) == 0
-	isContended := m.isContendedAddr(addr)
+	isContended := m.isContendedPortAddr(addr)
 
 	if isContended && isULAPort {
 		// Contended address, ULA port: C:1, C:3

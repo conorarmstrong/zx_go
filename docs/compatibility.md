@@ -152,9 +152,18 @@ mark anything unverified as Untested.
 
 ## Tape format edge cases
 
-The `pkg/ula` tape pipeline supports both TAP (load + save) and TZX
-(load + save, blocks 0x10 / 0x11 / 0x14). Edge cases worth verifying
-manually:
+The `pkg/ula` tape pipeline supports both TAP (load + save) and TZX.
+On load it plays the data blocks (0x10 / 0x11 / 0x14), the signal-only
+blocks (0x12 pure tone, 0x13 pulse sequence, 0x15 direct recording,
+0x20 pause) and honours the flow-control blocks (0x20-with-zero and
+0x2A stops, 0x23 jump, 0x24 / 0x25 counted loops, 0x2B signal level).
+Metadata blocks (group, text, archive info, hardware type, custom) are
+parsed and skipped. **Not implemented: 0x18 (CSW recording) and 0x19
+(generalised data block)** — both are separate compressed-stream
+formats; they are skipped via their length field, so a tape relying on
+them loses that content. TZX save covers 0x10 / 0x11 / 0x14 only.
+
+Edge cases worth verifying manually:
 
 - **Speedlock / Alkatraz loaders**: turbo blocks with non-standard pilot
   lengths. Format support is present; correct decoding of every

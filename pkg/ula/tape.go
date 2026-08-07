@@ -41,9 +41,61 @@ type TapePlayer struct {
 	// skips a block), which desyncs any real-time / custom (turbo) loader that
 	// takes over after a trapped block and causes "R Tape loading error".
 	pulseBlock int
+
+	// loopStack tracks open TZX 0x24 loops: one frame per nested loop,
+	// holding the block index just after the loop-start and the number of
+	// iterations still to run.
+	loopStack []tapeLoopFrame
+
+	// is48K reports whether the host machine is a 48K, which is what TZX
+	// block 0x2A keys off. Nil means "not a 48K", so the block is a no-op.
+	is48K func() bool
+}
+
+// tapeLoopFrame is one open TZX counted loop.
+type tapeLoopFrame struct {
+	bodyStart int    // index of the first block inside the loop
+	remaining uint16 // iterations still to run after the current one
+}
+
+// SetIs48K installs the predicate TZX block 0x2A ("stop the tape if in 48K
+// mode") consults. Without it the block is treated as a no-op.
+func (tp *TapePlayer) SetIs48K(fn func() bool) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	tp.is48K = fn
+}
+
+// tapeKind distinguishes the TZX block types the player can act on. Blocks
+// that carry no playable signal and no flow control (group markers, text,
+// archive info) are still skipped at parse time and never become a tapeBlock.
+type tapeKind byte
+
+const (
+	kindData      tapeKind = iota // 0x10 / 0x11 / 0x14 and TAP: pilot + sync + data bytes
+	kindPureTone                  // 0x12: N pulses of one length
+	kindPulseSeq                  // 0x13: an explicit list of pulse lengths
+	kindDirect                    // 0x15: one EAR level per sample
+	kindPause                     // 0x20: silence, or "stop the tape" when zero
+	kindStop48K                   // 0x2A: stop the tape, but only on a 48K machine
+	kindJump                      // 0x23: relative jump to another block
+	kindLoopStart                 // 0x24: begin a counted loop
+	kindLoopEnd                   // 0x25: end of the counted loop
+	kindSetLevel                  // 0x2B: force the EAR line to a level
+)
+
+// playable reports whether the kind produces pulses. The rest are flow
+// control, executed by advance() without generating any signal.
+func (k tapeKind) playable() bool {
+	switch k {
+	case kindData, kindPureTone, kindPulseSeq, kindDirect, kindPause:
+		return true
+	}
+	return false
 }
 
 type tapeBlock struct {
+	kind tapeKind
 	data []byte
 
 	// Optional pause (ms) appended after this block. Used by TZX loader.
@@ -59,6 +111,21 @@ type tapeBlock struct {
 	onePulse   uint16
 	pilotLen   uint16
 	usedBits   byte
+
+	// kindPureTone: one pulse length repeated toneCount times.
+	toneLen   uint16
+	toneCount uint16
+	// kindPulseSeq: the pulse lengths, played verbatim.
+	seq []uint16
+	// kindDirect: T-states per sample. data holds one bit per sample,
+	// most-significant first; usedBits gives the valid bits of the last byte.
+	sampleTStates uint16
+	// kindJump: signed block-relative offset (1 = the next block).
+	jumpOffset int16
+	// kindLoopStart: total number of iterations.
+	loopCount uint16
+	// kindSetLevel: the level to force the EAR line to.
+	level bool
 }
 
 // NewTapePlayer creates an empty tape player.
@@ -226,6 +293,18 @@ func (tp *TapePlayer) NextBlock() []byte {
 		tp.dataConsumed = false
 		tp.pulseBlock = -1 // force the real-time player to resync
 	}
+	// The trap hands the guest raw block bytes, so walk past anything that
+	// isn't a data block — flow control and bare signal blocks (pure tone,
+	// pulse sequence, direct recording) have no bytes to give it.
+	for tp.blockIdx < len(tp.blocks) && tp.blocks[tp.blockIdx].kind != kindData {
+		if !tp.advance() {
+			return nil
+		}
+		if tp.blocks[tp.blockIdx].kind == kindData {
+			break
+		}
+		tp.blockIdx++
+	}
 	if tp.blockIdx >= len(tp.blocks) {
 		return nil
 	}
@@ -263,6 +342,24 @@ func (tp *TapePlayer) Blocks() []BlockSummary {
 	for i, b := range tp.blocks {
 		s := BlockSummary{Index: i, Length: len(b.data)}
 		switch {
+		case b.kind == kindPureTone:
+			s.Type = "Pure tone"
+		case b.kind == kindPulseSeq:
+			s.Type = "Pulse sequence"
+		case b.kind == kindDirect:
+			s.Type = "Direct recording"
+		case b.kind == kindPause:
+			s.Type = "Pause"
+		case b.kind == kindStop48K:
+			s.Type = "Stop (48K)"
+		case b.kind == kindJump:
+			s.Type = "Jump"
+		case b.kind == kindLoopStart:
+			s.Type = "Loop start"
+		case b.kind == kindLoopEnd:
+			s.Type = "Loop end"
+		case b.kind == kindSetLevel:
+			s.Type = "Signal level"
 		case b.turbo && b.pilotLen == 0:
 			s.Type = "Pure data"
 		case b.turbo:
@@ -270,7 +367,7 @@ func (tp *TapePlayer) Blocks() []BlockSummary {
 		default:
 			s.Type = "Data"
 		}
-		if len(b.data) > 0 {
+		if b.kind == kindData && len(b.data) > 0 {
 			s.FlagByte = b.data[0]
 			if b.data[0] == 0x00 && !b.turbo {
 				s.Type = "Header"
@@ -332,7 +429,9 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 	// real-time/custom loader taking over after a trapped block reads the
 	// correct block rather than replaying the previous one or skipping ahead.
 	if tp.pulseBlock != tp.blockIdx {
-		if tp.blockIdx >= len(tp.blocks) {
+		// Execute any flow-control blocks sitting at the new position before
+		// generating pulses (TZX jump / loop / stop).
+		if !tp.advance() {
 			tp.playing = false
 			return false
 		}
@@ -367,7 +466,7 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 	// If we've exhausted all pulses, move to the next block.
 	if tp.pulseIdx >= len(tp.pulses) {
 		tp.blockIdx++
-		if tp.blockIdx >= len(tp.blocks) {
+		if !tp.advance() {
 			tp.playing = false
 			return false
 		}
@@ -399,6 +498,33 @@ func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
 // generatePulsesData is generatePulses plus the count of pulses that precede the
 // trailing inter-block pause (the pilot/sync/data pulses).
 func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPulses int) {
+	switch blk.kind {
+	case kindPureTone:
+		// 0x12: pulse length repeated pulse-count times. The spec gives the
+		// block no trailing pause.
+		pulses = make([]uint16, 0, blk.toneCount)
+		for i := 0; i < int(blk.toneCount); i++ {
+			pulses = append(pulses, blk.toneLen)
+		}
+		return pulses, len(pulses)
+	case kindPulseSeq:
+		// 0x13: the listed pulse lengths, verbatim.
+		pulses = make([]uint16, len(blk.seq))
+		copy(pulses, blk.seq)
+		return pulses, len(pulses)
+	case kindDirect:
+		// 0x15: one EAR LEVEL per sample rather than a pulse length, so a run
+		// of equal samples collapses into a single pulse of
+		// runLength * sampleTStates.
+		pulses = directRecordingPulses(blk)
+		dataPulses = len(pulses)
+		return append(pulses, silencePulses(uint64(blk.pause)*3500)...), dataPulses
+	case kindPause:
+		// 0x20 with a non-zero duration: pure silence. The zero case means
+		// "stop the tape" and is handled by advance(), never played.
+		return silencePulses(uint64(blk.pause) * 3500), 0
+	}
+
 	data := blk.data
 	if len(data) == 0 {
 		return nil, 0
@@ -470,14 +596,144 @@ func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPu
 		// 3500 T-states per millisecond on a 3.5MHz Z80.
 		pauseTStates = uint64(blk.pause) * 3500
 	}
-	for pauseTStates > 0 {
-		chunk := uint16(65535)
-		if pauseTStates < uint64(chunk) {
-			chunk = uint16(pauseTStates)
-		}
-		pulses = append(pulses, chunk)
-		pauseTStates -= uint64(chunk)
-	}
+	pulses = append(pulses, silencePulses(pauseTStates)...)
 
 	return pulses, dataPulses
+}
+
+// silencePulses splits a silence into uint16-sized chunks, because pulse
+// durations are stored as uint16 T-states.
+func silencePulses(tstates uint64) []uint16 {
+	var out []uint16
+	for tstates > 0 {
+		chunk := uint16(65535)
+		if tstates < uint64(chunk) {
+			chunk = uint16(tstates)
+		}
+		out = append(out, chunk)
+		tstates -= uint64(chunk)
+	}
+	return out
+}
+
+// directRecordingPulses converts a TZX 0x15 sample stream into pulse
+// durations. Each bit is one sample of the EAR line, most-significant first;
+// consecutive samples at the same level form one pulse.
+func directRecordingPulses(blk tapeBlock) []uint16 {
+	if len(blk.data) == 0 || blk.sampleTStates == 0 {
+		return nil
+	}
+	usedBits := int(blk.usedBits)
+	if usedBits < 1 || usedBits > 8 {
+		usedBits = 8
+	}
+
+	var out []uint16
+	run := 0
+	var cur bool
+	first := true
+	flush := func() {
+		if run == 0 {
+			return
+		}
+		// A run longer than a uint16 pulse has to be split; the level is
+		// unchanged across the split, which the player reproduces by
+		// emitting the remainder as further pulses of the same level is not
+		// possible — so clamp, which only affects pathologically long runs.
+		total := uint64(run) * uint64(blk.sampleTStates)
+		for total > 0 {
+			chunk := uint64(65535)
+			if total < chunk {
+				chunk = total
+			}
+			out = append(out, uint16(chunk))
+			total -= chunk
+		}
+	}
+	for i, b := range blk.data {
+		bits := 8
+		if i == len(blk.data)-1 {
+			bits = usedBits
+		}
+		for bit := 7; bit >= 8-bits; bit-- {
+			lvl := b&(1<<bit) != 0
+			if first {
+				cur, first, run = lvl, false, 1
+				continue
+			}
+			if lvl == cur {
+				run++
+				continue
+			}
+			flush()
+			cur, run = lvl, 1
+		}
+	}
+	flush()
+	return out
+}
+
+// advance executes any flow-control blocks at the current position and leaves
+// blockIdx on the next block that produces pulses. It reports false when the
+// tape has run out or a stop block halted playback.
+//
+// TZX flow control (0x23 jump, 0x24/0x25 loops, 0x20-with-zero and 0x2A
+// stops) was previously parsed and discarded, so multi-load and protected
+// tapes played their blocks in raw file order.
+func (tp *TapePlayer) advance() bool {
+	// Bound the walk so a self-referential jump or an unmatched loop end
+	// cannot spin forever; a real tape resolves in far fewer steps.
+	const maxSteps = 1 << 16
+	for steps := 0; steps < maxSteps; steps++ {
+		if tp.blockIdx < 0 || tp.blockIdx >= len(tp.blocks) {
+			return false
+		}
+		blk := tp.blocks[tp.blockIdx]
+		if blk.kind.playable() {
+			// A zero-length pause block is the spec's "stop the tape".
+			if blk.kind == kindPause && blk.pause == 0 {
+				return false
+			}
+			return true
+		}
+		switch blk.kind {
+		case kindStop48K:
+			if tp.is48K != nil && tp.is48K() {
+				return false
+			}
+			tp.blockIdx++
+		case kindJump:
+			// The offset is relative to the jump block itself: 1 is the
+			// following block, 0 would be the jump block again.
+			tp.blockIdx += int(blk.jumpOffset)
+		case kindLoopStart:
+			if blk.loopCount == 0 {
+				tp.blockIdx++
+				break
+			}
+			tp.loopStack = append(tp.loopStack, tapeLoopFrame{
+				bodyStart: tp.blockIdx + 1,
+				remaining: blk.loopCount - 1,
+			})
+			tp.blockIdx++
+		case kindLoopEnd:
+			if n := len(tp.loopStack); n > 0 {
+				f := &tp.loopStack[n-1]
+				if f.remaining > 0 {
+					f.remaining--
+					tp.blockIdx = f.bodyStart
+					break
+				}
+				tp.loopStack = tp.loopStack[:n-1]
+			}
+			tp.blockIdx++
+		case kindSetLevel:
+			// 0x2B forces the EAR line rather than toggling it.
+			tp.earBit = blk.level
+			tp.blockIdx++
+		default:
+			tp.blockIdx++
+		}
+	}
+	return false
 }
