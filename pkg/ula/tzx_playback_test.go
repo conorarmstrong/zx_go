@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // LoadTZX used to parse every one of these block types and then throw the
@@ -50,7 +51,7 @@ func TestTZXPureTonePlaysItsPulses(t *testing.T) {
 		t.Fatalf("block count = %d, want 1", tp.BlockCount())
 	}
 	pulses := tp.generatePulses(tp.blocks[0])
-	want := []uint16{2000, 2000, 2000, 2000, 2000}
+	want := []uint32{2000, 2000, 2000, 2000, 2000}
 	if len(pulses) != len(want) {
 		t.Fatalf("pulses = %v, want %v", pulses, want)
 	}
@@ -69,7 +70,7 @@ func TestTZXPulseSequencePlaysEachPulse(t *testing.T) {
 	tp := loadTZXBytes(t, b)
 
 	pulses := tp.generatePulses(tp.blocks[0])
-	want := []uint16{100, 200, 300}
+	want := []uint32{100, 200, 300}
 	if len(pulses) != len(want) {
 		t.Fatalf("pulses = %v, want %v", pulses, want)
 	}
@@ -95,7 +96,7 @@ func TestTZXDirectRecordingRunLengthsSamples(t *testing.T) {
 	tp := loadTZXBytes(t, b)
 
 	pulses := tp.generatePulses(tp.blocks[0])
-	want := []uint16{200, 200, 200, 200}
+	want := []uint32{200, 200, 200, 200}
 	if len(pulses) != len(want) {
 		t.Fatalf("pulses = %v, want %v", pulses, want)
 	}
@@ -205,9 +206,9 @@ func TestTZXLoopRepeatsBlocks(t *testing.T) {
 func TestTZXStopIn48KOnlyStopsOn48K(t *testing.T) {
 	build := func() *tzxBuilder {
 		b := newTZXBuilder()
-		b.standardBlock([]byte{0xAA})   // 0
+		b.standardBlock([]byte{0xAA})       // 0
 		b.raw(0x2A, 0x00, 0x00, 0x00, 0x00) // 1: stop if 48K
-		b.standardBlock([]byte{0xBB})   // 2
+		b.standardBlock([]byte{0xBB})       // 2
 		return b
 	}
 
@@ -263,5 +264,70 @@ func TestTZXControlBlocksAreNotFastLoadable(t *testing.T) {
 	second := tp.NextBlock()
 	if len(second) != 1 || second[0] != 0xBB {
 		t.Fatalf("second fast-load block = %v, want [0xBB]", second)
+	}
+}
+
+// TestTZXLongRunIsOnePulse pins that a same-level run is never split. The
+// player toggles the EAR line at every pulse boundary, so emitting a long run
+// as several chunks would come back as alternating levels instead of the one
+// level the samples recorded. 900 samples of 100 T-states is 90000 T — past
+// what a uint16 pulse could have held.
+func TestTZXLongRunIsOnePulse(t *testing.T) {
+	const samples = 904 // 113 bytes of 0xFF
+	body := []byte{0x15, 0x64, 0x00, 0x00, 0x00, 0x08}
+	body = append(body, byte(samples/8), 0x00, 0x00)
+	for i := 0; i < samples/8; i++ {
+		body = append(body, 0xFF)
+	}
+	b := newTZXBuilder()
+	b.raw(body...)
+	tp := loadTZXBytes(t, b)
+
+	pulses := tp.generatePulses(tp.blocks[0])
+	if len(pulses) != 1 {
+		t.Fatalf("a single %d-sample run produced %d pulses, want 1 (a split run toggles the EAR line mid-run)",
+			samples, len(pulses))
+	}
+	if want := uint32(samples * 100); pulses[0] != want {
+		t.Errorf("run length = %d T-states, want %d", pulses[0], want)
+	}
+}
+
+// TestTZXLongPauseIsOnePulse pins the same property for a silence: a
+// one-second gap holds one level throughout and must not be chunked into
+// dozens of spurious edges.
+func TestTZXLongPauseIsOnePulse(t *testing.T) {
+	b := newTZXBuilder()
+	b.raw(0x20, 0xE8, 0x03) // 1000 ms = 3,500,000 T-states
+	tp := loadTZXBytes(t, b)
+
+	pulses := tp.generatePulses(tp.blocks[0])
+	if len(pulses) != 1 {
+		t.Fatalf("a 1s pause produced %d pulses, want 1", len(pulses))
+	}
+	if want := uint32(1000 * 3500); pulses[0] != want {
+		t.Errorf("pause = %d T-states, want %d", pulses[0], want)
+	}
+}
+
+// TestNextBlockTerminatesOnACyclicTape guards the fast-load trap against a
+// tape whose flow control loops forever over blocks that carry no data — a
+// jump backwards over a pause, say. NextBlock must give up and report the
+// tape spent rather than spinning.
+func TestNextBlockTerminatesOnACyclicTape(t *testing.T) {
+	b := newTZXBuilder()
+	b.raw(0x20, 0x64, 0x00) // 0: pause (playable, but no data for the trap)
+	b.raw(0x23, 0xFF, 0xFF) // 1: jump -1, back to the pause
+	tp := loadTZXBytes(t, b)
+
+	done := make(chan []byte, 1)
+	go func() { done <- tp.NextBlock() }()
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Errorf("NextBlock = %v, want nil (no data block on this tape)", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("NextBlock did not terminate on a cyclic tape")
 	}
 }

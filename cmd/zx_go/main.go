@@ -1200,7 +1200,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		// immediately. The pacer keeps the frames on a fixed wall-clock grid
 		// (no accumulated drift) and drops missed frames instead of running
 		// them back-to-back — see framepacing.go.
-		pacer := newFramePacer(time.Now(), frameDurationForModel(e.model))
+		pacer := newFramePacer(time.Now())
 		timer := time.NewTimer(frameDurationForModel(e.model))
 		defer timer.Stop()
 

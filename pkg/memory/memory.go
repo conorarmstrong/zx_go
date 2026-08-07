@@ -93,6 +93,12 @@ type Memory struct {
 	// derive ContentionEnabled from it.
 	contentionDisabled bool
 
+	// contendTiming and contendTPerLine cache the model's contention shape.
+	// isContendedBank is on the hot path (every memory access), so neither is
+	// re-derived from currentModel per access. Both are set by setupModel.
+	contendTiming   contentionTiming
+	contendTPerLine uint64
+
 	// Beta Disk / TR-DOS ROM auto-paging. When betaEnabled, the Beta hardware
 	// swaps its TR-DOS ROM over $0000-$3FFF when the CPU fetches an instruction
 	// from the $3Dxx entry vector (while the 48 BASIC ROM is mapped) and swaps
@@ -777,7 +783,7 @@ func (m *Memory) isContendedBank(addr uint16) bool {
 		// through the Next's $DFFD extension: never contended.
 		return false
 	}
-	switch contentionTimingFor(m.currentModel) {
+	switch m.contendTiming {
 	case timing48:
 		return page == 5
 	case timing128:
@@ -824,8 +830,7 @@ func (m *Memory) contentionDelay() uint64 {
 	if mult > 1 {
 		return 0
 	}
-	timing := contentionTimingFor(m.currentModel)
-	if timing == timingNone {
+	if m.contendTiming == timingNone {
 		return 0
 	}
 
@@ -834,7 +839,7 @@ func (m *Memory) contentionDelay() uint64 {
 	// every model off 228 drifted the window 4 T-states per line on the 48K,
 	// so most display lines were charged at the wrong offsets (and some, like
 	// display line 1, were charged nothing at all).
-	tPerLine := uint64(tStatesPerLineFor(m.currentModel))
+	tPerLine := m.contendTPerLine
 
 	// Display line 0's fetch begins 64 scanlines into the frame; the ULA
 	// prefetches one T-state ahead of it, so the first contended T-state is
@@ -854,7 +859,7 @@ func (m *Memory) contentionDelay() uint64 {
 	if pos >= 128 { // the ULA only fetches for 128 T-states of each line
 		return 0
 	}
-	if timing == timingP3 {
+	if m.contendTiming == timingP3 {
 		return plus3ContentionPattern[pos%8]
 	}
 	return contentionPattern[pos%8]
@@ -992,6 +997,11 @@ func (m *Memory) setupModel(model roms.SpectrumModel) error {
 	// The Pentagon has no contended memory; every other model contends per the
 	// ULA pattern. Centralised here so SwitchModel re-applies it correctly.
 	m.contentionDisabled = model == roms.ModelPentagon
+
+	// Cache the contention shape: isContendedBank runs on EVERY memory access,
+	// so it must not re-derive these from the model each time.
+	m.contendTiming = contentionTimingFor(model)
+	m.contendTPerLine = uint64(tStatesPerLineFor(model))
 
 	var err error
 	switch model {

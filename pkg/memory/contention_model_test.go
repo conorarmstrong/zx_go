@@ -247,3 +247,33 @@ func TestPentagonNeverContends(t *testing.T) {
 		}
 	}
 }
+
+// TestSwitchModelReapplaysContentionShape guards the cached contention shape
+// (contendTiming / contendTPerLine, set by setupModel so isContendedBank stays
+// cheap on the hot path): a runtime machine switch must refresh it, or the new
+// machine keeps contending like the old one.
+func TestSwitchModelReapplaysContentionShape(t *testing.T) {
+	mem, ts := newContentionMem(t, "test_roms_contend_switch", roms.Model48K)
+
+	// 48K: bank 2 at 0x8000 is uncontended, and the window uses a 224-T line.
+	if got := delayAt(mem, ts, firstContendedT(roms.Model48K), 0x8000); got != 0 {
+		t.Fatalf("48K bank 2: delay %d, want 0", got)
+	}
+
+	if err := mem.SwitchModel(roms.ModelPlus3); err != nil {
+		t.Fatal(err)
+	}
+
+	// +3: banks >= 4 contend, so bank 5 at 0x4000 does; the pattern is the
+	// +3 table and the line is 228 T.
+	base := firstContendedT(roms.ModelPlus3)
+	if got := delayAt(mem, ts, base, 0x4000); got != plus3ContentionPattern[0] {
+		t.Errorf("+3 bank 5 after switch: delay %d, want %d (still on the 48K shape?)",
+			got, plus3ContentionPattern[0])
+	}
+	// A second display line proves the 228-T line length came across too.
+	if got := delayAt(mem, ts, base+228, 0x4000); got != plus3ContentionPattern[0] {
+		t.Errorf("+3 display line 1 after switch: delay %d, want %d",
+			got, plus3ContentionPattern[0])
+	}
+}

@@ -54,7 +54,7 @@ type framePacer struct {
 
 // newFramePacer anchors the grid at start. The period is supplied per call
 // to next, so a mid-run machine switch takes effect on the very next frame.
-func newFramePacer(start time.Time, _ time.Duration) *framePacer {
+func newFramePacer(start time.Time) *framePacer {
 	return &framePacer{last: start}
 }
 

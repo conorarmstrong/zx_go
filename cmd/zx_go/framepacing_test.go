@@ -52,7 +52,7 @@ func TestFramePacerHoldsCadenceWithoutDrift(t *testing.T) {
 	const period = 20 * time.Millisecond
 	start := time.Unix(0, 0)
 
-	p := newFramePacer(start, period)
+	p := newFramePacer(start)
 	now := start
 	for i := 1; i <= 100; i++ {
 		// Each frame takes 3 ms of real work before the pacer is consulted.
@@ -72,7 +72,7 @@ func TestFramePacerHoldsCadenceWithoutDrift(t *testing.T) {
 func TestFramePacerSkipsMissedFrames(t *testing.T) {
 	const period = 20 * time.Millisecond
 	start := time.Unix(0, 0)
-	p := newFramePacer(start, period)
+	p := newFramePacer(start)
 
 	// A frame that took 3.5 periods to service.
 	now := start.Add(70 * time.Millisecond)
@@ -98,7 +98,7 @@ func TestFramePacerSkipsMissedFrames(t *testing.T) {
 // keeping the old cadence.
 func TestFramePacerFollowsAModelSwitch(t *testing.T) {
 	start := time.Unix(0, 0)
-	p := newFramePacer(start, 20*time.Millisecond)
+	p := newFramePacer(start)
 
 	now := start
 	wait := p.next(now, 20*time.Millisecond)

@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.5.1]
+
+Self-review of the v1.5.0 changes. Three defects found in that release's own
+new code, plus one hot-path cost.
+
+### Fixed
+
+- **The fast-load trap could hang the emulator on a cyclic tape.** v1.5.0 made
+  `NextBlock` walk past the non-data blocks it had just taught the player to
+  understand, but that walk was unbounded — and TZX flow control can move the
+  cursor backwards. A tape whose jump or loop cycles over blocks carrying no
+  data (a jump of -1 over a pause, say) spun forever. Both tape walks now share
+  one bound.
+- **Long same-level runs were split into a toggling chain.** Pulse durations
+  were `uint16`, so anything past 65535 T-states had to be emitted as several
+  pulses — and the player toggles the EAR line at every pulse boundary, so a
+  run came back as alternating levels instead of the one level recorded. This
+  hit the new direct-recording block (0x15) and, pre-existing, every trailing
+  pause: a one-second gap was carrying ~53 spurious edges. Durations are now
+  `uint32` and a run is one pulse.
+- **A stale contention shape after a machine switch.** Deciding contention by
+  the paged bank put a model lookup on every memory access, so the timing
+  personality and line length are now cached — and the cache is refreshed by
+  `setupModel`, which both `New` and `SwitchModel` call. Pinned by a test, as
+  a stale cache would leave a switched-to machine contending like the old one.
+
 ## [v1.5.0]
 
 A fidelity pass driven by an external review. Several of the reported items

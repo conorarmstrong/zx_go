@@ -3,6 +3,7 @@ package ula
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 )
@@ -20,7 +21,7 @@ type TapePlayer struct {
 	earBit     bool
 
 	// Current pulse sequence being played
-	pulses   []uint16
+	pulses   []uint32
 	pulseIdx int
 	// dataPulses is the number of pulses in `pulses` that make up the block's
 	// pilot/sync/data (i.e. everything before the trailing inter-block pause).
@@ -51,6 +52,11 @@ type TapePlayer struct {
 	// block 0x2A keys off. Nil means "not a 48K", so the block is a no-op.
 	is48K func() bool
 }
+
+// maxTapeWalkSteps bounds any walk over the block list that TZX flow control
+// can steer. A jump or loop end moves the cursor backwards, so a malformed or
+// hostile tape can describe a cycle; a real tape resolves in far fewer steps.
+const maxTapeWalkSteps = 1 << 16
 
 // tapeLoopFrame is one open TZX counted loop.
 type tapeLoopFrame struct {
@@ -296,8 +302,12 @@ func (tp *TapePlayer) NextBlock() []byte {
 	// The trap hands the guest raw block bytes, so walk past anything that
 	// isn't a data block — flow control and bare signal blocks (pure tone,
 	// pulse sequence, direct recording) have no bytes to give it.
-	for tp.blockIdx < len(tp.blocks) && tp.blocks[tp.blockIdx].kind != kindData {
-		if !tp.advance() {
+	//
+	// Bounded: advance() can move blockIdx BACKWARDS (a jump or a loop end),
+	// so a tape that cycles over blocks carrying no data would otherwise spin
+	// here forever and hang the emulator on a fast-load trap.
+	for steps := 0; tp.blockIdx < len(tp.blocks) && tp.blocks[tp.blockIdx].kind != kindData; steps++ {
+		if steps >= maxTapeWalkSteps || !tp.advance() {
 			return nil
 		}
 		if tp.blocks[tp.blockIdx].kind == kindData {
@@ -490,27 +500,29 @@ func (tp *TapePlayer) Update(tstates uint64) bool {
 // TZX 0x11 (turbo) and 0x14 (pure data) blocks override these timings via the
 // fields on tapeBlock; pure data blocks have pilotLen == 0 and so emit no
 // pilot or sync.
-func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint16 {
+func (tp *TapePlayer) generatePulses(blk tapeBlock) []uint32 {
 	pulses, _ := tp.generatePulsesData(blk)
 	return pulses
 }
 
 // generatePulsesData is generatePulses plus the count of pulses that precede the
 // trailing inter-block pause (the pilot/sync/data pulses).
-func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPulses int) {
+func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint32, dataPulses int) {
 	switch blk.kind {
 	case kindPureTone:
 		// 0x12: pulse length repeated pulse-count times. The spec gives the
 		// block no trailing pause.
-		pulses = make([]uint16, 0, blk.toneCount)
+		pulses = make([]uint32, 0, blk.toneCount)
 		for i := 0; i < int(blk.toneCount); i++ {
-			pulses = append(pulses, blk.toneLen)
+			pulses = append(pulses, uint32(blk.toneLen))
 		}
 		return pulses, len(pulses)
 	case kindPulseSeq:
 		// 0x13: the listed pulse lengths, verbatim.
-		pulses = make([]uint16, len(blk.seq))
-		copy(pulses, blk.seq)
+		pulses = make([]uint32, len(blk.seq))
+		for i, p := range blk.seq {
+			pulses[i] = uint32(p)
+		}
 		return pulses, len(pulses)
 	case kindDirect:
 		// 0x15: one EAR LEVEL per sample rather than a pulse length, so a run
@@ -557,16 +569,16 @@ func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPu
 	}
 
 	// Pre-allocate: pilot + 2 sync + 16 pulses per byte + pause padding.
-	pulses = make([]uint16, 0, pilotPulses+2+len(data)*16+50)
+	pulses = make([]uint32, 0, pilotPulses+2+len(data)*16+50)
 
 	// Pilot tone
 	for i := 0; i < pilotPulses; i++ {
-		pulses = append(pulses, pilotPulse)
+		pulses = append(pulses, uint32(pilotPulse))
 	}
 
 	// Sync pulses (only if we emitted a pilot — pure data blocks have neither).
 	if pilotPulses > 0 {
-		pulses = append(pulses, syncFirst, syncSecond)
+		pulses = append(pulses, uint32(syncFirst), uint32(syncSecond))
 	}
 
 	// Data bits. The last byte may have fewer than 8 valid bits (TZX usedBits).
@@ -577,9 +589,9 @@ func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPu
 		}
 		for bit := 7; bit >= 8-bits; bit-- {
 			if b&(1<<bit) != 0 {
-				pulses = append(pulses, onePulse, onePulse)
+				pulses = append(pulses, uint32(onePulse), uint32(onePulse))
 			} else {
-				pulses = append(pulses, zeroPulse, zeroPulse)
+				pulses = append(pulses, uint32(zeroPulse), uint32(zeroPulse))
 			}
 		}
 	}
@@ -601,17 +613,22 @@ func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint16, dataPu
 	return pulses, dataPulses
 }
 
-// silencePulses splits a silence into uint16-sized chunks, because pulse
-// durations are stored as uint16 T-states.
-func silencePulses(tstates uint64) []uint16 {
-	var out []uint16
+// silencePulses renders a silence as a single pulse. The EAR line holds one
+// level for the whole gap, so it must NOT be split: the player toggles at
+// every pulse boundary, and chunking a 1-second pause into 65535-T-state
+// pieces produced ~53 spurious edges through it.
+func silencePulses(tstates uint64) []uint32 {
+	if tstates == 0 {
+		return nil
+	}
+	var out []uint32
 	for tstates > 0 {
-		chunk := uint16(65535)
-		if tstates < uint64(chunk) {
-			chunk = uint16(tstates)
+		chunk := uint64(math.MaxUint32)
+		if tstates < chunk {
+			chunk = tstates
 		}
-		out = append(out, chunk)
-		tstates -= uint64(chunk)
+		out = append(out, uint32(chunk))
+		tstates -= chunk
 	}
 	return out
 }
@@ -619,7 +636,7 @@ func silencePulses(tstates uint64) []uint16 {
 // directRecordingPulses converts a TZX 0x15 sample stream into pulse
 // durations. Each bit is one sample of the EAR line, most-significant first;
 // consecutive samples at the same level form one pulse.
-func directRecordingPulses(blk tapeBlock) []uint16 {
+func directRecordingPulses(blk tapeBlock) []uint32 {
 	if len(blk.data) == 0 || blk.sampleTStates == 0 {
 		return nil
 	}
@@ -628,7 +645,7 @@ func directRecordingPulses(blk tapeBlock) []uint16 {
 		usedBits = 8
 	}
 
-	var out []uint16
+	var out []uint32
 	run := 0
 	var cur bool
 	first := true
@@ -636,19 +653,10 @@ func directRecordingPulses(blk tapeBlock) []uint16 {
 		if run == 0 {
 			return
 		}
-		// A run longer than a uint16 pulse has to be split; the level is
-		// unchanged across the split, which the player reproduces by
-		// emitting the remainder as further pulses of the same level is not
-		// possible — so clamp, which only affects pathologically long runs.
-		total := uint64(run) * uint64(blk.sampleTStates)
-		for total > 0 {
-			chunk := uint64(65535)
-			if total < chunk {
-				chunk = total
-			}
-			out = append(out, uint16(chunk))
-			total -= chunk
-		}
+		// One pulse per run. Splitting would be wrong: the player toggles the
+		// EAR line at every pulse boundary, so a split run would come back as
+		// alternating levels instead of the one level the samples recorded.
+		out = append(out, uint32(uint64(run)*uint64(blk.sampleTStates)))
 	}
 	for i, b := range blk.data {
 		bits := 8
@@ -681,10 +689,7 @@ func directRecordingPulses(blk tapeBlock) []uint16 {
 // stops) was previously parsed and discarded, so multi-load and protected
 // tapes played their blocks in raw file order.
 func (tp *TapePlayer) advance() bool {
-	// Bound the walk so a self-referential jump or an unmatched loop end
-	// cannot spin forever; a real tape resolves in far fewer steps.
-	const maxSteps = 1 << 16
-	for steps := 0; steps < maxSteps; steps++ {
+	for steps := 0; steps < maxTapeWalkSteps; steps++ {
 		if tp.blockIdx < 0 || tp.blockIdx >= len(tp.blocks) {
 			return false
 		}

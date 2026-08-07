@@ -655,67 +655,66 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 		dst[off+2] = b
 		dst[off+3] = 0xFF
 	}
-	// --- the two additive blend orderings (NR$15 = 110 / 111) ---
-	//
-	// These do not fit the "ULA at the bottom" chain: under NR$68's reset
-	// blend selection the plain ULA layer never surfaces on its own
-	// (zxnext.vhd:7140-7180 leaves mix_top / mix_bot on the tilemap), and
-	// contributes only through the additive sum with Layer 2. A pixel with
-	// nothing to show falls back to NR$4A rather than to the ULA.
-	paintFallback := func(off int) {
-		dst[off+0], dst[off+1] = c.fallback[0], c.fallback[1]
-		dst[off+2], dst[off+3] = c.fallback[2], c.fallback[3]
-	}
-	// ulaChannels3 recovers the ULA pixel's original 3-bit channels from the
-	// already-expanded RGBA scanline (palette.RGB puts the source bits in the
-	// top 3). A transparent ULA pixel adds nothing, matching Mix()'s
-	// ulaMixRGB being zero when ulaMixTransparent.
-	ulaChannels3 := func(off int) (byte, byte, byte) {
-		if ulaTransparentAt(off) {
-			return 0, 0, 0
-		}
-		return ulaRGBA[off+0] >> 5, ulaRGBA[off+1] >> 5, ulaRGBA[off+2] >> 5
-	}
-	paintBlend := func(off, x int) {
-		if !doL2 {
-			return
-		}
-		idx := l2Scanline[x]
-		if c.l2Transparent(l2Pal, idx) {
-			return
-		}
-		v := l2Pal.Get(idx)
-		lr, lg, lb := byte((v>>6)&7), byte((v>>3)&7), byte(v&7)
-		ur, ug, ub := ulaChannels3(off)
-		mix := blendChannel
-		if mode == ModeBlend5 {
-			mix = blend5Channel
-		}
-		dst[off+0], dst[off+1] = expand3(mix(lr, ur)), expand3(mix(lg, ug))
-		dst[off+2], dst[off+3] = expand3(mix(lb, ub)), 0xFF
-	}
-	paintBlendPriority := func(off, x int) {
-		if !doL2 || !l2Pal.HasPriority(l2Scanline[x]) {
-			return
-		}
-		paintBlend(off, x)
-	}
-	// paintTilemapRaw applies the strict FPGA transparency rule
-	// (tilemap.vhd:427) with no on_top gating — the blend chain expresses
-	// above/below through paint ORDER instead.
-	paintTilemapRaw := func(off, x int) {
-		if !doTilemap {
-			return
-		}
-		idx := tilemapScan[x]
-		if (idx & 0x0F) == tmTransparentNibble {
-			return
-		}
-		r, g, b := tilemapPal.RGB(idx)
-		dst[off+0], dst[off+1], dst[off+2], dst[off+3] = r, g, b, 0xFF
-	}
-
 	if mode == ModeBlend || mode == ModeBlend5 {
+		// --- the two additive blend orderings (NR$15 = 110 / 111) ---
+		//
+		// These do not fit the "ULA at the bottom" chain: under NR$68's reset
+		// blend selection the plain ULA layer never surfaces on its own
+		// (zxnext.vhd:7140-7180 leaves mix_top / mix_bot on the tilemap), and
+		// contributes only through the additive sum with Layer 2. A pixel with
+		// nothing to show falls back to NR$4A rather than to the ULA.
+		paintFallback := func(off int) {
+			dst[off+0], dst[off+1] = c.fallback[0], c.fallback[1]
+			dst[off+2], dst[off+3] = c.fallback[2], c.fallback[3]
+		}
+		// ulaChannels3 recovers the ULA pixel's original 3-bit channels from the
+		// already-expanded RGBA scanline (palette.RGB puts the source bits in the
+		// top 3). A transparent ULA pixel adds nothing, matching Mix()'s
+		// ulaMixRGB being zero when ulaMixTransparent.
+		ulaChannels3 := func(off int) (byte, byte, byte) {
+			if ulaTransparentAt(off) {
+				return 0, 0, 0
+			}
+			return ulaRGBA[off+0] >> 5, ulaRGBA[off+1] >> 5, ulaRGBA[off+2] >> 5
+		}
+		paintBlend := func(off, x int) {
+			if !doL2 {
+				return
+			}
+			idx := l2Scanline[x]
+			if c.l2Transparent(l2Pal, idx) {
+				return
+			}
+			v := l2Pal.Get(idx)
+			lr, lg, lb := byte((v>>6)&7), byte((v>>3)&7), byte(v&7)
+			ur, ug, ub := ulaChannels3(off)
+			mix := blendChannel
+			if mode == ModeBlend5 {
+				mix = blend5Channel
+			}
+			dst[off+0], dst[off+1] = expand3(mix(lr, ur)), expand3(mix(lg, ug))
+			dst[off+2], dst[off+3] = expand3(mix(lb, ub)), 0xFF
+		}
+		paintBlendPriority := func(off, x int) {
+			if !doL2 || !l2Pal.HasPriority(l2Scanline[x]) {
+				return
+			}
+			paintBlend(off, x)
+		}
+		// paintTilemapRaw applies the strict FPGA transparency rule
+		// (tilemap.vhd:427) with no on_top gating — the blend chain expresses
+		// above/below through paint ORDER instead.
+		paintTilemapRaw := func(off, x int) {
+			if !doTilemap {
+				return
+			}
+			idx := tilemapScan[x]
+			if (idx & 0x0F) == tmTransparentNibble {
+				return
+			}
+			r, g, b := tilemapPal.RGB(idx)
+			dst[off+0], dst[off+1], dst[off+2], dst[off+3] = r, g, b, 0xFF
+		}
 		for x := 0; x < Width; x++ {
 			off := x * 4
 			paintFallback(off)

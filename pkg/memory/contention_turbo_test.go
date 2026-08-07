@@ -15,12 +15,15 @@ import "testing"
 func TestTurboContentionDisabled(t *testing.T) {
 	var ts uint64
 	mult := 1
+	// This builds a Memory directly to avoid loading ROMs, so it has to
+	// declare what setupModel would normally cache: the 48K contention shape
+	// (bank 5 contended, 224-T line) and the real 48K page layout, since
+	// contention is decided by the bank paged at the address
+	// (zxnext.vhd:4489) rather than by the address itself.
 	m := &Memory{TStates: &ts, ContentionEnabled: true, SpeedMultiplier: func() int { return mult },
-		// Contention is decided by the bank paged at the address
-		// (zxnext.vhd:4489), so this needs the real 48K layout: ROM, bank 5,
-		// bank 2, bank 0. The zero-value model is Model48K, where bank 5 is
-		// the contended one.
-		memoryPageReadMap: [4]int{16, 5, 2, 0}}
+		memoryPageReadMap: [4]int{16, 5, 2, 0},
+		contendTiming:     timing48,
+		contendTPerLine:   224}
 
 	// 3.5 MHz (×1): contended access at ULA T-state 14335 → pattern[0]=6.
 	ts = 14335
