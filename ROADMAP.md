@@ -122,8 +122,33 @@ downstream symptoms — see the development log.
   budget is hardware-correct (v1.5.0).
 
 - [ ] **[nice-to-have] Opus Discovery.** The one genuinely absent disk
-  interface; Microdrive, TR-DOS/Beta and DISCiPLE are all present. A new
-  peripheral rather than a defect.
+  interface; Microdrive, TR-DOS/Beta and DISCiPLE are all present.
+
+  **ROM now vendored** at `roms/opus.rom` (8192 bytes, sha256
+  af869af8…4acf86), so the old "no ROM" blocker is gone. What is still
+  missing is the hardware INTERFACE, and these dead ends are recorded so the
+  next attempt does not repeat them:
+
+  - Running the ROM standalone from reset performs **no I/O at all** and runs
+    off into RAM, with or without the 48K ROM underneath. It is not a
+    self-contained boot ROM in that configuration.
+  - Static disassembly does not yield the port map. The only coherent I/O
+    sites are `IN A,($FE)` (keyboard), `IN A,($1F)` at `$11FD` (a genuine
+    Kempston joystick read — verified as real code by its surrounding
+    context), and an `OUT (C),A` transfer routine at `$17A2-$17CB` whose port
+    comes from a runtime `IX` structure, so the FDC addresses never appear as
+    literals.
+  - A byte scan suggests `IN ($03)/($1B)` and `OUT ($00)/($14)/($17)`, which
+    looks temptingly like a WD1770 register select on bits 4:3. It is not:
+    disassembling their surroundings shows incoherent instruction streams, so
+    those bytes are DATA. This inference was made and discarded — do not
+    rebuild it.
+
+  To finish this, one of two things is needed: Opus Discovery hardware
+  documentation (port map + ROM paging trigger), or a decision that taking
+  interface facts (port numbers, register semantics — facts about hardware,
+  not copyrightable expression) from the GPL reference implementation is
+  acceptable for an independently written MIT implementation.
 
 - [⊘] **[nice-to-have] #243/#245 compare-foreign bisect UX** + #244
   the reference emulator DZRP RunToInstruction polish — debugger ergonomics.
