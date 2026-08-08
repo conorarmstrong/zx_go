@@ -81,3 +81,21 @@ func DisplayStartTState(model SpectrumModel) int {
 func FirstContendedTState(model SpectrumModel) int {
 	return DisplayStartTState(model) - 1
 }
+
+// FrameTStates returns the model's whole frame length in 3.5 MHz T-states:
+// 312 lines of 224 on the 48K, 311 of 228 on the 128K family, and 320 of 224
+// on the Pentagon (zxula_timing.vhd c_max_vc / c_max_hc per personality).
+//
+// Dividing the running T-state counter by this gives a frame number that
+// advances whether or not anything renders — which is what the raster journal
+// needs to scope its entries.
+func FrameTStates(model SpectrumModel) int {
+	switch model {
+	case Model48K:
+		return 69888
+	case ModelPentagon:
+		return 71680
+	default:
+		return 70908
+	}
+}

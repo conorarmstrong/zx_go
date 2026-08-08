@@ -290,3 +290,60 @@ func TestNothingIsRecordedDuringTheWholeReplayWindow(t *testing.T) {
 		t.Errorf("Len after the window = %d, want 1", log.Len())
 	}
 }
+
+// TestJournalDoesNotAccumulateAcrossUnrenderedFrames pins the bug that
+// shipped in v1.6.0: the log was only ever cleared by EndReplay, which the
+// compositor calls. Any path that executes frames WITHOUT rendering — headless
+// stepping, fast tape turbo, the debugger, RZX playback — left entries piling
+// up forever. Measured on a real Next boot it reached 113,766 entries and was
+// still climbing, which is both a memory leak and a correctness bug: the next
+// rewind would undo state from thousands of frames earlier.
+//
+// A frame that is never rendered has no journal worth keeping — its writes are
+// already live — so the log discards them as soon as the frame changes.
+func TestJournalDoesNotAccumulateAcrossUnrenderedFrames(t *testing.T) {
+	row := 10
+	frame := uint64(0)
+	log := NewWithFrame(func() int { return row }, func() uint64 { return frame })
+
+	for f := 0; f < 500; f++ {
+		frame = uint64(f)
+		// Several writes per frame, and no render at all.
+		for i := 0; i < 20; i++ {
+			log.Record(func() {}, func() {})
+		}
+		if log.Len() > 20 {
+			t.Fatalf("frame %d: Len = %d, want at most one frame's worth (20)", f, log.Len())
+		}
+	}
+}
+
+// TestJournalKeepsTheCurrentFrameIntact guards the other side: entries within
+// a single frame must all survive, or the replay is incomplete.
+func TestJournalKeepsTheCurrentFrameIntact(t *testing.T) {
+	row := 5
+	frame := uint64(7)
+	log := NewWithFrame(func() int { return row }, func() uint64 { return frame })
+
+	for i := 0; i < 50; i++ {
+		log.Record(func() {}, func() {})
+	}
+	if log.Len() != 50 {
+		t.Errorf("Len = %d, want 50 (all of one frame's writes)", log.Len())
+	}
+}
+
+// TestJournalIsBoundedWithinAFrame is the backstop: even a pathological frame
+// writing without limit must not grow the log without limit.
+func TestJournalIsBoundedWithinAFrame(t *testing.T) {
+	row := 0
+	frame := uint64(1)
+	log := NewWithFrame(func() int { return row }, func() uint64 { return frame })
+
+	for i := 0; i < MaxEntries*3; i++ {
+		log.Record(func() {}, func() {})
+	}
+	if log.Len() > MaxEntries {
+		t.Errorf("Len = %d, want at most MaxEntries (%d)", log.Len(), MaxEntries)
+	}
+}

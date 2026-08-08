@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/roms"
+)
 
 // NextReg 0x68 ("ULA Control") decodes five fields, but only bit 7 was ever
 // acted on. zxnext.vhd:5444-5450:
@@ -69,5 +73,35 @@ func TestDecodeNR68BlendModeIsTwoBits(t *testing.T) {
 	}
 	if len(seen) != 4 {
 		t.Errorf("decoded %d distinct blend modes, want 4", len(seen))
+	}
+}
+
+// TestULAScrollRegistersReachTheULA pins the NR$26 / NR$27 wiring end to end
+// on a real Next core: the register write must land on the ULA, not just be
+// stored in the register file.
+func TestULAScrollRegistersReachTheULA(t *testing.T) {
+	emu, err := newEmulator(roms.ModelNext)
+	if err != nil {
+		t.Skipf("Next core unavailable: %v", err)
+	}
+	if emu.nextRegs == nil {
+		t.Skip("NextRegs not wired on this build")
+	}
+	emu.nextRegs.WriteReg(0x26, 0x2A)
+	emu.nextRegs.WriteReg(0x27, 0x1C)
+
+	x, y := emu.ula.ULAScroll()
+	if x != 0x2A {
+		t.Errorf("NR$26 -> ULA scrollX = %#02x, want 0x2A", x)
+	}
+	if y != 0x1C {
+		t.Errorf("NR$27 -> ULA scrollY = %#02x, want 0x1C", y)
+	}
+	// And they read back.
+	if got := emu.nextRegs.ReadReg(0x26); got != 0x2A {
+		t.Errorf("NR$26 read-back = %#02x, want 0x2A", got)
+	}
+	if got := emu.nextRegs.ReadReg(0x27); got != 0x1C {
+		t.Errorf("NR$27 read-back = %#02x, want 0x1C", got)
 	}
 }

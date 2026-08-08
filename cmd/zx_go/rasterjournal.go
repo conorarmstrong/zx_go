@@ -22,6 +22,7 @@ import (
 // auto-incrementing kind that cannot be replayed, and Layer 2 scroll because
 // it is assembled from two registers (NR$16 and NR$71).
 var visualJournalRegs = []byte{
+	0x14, // global transparency colour
 	0x15, // layer priority / sprite enables
 	0x2F, // tilemap X offset, high bits
 	0x30, // tilemap Y offset

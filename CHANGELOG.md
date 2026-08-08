@@ -4,6 +4,48 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.3]
+
+### Added
+
+- **NR$26 / NR$27 ULA scroll.** The ULA's own horizontal and vertical scroll
+  was entirely unimplemented, which is also why NR$68 bit 2 had nothing to
+  attach to. Transcribed from `zxula.vhd:192-216`: the horizontal register
+  splits into a whole-character offset (bits 7:3) applied to the fetch and a
+  pixel shift within the character (bits 2:0) that straddles two cells; the
+  vertical is a 9-bit sum folded back onto the 192-line screen by the core's
+  two special cases, not a modulo. Both reset to zero, where they are exactly
+  a no-op, so no classic model changes.
+
+  NR$68 bit 2 is now carried into the ULA but still does not render: the shift
+  it contributes is a HALF pixel (`zxula.vhd:353` builds it as
+  `px(2 downto 0) & px(8)`), which needs the ULA layer rendered at twice the
+  horizontal resolution to show.
+
+### Fixed
+
+- **The raster journal grew without bound.** It was only ever cleared by the
+  compositor's `EndReplay`, so any path that executes frames WITHOUT rendering
+  one — headless stepping, fast tape turbo, the debugger, RZX playback — left
+  entries piling up forever. Measured on a real Next boot it reached **113,766
+  entries and was still climbing**. That is a memory leak, and worse a
+  correctness bug: the next rewind would undo state from thousands of frames
+  earlier. Shipped in v1.6.0, so it affected the palette and Layer 2 scroll
+  journalling too, not just the registers added in v1.6.1.
+
+  Entries are now scoped to a frame identity taken from the T-state counter
+  (`roms.FrameTStates`), which advances whether or not anything renders, and
+  a frame that is never rendered has its entries discarded — its writes are
+  already live. A hard cap of 8192 entries per frame is the backstop. The same
+  boot now peaks in the hundreds.
+
+- **NR$14 is journalled after all.** v1.6.1 excluded it, reasoning that
+  transparency compares against a whole-frame ULA layer so a per-row
+  comparison would be inconsistent. That diagnosis was wrong. show512 writes
+  NR$14 **zero** times in 150 frames — it was never the demo's own writes that
+  broke it, but the accumulated journal being rewound. With the leak fixed,
+  NR$14 journals correctly and every Next demo passes.
+
 ## [v1.6.2]
 
 No functional change. Corrects a claim in the v1.6.1 notes and syncs the
@@ -70,13 +112,9 @@ features. Two more real bugs fell out of doing it.
   anything that auto-increments a cursor, uploads data or repages memory must
   never be added. A test pins the idempotence that makes replay safe.
 
-  **NR$14 is deliberately excluded.** Transparency is decided by comparing a
-  layer's pixel against NR$14, and the ULA layer it is compared against is
-  rendered once per frame, not per row. Making only the comparison per-row is
-  not more faithful, it is inconsistent — and it shows: journalling NR$14
-  blanks the show512 demo, which renders correctly on the frame-final value.
-  Caught by the Next demo tests; worth revisiting if the ULA layer ever
-  becomes a per-scanline render.
+  **NR$14 was excluded here on a mistaken diagnosis; see v1.6.3.** It was
+  attributed to a per-row/per-frame mismatch in how transparency is compared.
+  That was wrong — the real cause was the journal growing without bound.
 
 ### Verified
 

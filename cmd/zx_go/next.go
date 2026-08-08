@@ -1283,7 +1283,7 @@ func wireNextSubsystems(e *emulator) error {
 	// Covered: palette entry writes (the classic rainbow / raster-split
 	// effect) and Layer 2 scroll (per-line parallax). Other visual registers
 	// still latch once per frame.
-	rlog := rasterlog.New(u.DisplayRow)
+	rlog := rasterlog.NewWithFrame(u.DisplayRow, u.FrameID)
 	pal.SetWriteObserver(func(w palette.PaletteWrite) {
 		p := pal.Palette(int(w.Slot))
 		if p == nil {
@@ -1373,6 +1373,16 @@ func wireNextSubsystems(e *emulator) error {
 		d.Store(0x4B, val)
 		comp.SetSpriteTransparency(val)
 	})
+	// NR$26 / NR$27: the ULA's own horizontal and vertical scroll
+	// (zxula.vhd:192-206). Both reset to zero, where they are a no-op.
+	disp.SetOnWrite(0x26, func(d *nextregs.Dispatcher, val byte) {
+		d.Store(0x26, val)
+		u.SetULAScrollX(val)
+	})
+	disp.SetOnWrite(0x27, func(d *nextregs.Dispatcher, val byte) {
+		d.Store(0x27, val)
+		u.SetULAScrollY(val)
+	})
 	// NR$68 ("ULA Control"). Bit 7 = Disable ULA output: the ULA layer paints
 	// nothing (lower layers / NR$4A fallback show). Sonic disables the ULA
 	// for its Layer-2/tilemap title; without this its stale screen RAM
@@ -1380,15 +1390,26 @@ func wireNextSubsystems(e *emulator) error {
 	//
 	// Bits 6:5 pick the blend colour source for NR$15's two blend orderings
 	// and bit 0 is the ULA/tilemap stencil; both used to be dropped, so the
-	// blend modes could only ever see the reset selection. Bit 4 (cancel
-	// extended keys) and bit 2 (ULA half-pixel scroll) are decoded and read
-	// back but not yet acted on — neither subsystem models them.
+	// blend modes could only ever see the reset selection.
+	//
+	// Bits 4 and 2 are decoded and read back but inert, and neither can be
+	// acted on in isolation:
+	//   - bit 4 (cancel extended keys) drives o_KBD_CANCEL into the PS/2
+	//     keyboard's 8x5 extended-entry matrix (zxnext.vhd:1584). zx_go maps
+	//     host keys straight onto the Spectrum matrix and models no PS/2
+	//     extended entries, so there is nothing for it to cancel.
+	//   - bit 2 (ULA half-pixel scroll) is now carried into the ULA. The
+	//     base NR$26/$27 scroll it refines is implemented, but the shift it
+	//     contributes is a HALF pixel (zxula.vhd:353 builds it as
+	//     px(2 downto 0) & px(8)), which needs the ULA layer rendered at
+	//     twice the horizontal resolution to show. Stored and read back.
 	disp.SetOnWrite(0x68, func(d *nextregs.Dispatcher, val byte) {
 		d.Store(0x68, nr68ReadBack(val))
 		r := decodeNR68(val)
 		u.SetULAOutputDisabled(r.ulaDisabled)
 		comp.SetBlendMode(r.blendMode)
 		comp.SetStencilMode(r.stencilMode)
+		u.SetULAFineScrollX(r.ulaFineScrollX)
 	})
 	u.SetNextDMA(dmaEngine)
 	// zxnDMA IO endpoints: a port configured as an IO endpoint (WR1/WR2 D3)

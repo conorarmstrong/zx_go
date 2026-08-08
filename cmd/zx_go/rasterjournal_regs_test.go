@@ -22,6 +22,7 @@ var journalledRegs = []struct {
 	name string
 }{
 
+	{0x14, 0x07, "global transparency"},
 	{0x15, 0x04, "layer priority"},
 	{0x2F, 0x02, "tilemap X offset (MSB)"},
 	{0x30, 0x40, "tilemap Y offset"},

@@ -56,15 +56,15 @@ zx_go yet; foundation tests confirm the 48K boot path works.
 |---|---|---|
 | Manic Miner | Untested | |
 | Jet Set Willy | Untested | |
-| Knight Lore | Untested | Filled 3D — exercises attribute clash handling |
+| Knight Lore | **Works** | Verified 2026-08-08: menu accepts input, starts, and plays — the filled-3D room, character sprite and status panel all render correctly. |
 | Atic Atac | **Works** | Verified 2026-08-08: boots to the game-selection menu, accepts keyboard input through it, and plays — room graphics, sprites and the HUD (timer, lives, health) all render correctly. |
-| Sabre Wulf | Untested | |
-| Skool Daze | Untested | |
+| Sabre Wulf | **Works** | Verified 2026-08-08: menu accepts input, starts, and plays — jungle playfield with the score/lives HUD. |
+| Skool Daze | **Works (caveat)** | Verified 2026-08-08: boots and runs its attract-mode demo with full in-game graphics (classrooms, sprites, HUD). Not driven into a played game. |
 | The Hobbit | Untested | |
-| Lords of Midnight | Untested | |
+| Lords of Midnight | **Works (caveat)** | Verified 2026-08-08: renders the in-game landscape-and-text view correctly. Not driven through the game. |
 | Elite (Spectrum port) | Untested | |
 | Chuckie Egg | Untested | |
-| Horace Goes Skiing | Untested | |
+| Horace Goes Skiing | **Works (caveat)** | Verified 2026-08-08: boots to its title screen. Not driven further. |
 | Jet Pac (Interface 2 cartridge) | Untested | IF2 cartridge slot wired and tested in `if2_test.go` |
 | Pssst (Interface 2 cartridge) | Untested | Same IF2 path as Jet Pac |
 
@@ -81,9 +81,9 @@ memory map. Foundation tests confirm 128K paging works.
 | R-Type (Spectrum port) | Untested | |
 | Lemmings (Spectrum port) | Untested | |
 | Where Time Stood Still | Untested | |
-| Head over Heels | Untested | |
+| Head over Heels | **Works (caveat)** | Verified 2026-08-08 on the 48K release: accepts input at the options menu and progresses into the Blacktooth Empire world-select. Not driven into play. |
 | Last Ninja 2 | Untested | |
-| Match Day II | Untested | |
+| Match Day II | **Works (caveat)** | Verified 2026-08-08 on the 128K: accepts input and navigates joystick-select through to the main menu. Not driven into a match. |
 | The Way of the Tiger | Untested | |
 
 ## +3 / +2A disk titles

@@ -120,3 +120,25 @@ func TestFirstContendedTState(t *testing.T) {
 		}
 	}
 }
+
+// TestFrameTStates pins the per-model frame length. 48K: 312 lines * 224.
+// 128K family: 311 * 228. Pentagon: 320 * 224 (zxula_timing.vhd c_max_vc /
+// c_max_hc per personality).
+func TestFrameTStates(t *testing.T) {
+	for _, tc := range []struct {
+		model SpectrumModel
+		want  int
+	}{
+		{Model48K, 69888},
+		{Model128K, 70908},
+		{ModelPlus2, 70908},
+		{ModelPlus2A, 70908},
+		{ModelPlus3, 70908},
+		{ModelNext, 70908},
+		{ModelPentagon, 71680},
+	} {
+		if got := FrameTStates(tc.model); got != tc.want {
+			t.Errorf("FrameTStates(%s) = %d, want %d", GetModelName(tc.model), got, tc.want)
+		}
+	}
+}

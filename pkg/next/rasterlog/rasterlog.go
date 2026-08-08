@@ -32,6 +32,13 @@ const (
 	RowAfterDisplay = 192
 )
 
+// MaxEntries bounds one frame's journal. A frame that writes more visual
+// state than this is not doing anything a replay can represent usefully, and
+// the cap keeps a pathological or runaway guest from growing the log without
+// limit. Well above what real software uses: a per-scanline effect touching
+// several registers a line needs only a few hundred.
+const MaxEntries = 8192
+
 // Log is a frame's worth of recorded visual changes, in the order they were
 // made. Not safe for concurrent use; it is written from the emulation
 // goroutine and replayed on the same one.
@@ -44,6 +51,13 @@ type Log struct {
 	// cursor is how far ApplyThrough has replayed, so a walk down the screen
 	// stays linear rather than rescanning from the start for every row.
 	cursor int
+	// frame identifies the frame being recorded. Entries only ever describe
+	// the CURRENT frame: when it changes, whatever was recorded for the
+	// previous one is discarded.
+	frame     func() uint64
+	lastFrame uint64
+	haveFrame bool
+
 	// replaying suppresses recording while undo/redo run. Those closures
 	// usually go back through the very setter whose observer recorded them,
 	// so without this the log would journal its own replay and grow every
@@ -57,8 +71,26 @@ type entry struct {
 	redo func()
 }
 
-// New returns a Log that timestamps each change using row.
+// New returns a Log that timestamps each change using row, with no frame
+// scoping. Prefer NewWithFrame: without a frame source the log is only ever
+// cleared by EndReplay, so any path that runs frames WITHOUT rendering piles
+// entries up indefinitely.
 func New(row func() int) *Log { return &Log{row: row} }
+
+// NewWithFrame returns a Log that timestamps each change using row and scopes
+// its entries to the frame reported by frame.
+//
+// The scoping matters more than it looks. The compositor clears the log in
+// EndReplay, but plenty of paths execute frames without ever rendering one —
+// headless stepping, fast tape turbo, the debugger, RZX playback. Without a
+// frame source those writes accumulate forever: measured on a real Next boot
+// the log reached 113,766 entries and was still climbing, which leaks memory
+// and, worse, means the next rewind undoes state from thousands of frames
+// ago. A frame that is never rendered has no journal worth keeping — its
+// writes are already live — so they are dropped as soon as the frame moves on.
+func NewWithFrame(row func() int, frame func() uint64) *Log {
+	return &Log{row: row, frame: frame}
+}
 
 // Record captures a change that has just been made: undo restores the value
 // it replaced, redo re-applies it. Both are retained for the rest of the
@@ -67,6 +99,19 @@ func New(row func() int) *Log { return &Log{row: row} }
 // Safe on a nil Log, which lets callers stay unconditional on the hot path.
 func (l *Log) Record(undo, redo func()) {
 	if l == nil || l.replaying {
+		return
+	}
+	if l.frame != nil {
+		f := l.frame()
+		if !l.haveFrame || f != l.lastFrame {
+			// A new frame: anything held for the previous one was never
+			// rendered, so it describes a frame nobody will replay.
+			l.entries = l.entries[:0]
+			l.cursor = 0
+			l.lastFrame, l.haveFrame = f, true
+		}
+	}
+	if len(l.entries) >= MaxEntries {
 		return
 	}
 	r := RowBeforeDisplay

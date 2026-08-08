@@ -120,6 +120,11 @@ type ULA struct {
 	// title; without honouring this, stale screen RAM rendered as garbage.
 	ulaOutputDisabled bool
 
+	// ULA scroll (NextReg 0x26 / 0x27) and the NR$68 bit 2 half-pixel
+	// refinement. See ulascroll.go.
+	ulaScrollX, ulaScrollY byte
+	ulaFineScrollX         bool
+
 	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
 	// Allows accurate rendering of border effects that change colour during the frame.
 	borderChanges []borderChange
@@ -469,6 +474,26 @@ func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
 // was. See NextRasterLog.
 func (u *ULA) SetNextRasterLog(l NextRasterLog) { u.nextRasterLog = l }
 
+// FrameID identifies the frame currently being executed, as the running
+// T-state counter divided by the model's frame length.
+//
+// Derived from the clock rather than from the ULA's own frame bookkeeping on
+// purpose: that bookkeeping only advances when a frame is actually rendered,
+// and the raster journal has to be scoped correctly on the paths that execute
+// frames WITHOUT rendering — headless stepping, fast tape turbo, the
+// debugger, RZX playback. Those are exactly the paths where an unscoped
+// journal grows without bound.
+func (u *ULA) FrameID() uint64 {
+	if u.mem == nil || u.mem.TStates == nil {
+		return 0
+	}
+	frame := roms.FrameTStates(u.mem.GetCurrentModel())
+	if frame <= 0 {
+		return 0
+	}
+	return *u.mem.TStates / uint64(frame)
+}
+
 // NextRasterLogForTest exposes the installed raster journal so an
 // integration test can drive a rewind/replay directly. Returns nil when none
 // is wired.
@@ -767,12 +792,26 @@ func (u *ULA) Render() *image.RGBA {
 	screenMem := u.mem.GetPage(u.mem.ScreenPage)
 	attrMem := screenMem[0x1800:]
 
+	// NR$26 / NR$27 ULA scroll. Both are zero on every classic model and at
+	// Next reset, in which case srcY == y and the column offset is 0, so this
+	// collapses to the unscrolled fetch. See ulascroll.go.
+	scrollChars, scrollPixels := ulaScrollColumn(u.ulaScrollX)
+
 	for y := 0; y < ScreenHeight; y++ {
+		srcY := ulaScrollRow(y, u.ulaScrollY)
 		for x := 0; x < ScreenWidth/8; x++ {
-			addr := screenAddrForRowCol(y, x)
-			attrAddr := ((y >> 3) * 32) + x
+			// The pixel shift straddles two character cells, so fetch this
+			// one and its neighbour and combine (zxula.vhd fetches px and
+			// px_1 for exactly this).
+			col := (x + scrollChars) & 31
+			addr := screenAddrForRowCol(srcY, col)
+			attrAddr := ((srcY >> 3) * 32) + col
 
 			pixels := screenMem[addr]
+			if scrollPixels != 0 {
+				next := screenMem[screenAddrForRowCol(srcY, (col+1)&31)]
+				pixels = pixels<<uint(scrollPixels) | next>>uint(8-scrollPixels)
+			}
 			attr := attrMem[attrAddr]
 
 			inkIdx := attr & 0x07
