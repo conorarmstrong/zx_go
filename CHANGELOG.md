@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.2]
+
+No functional change. Corrects a claim in the v1.6.1 notes and syncs the
+`release-public` branch, which had fallen 152 commits behind `main`.
+
+### Changed
+
+- **Corrected the v1.6.1 note on how the NR$14 regression was found.** It said
+  a Next demo test "the full-package run had been silently skipping" caught
+  it. That was wrong, and checking it properly disproved it: re-introducing
+  the NR$14 journal entry fails the test in a full-package run and a targeted
+  run alike. There is no order-dependent skipping and `go test ./...` catches
+  it. The regression was missed because the verification command in use piped
+  through `head -20` and truncated the output above the failure — a mistake in
+  how the suite was being read, not a property of the suite.
+
 ## [v1.6.1]
 
 Closing the testing gap that let the v1.6.0 bug through, rather than adding
@@ -59,9 +75,8 @@ features. Two more real bugs fell out of doing it.
   rendered once per frame, not per row. Making only the comparison per-row is
   not more faithful, it is inconsistent — and it shows: journalling NR$14
   blanks the show512 demo, which renders correctly on the frame-final value.
-  Caught by a Next demo test that the full-package run had been silently
-  skipping; worth revisiting if the ULA layer ever becomes a per-scanline
-  render.
+  Caught by the Next demo tests; worth revisiting if the ULA layer ever
+  becomes a per-scanline render.
 
 ### Verified
 
