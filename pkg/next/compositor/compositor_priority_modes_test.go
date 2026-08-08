@@ -213,3 +213,40 @@ func TestPriorityModeConstantsCoverAllEight(t *testing.T) {
 		}
 	}
 }
+
+// NextReg 0x68 bits 6:5 select WHICH layer supplies the blend colour that is
+// summed with Layer 2 in the two blend orderings (zxnext.vhd:5446, and the
+// mix_rgb selection at 7140-7180):
+//
+//	00 = the ULA pixel        10 = nothing (no blending)
+//	01 = the combined ULA+TM  11 = the tilemap pixel
+//
+// Only the reset selection (00) was modelled; the register itself decoded
+// nothing but bit 7.
+func TestBlendModeSelectsTheBlendColour(t *testing.T) {
+	// With no tilemap: 00 and 01 both resolve to the ULA colour, while 10 and
+	// 11 leave nothing to add, so Layer 2 comes through unchanged.
+	withULA := [3]byte{expand3(blendChannel(fxL2R, fxULAR)),
+		expand3(blendChannel(fxL2G, fxULAG)), expand3(blendChannel(fxL2B, fxULAB))}
+	l2Only := [3]byte{expand3(fxL2R), expand3(fxL2G), expand3(fxL2B)}
+
+	for _, tc := range []struct {
+		blend byte
+		want  [3]byte
+		note  string
+	}{
+		{0, withULA, "ULA as the blend colour"},
+		{1, withULA, "ULA+TM as the blend colour (no tilemap, so the ULA)"},
+		{2, l2Only, "no blending"},
+		{3, l2Only, "tilemap as the blend colour (no tilemap, so nothing)"},
+	} {
+		t.Run(tc.note, func(t *testing.T) {
+			f := newModeFixture(t, ModeBlend, false)
+			f.c.SetBlendMode(tc.blend)
+			f.setULA(false)
+			if got := f.pixel(0); got != tc.want {
+				t.Errorf("blend mode %d: pixel = %v, want %v", tc.blend, got, tc.want)
+			}
+		})
+	}
+}

@@ -75,9 +75,12 @@ func newFloatingBusULA(t *testing.T) (*ULA, *memory.Memory) {
 func TestFloatingBusInBorderReturns0xFF(t *testing.T) {
 	u, mem := newFloatingBusULA(t)
 
-	// The 48K ULA uses 224 T-states/line (the documented value); the floating
-	// bus origin is 64*224 = 14336.
+	// The 48K ULA uses 224 T-states/line; its first paper fetch is 14336
+	// T-states after the interrupt (roms.DisplayStartTState). The origin is
+	// the FETCH itself, so a line's border sits before it, not 24 T-states
+	// into it.
 	tpl := TStatesPerLineFor(roms.Model48K)
+	start := uint64(roms.DisplayStartTState(roms.Model48K))
 
 	// Top border: any T-state before line 64 starts.
 	*mem.TStates = 0
@@ -95,16 +98,25 @@ func TestFloatingBusInBorderReturns0xFF(t *testing.T) {
 		t.Errorf("bottom border: got %#x, want 0xFF", got)
 	}
 
-	// Left border within a display line.
-	*mem.TStates = uint64(64*tpl + 5)
+	// The gap between two display lines: 5 T-states before line 1's fetch
+	// opens is still line 0's border/retrace tail.
+	*mem.TStates = start + uint64(tpl) - 5
 	if got := u.floatingBusByte(); got != 0xFF {
-		t.Errorf("left border: got %#x, want 0xFF", got)
+		t.Errorf("inter-line border: got %#x, want 0xFF", got)
 	}
 
-	// Right border within a display line.
-	*mem.TStates = uint64(64*tpl + 24 + 128 + 5)
+	// Right border: past the 128 T-states of fetch on a display line.
+	*mem.TStates = start + 128 + 5
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("right border: got %#x, want 0xFF", got)
+	}
+
+	// Just inside the origin is NOT border. Offsets 0 and 1 of the fetch
+	// pattern are idle cycles, so probe offset 2 — the first bitmap byte.
+	// Under the old "origin plus 24" model this T-state was left border.
+	*mem.TStates = start + 2
+	if got := u.floatingBusByte(); got != 0xA5 {
+		t.Errorf("first bitmap fetch: got %#x, want 0xA5", got)
 	}
 }
 
@@ -114,10 +126,9 @@ func TestFloatingBusInBorderReturns0xFF(t *testing.T) {
 func TestFloatingBusInDisplayReturnsScreenData(t *testing.T) {
 	u, mem := newFloatingBusULA(t)
 
-	// First display line, first display column. The 48K floating-bus origin
-	// is 64*224 + leftBorder = 14336 + 24 (224-T-state lines).
-	const leftBorder = 24
-	base := uint64(64*TStatesPerLineFor(roms.Model48K) + leftBorder)
+	// First display line, first display column: the origin IS the first
+	// paper fetch (roms.DisplayStartTState), with no left-border offset.
+	base := uint64(roms.DisplayStartTState(roms.Model48K))
 
 	// t%8 = 0,1,6,7: idle 0xFF; 2,4: bitmap (0xA5); 3,5: attribute (0x5A).
 	for offset, want := range []byte{0xFF, 0xFF, 0xA5, 0x5A, 0xA5, 0x5A, 0xFF, 0xFF} {

@@ -23,7 +23,8 @@ func TestTurboContentionDisabled(t *testing.T) {
 	m := &Memory{TStates: &ts, ContentionEnabled: true, SpeedMultiplier: func() int { return mult },
 		memoryPageReadMap: [4]int{16, 5, 2, 0},
 		contendTiming:     timing48,
-		contendTPerLine:   224}
+		contendTPerLine:   224,
+		contendStart:      14335}
 
 	// 3.5 MHz (×1): contended access at ULA T-state 14335 → pattern[0]=6.
 	ts = 14335

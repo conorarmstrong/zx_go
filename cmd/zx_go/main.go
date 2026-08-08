@@ -1267,7 +1267,8 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 								e.stopRZXPlayback()
 								break
 							}
-							if aerr := applySnapshotToEmulator(e, snap); aerr != nil {
+							// Locked variant: the frame loop already holds coreMu.
+							if aerr := applySnapshotToEmulatorLocked(e, snap); aerr != nil {
 								slog.Error("RZX intermediate snapshot apply failed; stopping playback", "err", aerr)
 								e.stopRZXPlayback()
 							}
@@ -1437,7 +1438,19 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 	}()
 }
 
+// reboot resets the machine. It takes coreMu, so it must not be called from
+// somewhere that already holds it — the machine-switch paths call
+// rebootLocked instead.
 func (e *emulator) reboot() {
+	e.coreMu.Lock()
+	defer e.coreMu.Unlock()
+	e.rebootLocked()
+}
+
+// rebootLocked is reboot's body. The caller must hold coreMu: a reset tears
+// through the CPU, ULA and NextReg state that the emulation goroutine reads
+// every frame.
+func (e *emulator) rebootLocked() {
 	slog.Info("rebooting emulator")
 	if e.zx8x != nil {
 		e.zx8x.Reset()
@@ -1642,7 +1655,19 @@ func (e *emulator) flushSDWriteback() {
 }
 
 // applySnapshotToEmulator applies a loaded snapshot to the running emulator.
+// applySnapshotToEmulator restores a snapshot into the running machine. It
+// takes coreMu, so it must not be called from somewhere that already holds
+// it — the RZX playback path inside the frame loop calls the Locked variant.
 func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
+	emu.coreMu.Lock()
+	defer emu.coreMu.Unlock()
+	return applySnapshotToEmulatorLocked(emu, snap)
+}
+
+// applySnapshotToEmulatorLocked is the body. The caller must hold coreMu: a
+// snapshot rewrites the CPU registers and the whole of RAM, all of which the
+// emulation goroutine reads every frame.
+func applySnapshotToEmulatorLocked(emu *emulator, snap *snapshot.Snapshot) error {
 	// Pause emulation during snapshot loading
 	wasPaused := emu.paused.Load()
 	if !emu.paused.Load() {
@@ -2978,8 +3003,9 @@ func main() {
 		currentModel = newModel
 		saveConfig()
 
-		// Automatic reboot after model switch
-		emu.reboot()
+		// Automatic reboot after model switch. rebootLocked, not reboot:
+		// this path already holds coreMu.
+		emu.rebootLocked()
 		// Re-apply the per-model frame-INT timing (reboot's CPU reset keeps
 		// the fields, but the model just changed).
 		configureClassicIntTiming(emu.cpu, newModel)

@@ -98,6 +98,7 @@ type Memory struct {
 	// re-derived from currentModel per access. Both are set by setupModel.
 	contendTiming   contentionTiming
 	contendTPerLine uint64
+	contendStart    uint64
 
 	// Beta Disk / TR-DOS ROM auto-paging. When betaEnabled, the Beta hardware
 	// swaps its TR-DOS ROM over $0000-$3FFF when the CPU fetches an instruction
@@ -748,18 +749,6 @@ func contentionTimingFor(model roms.SpectrumModel) contentionTiming {
 	return timingNone
 }
 
-// tStatesPerLineFor returns the model's ULA scanline length in 3.5 MHz
-// T-states: 224 on the 48K (zxula_timing.vhd c_max_hc = 447, so 448 pixel
-// columns at 2 pixels per T-state), 228 on the 128K family (c_max_hc = 455).
-// Mirrors ula.TStatesPerLineFor, which pkg/memory cannot import because
-// pkg/ula already depends on pkg/memory.
-func tStatesPerLineFor(model roms.SpectrumModel) int {
-	if model == roms.Model48K {
-		return 224
-	}
-	return 228
-}
-
 // isContendedBank reports whether the 16K bank currently paged at addr is a
 // contended one.
 //
@@ -841,12 +830,13 @@ func (m *Memory) contentionDelay() uint64 {
 	// display line 1, were charged nothing at all).
 	tPerLine := m.contendTPerLine
 
-	// Display line 0's fetch begins 64 scanlines into the frame; the ULA
-	// prefetches one T-state ahead of it, so the first contended T-state is
-	// the one before — the canonical 14335 on the 48K's 224-T line. This is
-	// the same 64-line display origin pkg/ula uses for the floating bus and
-	// border timing, so contention and the raster cannot disagree.
-	start := 64*tPerLine - 1
+	// The window opens one T-state before display line 0's first paper fetch
+	// (the ULA prefetches; the canonical "-1"). Only the 48K's display start
+	// is a whole 64 scanlines from the interrupt — see roms.DisplayStartTState
+	// for the per-personality derivation from the FPGA. pkg/ula keys the
+	// floating bus and border tracking off the same constant, so contention
+	// and the raster cannot disagree.
+	start := m.contendStart
 	tstate := *m.TStates / mult
 	if tstate < start {
 		return 0
@@ -1001,7 +991,8 @@ func (m *Memory) setupModel(model roms.SpectrumModel) error {
 	// Cache the contention shape: isContendedBank runs on EVERY memory access,
 	// so it must not re-derive these from the model each time.
 	m.contendTiming = contentionTimingFor(model)
-	m.contendTPerLine = uint64(tStatesPerLineFor(model))
+	m.contendTPerLine = uint64(roms.TStatesPerLine(model))
+	m.contendStart = uint64(roms.FirstContendedTState(model))
 
 	var err error
 	switch model {

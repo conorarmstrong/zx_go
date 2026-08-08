@@ -55,8 +55,10 @@ func delayAt(mem *Memory, ts *uint64, t uint64, addr uint16) uint64 {
 
 // firstContendedT is the first contended T-state of display line 0 for a
 // model: one T-state before the line-0 display fetch (the canonical "-1").
+// Only the 48K's is a whole 64 scanlines from the interrupt — see
+// roms.DisplayStartTState.
 func firstContendedT(model roms.SpectrumModel) uint64 {
-	return uint64(64*tStatesPerLineFor(model)) - 1
+	return uint64(roms.FirstContendedTState(model))
 }
 
 // TestContentionTracksPerModelLineLength pins that the contention window

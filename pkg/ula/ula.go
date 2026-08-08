@@ -203,6 +203,10 @@ type ULA struct {
 	// max-per-line, clear-on-read). Wired only for ModelNext.
 	nextSprite NextSpritePort
 
+	// nextRasterLog, when wired, replays this frame's CPU writes to the
+	// Next's visual state at the row each was made on (see NextRasterLog).
+	nextRasterLog NextRasterLog
+
 	// nextCopper is ticked once per active scanline during the
 	// post-render compositor pass. nil on non-Next models.
 	nextCopper NextCopper
@@ -343,6 +347,21 @@ type NextCopper interface {
 	Step(scanline uint16, hcount uint16, maxInstr int) int
 }
 
+// NextRasterLog is the contract for replaying mid-frame CPU writes to the
+// Next's visual state at the row they were made on. pkg/next/rasterlog.Log
+// satisfies it.
+//
+// The compositor pass rewinds to the frame-start state, walks down applying
+// each change as it reaches its row, then applies the remainder so the next
+// frame starts from the live state. Without it every CPU write applied
+// retroactively to the whole frame.
+type NextRasterLog interface {
+	BeginReplay()
+	ApplyThrough(row int)
+	EndReplay()
+	Len() int
+}
+
 // NextDAC is the contract for the four Spectrum Next DAC channels.
 // pkg/next/dac.Bank satisfies it via WritePort (which returns
 // "handled?" so the ULA's port dispatcher knows whether to fall
@@ -444,6 +463,37 @@ func (u *ULA) SetNextI2C(b NextI2C) { u.nextI2C = b }
 // affecting palette / Layer 2 state are visible to that row's
 // composition. Passing nil unhooks.
 func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
+
+// SetNextRasterLog installs the mid-frame raster journal. Passing nil (the
+// default, and every classic model) leaves the compositor pass exactly as it
+// was. See NextRasterLog.
+func (u *ULA) SetNextRasterLog(l NextRasterLog) { u.nextRasterLog = l }
+
+// NextRasterLogForTest exposes the installed raster journal so an
+// integration test can drive a rewind/replay directly. Returns nil when none
+// is wired.
+func (u *ULA) NextRasterLogForTest() NextRasterLog { return u.nextRasterLog }
+
+// DisplayRow reports which display row the raster is on right now: 0..191
+// inside the active area, rasterlog.RowBeforeDisplay (-1) during the top
+// border or vblank, and rasterlog.RowAfterDisplay (192) below the display.
+// Used to timestamp journalled writes.
+func (u *ULA) DisplayRow() int {
+	if u.mem == nil || u.mem.TStates == nil {
+		return -1
+	}
+	model := u.mem.GetCurrentModel()
+	t := int(*u.mem.TStates - u.frameStartTstate)
+	start := roms.DisplayStartTState(model)
+	if t < start {
+		return -1
+	}
+	row := (t - start) / TStatesPerLineFor(model)
+	if row >= ScreenHeight {
+		return ScreenHeight
+	}
+	return row
+}
 
 // SetNextDAC installs the Spectrum Next four-channel DAC bank.
 // Port writes are forwarded to it after the NextRegs / DMA priority
@@ -651,10 +701,16 @@ func (u *ULA) Render() *image.RGBA {
 			currentBorder = u.borderChanges[0].colour
 		}
 		changeIdx := 0
+		// The frame scanline the display starts on. Only the 48K's is a whole
+		// 64 lines from the interrupt — see roms.DisplayStartTState — so
+		// hardcoding 64 put a mid-frame border change on the wrong row by
+		// about a scanline for the whole 128K family.
+		displayStartLine := roms.DisplayStartTState(u.mem.GetCurrentModel()) /
+			TStatesPerLineFor(u.mem.GetCurrentModel())
 		for line := 0; line < TotalHeight; line++ {
-			// Advance past any border changes that apply to this scanline
-			// Map display line to frame scanline (line 0 = top border start)
-			frameScanline := line + (64 - BorderTop) // approximate: 64 lines before active display on 48K
+			// Advance past any border changes that apply to this scanline.
+			// Image row 0 is BorderTop rows above the first display row.
+			frameScanline := line + (displayStartLine - BorderTop)
 			for changeIdx < len(u.borderChanges) && u.borderChanges[changeIdx].scanline <= frameScanline {
 				currentBorder = u.borderChanges[changeIdx].colour
 				changeIdx++
@@ -1204,42 +1260,33 @@ func (u *ULA) floatingBusByte() byte {
 	tstates := int(*u.mem.TStates - u.frameStartTstate)
 
 	// Per-model line length: the 48K ULA uses 224 T-states/line, the 128K
-	// family 228. Using the wrong length shifts the floating-bus origin by a
-	// full 256 T-states on 48K (the documented first paper fetch is 64*224 =
-	// 14336, not 64*228 = 14592 — Ramsoft "floating bus", Sean Young notes,
-	// video/zxula_timing.vhd c_max_hc 447 vs 455).
+	// family 228 (video/zxula_timing.vhd c_max_hc 447 vs 455).
 	tPerLine := TStatesPerLineFor(model)
 
-	// Top border: before the first display line.
-	topBorderTStates := 64 * tPerLine
-	if tstates < topBorderTStates {
+	// The first paper fetch of display line 0, measured from the interrupt.
+	// This is per-personality and only the 48K's is a whole 64 scanlines —
+	// see roms.DisplayStartTState. The same constant anchors pkg/memory's
+	// contention window, so the floating bus and contention agree by
+	// construction.
+	displayStart := roms.DisplayStartTState(model)
+	if tstates < displayStart {
 		return 0xFF
 	}
 
-	line := (tstates - topBorderTStates) / tPerLine
+	line := (tstates - displayStart) / tPerLine
 	if line >= 192 { // bottom border
 		return 0xFF
 	}
 
-	// T-states into this line. The first 18 are the leftmost
-	// blanking/sync; the first displayed pixel is at T-state 14336 on 48K.
-	// Our frameStartTstate is the start of frame, so we subtract the
-	// per-line origin.
-	tInLine := tstates - topBorderTStates - line*tPerLine
+	// T-states into this display line, measured from its first paper fetch.
+	tInDisplay := tstates - displayStart - line*tPerLine
 
-	// Each line: 24 T-states left border, 128 T-states display,
-	// 24 right border, 52 retrace. Only the 128 display T-states
-	// produce floating-bus data.
-	const leftBorder = 24
+	// The ULA fetches for 128 T-states of each line; the rest of the line is
+	// border and retrace, which return no screen data.
 	const horizontalScreen = 128
-	if tInLine < leftBorder {
+	if tInDisplay >= horizontalScreen {
 		return 0xFF
 	}
-	if tInLine >= leftBorder+horizontalScreen {
-		return 0xFF
-	}
-
-	tInDisplay := tInLine - leftBorder
 	// 8 T-states per 16-pixel column pair. Within those 8 T-states
 	// the ULA's fetch pattern is:
 	//   t%8 = 0,1: idle bus (0xFF)
@@ -1624,7 +1671,18 @@ func (u *ULA) applyNextCompositor() {
 	}
 	ulaScan := u.compositorScan
 	composed := u.compositorComposed
+	// Rewind the journalled CPU writes to their frame-start values; each is
+	// re-applied below as the walk reaches the row it was made on. A no-op
+	// when nothing was journalled, and when no journal is wired at all.
+	journal := u.nextRasterLog
+	if journal != nil {
+		journal.BeginReplay()
+	}
 	for y := 0; y < h; y++ {
+		// Bring the visual state up to this row before composing it.
+		if journal != nil {
+			journal.ApplyThrough(y)
+		}
 		// Tick the Copper BEFORE composing the row so MOVEs affecting
 		// the compositor palette / Layer 2 are visible to this row's
 		// composition (these layers ARE composited per-scanline here).
@@ -1650,6 +1708,12 @@ func (u *ULA) applyNextCompositor() {
 		copy(ulaScan, u.img.Pix[rowStart:rowStart+w*4])
 		u.nextCompositor.ComposeScanline(y, ulaScan, composed)
 		copy(u.img.Pix[rowStart:rowStart+w*4], composed)
+	}
+	// Restore the state the guest actually left, including writes made below
+	// the last display row, so the border passes and the next frame both see
+	// it. Then drop the frame's entries.
+	if journal != nil {
+		journal.EndReplay()
 	}
 
 	// Border-area tilemap pass. Tilemap content in NextZXOS Browser

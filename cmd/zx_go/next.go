@@ -33,6 +33,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
+	"github.com/conorarmstrong/zx_go/pkg/next/rasterlog"
 	rtcpkg "github.com/conorarmstrong/zx_go/pkg/next/rtc"
 	"github.com/conorarmstrong/zx_go/pkg/next/sdcard"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
@@ -1271,6 +1272,37 @@ func wireNextSubsystems(e *emulator) error {
 		slog.Info("next: direct-core boot — seeded post-config NextRegs (no FPGA bootrom / no TBBLUE.FW)")
 	}
 	u.SetNextAY(ayEngine)
+
+	// Mid-frame raster journal. The Next layers composite at the end of a
+	// frame, so a CPU write partway down the screen used to apply
+	// retroactively to the whole frame; the Copper was unaffected because it
+	// is stepped inside the compositor's row loop. Journalling each visual
+	// change against the row it was made on lets the compositor replay them
+	// as it walks down. See pkg/next/rasterlog.
+	//
+	// Covered: palette entry writes (the classic rainbow / raster-split
+	// effect) and Layer 2 scroll (per-line parallax). Other visual registers
+	// still latch once per frame.
+	rlog := rasterlog.New(u.DisplayRow)
+	pal.SetWriteObserver(func(w palette.PaletteWrite) {
+		p := pal.Palette(int(w.Slot))
+		if p == nil {
+			return
+		}
+		idx, ov, op, nv, np := w.Index, w.OldVal, w.OldPrio, w.NewVal, w.NewPrio
+		rlog.Record(
+			func() { p.Set(idx, ov); p.SetPriority(idx, op) },
+			func() { p.Set(idx, nv); p.SetPriority(idx, np) },
+		)
+	})
+	l2.SetScrollObserver(func(w layer2.ScrollWrite) {
+		rlog.Record(
+			func() { l2.SetScrollX(w.OldX); l2.SetScrollY(w.OldY) },
+			func() { l2.SetScrollX(w.NewX); l2.SetScrollY(w.NewY) },
+		)
+	})
+	u.SetNextRasterLog(rlog)
+
 	comp := compositor.New(pal, l2)
 	comp.SetSprites(sprites)
 	u.SetNextSpritePort(sprites) // port $303B select (write) / status (read)
@@ -1337,13 +1369,22 @@ func wireNextSubsystems(e *emulator) error {
 		d.Store(0x4B, val)
 		comp.SetSpriteTransparency(val)
 	})
-	// NR$68 ("ULA Control") bit 7 = Disable ULA output. When set, the ULA
-	// layer paints nothing (lower layers / NR$4A fallback show). Sonic
-	// disables the ULA for its Layer-2/tilemap title; without this its stale
-	// screen RAM rendered as a garbled background.
+	// NR$68 ("ULA Control"). Bit 7 = Disable ULA output: the ULA layer paints
+	// nothing (lower layers / NR$4A fallback show). Sonic disables the ULA
+	// for its Layer-2/tilemap title; without this its stale screen RAM
+	// rendered as a garbled background.
+	//
+	// Bits 6:5 pick the blend colour source for NR$15's two blend orderings
+	// and bit 0 is the ULA/tilemap stencil; both used to be dropped, so the
+	// blend modes could only ever see the reset selection. Bit 4 (cancel
+	// extended keys) and bit 2 (ULA half-pixel scroll) are decoded and read
+	// back but not yet acted on — neither subsystem models them.
 	disp.SetOnWrite(0x68, func(d *nextregs.Dispatcher, val byte) {
-		d.Store(0x68, val)
-		u.SetULAOutputDisabled(val&0x80 != 0)
+		d.Store(0x68, nr68ReadBack(val))
+		r := decodeNR68(val)
+		u.SetULAOutputDisabled(r.ulaDisabled)
+		comp.SetBlendMode(r.blendMode)
+		comp.SetStencilMode(r.stencilMode)
 	})
 	u.SetNextDMA(dmaEngine)
 	// zxnDMA IO endpoints: a port configured as an IO endpoint (WR1/WR2 D3)

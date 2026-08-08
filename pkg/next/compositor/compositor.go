@@ -110,6 +110,8 @@ type Compositor struct {
 	spriteTrans    byte    // sprite transparency index (NextReg 0x4B)
 	tilemapTrans   byte    // tilemap transparency nibble (NextReg 0x4C, low 4 bits)
 	fallback       [4]byte // NR$4A fallback RGBA, shown when every layer is transparent
+	blendMode      byte    // NextReg 0x68 bits 6:5 — blend colour source
+	stencilMode    bool    // NextReg 0x68 bit 0 — ULA/tilemap stencil
 
 	// ULA transparency: the classic ULA renders via its own 16-colour
 	// palette, so a ULA pixel is "transparent" (lets a lower layer show in
@@ -361,6 +363,27 @@ func (c *Compositor) SetPrioritySource(p PrioritySource) { c.prioritySource = p 
 // transparent for the sprite layer (NextReg 0x4B). Defaults to
 // DefaultTransparency ($E3, the FPGA reset value).
 func (c *Compositor) SetSpriteTransparency(idx byte) { c.spriteTrans = idx }
+
+// SetBlendMode installs NextReg 0x68 bits 6:5, which choose WHICH layer
+// supplies the colour summed with Layer 2 in the two blend orderings
+// (zxnext.vhd:5446; the mix_rgb selection is at 7140-7180):
+//
+//	00 = the ULA pixel        10 = nothing (no blending)
+//	01 = the combined ULA+TM  11 = the tilemap pixel
+//
+// Reset value is 00, which is all that used to be modelled.
+func (c *Compositor) SetBlendMode(m byte) { c.blendMode = m & 0x03 }
+
+// BlendMode returns the active NR$68 blend selection.
+func (c *Compositor) BlendMode() byte { return c.blendMode }
+
+// SetStencilMode installs NextReg 0x68 bit 0. When set, and both the ULA and
+// the tilemap are enabled, the two combine into a stencil (their colours
+// ANDed) rather than layering (zxnext.vhd:7125-7138).
+func (c *Compositor) SetStencilMode(on bool) { c.stencilMode = on }
+
+// StencilMode reports the active NR$68 stencil selection.
+func (c *Compositor) StencilMode() bool { return c.stencilMode }
 
 // SetTilemapTransparency installs the tilemap transparency nibble
 // (NextReg 0x4C, low 4 bits). A tilemap pixel is transparent when the
@@ -667,15 +690,44 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			dst[off+0], dst[off+1] = c.fallback[0], c.fallback[1]
 			dst[off+2], dst[off+3] = c.fallback[2], c.fallback[3]
 		}
-		// ulaChannels3 recovers the ULA pixel's original 3-bit channels from the
-		// already-expanded RGBA scanline (palette.RGB puts the source bits in the
-		// top 3). A transparent ULA pixel adds nothing, matching Mix()'s
-		// ulaMixRGB being zero when ulaMixTransparent.
+		// blendChannels3 returns the 3-bit channels of the colour NR$68 bits
+		// 6:5 select as the blend source (Mix()'s mix_rgb, zxnext.vhd
+		// 7140-7180). A transparent source contributes nothing, matching
+		// mix_rgb being zero when mixRGBTransparent.
+		//
+		// The ULA arrives already expanded to RGBA; palette.RGB replicates
+		// 3-bit 'abc' as 'abcabcab', so the top 3 bits are the original.
 		ulaChannels3 := func(off int) (byte, byte, byte) {
 			if ulaTransparentAt(off) {
 				return 0, 0, 0
 			}
 			return ulaRGBA[off+0] >> 5, ulaRGBA[off+1] >> 5, ulaRGBA[off+2] >> 5
+		}
+		tmChannels3 := func(x int) (byte, byte, byte) {
+			if !doTilemap {
+				return 0, 0, 0
+			}
+			idx := tilemapScan[x]
+			if (idx & 0x0F) == tmTransparentNibble {
+				return 0, 0, 0
+			}
+			v := tilemapPal.Get(idx)
+			return byte((v >> 6) & 7), byte((v >> 3) & 7), byte(v & 7)
+		}
+		blendChannels3 := func(off, x int) (byte, byte, byte) {
+			switch c.blendMode {
+			case 1: // the combined ULA+TM: the tilemap wins where it is opaque
+				if tr, tg, tb := tmChannels3(x); tr|tg|tb != 0 {
+					return tr, tg, tb
+				}
+				return ulaChannels3(off)
+			case 2: // no blending
+				return 0, 0, 0
+			case 3: // the tilemap
+				return tmChannels3(x)
+			default: // 0: the ULA
+				return ulaChannels3(off)
+			}
 		}
 		paintBlend := func(off, x int) {
 			if !doL2 {
@@ -687,7 +739,7 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 			}
 			v := l2Pal.Get(idx)
 			lr, lg, lb := byte((v>>6)&7), byte((v>>3)&7), byte(v&7)
-			ur, ug, ub := ulaChannels3(off)
+			ur, ug, ub := blendChannels3(off, x)
 			mix := blendChannel
 			if mode == ModeBlend5 {
 				mix = blend5Channel

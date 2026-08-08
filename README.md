@@ -98,7 +98,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 | Format | Extensions | Load | Save | Notes |
 | --- | --- | :---: | :---: | --- |
 | Snapshots | `.sna` `.z80` `.szx` | ✓ | ✓ | Full 48K + 128K |
-| Tape | `.tap` `.tzx` | ✓ | ✓ | TZX load plays the data, signal and flow-control blocks (not 0x18/0x19); save covers 0x10/0x11/0x14 |
+| Tape | `.tap` `.tzx` | ✓ | ✓ | TZX load plays the data, signal, stream (CSW / generalised) and flow-control blocks; save covers 0x10/0x11/0x14 |
 | Disk (+3) | `.dsk` `.edsk` | ✓ | ✓ | EDSK handles weak sectors |
 | Disk (other) | `.udi` `.mgt` `.img` `.sad` `.d40` `.d80` | ✓ | — | Full format coverage |
 | TR-DOS / Beta | `.trd` | ✓ | — | Pentagon / 48K / 128K via WD1793 |

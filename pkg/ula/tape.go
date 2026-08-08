@@ -121,8 +121,9 @@ type tapeBlock struct {
 	// kindPureTone: one pulse length repeated toneCount times.
 	toneLen   uint16
 	toneCount uint16
-	// kindPulseSeq: the pulse lengths, played verbatim.
-	seq []uint16
+	// kindPulseSeq: the pulse lengths, played verbatim. Also carries the
+	// decoded streams of TZX 0x18 (CSW) and 0x19 (generalised data).
+	seq []uint32
 	// kindDirect: T-states per sample. data holds one bit per sample,
 	// most-significant first; usedBits gives the valid bits of the last byte.
 	sampleTStates uint16
@@ -518,12 +519,12 @@ func (tp *TapePlayer) generatePulsesData(blk tapeBlock) (pulses []uint32, dataPu
 		}
 		return pulses, len(pulses)
 	case kindPulseSeq:
-		// 0x13: the listed pulse lengths, verbatim.
+		// 0x13 pulse sequence, and the decoded 0x18 / 0x19 streams: the
+		// listed pulse lengths, verbatim, then any trailing pause.
 		pulses = make([]uint32, len(blk.seq))
-		for i, p := range blk.seq {
-			pulses[i] = uint32(p)
-		}
-		return pulses, len(pulses)
+		copy(pulses, blk.seq)
+		dataPulses = len(pulses)
+		return append(pulses, silencePulses(uint64(blk.pause)*3500)...), dataPulses
 	case kindDirect:
 		// 0x15: one EAR LEVEL per sample rather than a pulse length, so a run
 		// of equal samples collapses into a single pulse of

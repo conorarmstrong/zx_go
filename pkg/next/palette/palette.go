@@ -93,6 +93,10 @@ type Bank struct {
 	activeSprites byte
 	activeTilemap byte
 
+	// writeObserver, when set, is told about every palette entry write so the
+	// raster journal can replay mid-frame changes at their own scanline.
+	writeObserver func(PaletteWrite)
+
 	// Two-byte latch for the NR$44 9-bit palette write protocol: pending9
 	// holds the high byte (first write) until the second write arrives and
 	// commits both. Stored here (not in the wire-layer closure) so
@@ -218,6 +222,35 @@ func (b *Bank) PaletteForLayer(layer Layer) *Palette {
 // Write8 stores an 8-bit palette value (NextReg 0x41 write
 // behaviour: high 8 of 9 bits, low blue bit forced to 0) at the
 // current index, then advances the index by 1.
+// PaletteWrite describes one palette entry write: which palette and entry,
+// and the value and priority before and after. Everything the raster journal
+// needs to rewind the write and replay it at the row it was made on.
+type PaletteWrite struct {
+	Slot, Index      byte
+	OldVal, NewVal   uint16
+	OldPrio, NewPrio byte
+}
+
+// SetWriteObserver installs a callback fired on every palette entry write.
+// Used by the raster journal so a mid-frame palette change (the classic
+// raster-split effect) can be replayed at its own scanline instead of
+// applying retroactively to the whole frame. Pass nil to unhook.
+func (b *Bank) SetWriteObserver(fn func(PaletteWrite)) { b.writeObserver = fn }
+
+// observeWrite reports an entry write, if anyone is listening. Called with
+// the entry's prior state, immediately before it is overwritten.
+func (b *Bank) observeWrite(index byte, newVal uint16, newPrio byte) {
+	if b.writeObserver == nil {
+		return
+	}
+	p := b.palettes[b.selected]
+	b.writeObserver(PaletteWrite{
+		Slot: b.selected, Index: index,
+		OldVal: p.Get(index), NewVal: newVal,
+		OldPrio: p.Priority(index), NewPrio: newPrio,
+	})
+}
+
 func (b *Bank) Write8(val byte) {
 	// 9th bit (low blue) = written byte's bit1 OR bit0, per zxnext.vhd:4919
 	// (nr_palette_value <= nr_wr_dat & (nr_wr_dat(1) or nr_wr_dat(0))) —
@@ -227,6 +260,7 @@ func (b *Bank) Write8(val byte) {
 	if val&0x03 != 0 {
 		v |= 1
 	}
+	b.observeWrite(b.index, v, b.palettes[b.selected].Priority(b.index))
 	b.palettes[b.selected].Set(b.index, v)
 	if !b.autoIncDisable {
 		b.index++
@@ -263,6 +297,7 @@ func (b *Bank) ReadNR44() byte {
 // register writes can be added when there's a real caller.
 func (b *Bank) Write9(hi, lo byte) {
 	v := (uint16(hi) << 1) | uint16(lo&0x01)
+	b.observeWrite(b.index, v, (lo>>6)&0x03)
 	b.palettes[b.selected].Set(b.index, v)
 	// lo bits 7:6 carry the 2-bit priority (NR$44 protocol, zxnext.vhd:4920).
 	b.palettes[b.selected].SetPriority(b.index, (lo>>6)&0x03)

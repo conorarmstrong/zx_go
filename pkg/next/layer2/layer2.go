@@ -48,7 +48,11 @@ type Layer2 struct {
 	// scrollY is the 8-bit Layer 2 Y scroll (NR$17). Both feed the FPGA
 	// address generator (layer2.vhd:152, :156).
 	scrollX uint16
-	scrollY byte
+
+	// scrollObserver, when set, is told about every scroll change so the
+	// raster journal can replay it at its own scanline.
+	scrollObserver func(ScrollWrite)
+	scrollY        byte
 }
 
 // New constructs a Layer 2 reader backed by the given memory bus.
@@ -94,13 +98,47 @@ func (l *Layer2) PaletteOffset() byte { return l.paletteOffset }
 
 // SetScrollX installs the 9-bit Layer 2 X scroll (NR$71 bit0 || NR$16). Only
 // the low 9 bits are kept. Feeds the FPGA address generator (layer2.vhd:152).
-func (l *Layer2) SetScrollX(v uint16) { l.scrollX = v & 0x1FF }
+func (l *Layer2) SetScrollX(v uint16) {
+	v &= 0x1FF
+	if v != l.scrollX {
+		l.observeScroll(v, l.scrollY)
+	}
+	l.scrollX = v
+}
 
 // ScrollX returns the current 9-bit X scroll.
 func (l *Layer2) ScrollX() uint16 { return l.scrollX }
 
 // SetScrollY installs the 8-bit Layer 2 Y scroll (NR$17, layer2.vhd:156).
-func (l *Layer2) SetScrollY(v byte) { l.scrollY = v }
+func (l *Layer2) SetScrollY(v byte) {
+	if v != l.scrollY {
+		l.observeScroll(l.scrollX, v)
+	}
+	l.scrollY = v
+}
+
+// ScrollWrite describes a change to the Layer 2 scroll offsets: the pair
+// before and the pair after. Everything the raster journal needs to rewind
+// the change and replay it at the row it was made on.
+type ScrollWrite struct {
+	OldX, NewX uint16
+	OldY, NewY byte
+}
+
+// SetScrollObserver installs a callback fired whenever either scroll offset
+// changes. Used by the raster journal so a mid-frame scroll write (the
+// classic per-line parallax effect) takes effect from its own scanline
+// instead of applying retroactively to the whole frame. Pass nil to unhook.
+func (l *Layer2) SetScrollObserver(fn func(ScrollWrite)) { l.scrollObserver = fn }
+
+// observeScroll reports a pending scroll change, with the offsets as they
+// stand before it is applied.
+func (l *Layer2) observeScroll(newX uint16, newY byte) {
+	if l.scrollObserver == nil {
+		return
+	}
+	l.scrollObserver(ScrollWrite{OldX: l.scrollX, NewX: newX, OldY: l.scrollY, NewY: newY})
+}
 
 // ScrollY returns the current 8-bit Y scroll.
 func (l *Layer2) ScrollY() byte { return l.scrollY }

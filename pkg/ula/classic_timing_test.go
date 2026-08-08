@@ -156,10 +156,9 @@ func TestClassicFloatingBus48KOrigin(t *testing.T) {
 	// The first paper line, first display column. The fetch phase pattern
 	// (idle,idle,bitmap,attr,bitmap,attr,idle,idle) must apply at the
 	// 224-T-line origin, not the 228-T one.
-	base := uint64(64 * tPerLine48K)
-	const leftBorder = 24
+	base := uint64(roms.DisplayStartTState(roms.Model48K))
 	for offset, want := range []byte{0xFF, 0xFF, 0xA5, 0x5A, 0xA5, 0x5A, 0xFF, 0xFF} {
-		*mem.TStates = base + uint64(leftBorder) + uint64(offset)
+		*mem.TStates = base + uint64(offset)
 		got := u.floatingBusByte()
 		if got != want {
 			t.Errorf("48K display t-offset %d (origin 14336): got %#x, want %#x", offset, got, want)
@@ -275,5 +274,74 @@ func TestClassicFloatingBusPlus3Disabled(t *testing.T) {
 	*mem.TStates = uint64(64*224 + 24 + 2) // would be a bitmap fetch on 48K
 	if got := u.floatingBusByte(); got != 0xFF {
 		t.Errorf("+3 floating bus: got %#x, want 0xFF (no floating bus on +2A/+3)", got)
+	}
+}
+
+// TestFloatingBusAndContentionShareAnOrigin pins the coupling that was
+// missing: the floating bus and the contention window both describe the same
+// ULA fetch, so they must key off one per-model origin. Previously each
+// derived its own from a flat 64 scanlines, which happened to agree on the
+// 48K and disagreed by a whole scanline on the 128K family.
+func TestFloatingBusAndContentionShareAnOrigin(t *testing.T) {
+	for _, model := range []roms.SpectrumModel{
+		roms.Model48K, roms.Model128K, roms.ModelPlus2, roms.ModelPlus2A, roms.ModelPlus3,
+	} {
+		t.Run(roms.GetModelName(model), func(t *testing.T) {
+			// Contention opens exactly one T-state before the first fetch.
+			if got, want := roms.FirstContendedTState(model), roms.DisplayStartTState(model)-1; got != want {
+				t.Errorf("contention start %d, want %d (one before the fetch)", got, want)
+			}
+			// And the fetch origin is not the flat 64-line assumption unless
+			// the machine genuinely is 64 whole lines (only the 48K).
+			flat := 64 * roms.TStatesPerLine(model)
+			if model == roms.Model48K {
+				if roms.DisplayStartTState(model) != flat {
+					t.Errorf("48K display start %d, want %d", roms.DisplayStartTState(model), flat)
+				}
+				return
+			}
+			if roms.DisplayStartTState(model) == flat {
+				t.Errorf("%s still uses the flat 64-line origin %d",
+					roms.GetModelName(model), flat)
+			}
+		})
+	}
+}
+
+// TestContentionWindowMatchesTheFetchWindowOn128K walks the 128K's first
+// display line and asserts contention is charged exactly across the 128
+// T-states the floating bus reports as fetch, offset by the prefetch.
+func TestContentionWindowMatchesTheFetchWindowOn128K(t *testing.T) {
+	testDir := "test_roms_shared_origin_128"
+	createTestROMs(t, testDir)
+	t.Cleanup(func() { cleanupTestROMs(testDir) })
+	mem, err := memory.New(testDir, roms.Model128K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ts uint64
+	mem.SetTStatePtr(&ts)
+
+	start := uint64(roms.FirstContendedTState(roms.Model128K))
+	// Inside the window: the pattern's slot 0 charges the longest stall.
+	ts = start
+	before := ts
+	mem.ContendMemory(0x4000)
+	if got := ts - before; got != 6 {
+		t.Errorf("128K first contended T-state (%d): delay %d, want 6", start, got)
+	}
+	// One before the window: nothing.
+	ts = start - 1
+	before = ts
+	mem.ContendMemory(0x4000)
+	if got := ts - before; got != 0 {
+		t.Errorf("128K T=%d (pre-window): delay %d, want 0", start-1, got)
+	}
+	// 128 T-states of fetch, then the line's border: nothing.
+	ts = start + 128
+	before = ts
+	mem.ContendMemory(0x4000)
+	if got := ts - before; got != 0 {
+		t.Errorf("128K T=%d (past fetch): delay %d, want 0", start+128, got)
 	}
 }

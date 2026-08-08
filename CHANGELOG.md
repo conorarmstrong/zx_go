@@ -4,6 +4,83 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.0]
+
+Clears the remaining valid items from the external review, plus one open
+question from v1.5.0 that turned out to be a real bug. Everything is derived
+from the FPGA core sources, with the VHDL line references in the code.
+
+### Fixed
+
+- **The whole 128K family was a scanline late against the interrupt.** v1.5.0
+  left this flagged as an open question; the FPGA settles it. `zxula_timing.vhd`
+  derives the ULA-relative counters from the raw ones — `hc_ula` resets at
+  `c_min_hactive - 12`, `vc_ula` on the line where `vc = c_min_vactive` — and
+  the interrupt fires at `(c_int_v, c_int_h)`. Working the gap out per
+  personality gives a first paper fetch of **14336** on the 48K, **14362** on
+  the 128K/+2 and **14363** on the +2A/+3, not the flat `64 * lineLength`
+  every model was using. The 48K and 128K results reproduce the documented
+  14336 / 14362 exactly, which is what validates the derivation; the +2A/+3
+  differs from the commonly-quoted figure by one T-state because the core
+  gives it its own `c_int_h`.
+
+  The 230-T-state error was invisible to the test corpus because the renderer
+  and the contention model shared the same wrong origin, so a static screen
+  still looked right — what was wrong was the phase against the interrupt,
+  which is exactly what timing-sensitive software depends on. The per-model
+  geometry now lives in one place (`pkg/roms/timing.go`) and the contention
+  window, the floating bus and the mid-frame border tracking all key off it.
+
+  Two consequences fell out. The floating bus was placing the paper 24
+  T-states into each line, a left border that does not exist once the origin
+  IS the fetch. And the border tracker's `frameScanline` was hardcoded to 64
+  lines with an "approximate" comment; it now follows the model.
+
+- **NextReg 0x68 only decoded bit 7.** The blend selection (bits 6:5) and the
+  stencil bit were dropped, so NR$15's two blend orderings could only ever see
+  the reset blend source. All the fields are decoded now, the blend source and
+  stencil reach the compositor, and the read-back masks reserved bit 1 per
+  `zxnext.vhd:6093`. Bit 4 (cancel extended keys) and bit 2 (ULA half-pixel
+  scroll) are decoded and read back but not acted on — neither subsystem
+  models them.
+
+- **CPU mid-frame writes now take effect at their own scanline.** The Next
+  composites at the end of a frame, so a CPU write partway down the screen
+  applied retroactively to the whole frame and raster splits driven from an
+  interrupt handler or a raster-wait loop did not appear at all. (The Copper
+  was never affected — it is stepped inside the compositor's row loop.)
+
+  A new journal (`pkg/next/rasterlog`) records each visual change against the
+  display row it was made on; the compositor rewinds to the frame-start state,
+  walks down applying each change as it reaches its row, then restores the
+  live state. Changes are recorded as undo/redo closures rather than register
+  writes on purpose: replaying raw NextReg writes through the dispatcher would
+  re-trigger palette auto-increment, sprite uploads and MMU paging. Wired for
+  palette entry writes (the classic rainbow split) and Layer 2 scroll (per-line
+  parallax); other visual registers still latch once per frame.
+
+- **TZX 0x18 and 0x19 are decoded.** Both were skipped via their length field,
+  silently dropping content. 0x18 (CSW recording) now decodes both the RLE and
+  Z-RLE streams; 0x19 (generalised data block) decodes its symbol alphabets,
+  run-length pilot stream and bit-packed data stream, honouring the per-symbol
+  level flags. A malformed stream block is skipped with a warning rather than
+  failing the load.
+
+- **The rest of the UI paths that mutate live state are guarded.** v1.5.1
+  fixed the machine switch; reboot and snapshot restore had the same
+  weakness, reachable from menus, drag-and-drop and the telnet debugger. Both
+  now take `coreMu`, each with a `Locked` variant for the callers that already
+  hold it — the machine switch reboots, and RZX playback restores intermediate
+  snapshots from inside the frame loop.
+
+### Known limitations
+
+- **The Copper still resolves a WAIT to a whole scanline.** Intra-line raster
+  precision would need a per-pixel renderer. The per-scanline instruction
+  budget is hardware-correct as of v1.5.0.
+- **Opus Discovery is not emulated.** Microdrive, TR-DOS/Beta and DISCiPLE
+  are.
+
 ## [v1.5.1]
 
 Self-review of the v1.5.0 changes. Three defects found in that release's own

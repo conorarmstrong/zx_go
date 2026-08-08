@@ -3,6 +3,7 @@ package ula
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"os"
 )
 
@@ -249,9 +250,9 @@ parseLoop:
 			if offset+count*2 > len(data) {
 				break parseLoop
 			}
-			seq := make([]uint16, count)
+			seq := make([]uint32, count)
 			for i := 0; i < count; i++ {
-				seq[i] = binary.LittleEndian.Uint16(data[offset+i*2 : offset+i*2+2])
+				seq[i] = uint32(binary.LittleEndian.Uint16(data[offset+i*2 : offset+i*2+2]))
 			}
 			tp.blocks = append(tp.blocks, tapeBlock{kind: kindPulseSeq, seq: seq})
 			offset += count * 2
@@ -304,6 +305,40 @@ parseLoop:
 				usedBits:      usedBits,
 			})
 			offset += int(length)
+
+		case 0x18, 0x19: // CSW recording / generalised data block
+			// Both carry a 4-byte payload length, then a stream that decodes
+			// to explicit pulse durations. A malformed one is skipped rather
+			// than aborting the load — the length field still tells us how
+			// far to advance.
+			if offset+4 > len(data) {
+				break parseLoop
+			}
+			length := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			offset += 4
+			if length < 0 || offset+length > len(data) {
+				break parseLoop
+			}
+			payload := data[offset : offset+length]
+			offset += length
+
+			var seq []uint32
+			var pause uint16
+			var derr error
+			if blockID == 0x18 {
+				seq, pause, derr = decodeCSW(payload)
+			} else {
+				seq, pause, derr = decodeGeneralisedData(payload)
+			}
+			if derr != nil {
+				slog.Warn("TZX: skipping block", "id", fmt.Sprintf("%#02x", blockID), "err", derr)
+				break
+			}
+			if len(seq) > 0 {
+				tp.blocks = append(tp.blocks, tapeBlock{
+					kind: kindPulseSeq, seq: seq, pause: pause,
+				})
+			}
 
 		case 0x20: // Pause (or, when zero, stop the tape)
 			if offset+2 > len(data) {
