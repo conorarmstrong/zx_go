@@ -178,6 +178,16 @@ type emulator struct {
 	// is model-correct in the GUI render loop too (timing.md §1a).
 	model roms.SpectrumModel
 
+	// coreMu guards the swappable machine core: model, cpu, mem, ula, kbd,
+	// peripherals, zx8x, sam and the Next device set. The emulation goroutine
+	// holds it for the whole of each frame; the machine-switch paths hold it
+	// across their mutations, so a switch can never land mid-frame.
+	//
+	// Pausing first is NOT sufficient on its own: `paused` is only tested at
+	// the top of a loop iteration, so setting it does not wait for an
+	// in-flight frame to finish.
+	coreMu sync.Mutex
+
 	paused atomic.Bool
 	ticker *time.Ticker
 
@@ -1201,7 +1211,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		// (no accumulated drift) and drops missed frames instead of running
 		// them back-to-back — see framepacing.go.
 		pacer := newFramePacer(time.Now())
-		timer := time.NewTimer(frameDurationForModel(e.model))
+		timer := time.NewTimer(frameDurationForModel(e.currentModel()))
 		defer timer.Stop()
 
 		frameCount := 0
@@ -1210,14 +1220,21 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		for {
 			select {
 			case <-timer.C:
-				period := frameDurationForModel(e.model)
+				period := frameDurationForModel(e.currentModel())
 				timer.Reset(pacer.next(time.Now(), period))
 				if !e.paused.Load() {
 					// Honour the remote debugger's pause state.
 					// WaitIfPaused is nil-safe and a no-op when
 					// not paused, so the GUI hot path is unaffected
 					// when --debugger-port wasn't supplied.
+					// Taken BEFORE coreMu: blocking on the debugger
+					// while holding the core would freeze a machine
+					// switch until the user resumed.
 					e.rdbg.WaitIfPaused()
+
+					// Hold the core for the whole frame so a machine
+					// switch cannot swap cpu/mem/ula out underneath it.
+					e.coreMu.Lock()
 					// Execution paths: ZX80/ZX81 (CPU-generated video),
 					// RZX playback, RZX recording, or normal frame.
 					switch {
@@ -1411,6 +1428,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						lastRender = now
 					}
 
+					e.coreMu.Unlock()
 				}
 			case <-e.stopChan:
 				return
@@ -2802,6 +2820,14 @@ func main() {
 			}
 			return
 		}
+		// Everything from here mutates the live core, so hold it against the
+		// emulation goroutine — closing the outgoing ULA or swapping cpu/mem
+		// mid-frame is exactly the race. Deferred so the several error-path
+		// returns below all release it. dialog.ShowInformation and SetTitle
+		// only queue work for the UI thread, so holding across them is safe.
+		emu.coreMu.Lock()
+		defer emu.coreMu.Unlock()
+
 		// Stop the outgoing machine's audio devices before swapping the core,
 		// so we don't leak the old SAM SAA player (or the old ULA's player when
 		// crossing into a machine that has no ULA).
@@ -2881,6 +2907,14 @@ func main() {
 		if !emu.paused.Load() {
 			emu.togglePause()
 		}
+
+		// From here on the live core is being reshuffled in place —
+		// mem.SwitchModel moves bank allocations under the running CPU — so
+		// hold it against the emulation goroutine. Deferred to cover the
+		// error-path returns below. Taken AFTER the rebuildEmulatorCore
+		// delegation above, which locks for itself.
+		emu.coreMu.Lock()
+		defer emu.coreMu.Unlock()
 
 		// Tear down Next-only wiring BEFORE the memory swap when
 		// leaving the Next: divMMC, esxDOS, Layer 2 etc all hold

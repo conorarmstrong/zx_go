@@ -13,6 +13,16 @@ const (
 	cpuHz128K = 3_546_900
 )
 
+// currentModel returns the active machine. The emulation goroutine calls this
+// from outside its frame (to pick the frame period), where the machine-switch
+// menu may be swapping the core underneath it. Reads made INSIDE a frame can
+// use e.model directly, since the frame already holds coreMu.
+func (e *emulator) currentModel() roms.SpectrumModel {
+	e.coreMu.Lock()
+	defer e.coreMu.Unlock()
+	return e.model
+}
+
 // cpuHzForModel returns the model's CPU clock.
 func cpuHzForModel(model roms.SpectrumModel) int {
 	switch model {

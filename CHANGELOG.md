@@ -24,6 +24,26 @@ new code, plus one hot-path cost.
   hit the new direct-recording block (0x15) and, pre-existing, every trailing
   pause: a one-second gap was carrying ~53 spurious edges. Durations are now
   `uint32` and a run is one pulse.
+- **The machine switch could swap the core out mid-frame.** A data race that
+  predates v1.5.0 (the frame-pacing work only added another read of it, which
+  is how it was noticed). The machine-switch menu runs on the UI goroutine and
+  replaces `cpu`, `mem`, `ula`, `kbd`, `peripherals`, `model` and the Next
+  device set wholesale — or, on the in-place path, has `mem.SwitchModel`
+  reshuffle bank allocations under the running CPU — while the emulation
+  goroutine is reading all of it every frame. Pausing first was not enough:
+  `paused` is only tested at the top of a loop iteration, so setting it never
+  waited for an in-flight frame to finish. A new `coreMu` is held by the
+  emulation goroutine for the whole of each frame and across both switch
+  paths' mutations, so a switch can only land between frames. It is taken
+  after the remote debugger's `WaitIfPaused`, so a debugger pause cannot
+  freeze a machine switch.
+
+  Not covered: the other UI actions that mutate live emulator state
+  (snapshot load, quick-load, reboot, tape insertion) rely on the same
+  advisory pause and have the same weakness. They mutate contents rather than
+  replacing the core objects, so the consequences are milder, but they are the
+  same class of bug and want their own pass.
+
 - **A stale contention shape after a machine switch.** Deciding contention by
   the paged bank put a model lookup on every memory access, so the timing
   personality and line length are now cached — and the cache is refreshed by
