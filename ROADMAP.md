@@ -121,34 +121,29 @@ downstream symptoms — see the development log.
   the Copper's normal idiom is per-scanline. The per-scanline instruction
   budget is hardware-correct (v1.5.0).
 
-- [ ] **[nice-to-have] Opus Discovery.** The one genuinely absent disk
-  interface; Microdrive, TR-DOS/Beta and DISCiPLE are all present.
+- [~] **[nice-to-have] Opus Discovery.** ROM vendored at `roms/opus.rom`
+  (8192 bytes). `pkg/opus` implements the interface's address decode and
+  register file, on pkg/betadisk's Western Digital controller (the WD1770 the
+  Opus uses shares the FD179x command set).
 
-  **ROM now vendored** at `roms/opus.rom` (8192 bytes, sha256
-  af869af8…4acf86), so the old "no ROM" blocker is gone. What is still
-  missing is the hardware INTERFACE, and these dead ends are recorded so the
-  next attempt does not repeat them:
+  **The interface is MEMORY-mapped, not port-mapped** — which is why the ROM
+  contains almost no IN/OUT instructions, and why an earlier attempt to derive
+  a port map from it failed. Layout, from the published v2.15 disassembly at
+  speccy4ever.speccy.org cross-checked against the v2.22 ROM:
 
-  - Running the ROM standalone from reset performs **no I/O at all** and runs
-    off into RAM, with or without the 48K ROM underneath. It is not a
-    self-contained boot ROM in that configuration.
-  - Static disassembly does not yield the port map. The only coherent I/O
-    sites are `IN A,($FE)` (keyboard), `IN A,($1F)` at `$11FD` (a genuine
-    Kempston joystick read — verified as real code by its surrounding
-    context), and an `OUT (C),A` transfer routine at `$17A2-$17CB` whose port
-    comes from a runtime `IX` structure, so the FDC addresses never appear as
-    literals.
-  - A byte scan suggests `IN ($03)/($1B)` and `OUT ($00)/($14)/($17)`, which
-    looks temptingly like a WD1770 register select on bits 4:3. It is not:
-    disassembling their surroundings shows incoherent instruction streams, so
-    those bytes are DATA. This inference was made and discarded — do not
-    rebuild it.
+  - `$0000-$1FFF` the 8 KB Opus ROM
+  - `$2800-$2803` WD1770 registers: command/status, track, sector, data
+  - `$3000-$3003` drive control and status
+  - the rest of `$2000-$3FFF` is the interface's own RAM
 
-  To finish this, one of two things is needed: Opus Discovery hardware
-  documentation (port map + ROM paging trigger), or a decision that taking
-  interface facts (port numbers, register semantics — facts about hardware,
-  not copyrightable expression) from the GPL reference implementation is
-  acceptable for an independently written MIT implementation.
+  The only genuine port instructions are `IN A,($FE)` (keyboard) and
+  `IN A,($1F)` — a Kempston-compatible joystick port, confirmed real by its
+  context (reads `$3000`, tests bit 7, then the joystick).
+
+  Still to do: the ROM paging trigger (what pages the interface in and out),
+  the `.OPD` disk image format, and wiring it into the peripherals manager and
+  the GUI. Sample `.OPD` images and further ROM versions are available from the
+  same source.
 
 - [⊘] **[nice-to-have] #243/#245 compare-foreign bisect UX** + #244
   the reference emulator DZRP RunToInstruction polish — debugger ergonomics.
