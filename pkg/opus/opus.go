@@ -18,8 +18,6 @@
 // bit 7, and only then reads the joystick.
 package opus
 
-import "github.com/conorarmstrong/zx_go/pkg/betadisk"
-
 // Region identifies which part of the interface an address falls in.
 type Region int
 
@@ -75,20 +73,27 @@ func FDCRegister(addr uint16) int { return int(addr-FDCBase) & 3 }
 // implementation: the WD1770 the Opus uses shares that command set, so the
 // controller is reused rather than reimplemented.
 type Device struct {
-	fdc     *betadisk.FDC
+	fdc     fdc
 	control byte
 	ram     [WinTop - WinBase + 1]byte
 }
 
 // New returns an Opus Discovery with no disks mounted.
-func New() *Device {
-	d := &Device{fdc: &betadisk.FDC{}}
-	d.fdc.Reset()
-	return d
+func New() *Device { return &Device{} }
+
+// Mount inserts a disk into a drive (0 or 1).
+func (d *Device) Mount(drive int, img *Image) {
+	if drive >= 0 && drive < len(d.fdc.disks) {
+		d.fdc.disks[drive] = img
+	}
 }
 
-// FDC exposes the controller so a host can mount images on it.
-func (d *Device) FDC() *betadisk.FDC { return d.fdc }
+// SetWriteProtect marks a drive's disk read-only.
+func (d *Device) SetWriteProtect(drive int, wp bool) {
+	if drive >= 0 && drive < len(d.fdc.wprot) {
+		d.fdc.wprot[drive] = wp
+	}
+}
 
 // Control returns the drive-control latch as last written.
 func (d *Device) Control() byte { return d.control }
@@ -99,13 +104,13 @@ func (d *Device) TryRead(addr uint16) (byte, bool) {
 	case RegionFDC:
 		switch FDCRegister(addr) {
 		case 0:
-			return d.fdc.ReadStatus(), true
+			return d.fdc.status, true
 		case 1:
-			return d.fdc.ReadTrackReg(), true
+			return d.fdc.track, true
 		case 2:
-			return d.fdc.ReadSectorReg(), true
+			return d.fdc.sector, true
 		default:
-			return d.fdc.ReadData(), true
+			return d.fdc.readData(), true
 		}
 	case RegionControl:
 		return d.control, true
@@ -121,21 +126,20 @@ func (d *Device) TryWrite(addr uint16, v byte) bool {
 	case RegionFDC:
 		switch FDCRegister(addr) {
 		case 0:
-			d.fdc.WriteCommand(v)
+			d.fdc.writeCommand(v)
 		case 1:
-			d.fdc.WriteTrackReg(v)
+			d.fdc.track = v
 		case 2:
-			d.fdc.WriteSectorReg(v)
+			d.fdc.sector = v
 		default:
-			d.fdc.WriteData(v)
+			d.fdc.writeData(v)
 		}
 		return true
 	case RegionControl:
 		d.control = v
-		// Low bits select the drive; the WD1770 has no side line of its own,
-		// so the side comes from the same latch.
-		d.fdc.SelectDrive(int(v & 0x03))
-		d.fdc.SetSide(int(v>>4) & 1)
+		// The low bits select the drive. The Opus is single-sided, so there
+		// is no side line to derive.
+		d.fdc.drive = int(v & 0x01)
 		return true
 	case RegionRAM:
 		d.ram[addr-WinBase] = v

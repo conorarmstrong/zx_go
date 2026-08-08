@@ -4,6 +4,39 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.0]
+
+### Added
+
+- **Opus Discovery disk interface (`pkg/opus`).** The 8 KB v2.22 interface ROM
+  is vendored at `roms/opus.rom`, and the hardware is modelled where it
+  actually lives: the Opus is memory-mapped, not port-mapped, with the WD1770
+  register file at `$2800-$2803` and drive control at `$3000-$3003` inside the
+  window it pages in alongside its ROM. That is why earlier port-map hunting
+  found nothing — the ROM contains almost no `IN`/`OUT` at all.
+
+  `.opd` images are 40 cylinders of 18 256-byte sectors on one side, a flat
+  184320 bytes with no header, confirmed against three unrelated real images.
+  The Opus geometry is why the controller is its own rather than
+  `pkg/betadisk`'s, which is built around TR-DOS's 16 sectors per track.
+
+  Working and test-covered: Type I restore/seek/step, Type II read and write
+  sector, drive selection, write protection, and record-not-found on an empty
+  drive — all driven through the register file the guest itself uses, and the
+  read path verified byte-for-byte against real `.OPD` disk images.
+
+### Known gaps
+
+- **Opus ROM auto-paging is not implemented.** The trigger that pages the
+  interface over the Spectrum ROM is unknown. Executing the ROM standalone
+  from reset polls `$3001` a few hundred times and then runs into RAM;
+  sweeping every single-bit status value changes how it fails but never
+  reaches the controller. The published disassembly has no port map to find,
+  and its `page-in`/`page-out` labels turn out to be BASIC-editor routines.
+  Until this is known the package is a working disk subsystem rather than a
+  boot device, so it is deliberately not wired into the machine or the GUI.
+  `pkg/opus/README.md` records what has been ruled out so it is not re-derived.
+
 ## [v1.6.4]
 
 ### Added
