@@ -15,6 +15,10 @@ type hiResL2Mock struct {
 	wideL2Calls int
 }
 
+func (m *hiResL2Mock) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
+	m.ComposeScanline(y, ulaRGBA, dst)
+}
+
 func (m *hiResL2Mock) ComposeScanline(y int, ula, dst []byte)               {}
 func (m *hiResL2Mock) HasActiveTilemap() bool                               { return false }
 func (m *hiResL2Mock) ComposeBorderRow(y int, dst []byte, f func(int) bool) {}

@@ -250,3 +250,47 @@ func TestBlendModeSelectsTheBlendColour(t *testing.T) {
 		})
 	}
 }
+
+// TestComposeScanlineRangeTouchesOnlyItsRange pins the primitive the
+// intra-line Copper support rests on: composing [x0,x1) must leave every
+// other pixel of the destination untouched, so a caller can interleave Copper
+// steps with compositing across the line.
+func TestComposeScanlineRangeTouchesOnlyItsRange(t *testing.T) {
+	f := newModeFixture(t, ModeSLU, false)
+	f.setULA(false)
+
+	// Poison the destination so any stray write shows.
+	for i := range f.dst {
+		f.dst[i] = 0xA7
+	}
+	f.c.ComposeScanlineRange(0, f.ulaRGBA, f.dst, 8, 16)
+
+	for x := 0; x < Width; x++ {
+		touched := false
+		for b := 0; b < 4; b++ {
+			if f.dst[x*4+b] != 0xA7 {
+				touched = true
+			}
+		}
+		inRange := x >= 8 && x < 16
+		if touched != inRange {
+			t.Fatalf("pixel %d: touched=%v, want %v (range is [8,16))", x, touched, inRange)
+		}
+	}
+}
+
+// TestComposeScanlineIsTheWholeRow pins that the whole-row entry point still
+// covers everything, so the range variant cannot silently narrow it.
+func TestComposeScanlineIsTheWholeRow(t *testing.T) {
+	f := newModeFixture(t, ModeSLU, false)
+	f.setULA(false)
+	for i := range f.dst {
+		f.dst[i] = 0xA7
+	}
+	f.c.ComposeScanline(0, f.ulaRGBA, f.dst)
+	for x := 0; x < Width; x++ {
+		if f.dst[x*4] == 0xA7 && f.dst[x*4+1] == 0xA7 && f.dst[x*4+2] == 0xA7 {
+			t.Fatalf("pixel %d was never composed", x)
+		}
+	}
+}

@@ -4,6 +4,59 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.4]
+
+### Added
+
+- **Copper intra-line raster precision.** The Copper was stepped once per
+  scanline at end-of-line hcount, so every MOVE on a line landed before the
+  row was composited and a WAIT for a mid-line column had no effect at all.
+
+  Previous notes here called this unfixable without a per-pixel renderer, and
+  a segment-based approach an approximation. Both were wrong. The WAIT column
+  field is 6 bits taken as 8-pixel units — the release threshold is
+  `hcount >= (X<<3)+12`, `copper.vhd:94` — so **8 pixels is the Copper's own
+  horizontal resolution**. Stepping and compositing in 8-pixel segments is
+  therefore exact at the granularity the hardware itself resolves, not an
+  approximation of anything.
+
+  The compositor gained `ComposeScanlineRange`, and the row loop now walks the
+  line in 8-pixel segments, stepping the Copper at each boundary and finishing
+  off-screen so a WAIT for a column beyond the visible area still releases
+  within its own line. The whole line still shares one instruction budget, so
+  segmenting cannot let the Copper outrun the hardware. **Every pixel-golden
+  corpus frame is unchanged**, so this is a pure gain with no regression.
+
+### Verified
+
+- **Compatibility manifest: 20 Untested down to 13, 16 entries now carry
+  evidence.** Manic Miner verified into gameplay (Central Cavern with the AIR
+  bar and score panel); Elite, Chuckie Egg, Driller, Total Eclipse, Jet Pac
+  and Pssst to their title or options screens, each with a note on exactly
+  what was seen and what was not. Driller and Total Eclipse were checked on
+  their 48K tape releases rather than the +3 disk reissues the rows name, and
+  Jet Pac and Pssst from snapshots rather than through the Interface 2
+  cartridge slot — both said plainly in the notes rather than glossed.
+
+- **Where Time Stood Still stays Untested, with the reason recorded.** The
+  `.z80` to hand is a v1 (48K-format) snapshot of a 128K game, so it drops to
+  BASIC on the 48K and the 128K alike. Checked on both models specifically to
+  rule out the v1.6.1 48K-snapshot paging change as the cause; it is not.
+
+### Known limitations
+
+- **NR$68 bit 2 (ULA half-pixel scroll)** is decoded, stored and read back but
+  cannot render. The shift it contributes is a HALF pixel
+  (`zxula.vhd:353` builds it as `px(2 downto 0) & px(8)`), and the ULA layer is
+  sampled at one pixel per output pixel. Showing it needs the layer rendered at
+  twice the horizontal resolution. Rounding to the nearest whole pixel was
+  considered and rejected: it would move the picture by a full pixel when the
+  guest asked for half, which is a different wrong answer rather than a better
+  one.
+- **Opus Discovery** remains unimplemented. Confirmed there is no ROM image
+  anywhere on this machine, and the obvious reference implementation is GPL
+  against this project's MIT licence, so it cannot be written or tested here.
+
 ## [v1.6.3]
 
 ### Added

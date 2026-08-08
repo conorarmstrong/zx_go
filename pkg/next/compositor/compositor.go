@@ -452,7 +452,19 @@ func (c *Compositor) Transparency() byte { return c.transparency }
 //
 // dst must have at least Width*4 bytes; extra bytes are not
 // touched.
+// ComposeScanline composes the whole 256-pixel row.
 func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
+	c.ComposeScanlineRange(y, ulaRGBA, dst, 0, Width)
+}
+
+// ComposeScanlineRange composes pixels [x0, x1) of the row.
+//
+// The range exists so the caller can interleave Copper steps with
+// compositing. The Copper's WAIT column field is 6 bits taken as 8-pixel
+// units (copper.vhd:94), so its horizontal resolution IS 8 pixels: stepping
+// and composing in 8-pixel segments reproduces mid-line MOVEs exactly at the
+// granularity the hardware itself resolves, without per-pixel rendering.
+func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
 	if len(dst) < Width*4 {
 		return
 	}
@@ -783,7 +795,7 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 		return
 	}
 
-	for x := 0; x < Width; x++ {
+	for x := x0; x < x1; x++ {
 		off := x * 4
 		// First lay down ULA, then mix the tilemap onto ULA (the
 		// FPGA's ulatm_rgb formation), then the NR$15 priority chain

@@ -31,6 +31,12 @@ const (
 // (BeamPosition / ActiveVideoLine on the Next, which boots in 128K timing).
 const TStatesPerLine = 228
 
+// copperSegmentPixels is the width of one compositing segment. It is the
+// Copper's own horizontal resolution: its WAIT column field is 6 bits taken
+// as 8-pixel units (device/copper.vhd:94), so stepping and composing at this
+// granularity is exact rather than an approximation.
+const copperSegmentPixels = 8
+
 // TStatesPerLineFor returns the documented T-states-per-scanline for a machine
 // model: 224 for the 48K (312 lines * 224 = 69888 T-states/frame), 228 for the
 // 128K family and +2/+2A/+3 (311 lines * 228 = 70908). The Spectrum Next boots
@@ -263,6 +269,9 @@ type PortTracer func(addr uint16, val byte, write, handled bool)
 // sprite bandwidth model).
 type NextCompositor interface {
 	ComposeScanline(y int, ulaRGBA []byte, dst []byte)
+	// ComposeScanlineRange composes pixels [x0, x1) of a row, so the caller
+	// can interleave Copper steps with compositing across the line.
+	ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int)
 	// HasActiveTilemap reports whether the compositor has a
 	// tilemap layer wired AND enabled. ULA uses this to decide
 	// whether to run the border-area pass for Layer-3 content
@@ -1733,19 +1742,35 @@ func (u *ULA) applyNextCompositor() {
 		// copper-MOVE timing gap to close for it. (It would matter only
 		// if the ULA honoured the copper-changeable Next ULA palette,
 		// which it does not yet — a separate feature, not a timing bug.)
-		if u.nextCopper != nil {
-			// Step the Copper for scanline y at the end-of-line horizontal
-			// counter (>= 511) so every WAIT targeting any column on scanline
-			// y releases on y, not one scanline late. The Copper's WAIT
-			// release threshold is hcount >= (X<<3)+12 (device/copper.vhd:94);
-			// passing the max hcount clears it for all X. This is the
-			// achievable raster precision for a per-scanline renderer
-			// (per-pixel hcount precision would need per-pixel rendering).
-			u.nextCopper.Step(uint16(y), 511, copperInstrPerScanline)
-		}
 		rowStart := (BorderTop+y)*u.img.Stride + BorderLeft*4
 		copy(ulaScan, u.img.Pix[rowStart:rowStart+w*4])
-		u.nextCompositor.ComposeScanline(y, ulaScan, composed)
+
+		// Walk the line in 8-pixel segments, stepping the Copper at each
+		// boundary before composing that segment. The Copper's WAIT column
+		// field is 6 bits taken as 8-pixel units — the release threshold is
+		// hcount >= (X<<3)+12 (device/copper.vhd:94) — so 8 pixels IS the
+		// hardware's own horizontal resolution. A MOVE gated by a mid-line
+		// WAIT therefore affects exactly the segments after it, which a
+		// once-per-line step could not reproduce at all.
+		//
+		// The whole line still shares one instruction budget, so segmenting
+		// cannot let the Copper run faster than the hardware does.
+		budget := copperInstrPerScanline
+		if u.nextCopper != nil {
+			for x := 0; x < w; x += copperSegmentPixels {
+				if budget > 0 {
+					budget -= u.nextCopper.Step(uint16(y), uint16(x), budget)
+				}
+				u.nextCompositor.ComposeScanlineRange(y, ulaScan, composed, x, x+copperSegmentPixels)
+			}
+			// Finish the line off-screen so a WAIT for a column beyond the
+			// visible area still releases within its own scanline.
+			if budget > 0 {
+				u.nextCopper.Step(uint16(y), 511, budget)
+			}
+		} else {
+			u.nextCompositor.ComposeScanline(y, ulaScan, composed)
+		}
 		copy(u.img.Pix[rowStart:rowStart+w*4], composed)
 	}
 	// Restore the state the guest actually left, including writes made below

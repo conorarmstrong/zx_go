@@ -13,6 +13,10 @@ import (
 // the bottom over-border strip (frame Y 250).
 type overBorderMock struct{ rows map[int]bool }
 
+func (m *overBorderMock) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
+	m.ComposeScanline(y, ulaRGBA, dst)
+}
+
 func (m *overBorderMock) ComposeScanline(y int, ula, dst []byte)               {}
 func (m *overBorderMock) HasActiveTilemap() bool                               { return false }
 func (m *overBorderMock) ComposeBorderRow(y int, dst []byte, f func(int) bool) {}
@@ -88,6 +92,10 @@ func TestNextRenderNoSpritesStaysClassicHeight(t *testing.T) {
 }
 
 type noSpriteMock struct{}
+
+func (m *noSpriteMock) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
+	m.ComposeScanline(y, ulaRGBA, dst)
+}
 
 func (m *noSpriteMock) ComposeScanline(y int, ula, dst []byte)                     {}
 func (m *noSpriteMock) HasActiveTilemap() bool                                     { return false }

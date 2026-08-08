@@ -54,7 +54,7 @@ zx_go yet; foundation tests confirm the 48K boot path works.
 
 | Title | Status | Notes |
 |---|---|---|
-| Manic Miner | Untested | |
+| Manic Miner | **Works** | Verified 2026-08-08: plays — Central Cavern renders with the animated hazards, the AIR bar and the score/lives panel. |
 | Jet Set Willy | Untested | |
 | Knight Lore | **Works** | Verified 2026-08-08: menu accepts input, starts, and plays — the filled-3D room, character sprite and status panel all render correctly. |
 | Atic Atac | **Works** | Verified 2026-08-08: boots to the game-selection menu, accepts keyboard input through it, and plays — room graphics, sprites and the HUD (timer, lives, health) all render correctly. |
@@ -62,11 +62,11 @@ zx_go yet; foundation tests confirm the 48K boot path works.
 | Skool Daze | **Works (caveat)** | Verified 2026-08-08: boots and runs its attract-mode demo with full in-game graphics (classrooms, sprites, HUD). Not driven into a played game. |
 | The Hobbit | Untested | |
 | Lords of Midnight | **Works (caveat)** | Verified 2026-08-08: renders the in-game landscape-and-text view correctly. Not driven through the game. |
-| Elite (Spectrum port) | Untested | |
-| Chuckie Egg | Untested | |
+| Elite (Spectrum port) | **Works (caveat)** | Verified 2026-08-08: boots to its title screen (Elite logo, Torus/Firebird artwork). Not driven into flight. |
+| Chuckie Egg | **Works (caveat)** | Verified 2026-08-08: boots to the title and high-score table. Not driven into a game. |
 | Horace Goes Skiing | **Works (caveat)** | Verified 2026-08-08: boots to its title screen. Not driven further. |
-| Jet Pac (Interface 2 cartridge) | Untested | IF2 cartridge slot wired and tested in `if2_test.go` |
-| Pssst (Interface 2 cartridge) | Untested | Same IF2 path as Jet Pac |
+| Jet Pac (Interface 2 cartridge) | **Works (caveat)** | Verified 2026-08-08 from the snapshot release, NOT through the cartridge slot (no `.rom` image to hand): boots to its game-selection menu. The IF2 path itself remains covered only by `if2_test.go`. |
+| Pssst (Interface 2 cartridge) | **Works (caveat)** | Verified 2026-08-08 from the snapshot release, NOT through the cartridge slot: boots to its game-selection menu. Same IF2 caveat as Jet Pac. |
 
 ## 128K / +2 titles
 
@@ -80,7 +80,7 @@ memory map. Foundation tests confirm 128K paging works.
 | Target: Renegade | Untested | |
 | R-Type (Spectrum port) | Untested | |
 | Lemmings (Spectrum port) | Untested | |
-| Where Time Stood Still | Untested | |
+| Where Time Stood Still | Untested | The `.z80` to hand is a v1 (48K-format) snapshot of a 128K game, so it cannot run on any model — it drops to BASIC on 48K and 128K alike. Needs a proper 128K image. |
 | Head over Heels | **Works (caveat)** | Verified 2026-08-08 on the 48K release: accepts input at the options menu and progresses into the Blacktooth Empire world-select. Not driven into play. |
 | Last Ninja 2 | Untested | |
 | Match Day II | **Works (caveat)** | Verified 2026-08-08 on the 128K: accepts input and navigates joystick-select through to the main menu. Not driven into a match. |
@@ -97,8 +97,8 @@ symmetric, but no individual +3 title has been loaded and run.
 | Cobra (Ocean, 1986) — +3 disk | Parses cleanly | 194816-byte CPCEMU DSK, 40 tracks, 1 side. Round-trips through `plus3fdc.ParseDiskImage` without errors. Not yet run to gameplay end-to-end. |
 | Lemmings (+3 disk reissue) | Untested | |
 | Where Time Stood Still (+3 disk reissue) | Untested | |
-| Driller (+3 disk reissue) | Untested | |
-| Total Eclipse (+3 disk reissue) | Untested | |
+| Driller (+3 disk reissue) | **Works (caveat)** | Verified 2026-08-08 on the 48K tape release, not the +3 disk: boots to the control-options screen with the cockpit HUD rendered. |
+| Total Eclipse (+3 disk reissue) | **Works (caveat)** | Verified 2026-08-08 on the 48K tape release, not the +3 disk: boots to the control-options screen with the full border artwork. |
 
 If you have a +3 DSK image that isn't listed and you want to add it,
 follow the protocol at the bottom of this document.
