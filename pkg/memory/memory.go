@@ -1981,6 +1981,28 @@ func (m *Memory) RestorePagingState(state *PagingState) {
 	m.PagingEnabled = state.pagingEnabled
 }
 
+// Restore48KPagingState puts a 128K-family machine into the state 48K
+// software expects: the 48 BASIC ROM at $0000, the normal RAM layout, and
+// paging locked — the same thing the 128K's own "48 BASIC" menu entry does.
+//
+// A 48K snapshot carries no paging byte, so restoring only its RAM left
+// whatever ROM happened to be mapped. The program then executed against the
+// 128K editor ROM and every ROM call (the character set, the print routines)
+// produced garbage.
+//
+// ROM index is ($7FFD bit 4) | ($1FFD bit 2)<<1, so the 48 BASIC ROM is index
+// 1 on the 128K/+2 and index 3 on the +2A/+3. $1FFD is written first because
+// $7FFD bit 5 locks paging and would refuse the later write.
+func (m *Memory) Restore48KPagingState() {
+	switch m.currentModel {
+	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
+		m.PageMemory(0x30) // ROM 1 (48 BASIC) + paging lock
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		m.PageMemoryPlus3(0x04) // $1FFD bit 2 -> ROM index high bit
+		m.PageMemory(0x30)      // ROM 3 (48 BASIC) + paging lock
+	}
+}
+
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
 	if !m.PagingEnabled {

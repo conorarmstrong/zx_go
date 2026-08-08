@@ -1302,6 +1302,10 @@ func wireNextSubsystems(e *emulator) error {
 		)
 	})
 	u.SetNextRasterLog(rlog)
+	// The remaining purely-visual registers are journalled by wrapping their
+	// write handlers; done at the end of wiring so the wrappers capture the
+	// installed handlers. See visualJournalRegs for why this is a whitelist.
+	defer journalVisualRegs(disp, rlog)
 
 	comp := compositor.New(pal, l2)
 	comp.SetSprites(sprites)

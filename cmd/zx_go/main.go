@@ -791,17 +791,8 @@ func configureClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
 	if cpu == nil {
 		return
 	}
-	var nr03 byte
-	switch model {
-	case roms.Model128K, roms.ModelPlus2:
-		nr03 = 0x02
-	case roms.ModelPlus3, roms.ModelPlus2A:
-		nr03 = 0x03
-	case roms.ModelPentagon:
-		nr03 = 0x04
-	case roms.ModelNext:
-		nr03 = 0x03 // NextZXOS boots in +3/128K timing (NR$03 default "011")
-	default: // 48K and others: keep the legacy held-INT model.
+	nr03, ok := next.MachineTimingFor(model)
+	if !ok { // 48K and others: keep the legacy held-INT model.
 		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
 		return
 	}
@@ -1713,6 +1704,11 @@ func applySnapshotToEmulatorLocked(emu *emulator, snap *snapshot.Snapshot) error
 	// Apply memory paging for 128K machines
 	if snap.Memory.Is128K {
 		emu.mem.PageMemory(snap.Memory.Port7FFD)
+	} else {
+		// A 48K snapshot on a 128K-family machine needs the 48 BASIC ROM
+		// paged in and paging locked, or its ROM calls run against the wrong
+		// ROM. No-op on the 48K itself.
+		emu.mem.Restore48KPagingState()
 	}
 
 	// Apply border color

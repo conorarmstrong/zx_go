@@ -56,6 +56,8 @@ func newNext() (*Harness, error) {
 	u := ula.New(mem, kbd)
 	cpu := z80.New(mem, u)
 	cpu.Variant = z80.VariantZ80N
+	// Same narrow frame-INT pulse the GUI gives the Next (+3/128K timing).
+	applyClassicIntTiming(cpu, roms.ModelNext)
 
 	disp := nextregs.New()
 	ayEngine := ay.NewEngine()

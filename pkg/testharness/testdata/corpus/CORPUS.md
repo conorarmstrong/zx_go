@@ -82,6 +82,58 @@ auto-restart / $BF / empty mask) and `TestULARoutesDMAPort0BAsZ80Mode`
 (`fpga_golden_test.go`) still passes unchanged — zxn-mode behaviour is
 untouched.
 
+## 128K family (v1.6.1)
+
+Until v1.6.1 every classic entry ran on the 48K. That is exactly how a
+230-T-state error in the 128K display origin survived to v1.6.0: the renderer
+and the contention model shared the same wrong origin, so a static screen
+still looked right, and no vendored program ever ran on the machines that were
+wrong.
+
+| Golden | File | Model |
+|--------|------|-------|
+| `mrk_dihalt_128k` | `bin/DIHalt.sna` | 128K |
+| `mrk_dihalt_plus3` | `bin/DIHalt.sna` | +3 |
+| `mrk_ccffrm_128k` | `bin/ccffrm.sna` | 128K |
+| `mrk_z80bltst_128k` | `bin/z80bltst.sna` | 128K |
+| `mrk_int_skip_128k` | `bin/int_skip.sna` | 128K |
+
+These are timing-sensitive programs and contention feeds instruction timing,
+so their results move if the 128K/+2A/+3 contention window or raster geometry
+changes. Treat them as **regression guards for that family, not hardware
+oracles** — the goldens record what we produce, and correctness of the origin
+itself rests on the FPGA derivation in `pkg/roms/timing.go`.
+
+Two real bugs were found by adding them:
+
+1. **A 48K snapshot on a 128K-family machine did not page the 48 BASIC ROM.**
+   Only the RAM was restored, so the program ran against the 128K editor ROM
+   and every ROM call (character set, print routines) produced garbage — the
+   first `mrk_dihalt_128k` capture was illegible. Restoring a 48K snapshot now
+   selects the 48 BASIC ROM and locks paging, as the 128K's own "48 BASIC"
+   mode does (`memory.Restore48KPagingState`).
+
+2. **The harness never applied the per-model frame-INT timing the GUI does.**
+   `cmd/zx_go` configures a narrow /INT pulse for the 128K/+2A/+3/Next at
+   construction; `pkg/testharness` did not, so the whole corpus ran the legacy
+   held-INT approximation — a configuration no user sees, and the wrong one
+   for judging INT-timing conformance. Both now read the mapping from
+   `next.MachineTimingFor`, so they cannot drift.
+
+   `mrk_int_skip_128k` is the visible payoff: it reports **`0 |OK |inhibits
+   ISR`** for both the NOP and FD blocks, the correct hardware result, where
+   the held-INT configuration gave `!ERR! allows ISR`. The 48K entries are
+   unaffected (the 48K legitimately keeps the held-INT model, and its
+   documented `!ERR!` limitation below still stands).
+
+   One consequence to be aware of: `mrk_zilogdma` runs on the Next, so its
+   golden moved when the Next harness picked up its real narrow pulse. The
+   changed cell is a DMA timing measurement (`1A5705D594FE00` ->
+   `1A650B0097FE00`); the documented core readback line
+   (`3A3A1A03042A1A1A03D1041A1A03D508`) is unchanged. The new value is what
+   the test measures under the faithful INT model; it has not been checked
+   against hardware.
+
 ## Hardware exercised
 
 - **zxnext_layer2_tilemap** — Layer 2 256x192 background composited under a

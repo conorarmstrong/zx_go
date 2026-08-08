@@ -4,6 +4,81 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.1]
+
+Closing the testing gap that let the v1.6.0 bug through, rather than adding
+features. Two more real bugs fell out of doing it.
+
+### Fixed
+
+- **A 48K snapshot on a 128K-family machine did not page the 48 BASIC ROM.**
+  Only the RAM was restored, so the program ran against the 128K editor ROM
+  and every ROM call — the character set, the print routines — produced
+  garbage. Restoring a 48K snapshot now selects the 48 BASIC ROM and locks
+  paging, exactly as the 128K's own "48 BASIC" mode does. Affects the +2, +2A
+  and +3 equally (the +2A/+3 need ROM 3, reached through `$1FFD` bit 2).
+
+- **The test harness never applied the per-model frame-INT timing the GUI
+  does.** `cmd/zx_go` gives the 128K/+2A/+3/Next a narrow /INT pulse at
+  construction; `pkg/testharness` did not, so the entire golden corpus ran the
+  legacy held-INT approximation — a configuration no user sees, and the wrong
+  one for judging INT-timing conformance. Both now read the mapping from
+  `next.MachineTimingFor` so they cannot drift.
+
+  The payoff is visible: the `int_skip` conformance test on the 128K now
+  reports `0 |OK |inhibits ISR` for both the NOP and FD prefix blocks — the
+  correct hardware result — where held-INT gave `!ERR! allows ISR`.
+
+### Added
+
+- **The golden corpus covers the 128K family.** Every classic entry was 48K,
+  which is precisely how a 230-T-state error in the 128K display origin
+  survived: the renderer and the contention model shared the same wrong
+  origin, so a static screen still looked right, and no vendored program ever
+  ran on the machines that were wrong. Five entries added across the 128K and
+  +3. They are regression guards for that family, not hardware oracles.
+
+- **An observable interrupt-phase assertion.** The existing tests checked the
+  contention function and the constants in isolation, which could not see a
+  phase error. These sweep the frame and measure the first stalled T-state and
+  the first paper fetch through the emulator's own memory and ULA. The
+  expected figures are written as literals on purpose: comparing against
+  `roms.DisplayStartTState` is tautological, since the emulator derives its
+  behaviour from that same constant. Verified by reverting the origin — with
+  the constant as the expectation the tests still passed; with literals they
+  fail with a `+230 T-state phase error`.
+
+- **The raster journal covers the remaining visual registers** — NR$15, NR$2F,
+  NR$30, NR$4A, NR$4C, NR$6E and NR$6F — via a whitelist that wraps their write
+  handlers. It stays a whitelist deliberately: replay re-runs the handler, so
+  anything that auto-increments a cursor, uploads data or repages memory must
+  never be added. A test pins the idempotence that makes replay safe.
+
+  **NR$14 is deliberately excluded.** Transparency is decided by comparing a
+  layer's pixel against NR$14, and the ULA layer it is compared against is
+  rendered once per frame, not per row. Making only the comparison per-row is
+  not more faithful, it is inconsistent — and it shows: journalling NR$14
+  blanks the show512 demo, which renders correctly on the frame-final value.
+  Caught by a Next demo test that the full-package run had been silently
+  skipping; worth revisiting if the ULA layer ever becomes a per-scanline
+  render.
+
+### Verified
+
+- **The 128K raster origin is confirmed by simulation, not just by reading the
+  VHDL.** A GHDL testbench drives the real `zxula_timing.vhd`, waits for its
+  `o_int_ula` pulse and counts 7 MHz ticks to the first paper fetch. It
+  returns 14336 / 14362 / 14363 / 17982 for the 48K / 128K / +3 / Pentagon,
+  matching `pkg/roms/timing.go` exactly. (MAME was the original plan and is
+  the wrong oracle here: its `tbblue` screen is the Next's own output rather
+  than the classic raster, and `spec128` needs proprietary ROMs.)
+
+- **Atic Atac and Renegade are no longer "Untested".** Atic Atac boots, accepts
+  keyboard input through its menu and plays. Renegade loads from `.tap`
+  through the 128 Tape Loader to its title screen. `docs/compatibility.md`
+  now documents how to verify a title so the manifest can be worked down
+  without vendoring anything.
+
 ## [v1.6.0]
 
 Clears the remaining valid items from the external review, plus one open

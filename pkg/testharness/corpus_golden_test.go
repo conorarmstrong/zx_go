@@ -74,6 +74,24 @@ var corpusPrograms = []corpusProgram{
 	// are the 48K machine's own narrow-pulse constants (next.FrameIntTiming).
 	{name: "mrk_int_skip_narrowint", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2, intAssert: 58, intPulse: 32},
 
+	// The same conformance tests on the 128K family. Until v1.6.0 every entry
+	// here was 48K, which is exactly how a 230-T-state error in the 128K
+	// display origin survived: the renderer and the contention model shared
+	// the same wrong origin, so a static screen still looked right, and no
+	// vendored program ever ran on the machines that were wrong.
+	//
+	// These are timing-sensitive programs and contention feeds instruction
+	// timing, so their rendered result moves if the 128K/+2A/+3 contention
+	// window or raster geometry changes. They are REGRESSION guards for that
+	// family, not hardware oracles: the goldens record what we produce, and
+	// correctness of the origin itself rests on the FPGA derivation in
+	// pkg/roms/timing.go (cross-checked separately).
+	{name: "mrk_dihalt_128k", file: "DIHalt.sna", model: roms.Model128K, kind: loadSnapshot, frames: 200, minColours: 3},
+	{name: "mrk_dihalt_plus3", file: "DIHalt.sna", model: roms.ModelPlus3, kind: loadSnapshot, frames: 200, minColours: 3},
+	{name: "mrk_ccffrm_128k", file: "ccffrm.sna", model: roms.Model128K, kind: loadSnapshot, frames: 200, minColours: 4},
+	{name: "mrk_z80bltst_128k", file: "z80bltst.sna", model: roms.Model128K, kind: loadSnapshot, frames: 200, minColours: 4},
+	{name: "mrk_int_skip_128k", file: "int_skip.sna", model: roms.Model128K, kind: loadSnapshot, frames: 200, minColours: 2},
+
 	// zxnDMA conformance (MrKWatkins ZilogDMA), tape-loaded onto the Next. The
 	// Next has the zxnDMA the test drives; it boots to 48K BASIC on the
 	// embedded 48K ROM (no proprietary NextZXOS), then LOAD"" pulls the tape in

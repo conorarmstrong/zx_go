@@ -27,6 +27,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
@@ -95,6 +96,11 @@ func New(model roms.SpectrumModel) (*Harness, error) {
 	kbd := keyboard.New()
 	u := ula.New(mem, kbd)
 	cpu := z80.New(mem, u)
+	// Same per-model frame-INT timing the GUI applies at construction. Without
+	// it the harness ran the 128K family and the Next on the legacy held-INT
+	// approximation — a configuration no user sees, and the wrong one for
+	// judging INT-timing conformance in the golden corpus.
+	applyClassicIntTiming(cpu, model)
 	pm := peripherals.NewPeripheralManager(mem, "")
 	u.SetPeripherals(pm)
 	mem.PeripheralRead = pm.HandleMemoryRead
@@ -375,4 +381,23 @@ func (h *Harness) Wait(d time.Duration) {
 		frames = 1
 	}
 	h.RunFrames(frames)
+}
+
+// applyClassicIntTiming sets the maskable frame interrupt to the model's
+// narrow pulse, or leaves the legacy held-INT model for the machines that
+// have no pulse mapping (the 48K, ZX8x, SAM). Mirrors the GUI's
+// configureClassicIntTiming; both read the mapping from next.MachineTimingFor
+// so they cannot drift.
+func applyClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
+	if cpu == nil {
+		return
+	}
+	nr03, ok := next.MachineTimingFor(model)
+	if !ok {
+		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
+		return
+	}
+	assert, pulse := next.FrameIntTiming(nr03, false)
+	cpu.IntAssertTstate = uint64(assert)
+	cpu.IntPulseTstates = uint64(pulse)
 }

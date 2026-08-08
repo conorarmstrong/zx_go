@@ -1,5 +1,7 @@
 package next
 
+import "github.com/conorarmstrong/zx_go/pkg/roms"
+
 // Frame-interrupt timing model, transcribed from the FPGA core so the
 // whole class of INT-timing behaviour conforms in one place (timing.md
 // §1a/§1c). See inttiming_test.go for the conformance matrix.
@@ -43,4 +45,28 @@ func FrameIntTiming(nr03MachineTiming byte, sixtyHz bool) (assertTstate, pulseTs
 		assertTstate = (0*448 + 116) / 2 // 58
 	}
 	return assertTstate, pulseTstates
+}
+
+// MachineTimingFor maps a classic machine model to the NR$03 machine-timing
+// code its frame-INT pulse derives from, reporting false for models that keep
+// the legacy "held INT for the whole frame" approximation (the 48K and the
+// ZX8x/SAM machines, which have no narrow-pulse model here).
+//
+// Shared so every entry point configures the CPU identically. The GUI applied
+// this at construction while pkg/testharness did not, which left the golden
+// corpus running the 128K family and the Next on held-INT — a configuration
+// no user ever sees, and the wrong one for judging INT-timing conformance.
+func MachineTimingFor(model roms.SpectrumModel) (nr03 byte, ok bool) {
+	switch model {
+	case roms.Model128K, roms.ModelPlus2:
+		return 0x02, true
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		return 0x03, true
+	case roms.ModelPentagon:
+		return 0x04, true
+	case roms.ModelNext:
+		// NextZXOS boots in +3/128K timing (NR$03 default "011").
+		return 0x03, true
+	}
+	return 0, false
 }

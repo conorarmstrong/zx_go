@@ -48,10 +48,17 @@ func TStatesPerLine(model SpectrumModel) int {
 //	Pentagon  c_int_v=319 c_int_h=439  c_min_vactive=80
 //	          vc wraps 319 -> 80, so (81*448 - 323)/2       = 17982
 //
-// The 48K and 128K results reproduce the documented 14336 and 14362 exactly,
-// which is what validates the derivation. Only the 48K is a whole 64 lines;
-// treating every model that way (the previous behaviour) put the entire 128K
-// family a full scanline late against the interrupt.
+// The 48K and 128K results reproduce the documented 14336 and 14362 exactly.
+// Only the 48K is a whole 64 lines; treating every model that way (the
+// previous behaviour) put the entire 128K family a full scanline late against
+// the interrupt.
+//
+// Cross-checked by SIMULATION, not just by reading the source: a GHDL
+// testbench drives the real zxula_timing.vhd, waits for its o_int_ula pulse,
+// and counts 7 MHz ticks until the ULA fetch counters first reach (0,0). It
+// returns 14336 / 14362 / 14363 / 17982 for 48K / 128K / +3 / Pentagon,
+// matching every figure below. The testbench is dev-only, under
+// _tools/rastertiming-vhdl-test.
 func DisplayStartTState(model SpectrumModel) int {
 	switch model {
 	case Model48K:

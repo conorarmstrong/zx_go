@@ -50,6 +50,11 @@ func applySnapshotFile(h *Harness, path string) error {
 	}
 	if s.Memory.Is128K {
 		h.mem.PageMemory(s.Memory.Port7FFD)
+	} else {
+		// A 48K snapshot on a 128K-family machine needs the 48 BASIC ROM
+		// paged in and paging locked, or its ROM calls run against the wrong
+		// ROM. No-op on the 48K itself.
+		h.mem.Restore48KPagingState()
 	}
 	h.ula.BorderColour = s.CPU.BorderColor
 	return nil

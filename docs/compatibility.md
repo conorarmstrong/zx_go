@@ -57,7 +57,7 @@ zx_go yet; foundation tests confirm the 48K boot path works.
 | Manic Miner | Untested | |
 | Jet Set Willy | Untested | |
 | Knight Lore | Untested | Filled 3D — exercises attribute clash handling |
-| Atic Atac | Untested | |
+| Atic Atac | **Works** | Verified 2026-08-08: boots to the game-selection menu, accepts keyboard input through it, and plays — room graphics, sprites and the HUD (timer, lives, health) all render correctly. |
 | Sabre Wulf | Untested | |
 | Skool Daze | Untested | |
 | The Hobbit | Untested | |
@@ -76,7 +76,7 @@ memory map. Foundation tests confirm 128K paging works.
 | Title | Status | Notes |
 |---|---|---|
 | Robocop (Ocean) | Untested | AY soundtrack |
-| Renegade | Untested | |
+| Renegade | **Works (caveat)** | Verified 2026-08-08 on the 128K: loads from `.tap` through the 128 Tape Loader and renders its title screen. Not driven into gameplay, so the verdict stops at "loads and titles". |
 | Target: Renegade | Untested | |
 | R-Type (Spectrum port) | Untested | |
 | Lemmings (Spectrum port) | Untested | |
@@ -149,6 +149,31 @@ that any contributor running public `.nex` releases from specnext.com
 or itch.io should add their own rows above as they verify them.
 **No fabrications** — only list titles you've actually run, and
 mark anything unverified as Untested.
+
+## Verifying a title yourself
+
+The manifest is mostly "Untested" because verification needs the actual
+software, which is not redistributable and so is not vendored. Nothing here
+should be marked Works on the strength of unit tests alone.
+
+The quickest route is `pkg/testharness`, which boots a machine headless and
+renders a frame you can look at:
+
+```go
+h, _ := testharness.New(roms.Model48K)
+h.LoadSnapshot("your.z80")   // or h.LoadTAP("your.tap")
+h.RunFrames(500)
+png.Encode(f, h.ULA().Render())
+```
+
+`h.TapKey` / `h.TapKeyShift` drive the keyboard, which is what turns "it
+rendered something" into a real verdict. On the 128K a tape needs the Tape
+Loader selected first (`h.TapKey("Return")` at the menu); on the 48K it needs
+`LOAD ""` typed.
+
+When you add a verdict, say what you actually saw and stop there — "loads and
+titles" is a useful, honest entry, and more valuable than an optimistic
+"Works".
 
 ## Tape format edge cases
 
