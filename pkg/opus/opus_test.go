@@ -78,13 +78,16 @@ func TestRestoreSeeksToTrackZero(t *testing.T) {
 	}
 }
 
-// TestControlSelectsDrive pins the control latch: writes to it must be
-// readable back and must reach the controller's drive selection.
+// TestControlSelectsDrive pins the drive lines reaching the controller
+// through the PIA's port A.
 func TestControlSelectsDrive(t *testing.T) {
 	d := New()
-	d.Write(0x3000, 0x01)
-	if got := d.Control(); got != 0x01 {
-		t.Errorf("control latch = %#02x, want 0x01", got)
+	d.Write(0x3001, 0x00) // CRA bit 2 clear -> DDRA
+	d.Write(0x3000, 0xFF) // all outputs
+	d.Write(0x3001, 0x04) // -> PRA
+	d.Write(0x3000, 0x01) // righthand drive
+	if got := d.SelectedDrive(); got != 0 {
+		t.Errorf("SelectedDrive = %d, want 0", got)
 	}
 }
 

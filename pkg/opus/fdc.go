@@ -23,6 +23,11 @@ const (
 )
 
 // fdc is the controller state.
+//
+// Data transfer is DRQ-driven: the Opus wires DRQ to the Z80's NMI, so each
+// byte of a Type II/III command raises an interrupt and the ROM's handler
+// moves exactly one byte through the data register. There is no DMA and no
+// polling loop over DRQ in the ROM.
 type fdc struct {
 	status byte
 	track  byte
@@ -38,6 +43,71 @@ type fdc struct {
 	pos    int
 	write  bool
 	target struct{ track, sector int }
+
+	// nmi is pulsed on each DRQ rising edge.
+	nmi func()
+
+	// DRQ timing. A real WD1770 reading double-density at 250 kbit/s hands
+	// over a byte roughly every 32 microseconds, and that spacing is
+	// load-bearing rather than cosmetic: the ROM's handler needs about 83
+	// T-states to run, so a DRQ asserted the instant the previous byte was
+	// taken would re-enter NMI_READ at $188C, halfway through itself, instead
+	// of after its RETN. The transfer would then never advance.
+	now       uint64 // last T-state seen, fed by tickTo
+	remaining int    // T-states still to wait for the next byte
+	waiting   bool   // a byte is due but not yet handed over
+	started   bool   // now holds a real reading
+}
+
+// BytePeriodTStates is the gap between successive bytes of a transfer:
+// 32 microseconds at the Spectrum's 3.5 MHz.
+const BytePeriodTStates = 112
+
+// tickTo advances the controller's clock and hands over the next byte once a
+// byte-period has passed.
+//
+// The counter it is given is rebased at every frame boundary rather than
+// running absolutely, so this counts DOWN from a delta rather than comparing
+// against a deadline. A deadline would be missed for a whole counter cycle
+// each time the frame rebased, stalling the transfer mid-sector with BUSY
+// still asserted.
+func (f *fdc) tickTo(now uint64) {
+	delta := uint64(0)
+	switch {
+	case !f.started:
+		f.started = true
+	case now >= f.now:
+		delta = now - f.now
+	default:
+		// The counter was rebased. Everything up to the new reading is
+		// elapsed time; the part before the rebase is lost, which at worst
+		// delays one byte by less than a frame.
+		delta = now
+	}
+	f.now = now
+	if !f.waiting {
+		return
+	}
+	if uint64(f.remaining) > delta {
+		f.remaining -= int(delta)
+		return
+	}
+	f.remaining, f.waiting = 0, false
+	f.raiseDRQ()
+}
+
+// scheduleDRQ arms the next byte one byte-period from now.
+func (f *fdc) scheduleDRQ() {
+	f.waiting, f.remaining = true, BytePeriodTStates
+}
+
+// raiseDRQ asserts DRQ and pulses the NMI line, which is what actually
+// fetches the next byte out of the guest.
+func (f *fdc) raiseDRQ() {
+	f.status |= StatusDRQ
+	if f.nmi != nil {
+		f.nmi()
+	}
 }
 
 func (f *fdc) disk() *Image {
@@ -50,6 +120,7 @@ func (f *fdc) disk() *Image {
 // writeCommand starts a command. Type is the top nibble.
 func (f *fdc) writeCommand(cmd byte) {
 	f.endTransfer()
+	f.waiting = false
 	switch {
 	case cmd&0xF0 == 0x00: // RESTORE
 		f.track = 0
@@ -73,8 +144,16 @@ func (f *fdc) writeCommand(cmd byte) {
 		f.startRead()
 	case cmd&0xE0 == 0xA0: // WRITE SECTOR
 		f.startWrite()
-	case cmd&0xF0 == 0xD0: // FORCE INTERRUPT
+	case cmd&0xF0 == 0xD0: // FORCE INTERRUPT — the ROM's BREAK path uses $D0
+		f.buf, f.pos, f.write, f.waiting = nil, 0, false, false
 		f.status = StatusMotorOn
+	case cmd&0xF0 == 0xF0: // WRITE TRACK — formatting, not implemented
+		// Refuse rather than report success. The ROM checks bits 6 and 2 after
+		// a format ("AND +44"), so write-protect is the signal that reaches
+		// the user as an error. Completing silently would have the ROM believe
+		// it had laid down a track and write a catalogue over an image that
+		// still holds the old data.
+		f.status = StatusMotorOn | StatusWriteProtect
 	default:
 		f.status = StatusMotorOn
 	}
@@ -92,8 +171,9 @@ func (f *fdc) startRead() {
 		return
 	}
 	f.buf, f.pos, f.write = buf, 0, false
-	f.status = StatusMotorOn | StatusBusy | StatusDRQ
+	f.status = StatusMotorOn | StatusBusy
 	f.data = f.buf[0]
+	f.scheduleDRQ()
 }
 
 func (f *fdc) startWrite() {
@@ -113,7 +193,8 @@ func (f *fdc) startWrite() {
 	f.buf = make([]byte, SectorSize)
 	f.pos, f.write = 0, true
 	f.target.track, f.target.sector = int(f.track), int(f.sector)
-	f.status = StatusMotorOn | StatusBusy | StatusDRQ
+	f.status = StatusMotorOn | StatusBusy
+	f.scheduleDRQ()
 }
 
 // endTransfer commits a write in progress and clears the transfer state.
@@ -135,9 +216,13 @@ func (f *fdc) readData() byte {
 	f.pos++
 	if f.pos >= len(f.buf) {
 		f.buf, f.pos = nil, 0
-		f.status = StatusMotorOn // transfer complete: BUSY and DRQ clear
+		// Transfer complete: BUSY and DRQ drop, which is what lets the ROM's
+		// WAIT_I/O loop ("LD A,(2800) / BIT 0,A / RET Z") finish.
+		f.status = StatusMotorOn
 	} else {
 		f.data = f.buf[f.pos]
+		f.status &^= StatusDRQ
+		f.scheduleDRQ()
 	}
 	return v
 }
@@ -156,5 +241,8 @@ func (f *fdc) writeData(v byte) {
 		}
 		f.buf, f.pos, f.write = nil, 0, false
 		f.status = StatusMotorOn
+	} else {
+		f.status &^= StatusDRQ
+		f.scheduleDRQ()
 	}
 }

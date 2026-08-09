@@ -4,6 +4,54 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.0]
+
+### Added
+
+- **The Opus Discovery now works.** v1.7.0 shipped the disk layer with the ROM
+  paging trigger unknown; it is known now, and the interface boots, hooks
+  itself into BASIC, catalogues a disk, and loads and runs real games off real
+  `.opd` images.
+
+  **Paging is an M1 address trap, delayed by one cycle.** Three addresses page
+  the ROM in — `$0008` (the error restart, for hook codes), `$0048` (KEY-INT,
+  where it initialises its RAM), `$1708` (its entry point) — and `$1748` pages
+  it out. The change lands on the *next* opcode fetch, so the instruction at a
+  trap address always executes from whichever ROM was already paged. What
+  confirmed it: the Opus ROM carries **placeholder bytes copying the
+  Spectrum's** at exactly those addresses — `NOP` at `$1708` where the 48K ROM
+  has `INC HL`, `C5` at `$0048` where it has `PUSH BC`. Those bytes never
+  execute. At power-on the ROM is paged in, so the Z80 runs the Opus reset
+  vector and pages itself out into the Spectrum's.
+
+  **Transfers are NMI-driven, not DMA.** DRQ is wired to the Z80's NMI and the
+  handler moves one byte per interrupt. The byte spacing is load-bearing: a
+  real WD1770 delivers a byte every ~32 µs (112 T-states) and the ROM's
+  handler needs ~83, so asserting DRQ the instant the previous byte is taken
+  re-enters the handler halfway through itself and the transfer never advances.
+  The pacing counts down from a delta rather than against a deadline, because
+  the CPU's T-state counter is rebased every frame and an absolute deadline
+  stalls mid-sector at the first frame boundary.
+
+  Also corrected from v1.7.0: `$3000-$3003` is a **6821 PIA** (PRA/DDRA, CRA,
+  PRB/DDRB, CRB — one address is two registers, selected by control-register
+  bit 2), not the flat latch it first looked like; interface RAM is 2 KB at
+  `$2000-$27FF`; and **sectors are numbered from 0**, which the ROM's own
+  drive table settles with "(03) no extra sectors".
+
+- **Opus disks in the emulator.** File → Load Opus Disk 1/2, `.opd` on the
+  command line and in the unified Open File dialog. Fitting the interface
+  resets the machine, as the real hardware requires.
+
+### Known gaps
+
+- `FORMAT` (WD1770 WRITE TRACK) is not implemented. It reports an error rather
+  than silently succeeding: the ROM checks "AND +44" after a format, so a clean
+  status would have it write a fresh catalogue over an image that still holds
+  the old data. Reading, writing and cataloguing existing disks are unaffected.
+- 48K only: the trap addresses are 48K ROM addresses and mean something else
+  under any other ROM, so the emulator refuses to fit the interface elsewhere.
+
 ## [v1.7.0]
 
 ### Added

@@ -34,15 +34,20 @@ func LoadImage(data []byte) (*Image, error) {
 	return &Image{Data: cp}, nil
 }
 
-// offset resolves a 0-based track and 1-based sector to a byte offset.
+// offset resolves a track and sector to a byte offset. Both are 0-based:
+// the Opus numbers its sectors from zero, which is not the usual Western
+// Digital convention but is what the ROM asks for. Its drive table records
+// "(03) no extra sectors" (DEFB +00), and RD_WR_M_9 writes the sector number
+// to $2802 with only that offset added, so the very first block of the disk
+// is requested as track 0, sector 0.
 func (img *Image) offset(track, sector int) (int, error) {
 	if track < 0 || track >= Cylinders {
 		return 0, fmt.Errorf("opus: track %d out of range 0..%d", track, Cylinders-1)
 	}
-	if sector < 1 || sector > SectorsPerTrack {
-		return 0, fmt.Errorf("opus: sector %d out of range 1..%d", sector, SectorsPerTrack)
+	if sector < 0 || sector >= SectorsPerTrack {
+		return 0, fmt.Errorf("opus: sector %d out of range 0..%d", sector, SectorsPerTrack-1)
 	}
-	return track*TrackBytes + (sector-1)*SectorSize, nil
+	return track*TrackBytes + sector*SectorSize, nil
 }
 
 // ReadSector returns a copy of one sector.

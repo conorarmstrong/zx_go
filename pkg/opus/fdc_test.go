@@ -48,7 +48,7 @@ func TestReadSectorFromRealDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d.Write(CtrlBase, 0x00)  // select drive 0
+	selectDrive(d, 0)        // righthand drive
 	d.Write(FDCBase, 0x00)   // RESTORE -> track 0
 	d.Write(FDCBase+1, 0x00) // track register
 	d.Write(FDCBase+2, 0x01) // sector 1
@@ -74,7 +74,7 @@ func TestReadSectorHonoursTrackAndSector(t *testing.T) {
 	img := NewImage()
 	// Stamp each sector with its own track/sector so a mis-address shows.
 	for tr := 0; tr < Cylinders; tr++ {
-		for se := 1; se <= SectorsPerTrack; se++ {
+		for se := 0; se < SectorsPerTrack; se++ {
 			buf := make([]byte, SectorSize)
 			buf[0], buf[1] = byte(tr), byte(se)
 			_ = img.WriteSector(tr, se, buf)
@@ -83,7 +83,7 @@ func TestReadSectorHonoursTrackAndSector(t *testing.T) {
 	d := New()
 	d.Mount(0, img)
 
-	for _, tc := range []struct{ track, sector int }{{0, 1}, {5, 9}, {39, 18}} {
+	for _, tc := range []struct{ track, sector int }{{0, 0}, {5, 9}, {39, 17}} {
 		d.Write(FDCBase+1, byte(tc.track))
 		d.Write(FDCBase+2, byte(tc.sector))
 		d.Write(FDCBase, 0x80) // READ SECTOR
@@ -142,5 +142,56 @@ func TestSeekUpdatesTheTrackRegister(t *testing.T) {
 	d.Write(FDCBase, 0x10) // SEEK
 	if got := d.Read(FDCBase + 1); got != 20 {
 		t.Errorf("track register after SEEK = %d, want 20", got)
+	}
+}
+
+// selectDrive drives the PIA the way the ROM's RD_WR_M_5 does: configure port
+// A as outputs, then write the drive-select pattern.
+func selectDrive(d *Device, drive int) {
+	d.Write(PIABase+1, 0x00) // CRA bit 2 clear -> DDRA
+	d.Write(PIABase+0, 0xFF) // all outputs
+	d.Write(PIABase+1, 0x04) // -> PRA
+	d.Write(PIABase+0, byte(1<<uint(drive)))
+}
+
+// TestWriteTrackIsRefusedRatherThanFaked pins the formatting gap. WRITE TRACK
+// is not implemented, and the dangerous way to not implement it is to report
+// success: the ROM checks "AND +44" after a format, so a clean status would
+// have it believe a track had been laid down and write a fresh catalogue over
+// an image that still holds the old data. Write-protect is the status bit that
+// surfaces to the user as an error instead.
+func TestWriteTrackIsRefusedRatherThanFaked(t *testing.T) {
+	img := NewImage()
+	before, err := img.ReadSector(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range before {
+		before[i] = byte(i)
+	}
+	if err := img.WriteSector(0, 0, before); err != nil {
+		t.Fatal(err)
+	}
+
+	d := New()
+	d.Mount(0, img)
+	selectDrive(d, 0)
+	d.Write(FDCBase+0, 0xF4) // WRITE TRACK
+
+	st := d.Read(FDCBase + 0)
+	if st&0x44 == 0 {
+		t.Errorf("status = %#02x: WRITE TRACK must report an error the ROM can see", st)
+	}
+	if st&StatusBusy != 0 {
+		t.Errorf("status = %#02x: BUSY must not be left set", st)
+	}
+	after, err := img.ReadSector(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range after {
+		if after[i] != before[i] {
+			t.Fatalf("the image was modified at byte %d by a refused WRITE TRACK", i)
+		}
 	}
 }

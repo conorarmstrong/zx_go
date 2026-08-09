@@ -35,15 +35,18 @@ func TestSectorAddressing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Sectors are 1-based, tracks 0-based, laid out track by track.
+	// Tracks and sectors are both 0-based, laid out track by track. The
+	// Opus numbers sectors from zero: its drive table records "(03) no extra
+	// sectors" and the ROM asks for track 0, sector 0 to reach the first
+	// block of the disk.
 	for _, tc := range []struct {
 		track, sector, wantOff int
 	}{
-		{0, 1, 0},
-		{0, 2, 256},
-		{0, 18, 17 * 256},
-		{1, 1, 18 * 256},
-		{39, 18, 184320 - 256},
+		{0, 0, 0},
+		{0, 1, 256},
+		{0, 17, 17 * 256},
+		{1, 0, 18 * 256},
+		{39, 17, 184320 - 256},
 	} {
 		off, err := img.offset(tc.track, tc.sector)
 		if err != nil {
@@ -55,7 +58,7 @@ func TestSectorAddressing(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ track, sector int }{
-		{-1, 1}, {40, 1}, {0, 0}, {0, 19},
+		{-1, 0}, {40, 0}, {0, -1}, {0, 18},
 	} {
 		if _, err := img.offset(tc.track, tc.sector); err == nil {
 			t.Errorf("offset(track %d, sector %d) accepted an out-of-range address", tc.track, tc.sector)

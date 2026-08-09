@@ -100,6 +100,9 @@ type Memory struct {
 	contendTPerLine uint64
 	contendStart    uint64
 
+	// Opus Discovery overlay, nil unless the interface is fitted.
+	opus OpusOverlay
+
 	// Beta Disk / TR-DOS ROM auto-paging. When betaEnabled, the Beta hardware
 	// swaps its TR-DOS ROM over $0000-$3FFF when the CPU fetches an instruction
 	// from the $3Dxx entry vector (while the 48 BASIC ROM is mapped) and swaps
@@ -1226,6 +1229,23 @@ func (m *Memory) SetBetaActive(active bool) {
 	}
 }
 
+// OpusOverlay is the Opus Discovery interface as the memory system sees it:
+// an overlay that can claim any access in $0000-$3FFF, driven by an M1
+// address trap. It is satisfied by *opus.Interface.
+//
+// The pager itself is driven straight from the CPU's pre-fetch hook rather
+// than through here, because it also paces the controller's byte transfers
+// and so needs the interface, not the memory system.
+type OpusOverlay interface {
+	// TryRead reads through the overlay, reporting whether it answered.
+	TryRead(addr uint16) (byte, bool)
+	// Write writes through the overlay, reporting whether it took the write.
+	Write(addr uint16, v byte) bool
+}
+
+// SetOpus fits (or with nil removes) an Opus Discovery.
+func (m *Memory) SetOpus(o OpusOverlay) { m.opus = o }
+
 // BetaPreFetch advances the Beta Disk auto-paging state machine for an
 // instruction fetch at pc. Call it from the CPU's pre-fetch hook so the byte
 // fetched at $3Dxx already comes from the TR-DOS ROM. It pages the TR-DOS ROM
@@ -1496,6 +1516,15 @@ func (m *Memory) readValue(addr uint16) byte {
 		}
 	}
 
+	// Opus Discovery overlay: while its ROM is paged in the interface covers
+	// the whole of $0000-$3FFF — 8 KB of ROM, then its own RAM, the WD1770 and
+	// the PIA.
+	if m.opus != nil && addr < 0x4000 {
+		if v, ok := m.opus.TryRead(addr); ok {
+			return v
+		}
+	}
+
 	// Beta Disk TR-DOS ROM override: while the Beta ROM is paged in it replaces
 	// the system ROM across $0000-$3FFF (classic models only — the Next never
 	// enables Beta and returns above).
@@ -1558,6 +1587,12 @@ func (m *Memory) Write(addr uint16, val byte) {
 	// — gating this on !configModeActive fixes the cold-boot $2401 NOP-slide
 	// (VHDL conformance audit, memory-paging Rank 1).
 	if m.currentModel == roms.ModelNext && m.fpgaBootROMActive && !m.configModeActive && addr < 0x4000 {
+		return
+	}
+	// Opus Discovery overlay WRITE: while its ROM is paged in the interface
+	// owns $0000-$3FFF, so its RAM, the WD1770 and the PIA all take writes
+	// there. The 8 KB ROM itself absorbs them.
+	if m.opus != nil && addr < 0x4000 && m.opus.Write(addr, val) {
 		return
 	}
 	// divMMC overlay WRITE priority. Per zxnext.vhd's final memory mux

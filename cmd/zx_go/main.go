@@ -48,6 +48,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/sdcard"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
+	"github.com/conorarmstrong/zx_go/pkg/opus"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/rzx"
@@ -149,6 +150,7 @@ type emulator struct {
 	// betaDisk is the Beta Disk / TR-DOS interface, created lazily the first
 	// time a .TRD is mounted (classic models only). nil until then.
 	betaDisk *betadisk.Interface
+	opus     *opus.Interface
 
 	// fastTape, when set, runs the emulation at many frames per tick while a
 	// tape is actively loading, so a multi-minute real-time tape load (custom
@@ -631,7 +633,7 @@ func loadDiscipleDisk(emu *emulator, w fyne.Window, drive int) {
 			"Inserted "+filepath.Base(path)+" into DISCiPLE drive "+fmt.Sprintf("%d", drive+1)+".", w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{
-		".mgt", ".img", ".sad", ".dsk", ".trd", ".d40", ".d80",
+		".mgt", ".img", ".sad", ".dsk", ".trd", ".opd", ".d40", ".d80",
 	}))
 	fd.Show()
 }
@@ -712,6 +714,49 @@ func loadTRDDisk(emu *emulator, w fyne.Window, drive int) {
 				"From BASIC, enter TR-DOS with: RANDOMIZE USR 15616  (or the 128 menu).", w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".trd"}))
+	fd.Show()
+}
+
+// loadOPDDisk shows a .OPD file picker and mounts the chosen image in the
+// given Opus drive (0 = drive 1, 1 = drive 2), fitting the interface on first
+// use.
+func loadOPDDisk(emu *emulator, w fyne.Window, drive int) {
+	if !emu.opusSupported() {
+		dialog.ShowInformation("Load Opus Disk",
+			"The Opus Discovery is a 48K interface.\n"+
+				"Switch the machine model to 48K from the Machine menu first.", w)
+		return
+	}
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		_ = reader.Close()
+		var mountErr error
+		var rebooted bool
+		_ = emu.withEmulationPaused(func() error {
+			rebooted, mountErr = emu.mountOPD(drive, path)
+			return nil
+		})
+		if mountErr != nil {
+			dialog.ShowError(fmt.Errorf("failed to load OPD: %w", mountErr), w)
+			return
+		}
+		slog.Info("disk inserted", "interface", "Opus", "drive", drive+1, "path", path)
+		msg := "Inserted " + filepath.Base(path) + " into Opus drive " +
+			fmt.Sprint(drive+1) + ".\n"
+		if rebooted {
+			msg += "The machine was reset so the Opus ROM could initialise.\n"
+		}
+		msg += "From BASIC: RUN to start the disk, or CAT 1 to list it."
+		dialog.ShowInformation("Opus Disk Loaded", msg, w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".opd"}))
 	fd.Show()
 }
 
@@ -3121,6 +3166,14 @@ func main() {
 				emu.togglePause()
 			}
 			return "ZX80 program", nil
+		case ".opd":
+			rebooted, err := emu.mountOPD(0, path)
+			if err != nil {
+				return "", fmt.Errorf("load OPD: %w", err)
+			}
+			slog.Info("disk inserted", "interface", "Opus", "drive", 1, "path", path,
+				"reset", rebooted)
+			return "Opus disk", nil
 		case ".rzx":
 			file, err := rzx.ReadFile(path)
 			if err != nil {
@@ -3519,6 +3572,24 @@ func main() {
 				}),
 				fyne.NewMenuItem("Load Disk B...", func() {
 					loadPlus3Disk(emu, w, currentModel, 1)
+				}),
+				fyne.NewMenuItem("Load Opus Disk 1 (.OPD)...", func() {
+					loadOPDDisk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Load Opus Disk 2 (.OPD)...", func() {
+					loadOPDDisk(emu, w, 1)
+				}),
+				fyne.NewMenuItem("Eject Opus Disk 1", func() {
+					_ = emu.withEmulationPaused(func() error {
+						emu.ejectOPD(0)
+						return nil
+					})
+				}),
+				fyne.NewMenuItem("Eject Opus Disk 2", func() {
+					_ = emu.withEmulationPaused(func() error {
+						emu.ejectOPD(1)
+						return nil
+					})
 				}),
 				fyne.NewMenuItem("Load TR-DOS Disk A (.TRD)...", func() {
 					loadTRDDisk(emu, w, 0)

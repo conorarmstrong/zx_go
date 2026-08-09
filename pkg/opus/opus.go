@@ -5,12 +5,17 @@
 // the drive-control latch appear as ordinary memory in the $2000-$3FFF window
 // that the interface pages in alongside its 8 KB ROM at $0000-$1FFF.
 //
-// The map below is derived from the published v2.15 ROM disassembly at
-// speccy4ever.speccy.org (rom/opus/opus215disas.rtf), cross-checked against
-// the v2.22 ROM vendored at roms/opus.rom. The disassembly's own section
-// labels ("page-in", "page-out", "port-2") and the set of addresses its
-// instructions reach in $2000-$3FFF give the layout; no GPL implementation
-// was consulted.
+// The map is taken from the complete v2.2 shadow-ROM disassembly published on
+// World of Spectrum, which is the same ROM version vendored at roms/opus.rom,
+// and every address below is one the ROM's own instructions reach:
+//
+//	LD (2800),A  "Pass the command directly to the hardware"
+//	LD A,(2800)  "Is the diskdrive still doing I/O?"  BIT 0 = BUSY
+//	LD (2801),A  "Pass it [the track register] to the hardware"
+//	LD (2802),A  "Signal: go to sector 'A'"
+//	LD (2803),A  "Give byte to hardware" / LD A,(2803) "get byte from hardware"
+//
+// No GPL implementation was consulted.
 //
 // The only genuine port instructions in the ROM are IN A,($FE) for the
 // keyboard and IN A,($1F) for the interface's Kempston-compatible joystick
@@ -34,17 +39,30 @@ const (
 	RegionControl
 )
 
-// Address map. Four consecutive WD1770 registers and a small control area,
-// both inside the $2000-$3FFF window.
+// Address map, decoded from A13/A12/A11 within the paged window. The ROM only
+// ever touches $2000-$27FF, $2800-$2803 and $3000-$3003, so the mirroring
+// above each block is unobservable to it; the three-line decode is the
+// simplest that covers the window without gaps.
 const (
-	ROMBase  = 0x0000
-	ROMTop   = 0x1FFF
-	FDCBase  = 0x2800
-	FDCTop   = 0x2803
-	CtrlBase = 0x3000
-	CtrlTop  = 0x3003
-	WinBase  = 0x2000
-	WinTop   = 0x3FFF
+	ROMBase = 0x0000
+	ROMTop  = 0x1FFF
+	// RAMBase..RAMTop is the 2 KB IC 6116 SRAM the ROM copies its tables
+	// into. INIT_RAM2 checks for it and records the result in the PIA.
+	RAMBase = 0x2000
+	RAMTop  = 0x27FF
+	// FDCBase..FDCTop is the WD1770, four registers mirrored across the block.
+	FDCBase = 0x2800
+	FDCTop  = 0x2FFF
+	// PIABase..PIATop is the 6821, four registers mirrored across the block.
+	PIABase = 0x3000
+	PIATop  = 0x3FFF
+
+	// WinBase..WinTop is the whole hardware window above the ROM.
+	WinBase = 0x2000
+	WinTop  = 0x3FFF
+
+	// RAMSize is the 6116's capacity.
+	RAMSize = RAMTop - RAMBase + 1
 )
 
 // Decode reports which region of the interface an address belongs to.
@@ -52,12 +70,12 @@ func Decode(addr uint16) Region {
 	switch {
 	case addr <= ROMTop:
 		return RegionROM
-	case addr >= FDCBase && addr <= FDCTop:
-		return RegionFDC
-	case addr >= CtrlBase && addr <= CtrlTop:
-		return RegionControl
-	case addr >= WinBase && addr <= WinTop:
+	case addr <= RAMTop:
 		return RegionRAM
+	case addr <= FDCTop:
+		return RegionFDC
+	case addr <= PIATop:
+		return RegionControl
 	default:
 		return RegionNone
 	}
@@ -65,7 +83,11 @@ func Decode(addr uint16) Region {
 
 // FDCRegister maps an FDC address to its WD1770 register index:
 // 0 = command/status, 1 = track, 2 = sector, 3 = data.
-func FDCRegister(addr uint16) int { return int(addr-FDCBase) & 3 }
+func FDCRegister(addr uint16) int { return int(addr) & 3 }
+
+// PIARegister maps a control address to its 6821 register index:
+// 0 = PRA/DDRA, 1 = CRA, 2 = PRB/DDRB, 3 = CRB.
+func PIARegister(addr uint16) int { return int(addr) & 3 }
 
 // Device is one Opus Discovery interface.
 //
@@ -73,13 +95,21 @@ func FDCRegister(addr uint16) int { return int(addr-FDCBase) & 3 }
 // implementation: the WD1770 the Opus uses shares that command set, so the
 // controller is reused rather than reimplemented.
 type Device struct {
-	fdc     fdc
-	control byte
-	ram     [WinTop - WinBase + 1]byte
+	fdc fdc
+	pia pia
+	ram [RAMSize]byte
 }
 
 // New returns an Opus Discovery with no disks mounted.
 func New() *Device { return &Device{} }
+
+// TickTo advances the interface's clock to an absolute CPU T-state count,
+// handing over the next byte of a transfer once its byte-period has elapsed.
+func (d *Device) TickTo(now uint64) { d.fdc.tickTo(now) }
+
+// SetNMI installs the interrupt line the WD1770's DRQ output drives. The Opus
+// has no DMA: the ROM's $0066 handler moves one byte per NMI.
+func (d *Device) SetNMI(f func()) { d.fdc.nmi = f }
 
 // Mount inserts a disk into a drive (0 or 1).
 func (d *Device) Mount(drive int, img *Image) {
@@ -95,8 +125,21 @@ func (d *Device) SetWriteProtect(drive int, wp bool) {
 	}
 }
 
-// Control returns the drive-control latch as last written.
-func (d *Device) Control() byte { return d.control }
+// SelectedDrive reports which drive the PIA's port A currently selects. Disk
+// subtable byte 2 documents the lines: "bit 0: SET for righthand drive;
+// bit 1: SET for lefthand drive".
+func (d *Device) SelectedDrive() int {
+	if d.pia.portA()&0x01 != 0 {
+		return 0
+	}
+	if d.pia.portA()&0x02 != 0 {
+		return 1
+	}
+	return d.fdc.drive
+}
+
+// SelectedSide reports the side line, port A bit 4.
+func (d *Device) SelectedSide() int { return int(d.pia.portA()>>4) & 1 }
 
 // TryRead reads an interface address, reporting whether the address was ours.
 func (d *Device) TryRead(addr uint16) (byte, bool) {
@@ -113,9 +156,9 @@ func (d *Device) TryRead(addr uint16) (byte, bool) {
 			return d.fdc.readData(), true
 		}
 	case RegionControl:
-		return d.control, true
+		return d.pia.read(PIARegister(addr)), true
 	case RegionRAM:
-		return d.ram[addr-WinBase], true
+		return d.ram[addr-RAMBase], true
 	}
 	return 0xFF, false
 }
@@ -136,13 +179,11 @@ func (d *Device) TryWrite(addr uint16, v byte) bool {
 		}
 		return true
 	case RegionControl:
-		d.control = v
-		// The low bits select the drive. The Opus is single-sided, so there
-		// is no side line to derive.
-		d.fdc.drive = int(v & 0x01)
+		d.pia.write(PIARegister(addr), v)
+		d.fdc.drive = d.SelectedDrive()
 		return true
 	case RegionRAM:
-		d.ram[addr-WinBase] = v
+		d.ram[addr-RAMBase] = v
 		return true
 	}
 	return false

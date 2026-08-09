@@ -102,7 +102,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 | Disk (+3) | `.dsk` `.edsk` | ✓ | ✓ | EDSK handles weak sectors |
 | Disk (other) | `.udi` `.mgt` `.img` `.sad` `.d40` `.d80` | ✓ | — | Full format coverage |
 | TR-DOS / Beta | `.trd` | ✓ | — | Pentagon / 48K / 128K via WD1793 |
-| Opus Discovery | `.opd` | ✓ | ✓ | 40 x 18 x 256 single-sided, via WD1770. Emulator library only — no menu entry yet, see below |
+| Opus Discovery | `.opd` | ✓ | ✓ | 40 x 18 x 256 single-sided, via WD1770. Boots, catalogues and runs games. 48K only |
 | Microdrive | `.mdr` | ✓ | ✓ | Sinclair cartridge format |
 | Interface 2 cartridge | `.rom` | ✓ | — | 16 KB, 48K-only |
 | RZX recordings | `.rzx` | ✓ | ✓ | Per-frame insn count + IN stream |
@@ -122,14 +122,13 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 **Peripherals:**
 
 - **+3 FDC** — NEC μPD765A, two drives, full command set.
-- **Opus Discovery** — WD1770 controller and `.opd` disks, memory-mapped at
-  `$2800`/`$3000` as the real interface is, with the 8 KB v2.22 ROM in
-  `roms/opus.rom`. Sector read and write are verified through the guest's own
-  register path against real disk images. What is missing is the hardware
-  trigger that pages the interface ROM over the Spectrum ROM: nothing in the
-  ROM, the published disassembly, or the surviving documentation says what it
-  is, so the interface cannot autoboot yet and is deliberately not wired into
-  the machine or the GUI. See `pkg/opus/README.md` for what has been ruled out.
+- **Opus Discovery** — the 8 KB interface ROM paged over the Spectrum ROM by
+  an M1 address trap, a WD1770, 2 KB of interface RAM and a 6821 PIA, all
+  memory-mapped exactly as the real interface is. Data transfer is NMI-driven
+  rather than DMA, one byte per interrupt, at the WD1770's real byte rate.
+  Boots, hooks itself into BASIC, catalogues a disk and loads and runs games
+  off real `.opd` images. 48K only, since the trap addresses are 48K ROM
+  addresses. `FORMAT` is not implemented and says so rather than corrupting a disk. See `pkg/opus/README.md`.
 - **Beta Disk / TR-DOS** — WD1793 with auto-paging TR-DOS ROM.
 - **Interface 1 + Microdrive** — 8 daisy-chained drives, GAP/SYNC formatting.
 - **Interface 2** — cartridge slot / ROM override.

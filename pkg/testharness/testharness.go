@@ -21,6 +21,7 @@ package testharness
 import (
 	"fmt"
 	"image"
+	"os"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -32,6 +33,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
+	"github.com/conorarmstrong/zx_go/pkg/opus"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
@@ -54,6 +56,7 @@ type Harness struct {
 	ula         *ula.ULA
 	kbd         *keyboard.Keyboard
 	peripherals *peripherals.PeripheralManager
+	opus        *opus.Interface
 
 	// nextEsxdos is the Spectrum Next's esxDOS dispatcher when
 	// the harness was constructed with ModelNext, nil otherwise.
@@ -363,6 +366,46 @@ func (h *Harness) EnableDiscipleColdBoot() error {
 	}
 	// Page in so GDOS boot code runs from 0x0000
 	h.peripherals.GetDisciple().HandlePortRead(0xBB)
+	return nil
+}
+
+// EnableOpus fits an Opus Discovery. The interface ROM is paged in from the
+// moment it is fitted, so the CPU must be reset afterwards for the Opus reset
+// vector at $0000 to run.
+func (h *Harness) EnableOpus() error {
+	rom, err := roms.ReadEmbeddedROM("opus.rom")
+	if err != nil {
+		return fmt.Errorf("testharness: opus.rom: %w", err)
+	}
+	iface, err := opus.NewInterface(rom)
+	if err != nil {
+		return err
+	}
+	iface.Dev.SetNMI(func() { h.cpu.PendingNMI.Store(true) })
+	iface.SetClock(h.cpu.Tstates)
+	h.mem.SetOpus(iface)
+	h.cpu.AddPreFetchHook("opus", iface.PreFetch)
+	h.opus = iface
+	return nil
+}
+
+// Opus returns the fitted Opus Discovery, or nil.
+func (h *Harness) Opus() *opus.Interface { return h.opus }
+
+// InsertOpusDisk mounts a .opd image in an Opus drive (0-based).
+func (h *Harness) InsertOpusDisk(drive int, path string) error {
+	if h.opus == nil {
+		return fmt.Errorf("testharness: no Opus Discovery fitted")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	img, err := opus.LoadImage(data)
+	if err != nil {
+		return err
+	}
+	h.opus.Dev.Mount(drive, img)
 	return nil
 }
 

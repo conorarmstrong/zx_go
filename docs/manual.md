@@ -70,6 +70,7 @@ window** — zx_go picks the right loader from the extension.
 | `.rom` | File → Load ROM | Replace the system ROM (advanced). |
 | `.dck` / Interface 2 cartridge | File → Insert Interface 2 Cartridge | 16K ROM cartridges. |
 | `.trd` TR-DOS disk | File → Load TR-DOS Disk A/B | Pentagon / 48K / 128K. Enter TR-DOS, then `CAT`/`LOAD`. See below. |
+| `.opd` Opus disk | File → Load Opus Disk 1/2 | 48K only. Type `RUN` to boot the disk, or `CAT 1` to list it. See below. |
 | `.dsk` / `.mgt` disk | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). |
 | `.p` / `.o` (ZX81/ZX80) | File → Open File | Loads and runs the program. |
 
@@ -86,6 +87,29 @@ not faked), so loaders with custom timing work. You can:
 
 Some protected games need the **Speedlock Workaround** (File → disk submenu)
 toggled on.
+
+### Opus Discovery disks (.OPD)
+
+The Opus Discovery was a 48K disk interface with its own BASIC extensions.
+Switch the machine to **48K** from the Machine menu, then **File → Load Opus
+Disk 1** and pick a `.opd` image. The interface is fitted and the machine
+resets so the Opus ROM can initialise — that reset is how the real hardware
+starts too.
+
+Then, from BASIC:
+
+- `RUN` — loads and runs the disk's `run` file, which is how most Opus game
+  disks boot.
+- `CAT 1` — lists the disk. `CAT` is an extended-mode keyword: press
+  CAPS SHIFT + SYMBOL SHIFT together, then SYMBOL SHIFT + 9.
+
+Disks are 40 tracks of 18 256-byte sectors, single sided, so every image is
+exactly 184320 bytes. There is no header to check, so a file of the wrong size
+is rejected.
+
+`FORMAT` is not implemented. It reports a "Write protected" error rather than
+pretending to work, so an existing disk cannot be damaged by trying. Reading,
+writing and cataloguing existing disks all work.
 
 ### TR-DOS disks (.TRD)
 
