@@ -102,6 +102,8 @@ deliberately not read.
   so completing cleanly would have it write a fresh catalogue over an image
   that still holds the old data. Reading, writing and cataloguing existing
   disks are unaffected.
+- Guest writes land in the mounted image, not the `.opd` file. The emulator
+  offers an explicit save, so a game disk cannot be damaged by running it.
 - The Centronics printer port is decoded and its direction bits behave, but
   nothing is attached, so BUSY reads as ready.
 - 48K only. The trap addresses are 48K ROM addresses and mean something else

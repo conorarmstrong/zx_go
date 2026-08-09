@@ -118,6 +118,14 @@ func (d *Device) Mount(drive int, img *Image) {
 	}
 }
 
+// Disk returns the image mounted in a drive, or nil.
+func (d *Device) Disk(drive int) *Image {
+	if drive < 0 || drive >= len(d.fdc.disks) {
+		return nil
+	}
+	return d.fdc.disks[drive]
+}
+
 // SetWriteProtect marks a drive's disk read-only.
 func (d *Device) SetWriteProtect(drive int, wp bool) {
 	if drive >= 0 && drive < len(d.fdc.wprot) {

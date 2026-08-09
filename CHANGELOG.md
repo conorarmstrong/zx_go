@@ -41,7 +41,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Opus disks in the emulator.** File → Load Opus Disk 1/2, `.opd` on the
   command line and in the unified Open File dialog. Fitting the interface
-  resets the machine, as the real hardware requires.
+  resets the machine, as the real hardware requires. Guest writes land in the
+  mounted image rather than the file, with an explicit Save Opus Disk As...,
+  so running a game disk cannot damage it; ejecting with unsaved changes asks
+  first.
 
 ### Known gaps
 

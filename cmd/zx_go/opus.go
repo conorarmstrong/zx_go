@@ -70,6 +70,33 @@ func (e *emulator) mountOPD(drive int, path string) (bool, error) {
 	return fresh, nil
 }
 
+// opusDiskModified reports whether the disk in the given drive has been
+// written to since it was mounted.
+func (e *emulator) opusDiskModified(drive int) bool {
+	if e.opus == nil {
+		return false
+	}
+	img := e.opus.Dev.Disk(drive)
+	return img != nil && img.Modified()
+}
+
+// saveOPD writes the disk in the given Opus drive back out to path.
+//
+// Writes are held in the mounted image rather than pushed straight back to the
+// file, so a session that saves a program to disk has to be committed
+// deliberately. That keeps a game image safe from an accidental write, and
+// matches how microdrive cartridges are handled.
+func (e *emulator) saveOPD(drive int, path string) error {
+	if e.opus == nil {
+		return fmt.Errorf("no Opus Discovery is fitted")
+	}
+	img := e.opus.Dev.Disk(drive)
+	if img == nil {
+		return fmt.Errorf("opus drive %d is empty", drive+1)
+	}
+	return os.WriteFile(path, img.Bytes(), 0o644)
+}
+
 // ejectOPD removes the disk in the given Opus drive.
 func (e *emulator) ejectOPD(drive int) {
 	if e.opus != nil {

@@ -107,6 +107,11 @@ Disks are 40 tracks of 18 256-byte sectors, single sided, so every image is
 exactly 184320 bytes. There is no header to check, so a file of the wrong size
 is rejected.
 
+Saving from BASIC writes into the mounted image, not straight back to the
+`.opd` file, so running a game disk can never damage it. To keep what you
+saved, use **File → Save Opus Disk 1 As...**. Ejecting a disk with unsaved
+changes asks first.
+
 `FORMAT` is not implemented. It reports a "Write protected" error rather than
 pretending to work, so an existing disk cannot be damaged by trying. Reading,
 writing and cataloguing existing disks all work.

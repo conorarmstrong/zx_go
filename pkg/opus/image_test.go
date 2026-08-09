@@ -139,3 +139,64 @@ func TestRealDiskImages(t *testing.T) {
 	}
 	t.Logf("parsed %d real Opus disk images", n)
 }
+
+// TestImageTracksModification pins the dirty flag that tells the emulator
+// whether a mounted disk has anything worth writing back. Without it a "save
+// disk" action either always rewrites the file or never offers itself.
+func TestImageTracksModification(t *testing.T) {
+	img := NewImage()
+	if img.Modified() {
+		t.Error("a fresh image reports itself modified")
+	}
+	buf, err := img.ReadSector(3, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Modified() {
+		t.Error("reading a sector marked the image modified")
+	}
+	buf[0] = 0x99
+	if err := img.WriteSector(3, 4, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !img.Modified() {
+		t.Error("writing a sector did not mark the image modified")
+	}
+
+	// A failed write must not set it.
+	fresh := NewImage()
+	if err := fresh.WriteSector(0, SectorsPerTrack, buf); err == nil {
+		t.Fatal("precondition: that write should have been rejected")
+	}
+	if fresh.Modified() {
+		t.Error("a rejected write marked the image modified")
+	}
+}
+
+// TestImageRoundTripsThroughBytes pins that a mounted image can be written
+// back out byte-identically, so saving a disk that was only read cannot
+// corrupt it.
+func TestImageRoundTripsThroughBytes(t *testing.T) {
+	src := make([]byte, ImageBytes)
+	for i := range src {
+		src[i] = byte(i * 7)
+	}
+	img, err := LoadImage(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := img.Bytes()
+	if len(out) != ImageBytes {
+		t.Fatalf("Bytes() returned %d bytes, want %d", len(out), ImageBytes)
+	}
+	for i := range src {
+		if out[i] != src[i] {
+			t.Fatalf("byte %d changed: %#02x -> %#02x", i, src[i], out[i])
+		}
+	}
+	// And it must be a copy, not the live buffer.
+	out[0] ^= 0xFF
+	if img.Data[0] == out[0] {
+		t.Error("Bytes() aliases the image's own storage")
+	}
+}

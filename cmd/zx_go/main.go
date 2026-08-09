@@ -760,6 +760,67 @@ func loadOPDDisk(emu *emulator, w fyne.Window, drive int) {
 	fd.Show()
 }
 
+// saveOPDDisk writes the disk in the given Opus drive back out to a file.
+// Guest writes are held in the mounted image, so saving is deliberate: a game
+// disk cannot be damaged just by running it.
+func saveOPDDisk(emu *emulator, w fyne.Window, drive int) {
+	if emu.opus == nil || emu.opus.Dev.Disk(drive) == nil {
+		dialog.ShowInformation("Save Opus Disk",
+			fmt.Sprintf("Opus drive %d is empty.", drive+1), w)
+		return
+	}
+	fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if writer == nil {
+			return
+		}
+		path := writer.URI().Path()
+		_ = writer.Close()
+		if !strings.HasSuffix(strings.ToLower(path), ".opd") {
+			path += ".opd"
+		}
+		var saveErr error
+		_ = emu.withEmulationPaused(func() error {
+			saveErr = emu.saveOPD(drive, path)
+			return nil
+		})
+		if saveErr != nil {
+			dialog.ShowError(fmt.Errorf("save Opus disk: %w", saveErr), w)
+			return
+		}
+		dialog.ShowInformation("Opus Disk Saved",
+			fmt.Sprintf("Drive %d saved to:\n%s", drive+1, filepath.Base(path)), w)
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".opd"}))
+	fd.Show()
+}
+
+// ejectOPDDisk removes the disk in the given Opus drive, asking first if the
+// guest has written to it — those writes live only in the mounted image, so
+// ejecting without saving throws them away.
+func ejectOPDDisk(emu *emulator, w fyne.Window, drive int) {
+	eject := func() {
+		_ = emu.withEmulationPaused(func() error {
+			emu.ejectOPD(drive)
+			return nil
+		})
+	}
+	if !emu.opusDiskModified(drive) {
+		eject()
+		return
+	}
+	dialog.ShowConfirm("Eject Opus Disk",
+		fmt.Sprintf("Drive %d has unsaved changes. Eject and discard them?", drive+1),
+		func(ok bool) {
+			if ok {
+				eject()
+			}
+		}, w)
+}
+
 // loadSAMDisk shows an MGT/SAD/DSK file picker and inserts the chosen image into
 // the given SAM Coupé drive (0 = drive 1, 1 = drive 2). SAM-only.
 func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
@@ -3579,17 +3640,17 @@ func main() {
 				fyne.NewMenuItem("Load Opus Disk 2 (.OPD)...", func() {
 					loadOPDDisk(emu, w, 1)
 				}),
+				fyne.NewMenuItem("Save Opus Disk 1 As...", func() {
+					saveOPDDisk(emu, w, 0)
+				}),
+				fyne.NewMenuItem("Save Opus Disk 2 As...", func() {
+					saveOPDDisk(emu, w, 1)
+				}),
 				fyne.NewMenuItem("Eject Opus Disk 1", func() {
-					_ = emu.withEmulationPaused(func() error {
-						emu.ejectOPD(0)
-						return nil
-					})
+					ejectOPDDisk(emu, w, 0)
 				}),
 				fyne.NewMenuItem("Eject Opus Disk 2", func() {
-					_ = emu.withEmulationPaused(func() error {
-						emu.ejectOPD(1)
-						return nil
-					})
+					ejectOPDDisk(emu, w, 1)
 				}),
 				fyne.NewMenuItem("Load TR-DOS Disk A (.TRD)...", func() {
 					loadTRDDisk(emu, w, 0)

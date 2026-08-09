@@ -17,6 +17,11 @@ const (
 // Image is one Opus disk.
 type Image struct {
 	Data []byte
+
+	// modified records whether the guest has written to the image since it
+	// was loaded, so the emulator can offer to save it back and leave
+	// read-only sessions alone.
+	modified bool
 }
 
 // NewImage returns a blank formatted-size image.
@@ -74,5 +79,17 @@ func (img *Image) WriteSector(track, sector int, buf []byte) error {
 		}
 		img.Data[off+i] = b
 	}
+	img.modified = true
 	return nil
+}
+
+// Modified reports whether the guest has written to the image since it was
+// loaded.
+func (img *Image) Modified() bool { return img.modified }
+
+// Bytes returns a copy of the whole image, ready to write back to a .opd file.
+func (img *Image) Bytes() []byte {
+	out := make([]byte, len(img.Data))
+	copy(out, img.Data)
+	return out
 }
