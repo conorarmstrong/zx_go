@@ -4,6 +4,50 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.1]
+
+### Added
+
+- **Opus formatting, via the WD1770's WRITE TRACK.** `FORMAT 1;"name"` works.
+  v1.8.0 refused the command on the grounds that faking success could corrupt
+  a disk — true of a silent no-op, but not a reason to leave it unimplemented.
+
+  The controller is handed a whole raw track a byte at a time — gaps, sync,
+  address marks, ID fields and sector data — and recovers the sectors from it,
+  which is what the real chip does. The ROM builds that stream from the
+  run-length table at `$1BDB`, substituting track, side, sector and size into
+  its `$F0-$F4` placeholders; the result is standard IBM System 34 double
+  density. WRITE TRACK carries no length in the command — it runs from one
+  index pulse to the next — so the controller ends it itself after a track's
+  worth of bytes.
+
+  A `.opd` stores only sector data, so ID fields and gaps are discarded. A
+  sector's physical position comes from where the head actually is rather than
+  what the ID claims, because a flat image has nowhere to record a
+  disagreement; sectors outside the geometry are dropped rather than aliased
+  onto a neighbour. Address marks count only after the sync run, so `$FE` and
+  `$FB` inside sector data stay data.
+
+  Verified against the ROM's own commands rather than in isolation: a blank
+  image formatted by `FORMAT` and read back by `CAT`, showing the new disk
+  name and a full 178 free blocks against the 148 a game disk reports; and a
+  copy of a real game disk formatted while the source file is compared byte
+  for byte and left untouched.
+
+### Fixed
+
+- **Windows ARM64 release builds.** The target compiled with the runner's
+  stock `clang`, which targets MSVC. go-gl's `build.go` puts glfw's bundled
+  mingw headers on the include path for every Windows build, so `<xinput.h>`
+  resolved to a header using `WINBOOL` — a mingw-w64 typedef the MSVC SDK does
+  not have — and clang read `XInputEnable(WINBOOL)` as an untyped parameter
+  and stopped. cgo wants a GCC-compatible toolchain on Windows in any case, so
+  the build now installs llvm-mingw and uses `aarch64-w64-mingw32-clang`.
+
+  The release workflow also gained `workflow_dispatch`, with publishing
+  restricted to tag runs, so the matrix can be built and checked without
+  cutting a release.
+
 ## [v1.8.0]
 
 ### Added
@@ -45,20 +89,6 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mounted image rather than the file, with an explicit Save Opus Disk As...,
   so running a game disk cannot damage it; ejecting with unsaved changes asks
   first.
-
-- **Formatting, via the WD1770's WRITE TRACK.** `FORMAT 1;"name"` works. The
-  controller is handed a whole raw track a byte at a time — gaps, sync,
-  address marks, ID fields and sector data — and recovers the sectors from it,
-  which is what the real chip does; the ROM builds that stream from a
-  run-length table at `$1BDB` with the track, side, sector and size
-  substituted into its `$F0-$F4` placeholders. WRITE TRACK carries no length,
-  so the controller ends the command itself after a track's worth of bytes, as
-  the index pulse does on real hardware.
-
-  Verified end to end against the ROM's own commands: a blank image formatted
-  by `FORMAT` and then read back by `CAT`, showing the new disk name and a
-  full 178 free blocks; and a copy of a real game disk formatted while the
-  source file is checked byte for byte and left untouched.
 
 ### Known gaps
 
