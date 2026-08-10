@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual runs build every target without publishing anything, so a
+  # toolchain change can be verified before it rides on a real tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,13 +32,23 @@ jobs:
             goos: windows
             goarch: amd64
             artifact: zx_go-windows-amd64.exe
-          # Experimental: native Windows-on-ARM. OpenGL/CGO support there is
-          # immature, so this target is non-blocking (continue-on-error) and
-          # must never fail the release or cancel the other targets.
+          # Experimental: native Windows-on-ARM. Non-blocking
+          # (continue-on-error) so it can never fail the release or cancel the
+          # other targets.
+          #
+          # It needs llvm-mingw rather than the runner's stock clang. go-gl's
+          # build.go puts glfw's bundled mingw headers on the include path for
+          # every Windows build ("#cgo windows CFLAGS: ... -Iglfw/deps/mingw"),
+          # so <xinput.h> resolves to a header that uses WINBOOL — a mingw-w64
+          # typedef the MSVC SDK does not have. An MSVC-targeting clang then
+          # reads "XInputEnable(WINBOOL)" as an untyped parameter and stops.
+          # cgo wants a GCC-compatible toolchain on Windows regardless, so the
+          # fix is to give it one rather than to define the missing symbol.
           - os: windows-11-arm
             goos: windows
             goarch: arm64
-            cc: clang
+            cc: aarch64-w64-mingw32-clang
+            llvm_mingw: true
             experimental: true
             artifact: zx_go-windows-arm64.exe
           - os: macos-latest
@@ -64,6 +77,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
 
+      # Pinned rather than tracking latest: a release build should not change
+      # underneath a tag. Bump the version deliberately.
+      - name: Install llvm-mingw (Windows ARM64)
+        if: matrix.llvm_mingw
+        shell: pwsh
+        run: |
+          $ver = '20260616'
+          $name = "llvm-mingw-$ver-ucrt-aarch64"
+          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$ver/$name.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\llvm-mingw.zip" -DestinationPath $env:RUNNER_TEMP -Force
+          $bin = "$env:RUNNER_TEMP\$name\bin"
+          if (-not (Test-Path "$bin\aarch64-w64-mingw32-clang.exe")) {
+            Get-ChildItem $bin -Filter "*clang*" | Select-Object -First 20 -ExpandProperty Name
+            throw "aarch64-w64-mingw32-clang not found in $bin"
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Build
         shell: bash
         env:
@@ -90,6 +121,7 @@ jobs:
           Compress-Archive -Path ${{ matrix.artifact }} -DestinationPath ${{ matrix.artifact }}.zip
 
       - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
