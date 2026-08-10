@@ -47,6 +47,19 @@ If a title in a covered category fails, the bug is almost certainly
 in a peripheral driver, timing, or untested undocumented behaviour —
 not the core CPU.
 
+## Opus Discovery disks
+
+Run from real `.opd` images on a 48K with the Opus fitted, which
+exercises the ROM overlay, the WD1770 and the NMI-per-byte transfer
+end to end. The disks themselves are commercial and not redistributable,
+so these are not in the automated corpus.
+
+| Title | Status | Notes |
+|---|---|---|
+| Batty | **Works** | Verified 2026-08-10: `RUN` autoboots the disk's `run` file; the high-score table renders and the game starts. |
+| Exolon | **Works** | Verified 2026-08-10: `RUN` autoboots; title screen, author credit and the 5-entry control menu all render. |
+| `CAT` / `FORMAT` | **Works** | Verified 2026-08-10: `CAT 1` lists a real disk (name, files, free-block count); `FORMAT 1;"name"` writes all 40 tracks and the result catalogues back with a full free count. Covered by `TestOpusFormatsABlankDiskAndCatalogsIt`. |
+
 ## 48K titles
 
 Canonical 48K titles. None have been individually verified through

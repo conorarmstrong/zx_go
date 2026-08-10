@@ -1,6 +1,6 @@
 # zx_go
 
-**A faithful emulator for the entire Sinclair 8-bit line — the ZX80, the ZX81, every classic ZX Spectrum (48K, 128K, +2, +2A, +3), the Pentagon clone, and a from-the-silicon-up ZX Spectrum Next — written in Go.**
+**A faithful emulator for the entire Sinclair 8-bit line — the ZX80, the ZX81, every classic ZX Spectrum (48K, 128K, +2, +2A, +3), the Pentagon clone, the SAM Coupé, and a from-the-silicon-up ZX Spectrum Next — written in Go.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8.svg)](https://go.dev)
@@ -173,10 +173,14 @@ Grab the latest from the [Releases](https://github.com/conorarmstrong/zx_go/rele
 | --- | --- |
 | macOS (Apple Silicon) | `zx_go-macos-arm64.tar.gz` |
 | macOS (Intel) | `zx_go-macos-amd64.tar.gz` |
-| Windows | `zx_go-windows-amd64.exe.zip` |
-| Linux | `zx_go-linux-amd64.tar.gz` |
+| Windows (x64) | `zx_go-windows-amd64.exe.zip` |
+| Windows (ARM64) | `zx_go-windows-arm64.exe.zip` — experimental, see below |
+| Linux (x64) | `zx_go-linux-amd64.tar.gz` |
+| Linux (ARM64) | `zx_go-linux-arm64.tar.gz` |
 
 On macOS/Linux: `tar xzf zx_go-macos-arm64.tar.gz && ./zx_go-macos-arm64`. On Windows: unzip and double-click the `.exe`.
+
+The Windows ARM64 build is marked experimental: it compiles and publishes, but its OpenGL path has not been exercised on real Windows-on-ARM hardware. Reports either way are welcome.
 
 The classic ROMs (48K → +3, plus the DISCiPLE / Multiface / Interface 1 peripheral ROMs) are **embedded in the binary** — nothing to install for those modes.
 
@@ -190,8 +194,11 @@ cd zx_go
 go build -o bin/zx_go ./cmd/zx_go
 ./bin/zx_go
 
-# Run the tests (~90s, forty-plus packages)
+# Run the tests (~2 min, 53 packages)
 go test ./...
+
+# ~1 min: skips the Cringle zexdoc/zexall exercisers
+go test -short ./...
 ```
 
 ---
@@ -277,17 +284,18 @@ pkg/
   z80/            Z80 + Z80N CPU core
   ula/            Display, border, audio, tape I/O, port dispatch
   memory/         Bank paging, contention, FPGA bootrom
-  keyboard/  audio/  ay/         Input + beeper + AY sound
+  zx8x/  sam/       ZX80 / ZX81 and SAM Coupé machines
+  keyboard/  audio/  ay/  saa1099/  audiodac/   Input + beeper + AY / SAA / DAC sound
   snapshot/  rzx/                SNA/Z80/SZX + RZX recording
-  plus3fdc/  microdrive/  if1/  if2/   Disk, microdrive, interfaces
+  plus3fdc/  betadisk/  opus/  microdrive/  if1/  if2/   Disk, microdrive, interfaces
   kempmouse/  zxprinter/          Mouse + printer
   peripherals/  disciple/  multiface/  Peripheral manager + devices
   next/           Spectrum Next: nextregs, divmmc, esxdos, sdcard,
                   layer2, palette, sprite, copper, dma, dac, rtc,
                   uart, nex, compositor, install
   debugger/       Visual debugger backend
-  testharness/    Headless scripted emulator (40+ integration tests)
-  roms/  config/  trace/  zxlog/   ROMs, settings, tracing, logging
+  testharness/    Headless scripted emulator (64 integration tests)
+  roms/  config/  trace/  zxlog/  version/   ROMs, settings, tracing, logging, version
 docs/             Per-subsystem documentation
 LICENSES/         GPLv3 text + NOTICE for the embedded tbblue_loader.rom
 ```

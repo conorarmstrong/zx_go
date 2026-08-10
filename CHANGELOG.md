@@ -4,6 +4,33 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.2]
+
+### Fixed
+
+- **Stale claims across the README and comparison docs**, found by auditing
+  each factual statement against the code rather than reading for sense:
+
+  - The headline sentence listed every machine except the **SAM Coupé**.
+  - The downloads table offered only x64 for Windows and Linux, though the
+    release workflow builds and publishes **arm64** for both. The Windows
+    ARM64 entry is marked experimental, since it compiles and publishes but
+    its OpenGL path has not been exercised on real hardware.
+  - "six disk formats" appeared twice. It counted one table row, and read as
+    a total once TR-DOS and Opus were listed beside it; there are ten. The
+    completeness claim now points at the table instead of repeating a count.
+  - The project layout omitted **seven packages**, including those behind
+    headline features — `sam`, `zx8x`, `betadisk` and `opus`. All 31 are now
+    listed, checked programmatically against `pkg/`.
+  - "~90s, forty-plus packages" for the test suite: a clean run is ~2 minutes
+    over 53 packages, most of it the Cringle exercisers. `-short` (~1 min) is
+    now documented alongside it.
+  - The comparison tables had no Opus Discovery row in either media formats or
+    peripherals.
+
+- **Compatibility manifest** gained an Opus Discovery section recording the
+  titles and operations actually driven end to end.
+
 ## [v1.8.1]
 
 ### Added

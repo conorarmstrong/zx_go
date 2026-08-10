@@ -163,6 +163,7 @@ which is why the community treats it as the accuracy reference.
 | Tape (TAP / TZX) | ✅ | ⚠️ ²⁰ | ✅ | ⚠️ ²¹ |
 | Disk (DSK / +3) | ✅ | ❔ | ⚠️ | ✅ ²¹ |
 | TR-DOS / Beta disk (.TRD) | ✅ | ❌ | ✅ | ❌ |
+| Opus Discovery disk (.OPD) | ✅ | ❌ | ❔ | ✅ |
 | RZX recordings | ✅ ²² | ❔ | ⚠️ (playback only) | ❌ |
 
 ¹⁶ MAME boots NextZXOS to navigable menus; full Browser use is highly likely but
@@ -193,6 +194,7 @@ signing/verification.
 | UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
 | DISCiPLE / +D | ✅ | ❌ | ✅ | ❌ |
 | Interface 1 + Microdrive | ✅ | ❌ | ✅ | ⚠️ |
+| Opus Discovery | ✅ | ❌ | ❔ | ✅ |
 | ZX Printer | ✅ | ❌ | ✅ | ⚠️ |
 
 ²³ zx_go persists battery-backed RTC NVRAM to disk.
