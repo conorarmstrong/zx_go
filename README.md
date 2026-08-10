@@ -32,8 +32,8 @@ The 48K was the author's first computer; this began as a Go learning exercise an
 
 - 🖥️ **The whole family, one emulator** — ZX80 · ZX81 · Spectrum 48K · 128K · +2 · +2A · +3 · Pentagon 128 · **Spectrum Next** · **SAM Coupé**.
 - ⚡ **The Next, done properly** — authentic cold boot to NextZXOS, Layer 2 (incl. 320×256 / 640×256 hi-res), 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, Turbosound, DACs, RTC, and all four clocks up to 28 MHz.
-- 💾 **Every common format** — snapshots (`.sna`/`.z80`/`.szx`), tapes (`.tap`/`.tzx`), six disk formats, TR-DOS `.trd`, microdrive `.mdr`, `.NEX`, and RZX recordings.
-- 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
+- 💾 **Every common format** — snapshots (`.sna`/`.z80`/`.szx`), tapes (`.tap`/`.tzx`), six disk formats, TR-DOS `.trd`, Opus `.opd`, microdrive `.mdr`, `.NEX`, and RZX recordings.
+- 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Opus Discovery, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
 - 🔊 **Real sound** — ULA beeper, AY-3-8912 / Turbosound, SpecDrum & Covox DACs, the Next 4-channel DAC, measured AY volume curve.
 - 🐞 **Three debuggers, one live backend** — a visual GUI, a scriptable telnet server, and headless trace instrumentation, all sharing the same breakpoints, watchpoints, and time-travel ring.
 
@@ -82,7 +82,7 @@ Prefer not to build? Grab a [pre-built binary](#installation).
 | Machine | Status | Notes |
 | --- | --- | --- |
 | **ZX80 / ZX81** | ✅ Interactive | Faithful **CPU-generated display** (NOP-on-the-bus video, R-register INT, ZX81 SLOW-mode NMI border), native per-machine keyword keyboard, `.P`/`.O` loading. `--zx81` / `--zx80`. |
-| **Spectrum 48K** | ✅ Interactive | The original. Cycle-accurate, contended. Interface 1 microdrive option. |
+| **Spectrum 48K** | ✅ Interactive | The original. Cycle-accurate, contended. Interface 1 microdrive and Opus Discovery disk options. |
 | **Spectrum 128K / +2** | ✅ Interactive | AY sound, 128 KB paged memory, the 128 menu. |
 | **Spectrum +2A / +3** | ✅ Interactive | `$1FFD` 4-ROM paging; the +3 adds the integrated μPD765A FDC and disks. |
 | **Pentagon 128** | ✅ Interactive | Soviet clone: 128K + AY, **no contention**, 71680-T frame, TR-DOS `.trd` via the Beta Disk interface. `--pentagon`. |
@@ -122,13 +122,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 **Peripherals:**
 
 - **+3 FDC** — NEC μPD765A, two drives, full command set.
-- **Opus Discovery** — the 8 KB interface ROM paged over the Spectrum ROM by
-  an M1 address trap, a WD1770, 2 KB of interface RAM and a 6821 PIA, all
-  memory-mapped exactly as the real interface is. Data transfer is NMI-driven
-  rather than DMA, one byte per interrupt, at the WD1770's real byte rate.
-  Boots, hooks itself into BASIC, catalogues a disk, formats one via WRITE
-  TRACK, and loads and runs games off real `.opd` images. 48K only, since the
-  trap addresses are 48K ROM addresses. See `pkg/opus/README.md`.
+- **Opus Discovery** — WD1770 + 6821 PIA + 2 KB RAM, memory-mapped under an M1 address-trap ROM overlay; NMI-per-byte transfer. Boots, catalogues, formats and runs games from `.opd`. 48K only. ([details](pkg/opus/README.md))
 - **Beta Disk / TR-DOS** — WD1793 with auto-paging TR-DOS ROM.
 - **Interface 1 + Microdrive** — 8 daisy-chained drives, GAP/SYNC formatting.
 - **Interface 2** — cartridge slot / ROM override.
