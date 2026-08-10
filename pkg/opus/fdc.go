@@ -44,6 +44,16 @@ type fdc struct {
 	write  bool
 	target struct{ track, sector int }
 
+	// WRITE TRACK (format) state. See format.go.
+	formatting bool
+	fmtPos     int
+	fmtSync    int
+	fmtField   int
+	fmtID      []byte
+	fmtData    []byte
+	fmtNeed    int
+	fmtHaveID  bool
+
 	// nmi is pulsed on each DRQ rising edge.
 	nmi func()
 
@@ -120,7 +130,7 @@ func (f *fdc) disk() *Image {
 // writeCommand starts a command. Type is the top nibble.
 func (f *fdc) writeCommand(cmd byte) {
 	f.endTransfer()
-	f.waiting = false
+	f.waiting, f.formatting = false, false
 	switch {
 	case cmd&0xF0 == 0x00: // RESTORE
 		f.track = 0
@@ -147,13 +157,8 @@ func (f *fdc) writeCommand(cmd byte) {
 	case cmd&0xF0 == 0xD0: // FORCE INTERRUPT — the ROM's BREAK path uses $D0
 		f.buf, f.pos, f.write, f.waiting = nil, 0, false, false
 		f.status = StatusMotorOn
-	case cmd&0xF0 == 0xF0: // WRITE TRACK — formatting, not implemented
-		// Refuse rather than report success. The ROM checks bits 6 and 2 after
-		// a format ("AND +44"), so write-protect is the signal that reaches
-		// the user as an error. Completing silently would have the ROM believe
-		// it had laid down a track and write a catalogue over an image that
-		// still holds the old data.
-		f.status = StatusMotorOn | StatusWriteProtect
+	case cmd&0xF0 == 0xF0: // WRITE TRACK — format the track under the head
+		f.startFormat()
 	default:
 		f.status = StatusMotorOn
 	}
@@ -230,6 +235,15 @@ func (f *fdc) readData() byte {
 // writeData accepts the next byte of a write transfer.
 func (f *fdc) writeData(v byte) {
 	f.data = v
+	if f.formatting {
+		if f.formatByte(v) {
+			f.endFormat()
+		} else {
+			f.status &^= StatusDRQ
+			f.scheduleDRQ()
+		}
+		return
+	}
 	if f.buf == nil || !f.write {
 		return
 	}

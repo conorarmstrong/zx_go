@@ -112,9 +112,11 @@ Saving from BASIC writes into the mounted image, not straight back to the
 saved, use **File → Save Opus Disk 1 As...**. Ejecting a disk with unsaved
 changes asks first.
 
-`FORMAT` is not implemented. It reports a "Write protected" error rather than
-pretending to work, so an existing disk cannot be damaged by trying. Reading,
-writing and cataloguing existing disks all work.
+To format, use `FORMAT 1;"name"` (FORMAT is extended mode, SYMBOL SHIFT + 0).
+The ROM asks `Destroy "..."?` first — press Y. A full 40-track format takes a
+few seconds of emulated time. As with any other write, the result stays in the
+mounted image until you save it, so formatting cannot damage the file you
+loaded.
 
 ### TR-DOS disks (.TRD)
 

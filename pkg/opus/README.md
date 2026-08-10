@@ -5,8 +5,8 @@ Spectrum ROM, a WD1770 floppy controller, 2 KB of interface RAM, a 6821 PIA
 carrying the drive lines and a Centronics port, and a Kempston-compatible
 joystick input.
 
-It boots, hooks itself into BASIC, and loads and runs real games off real
-`.opd` images.
+It boots, hooks itself into BASIC, formats disks, and loads and runs real
+games off real `.opd` images.
 
 ## The interface is memory-mapped, not port-mapped
 
@@ -64,6 +64,26 @@ The pacing counts down from a delta rather than comparing against a deadline,
 because the CPU's T-state counter is rebased every frame; an absolute deadline
 stalls mid-sector at the first frame boundary with BUSY still asserted.
 
+## Formatting
+
+`FORMAT 1;"name"` drives the WD1770's WRITE TRACK. The controller is handed a
+whole raw track a byte at a time — gaps, sync, address marks, ID fields and
+sector data — and picks the sectors out of it, which is what the real chip
+does. The ROM builds that stream from a run-length table at `$1BDB` with the
+track, side, sector and size substituted into `$F0-$F4` placeholders; it is
+standard IBM System 34 double density.
+
+WRITE TRACK has no length in the command — it runs from one index pulse to the
+next — so the controller stops itself after a track's worth of bytes
+(`TrackRawBytes`). The ROM feeds rather more than that and the tail gap gets
+cut short, exactly as on real hardware.
+
+A `.opd` stores only sector data, so ID fields and gaps are discarded. The
+sector's physical position comes from where the head actually is rather than
+what the ID field claims, because a flat image has nowhere to record a
+disagreement; sectors outside the geometry are dropped rather than aliased
+onto a neighbour.
+
 ## Disk format
 
 `.opd` images are 40 cylinders of 18 256-byte sectors on a single side: a flat
@@ -97,11 +117,6 @@ deliberately not read.
 
 ## Limitations
 
-- `FORMAT` (WD1770 WRITE TRACK) is not implemented, and **reports an error**
-  rather than silently succeeding — the ROM checks "AND +44" after a format,
-  so completing cleanly would have it write a fresh catalogue over an image
-  that still holds the old data. Reading, writing and cataloguing existing
-  disks are unaffected.
 - Guest writes land in the mounted image, not the `.opd` file. The emulator
   offers an explicit save, so a game disk cannot be damaged by running it.
 - The Centronics printer port is decoded and its direction bits behave, but

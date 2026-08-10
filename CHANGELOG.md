@@ -46,12 +46,22 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so running a game disk cannot damage it; ejecting with unsaved changes asks
   first.
 
+- **Formatting, via the WD1770's WRITE TRACK.** `FORMAT 1;"name"` works. The
+  controller is handed a whole raw track a byte at a time — gaps, sync,
+  address marks, ID fields and sector data — and recovers the sectors from it,
+  which is what the real chip does; the ROM builds that stream from a
+  run-length table at `$1BDB` with the track, side, sector and size
+  substituted into its `$F0-$F4` placeholders. WRITE TRACK carries no length,
+  so the controller ends the command itself after a track's worth of bytes, as
+  the index pulse does on real hardware.
+
+  Verified end to end against the ROM's own commands: a blank image formatted
+  by `FORMAT` and then read back by `CAT`, showing the new disk name and a
+  full 178 free blocks; and a copy of a real game disk formatted while the
+  source file is checked byte for byte and left untouched.
+
 ### Known gaps
 
-- `FORMAT` (WD1770 WRITE TRACK) is not implemented. It reports an error rather
-  than silently succeeding: the ROM checks "AND +44" after a format, so a clean
-  status would have it write a fresh catalogue over an image that still holds
-  the old data. Reading, writing and cataloguing existing disks are unaffected.
 - 48K only: the trap addresses are 48K ROM addresses and mean something else
   under any other ROM, so the emulator refuses to fit the interface elsewhere.
 
