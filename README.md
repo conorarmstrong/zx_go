@@ -32,7 +32,7 @@ The 48K was the author's first computer; this began as a Go learning exercise an
 
 - 🖥️ **The whole family, one emulator** — ZX80 · ZX81 · Spectrum 48K · 128K · +2 · +2A · +3 · Pentagon 128 · **Spectrum Next** · **SAM Coupé**.
 - ⚡ **The Next, done properly** — authentic cold boot to NextZXOS, Layer 2 (incl. 320×256 / 640×256 hi-res), 128 hardware sprites with collision, tilemap, Copper, the full NextReg file, 8K MMU, DivMMC/esxDOS, Turbosound, DACs, RTC, and all four clocks up to 28 MHz.
-- 💾 **Every common format** — snapshots (`.sna`/`.z80`/`.szx`), tapes (`.tap`/`.tzx`), six disk formats, TR-DOS `.trd`, Opus `.opd`, microdrive `.mdr`, `.NEX`, and RZX recordings.
+- 💾 **Every common format** — snapshots (`.sna`/`.z80`/`.szx`), tapes (`.tap`/`.tzx`), ten disk formats from `.dsk` through TR-DOS `.trd` and Opus `.opd`, microdrive `.mdr`, `.NEX`, and RZX recordings.
 - 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Opus Discovery, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
 - 🔊 **Real sound** — ULA beeper, AY-3-8912 / Turbosound, SpecDrum & Covox DACs, the Next 4-channel DAC, measured AY volume curve.
 - 🐞 **Three debuggers, one live backend** — a visual GUI, a scriptable telnet server, and headless trace instrumentation, all sharing the same breakpoints, watchpoints, and time-travel ring.
@@ -89,7 +89,7 @@ Prefer not to build? Grab a [pre-built binary](#installation).
 | **ZX Spectrum Next** | ✅ Cold-boots NextZXOS | Real FPGA boot chain → NextZXOS desktop; full custom hardware. See [below](#the-spectrum-next). |
 | **SAM Coupé** | ✅ Interactive | MGT's 1989 Z80B machine: custom ASIC (4 screen modes, 128-colour palette, bordered display), 256/512K paging, SAA1099 sound, WD1772 floppy — **real disk games boot** (File → Load SAM Disk, then `BOOT`). Cold-boots the bundled MGT ROM 3.0 to SAM BASIC. `--sam`. See [docs/sam-coupe.md](docs/sam-coupe.md). |
 
-Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A 4-ROM paging, all tape formats, and all six disk formats are supported. Switch models any time from the **Machine** menu (state is cold-wiped).
+Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A 4-ROM paging, and every tape and disk format in the [table below](#file-formats), are supported. Switch models any time from the **Machine** menu (state is cold-wiped).
 
 ---
 
