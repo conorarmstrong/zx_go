@@ -2,290 +2,144 @@
 
 ## What this is
 
-zx_go is a hardware-faithful Sinclair emulator written in Go that
-supports the **ZX80**, **ZX81**, the classic 48K / 128K / +2 / +2A / +3
-Spectrums, and the **Spectrum Next**.
+zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written
+in Go: the **ZX80**, **ZX81**, the classic **48K / 128K / +2 / +2A / +3**,
+the **Pentagon 128** clone, the **SAM Coupé**, and the **Spectrum Next**.
 
-**v1.2.0** added the ZX80 and ZX81 (`pkg/zx8x`): faithful CPU-generated
-video (A15 NOP-substitution video fetches, R-bit-6 interrupt with
-refresh-during-HALT, the ZX81 SLOW-mode NMI border generator), the ZX8x
-keyboard, and `.P` / `.O` program loading; plus the **Pentagon 128**, the
-**TR-DOS / Beta Disk** interface (`pkg/betadisk`), **quick save/load** state
-slots, and the completed **zxnDMA** (IO endpoints, prescaler timing, read-back).
-
-This is the project roadmap: the **current state**, the ordered
-**open-work** backlog, the hardware-feature **catalogue**, and the
-**"do not regress" invariants**. Day-to-day completed work also lives in
-git history, `CHANGELOG.md`, and the development log.
+This file holds the **open-work backlog** and the **"do not regress"
+invariants**. It is not a history: completed work lives in `CHANGELOG.md`
+and git. If an item here is done, delete it rather than striking it through.
 
 ## Format
 
-- `[ ]` = open work · `[~]` = partially complete
-- **[blocker]** — must ship before v1.0
-- **[should-do]** — strong pride-of-product item
-- **[nice-to-have]** / **[v1.1]** — catalogued / deferred
+- `[ ]` open · `[~]` partially complete · `[⊘]` catalogued, deliberately not doing
+- **[correctness]** a faithfulness gap against real hardware
+- **[product]** user-visible capability or confidence
+- **[research]** unknown answer, needs investigation before it can be scoped
 
 ---
 
-## CURRENT STATE (2026-06-14 — v1.0 RC1)
+## CURRENT STATE (2026-08-11 — v1.8.2)
 
-**Working end-to-end (GUI + headless):** FPGA bootrom → TBBLUE splash →
-NextZXOS welcome → menu → menu-item launch (Browser C:/ listing,
-NextBASIC + acceptance), and the firmware config-menu machine selection
-boots every personality. Classic 48K…+3 feature-complete.
+Every machine above boots and is interactive. The classic line is mature;
+the Next cold-boots NextZXOS through the real FPGA chain to an interactive
+desktop, and the individual hardware blocks are tested against the FPGA
+VHDL.
 
-**128K BASIC launch — FIXED (2026-06-14).** NextZXOS More…→128K BASIC now
-renders the Sinclair "128" menu pixel-identical to the reference emulator
-(was: black screen / NextZXOS welcome). Three faithful VHDL-backed fixes
-found via the ours-vs-reference first-divergence audit — zero-fill cold RAM,
-Multiface-3 paging readback ($7F3F/$1F3F), Layer 2 port $123B readback.
-The last open *functional* Next bug; see the Open-work entry + the development log.
-`./bin/zx_go --next` works out of the box; with no ROMs installed,
-picking Next offers a download from the official Spectrum Next distro.
-
-**NextZXOS "Guide" — FULLY WORKING (2026-06-09).** The Guide now renders
-pixel-perfectly (matching the reference emulator — title, intro, full menu)
-AND is interactive (DOWN/UP scroll; a down-then-up round-trip returns to
-the byte-identical index). Five root causes, all fixed (committed, TDD'd,
-no regression): (1) the **zxnDMA** was a fixed-7-step stub, but NextGuide
-drives the real variable-length **Z80-DMA WR-group** protocol on IO port
-`$6B` → the stub ran a 3709-byte garbage transfer that corrupted RAM →
-the `$D700` slide; implemented the faithful protocol. (2) tilemap
-**textmode** (NR$6B bit 3, 1bpp tiles, pixel `(attr&0xFE)|bit`) was
-unimplemented → garbage tiles. (3) the Guide runs **80-column** mode =
-640px wide; built the **640px display path** (the tilemap renders native
-at 640px over the doubled 320px base). (4) the tilemap **transparency
-nibble** was hardcoded `$0F` but NR$4C=`$08` → text was wrongly
-transparent (ULA bled through); wired the live NR$4C. (5) **NR$1E/$1F
-active video line** was unimplemented → after rendering, NextGuide (DI'd)
-spun in a raster-wait loop polling NR$1F forever (a 7-instruction hang);
-implemented `ULA.ActiveVideoLine()` from the T-state position and wired
-the live NR$1E/$1F reads → the wait exits and the Guide is interactive.
-The long crash-hunt's divMMC-bank-walk / chain-pointer theories were
-downstream symptoms — see the development log.
+**The honest weak point is Next game compatibility**, exactly as
+`README.md` says. Blocks being faithful in isolation has not yet been
+converted into "arbitrary `.NEX` titles run".
 
 ---
 
 ## Open work (ordered)
 
-- [x] ~~**[bug] 128K BASIC launch → black screen / welcome**~~ **DONE
-  (2026-06-14).** Resolved via a rigorous ours-vs-reference first-divergence
-  audit (shared clock = guest FRAMES $5C78; ZX_GO_TDIFF_AT + frame_dump.lua
-  + cmp_fd.py; launch-phase PC-stream diff from the MF NMI $0066). Earlier
-  $2009/IM-1 and D62/$5Dxx theories were downstream symptoms. Three faithful,
-  VHDL-backed, TDD'd fixes: (1) **cold RAM now ZERO-fills** (was a $C0FFEE
-  pseudo-random hack masking a since-fixed banking bug — diverged all 256
-  banks; memory.go + cold_ram_test.go). (2) **Multiface-3 paging readback**:
-  IN $7F3F→$7FFD, $1F3F→$1FFD when the MF is active (multiface.vhd:43-44,
-  zxnext.vhd mf_port_dat mux) — ours returned open-bus $FF, flipping a
-  `cp $04; jr nz` at MF-ROM $01F6 into the abort path; pkg/ula/ula.go +
-  multiface_readback_test.go. **This made the Sinclair 128 menu render**
-  (AltROM revealed NR$8C=$80, 128-ROM keywait $3683). (3) **Layer 2 port
-  $123B readback** (zxnext.vhd:2822 port_123b_rd_dat) — open bus left
-  NR$69=$C0 (Layer 2 visible) bleeding striping into the top border; now
-  NR$69=$00 and the menu is PIXEL-IDENTICAL to the reference emulator, stable over a
-  3000-frame post-launch soak. Boot / Browser / NextBASIC / 48K all
-  unaffected; full suite + golangci-lint v2 + vet green. See the development log.
+### 1. [product] Next game compatibility
 
-> Status (2026-06-09): the **hardware-feature sweep is complete** — every
-> tractable Next video/audio/NextReg gap has been implemented (see the
-> catalogue below; the large/subtle/out-of-scope ones carry a [⊘]
-> decision + rationale). What remains here is the **dev-tooling /
-> research / user-driven backlog** — not emulation-correctness gaps:
+The single most valuable thing to work on, and the project's own stated
+gap. `docs/compatibility.md` currently holds **25 entries: 9 Works, 13
+Untested, 3 Known issue**. That is too thin to support a compatibility
+claim either way.
 
-- [~] **[blocker] 30-minute GUI stability session** — HEADLESS PROXY
-  PASSED: a 50 000-frame headless soak (≈17 min real-time, 3.57 B
-  instructions) ran clean — no crash/panic/leak, steady ≈720 fps, final
-  frame still the pixel-perfect Guide (md5 8c1eaaedf47e). The interactive
-  GUI clicking part is still USER-DRIVEN (I can't drive the windowed app),
-  but the underlying emulation is verified stable over a long run.
-- [x] ~~#108 NR spec audit remainder~~ DONE — audited the NR read-back
-  shapes against the FPGA; found + fixed a real bug (NR$05 re-encoded to a
-  fictional layout citing a non-existent VHDL line — the only real read is
-  zxnext.vhd:5897 = the input layout, so the mask is now `val&0xFA`).
-  TestSpec_NR05_BitReorderingOnRead corrected.
-- [x] ~~**[should-do] Per-scanline latching of CPU mid-frame NextReg writes**~~
-  **DONE (v1.6.0).** `pkg/next/rasterlog` journals each visual change against
-  the display row it was made on; `applyNextCompositor` rewinds to the
-  frame-start state, walks down applying each as it reaches its row, then
-  restores the live state. Recorded as undo/redo closures, not register
-  writes, so replay cannot re-trigger palette auto-increment / sprite uploads
-  / MMU paging. Wired for palette entries and Layer 2 scroll; other visual
-  registers still latch per frame. Recording is suppressed for the whole
-  replay window, because the Copper writes NextRegs between rows and those
-  already land correctly.
+The machinery already exists — redistributable `.nex`, headless boot,
+pixel-golden assertion — so this scales by adding titles, not by building
+infrastructure. What is missing is volume and a systematic
+divergence-hunting loop rather than per-title debugging.
 
-- [ ] **[nice-to-have] Copper intra-line raster precision.** `Step` is called
-  once per scanline at end-of-line hcount, so a WAIT resolves to a whole line.
-  Displaying an intra-line change needs a per-pixel renderer — large cost, and
-  the Copper's normal idiom is per-scanline. The per-scanline instruction
-  budget is hardware-correct (v1.5.0).
+- [ ] Grow the tested corpus by an order of magnitude.
+- [ ] Turn the 13 Untested entries into a verdict either way.
+- [ ] Triage the 3 Known issues to root cause.
 
-- [~] **[nice-to-have] Opus Discovery.** ROM vendored at `roms/opus.rom`
-  (8192 bytes). `pkg/opus` implements the interface's address decode and
-  register file, on pkg/betadisk's Western Digital controller (the WD1770 the
-  Opus uses shares the FD179x command set).
+### 2. [correctness] Sprite per-line bandwidth limit
 
-  **The interface is MEMORY-mapped, not port-mapped** — which is why the ROM
-  contains almost no IN/OUT instructions, and why an earlier attempt to derive
-  a port map from it failed. Layout, from the published v2.15 disassembly at
-  speccy4ever.speccy.org cross-checked against the v2.22 ROM:
+Real hardware runs out of sprite bandwidth per scanline, drops the
+overflow, and latches bit 1 of the `$303B` status port. We model neither:
+the limit is unenforced and the status bit always reads 0
+(`pkg/next/sprite/sprite.go:250`).
 
-  - `$0000-$1FFF` the 8 KB Opus ROM
-  - `$2800-$2803` WD1770 registers: command/status, track, sector, data
-  - `$3000-$3003` drive control and status
-  - the rest of `$2000-$3FFF` is the interface's own RAM
+This is compatibility-relevant, not cosmetic. Software that reads the flag
+to throttle its own sprite use sees a machine that never saturates, and
+scenes that should visibly drop sprites render complete.
 
-  The only genuine port instructions are `IN A,($FE)` (keyboard) and
-  `IN A,($1F)` — a Kempston-compatible joystick port, confirmed real by its
-  context (reads `$3000`, tests bit 7, then the joystick).
+### 3. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
 
-  Still to do: the ROM paging trigger (what pages the interface in and out),
-  the `.OPD` disk image format, and wiring it into the peripherals manager and
-  the GUI. Sample `.OPD` images and further ROM versions are available from the
-  same source.
+Decoded, stored and read back, but not rendered
+(`pkg/ula/ulascroll.go:53`). `zxula.vhd:353` builds the shift as
+`px(2 downto 0) & px(8)`, a 4-bit count in **half** pixels, so displaying
+it needs the ULA layer rendered at twice the horizontal resolution.
+Everything else in that path is whole-pixel.
 
-- [⊘] **[nice-to-have] #243/#245 compare-foreign bisect UX** + #244
-  the reference emulator DZRP RunToInstruction polish — debugger ergonomics.
-- [⊘] **[v1.1] #237/#239 GHDL gate-level oracle testbench** — research;
-  the CPU-conformance piece already proved its point.
-- [⊘] **[v1.1] #229 direct-boot (no-firmware) path polish**; #226
-  direct-core boot default; #240 provenance phase 2b — boot-path polish.
+Bounded but not small: it needs a 2x-wide ULA render path.
 
-## Unimplemented hardware features (catalogued — 2026-06-09 code scan)
+### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
-Deferred / stubbed / approximated hardware behaviours found in the
-source. Most are [v1.1] / [nice-to-have]; the 640px display (above) is
-the active one. Line refs are approximate (re-grep before starting).
+The transfer engine, prescaler and cycle timing are complete and
+spec-checked. Not modelled: the interrupt/match logic, and DMA-vs-CPU bus
+arbitration (`pkg/next/dma/dma.go`). No traced software has exercised
+either, which is why it was deferred; revisit if a title needs it.
 
-### Video
-- [x] ~~Layer 2 320×256 / 640×256 hi-res modes~~ DONE (all TDD'd, Guide
-  byte-identical). Render: column-major addressing (320×256 8bpp
-  `renderColumnMajor`; 640×256 4bpp `renderColumnMajor4bpp`, high nibble =
-  left pixel) + LineWidth/LineHeight. Registers: NR$70 wiring moved into
-  WireLayer2 (bits 5:4 → SetResolution, bits 3:0 → SetPaletteOffset, offset
-  added mod-16 to each pixel's high nibble per layer2.vhd:203, offset 0 =
-  identity). Compositor: ComposeScanline skips a hi-res L2 in the 256-wide
-  pass; new ComposeWideLayer2Row colours the 320/640 L2 → RGBA;
-  HiResLayer2Active/Layer2Width drive the dispatch; ULA.renderHiResLayer2
-  overlays the wide L2 over the base frame (pixel-doubling for 640),
-  mirroring renderWide. Additive — resolution 0 keeps the verified path.
-  Visible window stays 240 rows (top-aligned, the same window every mode
-  uses; the bottom 16 of the 256 hi-res lines are off-window overscan).
-  TDD: TestLayer2_640ColumnMajor4bpp, TestLayer2_PaletteOffset640,
-  TestComposeWideLayer2Row320, TestRenderHiResLayer2DispatchesWidePass.
-  Follow-up (nice-to-have): end-to-end screenshot-oracle check vs
-  the reference emulator once a hi-res-L2 test program is to hand (layer2.go,
-  compositor.go, ula.go).
-- [x] ~~NextReg transparency colour~~ DONE — global transparency is
-  **NR$14** (FPGA nr_14, default `$E3`), wired live into
-  `compositor.SetTransparency`. **NR$4A fallback DONE too**: the
-  RGB332-expanded fallback (next.go) is shown where every layer is
-  transparent (compositor `paintBase`); TDD via
-  `TestComposeScanlineSULStencilAndFallback`.
-- [x] ~~Layer priority + SUL per-pixel "below" stencil~~ DONE — the ULA's
-  16-colour palette is threaded to the compositor (`SetULAPalette`) so it
-  resolves the ULA transparency colour (u.palette[NR$14] when NR$14 < 16;
-  inert for the default $E3, so the verified compositing is byte-identical).
-  With that: the **SUL per-pixel stencil** (Layer 2 shows through a
-  transparent ULA pixel, `paintULAStencil`) and the **per-pixel Layer 2
-  priority bit** (NR$44 bit 7 captured in the palette, `HasPriority`,
-  promotes L2 above ULA+TM in SUL via `paintL2Priority`; also fixes the
-  NR$44 priority read-back). Tilemap-over-ULA priority (on_top + the
-  ulatm_rgb mix) was already modelled. TDD:
-  `TestComposeScanlineSULStencilAndFallback`,
-  `TestComposeScanlineSULLayer2Priority`, `TestPalettePriority`
-  (compositor.go, palette.go, ula.go, next.go).
-- [x] ~~Tilemap advanced features~~ DONE — per-tile **mirror X/Y +
-  rotate**, **pixel scroll** (NR$2F/$30/$31), and **clip window** (NR$1B,
-  X doubled in 80-col) all FPGA-faithful, TDD `TestTilemapMirrorRotate` /
-  `TestTilemapScroll` / `TestTilemapClip` (tilemap.go).
-- [x] ~~Sprite rendering~~ DONE — mirror/rotate, scale (1/2/4/8×), 8bpp,
-  N6, Y-MSB, NR$75-$79 auto-increment (FPGA sprites.vhd:437/813/968), the
-  **$303B status port** (collision + max-per-line, clear-on-read), and
-  **anchor groups** (composite/unified relative sprites). TDD: TestSprite*,
-  TestSpriteCollision, TestNextSpritePortRouting, TestSpriteAnchorRelative.
-- [x] ~~Sprite 8bpp pattern mode~~ DONE — byte-4 bit 7 selects 8bpp (256
-  bytes/pattern, 1 byte/pixel); palette offset added to the high nibble
-  per FPGA sprites.vhd:968. Also fixed the 4bpp palette offset (was
-  pixel+offset, is offset<<4|pixel). TDD `TestSprite8bpp` /
-  `TestSprite4bppPaletteOffset`.
-- [x] ~~Sprite auto-increment register aliases $75-$79~~ DONE — NR$75-$79
-  apply attribute bytes 0-4 (shared with $35-$39) and auto-increment the
-  sprite index, TDD `TestSpriteAttrAutoIncrement` (wire.go).
+### 5. [product] GUI stability session
 
-### Copper
-- [x] ~~Per-T-state raster-precise Copper execution~~ DONE — added the
-  per-T-state beam-position model (ULA.BeamPosition, TDD) and stepped the
-  Copper at end-of-line hpos so WAITs release on the correct scanline
-  (TestEndOfLineHposReleasesScanlineWaits). Scanline-precise — the
-  achievable precision for a per-scanline renderer (full per-pixel hpos
-  would need per-pixel rendering).
-- [x] ~~Copper VBL auto-restart timing~~ DONE — StartOnVBL resets the
-  program counter to 0 at the top of each frame (raster wrap), TDD
-  `TestStartOnVBLRestartsEachFrame` (copper.go).
+Carried over, still open, and still **user-driven** — an agent cannot
+drive the windowed app. The headless proxy passed long ago (50 000 frames,
+≈17 min, no leak, steady frame rate, final frame still pixel-perfect), so
+this is about interactive use: menus, model switching, load/save, resize,
+over a sustained session.
 
-### CPU / memory / timing
-- [x] ~~Per-instruction contention at turbo speeds (7/14/28 MHz)~~ DONE —
-  the contention stall magnitude is now scaled by the speed multiplier
-  (a 6-ULA-cycle hold = 6*N CPU T-states at N×), TDD
-  TestTurboContentionScaling; ×1 at 3.5 MHz so the boot is byte-identical
-  (memory.go).
-- [x] ~~NR$8E port-7FFD bit-4 write gate in config mode~~ DONE (non-gap) —
-  verified against the FPGA: port $7FFD writes are gated ONLY by
-  port_7ffd_locked (= bit 5; zxnext.vhd:3650-3652 `port_7ffd_wr = '1' and
-  port_7ffd_locked = '0'`), NOT by config mode. OUR code already implements
-  the bit-5 lock-drop (PageMemory + PagingEnabled, tested by
-  TestPagingTracerReportsLockDroppedWrites). No config-mode-specific gate
-  exists on real hardware; the earlier deferral note misread it.
-- [x] ~~NextReg $02 bit 0 soft-reset latching~~ DONE — the NR$02 soft
-  reset is fully implemented and load-bearing (WireReset, wire.go:1479+):
-  Z80 /RESET semantics (PC/I/R/IFF/IM/HALT cleared, SP/IX/IY survive), the
-  3-bit reset_type shift-history (zxnext.vhd:1736), the Alt-ROM
-  staged-nibble promote (the "latching", :2255), paging reset to ROM0/RAM0,
-  divMMC SPI + entry-point re-arm, and the config-mode FPGA-bootrom re-arm
-  the firmware's config-menu machine selection depends on. All FPGA-derived
-  and lockstep-verified vs the reference emulator. The one documented simplification —
-  keeping NR$82-$89 as-is rather than a per-register reset-type-conditional
-  reset — is hardware-faithful for the boot (preserves nr_03 for free) and
-  unused by application software.
-- [x] ~~ULA per-scanline render refactor~~ DONE (moot) — the copper-MOVE
-  timing gap doesn't apply: the ULA inner screen is built from the fixed
-  classic palette, screen RAM, and the already-per-scanline border (port
-  $FE), none copper-changeable via a NextReg MOVE; the compositor layers
-  are already per-scanline. A refactor would only matter if the ULA
-  honoured the Next ULA palette (a separate, unimplemented feature, not a
-  timing bug) (ula.go).
+### 6. [product] Windows ARM64 has never been run
 
-### Peripherals
-- [x] ~~Joystick I/O mode (NR$0B)~~ DONE — the NR$0B register is modelled
-  exactly (writable mask $B1 = FPGA bits 7,5:4,0; TestNR0BJoyIOModeMask).
-  The I/O-mode BEHAVIOUR (repurposing joy pins as GPIO/UART for hardware
-  add-ons) is out of scope, like the UART (wire.go:117).
-- [x] ~~DISCiPLE FDC Read Track / Write Track ($E0 / $F0)~~ DONE — Read
-  Track streams the raw track image (Track.Bytes); Write Track parses the
-  format stream into sectors and rebuilds the track (Disk.FormatTrack). TDD
-  TestFormatTrackAndBytes / TestParseFormatStream / TestDisciple_ReadWriteTrack.
-- [x] ~~Interface 1 RS-232 + SinclairNET~~ DONE (scope) — the microdrive
-  (IF1's primary function) is fully modelled; RS-232/SinclairNET bit-bang
-  an external serial device (out of scope like the UART) and the CTR WAT
-  CPU-stall is unnecessary with emulator-driven microdrive timing (if1/ula.go).
-- [x] ~~UART / ESP Wi-Fi networking~~ DONE (scope) — the register interface
-  (NR$A8 data / NR$A9 status, TX/RX FIFOs, AT-command responder) is fully
-  implemented + wired; real Wi-Fi networking (live TCP/IP) is out of scope
-  for a reference emulator (uart/doc.go).
-- [x] ~~RTC battery-backed persistence~~ DONE — the DS1307's 56-byte NVRAM
-  (regs 0x08-0x3F) is modelled + persisted across runs via SetPersistPath;
-  TDD TestI2C_NVRAMWriteReadBack / TestRTCNVRAMPersists (rtc/rtc.go).
+Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
+toolchain problem is solved. Nobody has launched the binary. Compiling
+does not prove the OpenGL path works on Windows-on-ARM, which is why the
+release matrix still marks it `experimental` and the README carries the
+caveat. One run on real hardware resolves it either way.
 
-### Audio / misc
-- [x] ~~AY volume curve~~ DONE — replaced the uniform 3 dB/step
-  approximation with the measured AY-3-8912 levels (FUSE table, scaled to
-  the mixing headroom); TDD `TestVolumeCurveIsMeasured` (pkg/ay/ay.go).
-- [x] ~~RZX competition-mode DSA signing~~ DONE — Sign/Verify compute a DSA
-  signature over the recording (SHA-1 digest, sign-end block 0x21) per the
-  RZX security model; tamper-detection verified (TestRZXSignVerify). DSA +
-  SHA-1 are mandated by the format (rzx/sign.go).
+### 7. [research] Copper cycle accuracy
+
+Since v1.6.4 the Copper is stepped in 8-pixel segments, which is exact for
+`WAIT` (the hardware threshold is `x<<3 + 12`, so 8 pixels *is* its
+resolution). What remains is `MOVE` landing mid-segment
+(`pkg/next/copper/copper.go:19`). Whether that is observable at all needs
+evidence from real software before it is worth scoping.
+
+---
+
+## Catalogued — deliberately not doing
+
+Kept so they are not re-proposed. Each has a rationale in the code or the
+git history.
+
+- [⊘] **Real Wi-Fi / TCP networking.** The UART register interface,
+  FIFOs and AT-command responder are implemented; a live network stack is
+  out of scope for a reference emulator (`pkg/next/uart/doc.go`).
+- [⊘] **Interface 1 RS-232 / SinclairNET** and **NR$0B joystick I/O
+  mode** — bit-banged external serial devices, same rationale.
+- [⊘] **SAM MIDI, clock and SD/IDE ports** — writes ignored
+  (`pkg/sam/io.go`).
+- [⊘] **Beta Disk density bit** (status bit 5) — TR-DOS is always MFM.
+- [⊘] **Debugger bisect UX**, **direct-boot path polish**, **GHDL
+  gate-level testbench** — the CPU-conformance work already made the
+  point.
+
+---
+
+## Do not re-derive
+
+Solved problems whose answers are expensive to rediscover.
+
+- **Opus Discovery ROM paging** is an **M1 address trap delayed one
+  fetch**: in at `$0008`, `$0048`, `$1708`; out at `$1748`. The tell is
+  placeholder bytes in the Opus ROM copying the Spectrum's at those
+  addresses. Transfers are **NMI-per-byte**, not DMA, and the byte spacing
+  is load-bearing. The interface is **memory-mapped, not port-mapped**;
+  do not go hunting for a port map. Full record in `pkg/opus/README.md`.
+- **The bootable SD image is FAT32.** The old FAT16 builder output never
+  booted.
+- **The 128K BASIC launch bug is closed** (Multiface-3 `$7F3F`/`$1F3F`
+  paging readback, Layer 2 `$123B` readback, zero-filled cold RAM). Do not
+  re-chase the superseded `$2009` / IM-1 / `$5Dxx` theories.
+
+---
 
 ## Key invariants (do not regress)
 
