@@ -4,6 +4,38 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.5]
+
+### Added
+
+- **Input probing in the screening harness** (`Harness.ProbeInput`). A still
+  screen is sent keys and watched for a material change, which separates a
+  title waiting at a menu from one hung with a menu on it — a distinction the
+  frame measurements alone cannot make, since both are simply still.
+
+  The probe runs a **control first**: the same elapsed time with no key
+  pressed. Only a change exceeding what the screen does unprompted counts.
+  That control is the whole point of it. Without one the first version
+  credited self-animation to the keypress — Cybernoid's title menu animates
+  its border decoration — and reported 85 of 87 titles as responding, a figure
+  too clean to be true. Each key also costs exactly one 32-frame FLASH period,
+  so a flashing attribute is never mistaken for motion.
+
+  Guarded by tests for all three failure modes: a responsive machine, a halted
+  one, and a self-animating screen.
+
+- **A `Boots (responds)` manifest status**, carrying exactly what that
+  evidence supports: the title answered a keypress, so it is waiting for input
+  rather than hung. It explicitly does **not** mean playable — what the
+  keypress did is unknown.
+
+### Changed
+
+- Manifest: 78 of the 99 booting titles answer input. A separate check
+  confirmed **0 of 100** screened titles were merely sitting at the 128 menu,
+  which would have inflated every figure in the manifest had it been
+  happening.
+
 ## [v1.8.4]
 
 ### Fixed

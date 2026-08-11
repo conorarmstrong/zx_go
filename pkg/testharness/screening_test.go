@@ -270,3 +270,107 @@ func TestScreenFileHandlesDSK(t *testing.T) {
 		t.Fatal(".dsk is rejected as an unknown format")
 	}
 }
+
+// TestRespondedStrengthensAVerdict pins what input probing adds. A Boots
+// verdict says the guest drew a screen; it cannot distinguish a title waiting
+// at a menu from one that has hung with a menu on screen. Sending keys and
+// watching for a material change separates them.
+//
+// It only means anything for a still screen. A title that is already animating
+// changes on its own, so a change after a keypress proves nothing about input.
+func TestRespondedStrengthensAVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    Screening
+		want Verdict
+	}{
+		{"still screen that answered a key", Screening{Pixels: 20000, Colours: 8, Moved: false, Responded: true}, VerdictResponds},
+		{"still screen that ignored it", Screening{Pixels: 20000, Colours: 8, Moved: false, Responded: false}, VerdictStatic},
+		{"already animating", Screening{Pixels: 20000, Colours: 8, Moved: true, Responded: false}, VerdictLive},
+		{"animating and answered", Screening{Pixels: 20000, Colours: 8, Moved: true, Responded: true}, VerdictLive},
+		{"blank cannot respond", Screening{Pixels: 0, Colours: 1, Responded: true}, VerdictBlank},
+	} {
+		if got := Classify(tc.s); got != tc.want {
+			t.Errorf("%s: Classify = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestVerdictRespondsName pins the manifest string.
+func TestVerdictRespondsName(t *testing.T) {
+	if got := VerdictResponds.String(); got != "Responds" {
+		t.Errorf("VerdictResponds.String() = %q, want %q", got, "Responds")
+	}
+}
+
+// TestProbeInputDetectsAResponse drives the real thing. The 48K BASIC prompt
+// is a still screen that unambiguously answers a keypress: type a character
+// and it appears. If probing cannot detect that, it cannot detect anything.
+func TestProbeInputDetectsAResponse(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Skipf("48K harness: %v", err)
+	}
+	defer h.CloseFiles()
+	if _, err := h.RunUntilText("1982 Sinclair Research", 400); err != nil {
+		t.Fatalf("never reached BASIC: %v", err)
+	}
+	if !h.ProbeInput() {
+		t.Error("the BASIC prompt did not register as responding to input")
+	}
+}
+
+// TestProbeInputIgnoresAnUnresponsiveMachine pins the other side: a halted
+// machine must not read as responding, or every title would.
+func TestProbeInputIgnoresAnUnresponsiveMachine(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Skipf("48K harness: %v", err)
+	}
+	defer h.CloseFiles()
+	if _, err := h.RunUntilText("1982 Sinclair Research", 400); err != nil {
+		t.Fatalf("never reached BASIC: %v", err)
+	}
+	// DI : HALT — the CPU stops responding to anything but an interrupt, and
+	// nothing further is drawn.
+	h.WriteMemory(0x8000, 0xF3) // DI
+	h.WriteMemory(0x8001, 0x76) // HALT
+	h.CPU().PC = 0x8000
+	h.RunFrames(10)
+	if h.ProbeInput() {
+		t.Error("a halted machine registered as responding to input")
+	}
+}
+
+// TestProbeInputIgnoresSelfAnimation is the control this probe was missing.
+//
+// A screen that animates on its own changes between any two samples. Without a
+// control, the probe attributes that change to the keys it just sent and
+// reports a response — which is exactly what happened: Cybernoid's title menu
+// animates its border decoration, and 85 of 87 titles came back "Responds",
+// a figure too clean to be true.
+//
+// The machine here paints a different screen byte every frame and never reads
+// the keyboard, so a correct probe must report no response.
+func TestProbeInputIgnoresSelfAnimation(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Skipf("48K harness: %v", err)
+	}
+	defer h.CloseFiles()
+	if _, err := h.RunUntilText("1982 Sinclair Research", 400); err != nil {
+		t.Fatalf("never reached BASIC: %v", err)
+	}
+
+	// LD HL,$4000 / (loop) INC (HL) / INC HL / JR loop — scribbles across the
+	// display for ever, touching no port.
+	for i, b := range []byte{0x21, 0x00, 0x40, 0x34, 0x23, 0x18, 0xFC} {
+		h.WriteMemory(uint16(0x8000+i), b)
+	}
+	h.CPU().PC = 0x8000
+	h.RunFrames(20)
+
+	if h.ProbeInput() {
+		t.Error("a self-animating screen registered as responding to input")
+	}
+}

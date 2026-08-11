@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"fyne.io/fyne/v2"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 )
 
@@ -26,6 +27,11 @@ type Screening struct {
 	Moved bool
 	// Error is a BASIC error report read off the bottom line, empty if none.
 	Error string
+	// Responded reports that the screen changed materially after keys were
+	// sent to a screen that was otherwise still. It is only meaningful for a
+	// still screen: a title already animating changes on its own, so a change
+	// after a keypress would prove nothing.
+	Responded bool
 }
 
 // Verdict is the classification of a screening.
@@ -37,6 +43,10 @@ const (
 	// VerdictStatic means a screen was drawn but is not changing: a title
 	// screen or a menu waiting for input. A real result, not a failure.
 	VerdictStatic
+	// VerdictResponds means a still screen changed materially after keys were
+	// sent — the strongest evidence automated screening can produce, because
+	// it separates a title waiting at a menu from one hung with a menu on it.
+	VerdictResponds
 	// VerdictLive means a screen was drawn and is still changing.
 	VerdictLive
 	// VerdictError means the guest reported a BASIC error.
@@ -49,6 +59,8 @@ func (v Verdict) String() string {
 		return "Blank"
 	case VerdictStatic:
 		return "Static"
+	case VerdictResponds:
+		return "Responds"
 	case VerdictLive:
 		return "Live"
 	case VerdictError:
@@ -88,6 +100,9 @@ func Classify(s Screening) Verdict {
 	}
 	if s.Moved {
 		return VerdictLive
+	}
+	if s.Responded {
+		return VerdictResponds
 	}
 	return VerdictStatic
 }
@@ -221,5 +236,87 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 		return Screening{}, fmt.Errorf("testharness: no screening loader for %q", ext)
 	}
 	h.RunFrames(frames)
-	return h.ScreenTitle(96), nil
+	s := h.ScreenTitle(96)
+	// Probing is only informative on a still screen; see ProbeInput.
+	if !s.Moved && s.Error == "" {
+		s.Responded = h.ProbeInput()
+	}
+	return s, nil
+}
+
+// probeKeys are the keys a title is most likely to act on at a title screen or
+// menu: fire, start, and the usual menu selections. They are sent in turn
+// because there is no way to know which one a given title wants.
+var probeKeys = []fyne.KeyName{
+	fyne.KeySpace, fyne.KeyReturn, fyne.Key1, fyne.Key0, fyne.Key5,
+}
+
+// respondThreshold is the fraction of the display window that must change for
+// a frame to count as a response. A cursor blink or a one-character echo moves
+// a handful of pixels; a menu selection, a screen wipe or a level starting
+// moves a great many. The floor sits between them.
+const respondThreshold = 0.002 // 0.2% of the display window
+
+// respondCeiling is the drift above which a screen is too busy to probe: its
+// own motion would swamp any response. Such titles are already classified Live
+// on the strength of that motion.
+const respondCeiling = 0.02 // 2% of the display window
+
+// ProbeInput sends keys to a running machine and reports whether the display
+// changed materially *because of them*.
+//
+// This is what separates a title waiting at a menu from one that has hung with
+// a menu on screen — a distinction the still-frame measurements cannot make,
+// since both are simply still.
+//
+// It runs a control first: the same elapsed time with no key pressed. A screen
+// that animates on its own changes between any two samples, and without the
+// control that change is credited to the keys. That is not hypothetical — it
+// is what the first version did, reporting 85 of 87 titles as responding
+// because things like Cybernoid's animated menu border moved on their own.
+// A response only counts when it clearly exceeds what the screen does
+// unprompted.
+func (h *Harness) ProbeInput() bool {
+	const holdFrames = 4
+
+	// Control: one probe interval, no key. Whatever changes here is the
+	// screen's own doing.
+	base := h.frameBytes()
+	h.RunFrames(flashPeriod)
+	drift := changedFraction(base, h.frameBytes())
+
+	// A screen already churning cannot be probed this way: any keyed change is
+	// indistinguishable from its own motion. Say "no response" rather than
+	// guess — such a title is reported as Live on its own evidence anyway.
+	if drift > respondCeiling {
+		return false
+	}
+
+	before := h.frameBytes()
+	for _, k := range probeKeys {
+		h.PressKey(k)
+		h.RunFrames(holdFrames)
+		h.ReleaseKey(k)
+		h.RunFrames(flashPeriod - holdFrames)
+		// Each key costs exactly one FLASH period, so every comparison lands
+		// in the same FLASH phase and a flashing attribute is not motion.
+		if changedFraction(before, h.frameBytes()) > drift+respondThreshold {
+			return true
+		}
+	}
+	return false
+}
+
+// changedFraction is the proportion of pixels that differ between two frames.
+func changedFraction(a, b []byte) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	diff := 0
+	for i := 0; i+3 < len(a); i += 4 {
+		if a[i] != b[i] || a[i+1] != b[i+1] || a[i+2] != b[i+2] {
+			diff++
+		}
+	}
+	return float64(diff) / float64(len(a)/4)
 }

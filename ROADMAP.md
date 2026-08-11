@@ -40,8 +40,8 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **135 title rows: 7 Works, 12 Works
-(caveat), 99 Boots, 1 Parses cleanly, 11 Known issue, 5 Untested.** It was 36
-rows with 13 Untested before the automated screening added in v1.8.3.
+(caveat), 78 Boots (responds), 21 Boots, 1 Parses cleanly, 11 Known issue, 5
+Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
 runs it, and measures the display window with the border cropped. A **Boots**
@@ -53,8 +53,13 @@ remaining gap.
   they could not be: no copy to hand (Jet Set Willy, The Hobbit, Baggers in
   Space, Lemmings +3), or no +3 disk loader in the harness yet (Where Time
   Stood Still +3).
-- [ ] **Drive input.** Screening proves boot and render. Turning a Boots into a
-  Works needs keys sent and the result checked, which is per-title work.
+- [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
+  reports a material change, against a no-key control so self-animation is not
+  credited to the keypress. 78 titles answer input.
+- [ ] **Verify what the keypress did.** A response proves a title is waiting
+  rather than hung; it does not prove the title is playable. Closing that gap
+  means per-title expectations — what screen should follow which key — which
+  is genuine manual work and cannot be inferred.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.
