@@ -1,6 +1,7 @@
 package testharness
 
 import (
+	"fyne.io/fyne/v2"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
@@ -26,6 +27,26 @@ func (h *Harness) LoadTAP(path string) error {
 	if err := tp.LoadTAP(path); err != nil {
 		return err
 	}
+	return h.attachTape(tp)
+}
+
+// LoadTZX is LoadTAP for the TZX container. Most of the canonical Spectrum
+// catalogue ships as TZX rather than TAP, because TZX is the format that can
+// describe the custom loaders publishers used.
+//
+// The same fast-load trap applies, and the same caveat with it: a title whose
+// loader bypasses the ROM's LD-BYTES never trips the trap and loads from the
+// signal in real time instead, so it needs proportionally more frames.
+func (h *Harness) LoadTZX(path string) error {
+	tp := ula.NewTapePlayer()
+	if err := tp.LoadTZX(path); err != nil {
+		return err
+	}
+	return h.attachTape(tp)
+}
+
+// attachTape wires a loaded player to the ULA and installs the LD-BYTES trap.
+func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 	h.ula.SetTapePlayer(tp)
 	tp.Play()
 
@@ -81,4 +102,25 @@ func (h *Harness) LoadTAP(path string) error {
 		return true
 	}
 	return nil
+}
+
+// TypeLoadCommand types `LOAD""` + ENTER at the 48K BASIC prompt (K cursor):
+// J = the LOAD keyword, SymbolShift+P = ", twice, then ENTER. Each key is held
+// a few frames and released with a gap so the ROM's ~50 Hz keyboard scan
+// registers distinct presses (the two quotes especially need the gap).
+func (h *Harness) TypeLoadCommand() {
+	tapKey := func(k fyne.KeyName) {
+		h.PressKey(k)
+		h.RunFrames(4)
+		h.ReleaseKey(k)
+		h.RunFrames(8)
+	}
+	tapKey(fyne.KeyJ) // LOAD
+	h.PressSymbolShift(true)
+	h.RunFrames(2)
+	tapKey(fyne.KeyP) // "
+	tapKey(fyne.KeyP) // "
+	h.PressSymbolShift(false)
+	h.RunFrames(4)
+	tapKey(fyne.KeyReturn)
 }

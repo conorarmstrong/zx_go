@@ -4,6 +4,57 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.3]
+
+### Added
+
+- **Automated title screening** (`TestScreenLocalTitles`, `pkg/testharness`).
+  The compatibility manifest carried thirteen "Untested" entries because
+  verifying one meant a person watching a screen. This does it mechanically: a
+  title is loaded, run, and measured, and the result classified Blank / Static
+  / Live / Error.
+
+  Measurement is of the **composited frame, display window only, border
+  cropped**. Both halves of that were found by being wrong first:
+
+  - Measuring the ULA display file at `$4000` reported two of the three
+    vendored Next demos as blank, because a Next title can draw entirely into
+    Layer 2 or the tilemap. Reporting a working title as broken is the worst
+    error a compatibility harness can make.
+  - Measuring the whole frame counted a tape loader's moving border stripes as
+    content, which forced the colour floor up, which then rejected genuinely
+    monochrome titles — Elite draws 35 000 pixels in three colours and was
+    being called blank. Cropping the border fixes both ends.
+
+  Commercial titles never enter the repository: the test reads a path list
+  from a gitignored `testdata/local_titles.tsv` and skips when it is absent.
+
+- **`.tzx` screening support**, with `Harness.LoadTZX`. Much of the canonical
+  catalogue ships as TZX rather than TAP, since TZX is the format that can
+  describe the custom loaders publishers used.
+
+### Changed
+
+- **The compatibility manifest went from 36 title rows to 74**, and from 13
+  unresolved entries to 5. Forty-eight titles were screened; 47 rendered
+  content. Ten were confirmed by eye against the captured frames rather than
+  trusted from the numbers.
+
+  A new **Boots** status carries the honest meaning of a screening: the
+  guest's own code ran and drew its title or menu screen, but no input was
+  sent, so playability is unverified. It is deliberately weaker than Works.
+
+  The five still unresolved now record *why* — no copy to hand, or no +3 disk
+  loader in the harness yet — rather than sitting silently as "Untested".
+
+### Known gaps
+
+- **Warhawk** does not run through the harness's ROM-independent `LoadNEX`: it
+  loads, runs its entry stub at `$5C50`, and lands in the ROM main loop at
+  `$1304`, rendering nothing. The README screenshot came from the full
+  NextZXOS boot, so this may be a loader limitation rather than an emulator
+  fault. Recorded as a Known issue pending investigation.
+
 ## [v1.8.2]
 
 ### Fixed

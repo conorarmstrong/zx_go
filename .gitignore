@@ -126,3 +126,4 @@ cmd/zx_go/oracle_test.go
 # Local-only headless tape/snapshot diagnostic (env-gated; not part of the
 # shipped test suite).
 cmd/zx_go/tzxload_test.go
+pkg/testharness/testdata/local_titles.tsv

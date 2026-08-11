@@ -39,18 +39,30 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-The most valuable thing to work on, and the project's own stated gap.
-`docs/compatibility.md` holds **25 entries: 9 Works, 13 Untested, 3 Known
-issue** — too thin to support a compatibility claim in either direction.
+`docs/compatibility.md` now holds **74 title rows: 7 Works, 12 Works
+(caveat), 47 Boots, 1 Parses cleanly, 2 Known issue, 5 Untested.** It was 36
+rows with 13 Untested before the automated screening added in v1.8.3.
 
-The machinery exists already (redistributable `.nex`, headless boot,
-pixel-golden assertion), so this scales by adding titles rather than by
-building infrastructure. What is missing is volume, and a systematic
-divergence-hunting loop rather than per-title debugging.
+Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
+runs it, and measures the display window with the border cropped. A **Boots**
+verdict means the guest's own code ran and drew its title or menu screen; it
+does **not** mean the title was played, because no input is sent. That is the
+remaining gap.
 
-- [ ] Grow the tested corpus by an order of magnitude.
-- [ ] Resolve the 13 Untested entries to a verdict either way.
-- [ ] Triage the 3 Known issues to root cause.
+- [x] ~~Resolve the 13 Untested entries~~ — 8 resolved. The other 5 record why
+  they could not be: no copy to hand (Jet Set Willy, The Hobbit, Baggers in
+  Space, Lemmings +3), or no +3 disk loader in the harness yet (Where Time
+  Stood Still +3).
+- [ ] **Drive input.** Screening proves boot and render. Turning a Boots into a
+  Works needs keys sent and the result checked, which is per-title work.
+- [ ] **A +3 disk loader for the harness**, which would unlock the whole
+  `.dsk` class — 592 disk images sit in the collection already screened from.
+- [ ] **Investigate Warhawk** (see Known issue): it loads, runs its entry stub,
+  and lands back in the ROM main loop rendering nothing.
+
+**Items 4 and 7 are blocked on this one.** Both are deferred for the same
+reason — no software we run exercises them — so the corpus is what unblocks
+them. Doing either before this is building on speculation.
 
 ### 2. [correctness] Sprite per-line bandwidth limit
 
@@ -75,10 +87,11 @@ Bounded, but not small: it needs a 2x-wide ULA render path.
 
 ### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
-The transfer engine, prescaler and cycle timing are complete and
-spec-checked. Not modelled: the interrupt/match logic and DMA-vs-CPU bus
-arbitration (`pkg/next/dma/dma.go`). No traced software has exercised
-either, which is why it was deferred. Revisit if a title needs it.
+**Blocked on item 1.** The transfer engine, prescaler and cycle timing are
+complete and spec-checked. Not modelled: the interrupt/match logic and
+DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`). No traced software has
+exercised either, which is why it was deferred, and a larger corpus is what
+would surface a title that does. Do not start this speculatively.
 
 ### 5. [product] GUI stability session
 
@@ -98,11 +111,11 @@ caveat. One run on real hardware settles it.
 
 ### 7. [research] Copper cycle accuracy
 
-Since v1.6.4 the Copper is stepped in 8-pixel segments, which is exact for
-`WAIT` — the hardware threshold is `x<<3 + 12`, so 8 pixels *is* its
-resolution. What remains is `MOVE` landing mid-segment
+**Blocked on item 1.** Since v1.6.4 the Copper is stepped in 8-pixel
+segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
+so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 (`pkg/next/copper/copper.go:19`). Whether that is observable at all needs
-evidence from real software before it is worth scoping.
+evidence from real software, which is what a larger corpus provides.
 
 ---
 

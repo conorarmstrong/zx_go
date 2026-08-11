@@ -12,6 +12,12 @@ Status legend:
   imperfection. Caveat documented in the Notes column.
 - **Parses cleanly** — file-format parser accepts the image
   without error. No gameplay verification.
+- **Boots** — loaded headlessly and rendered its own title, menu
+  or attract screen, measured in the display window with the
+  border cropped. Stronger than "parses cleanly": the guest's own
+  code ran and drew. Weaker than "Works": no input was sent, so
+  playability is unverified. Produced by
+  `TestScreenLocalTitles`; see "Automated screening" below.
 - **Known issue** — loads partway, crashes, or visibly wrong.
   Filed as a GitHub issue (linked).
 - **Untested** — no contributor has run this through yet.
@@ -68,12 +74,12 @@ zx_go yet; foundation tests confirm the 48K boot path works.
 | Title | Status | Notes |
 |---|---|---|
 | Manic Miner | **Works** | Verified 2026-08-08: plays — Central Cavern renders with the animated hazards, the AIR bar and the score/lives panel. |
-| Jet Set Willy | Untested | |
+| Jet Set Willy | Untested | Not screened: no original release to hand — the collection searched holds only fan variants and sequels. |
 | Knight Lore | **Works** | Verified 2026-08-08: menu accepts input, starts, and plays — the filled-3D room, character sprite and status panel all render correctly. |
 | Atic Atac | **Works** | Verified 2026-08-08: boots to the game-selection menu, accepts keyboard input through it, and plays — room graphics, sprites and the HUD (timer, lives, health) all render correctly. |
 | Sabre Wulf | **Works** | Verified 2026-08-08: menu accepts input, starts, and plays — jungle playfield with the score/lives HUD. |
 | Skool Daze | **Works (caveat)** | Verified 2026-08-08: boots and runs its attract-mode demo with full in-game graphics (classrooms, sprites, HUD). Not driven into a played game. |
-| The Hobbit | Untested | |
+| The Hobbit | Untested | Not screened: no copy to hand; it is an adventure, absent from the arcade collection searched. |
 | Lords of Midnight | **Works (caveat)** | Verified 2026-08-08: renders the in-game landscape-and-text view correctly. Not driven through the game. |
 | Elite (Spectrum port) | **Works (caveat)** | Verified 2026-08-08: boots to its title screen (Elite logo, Torus/Firebird artwork). Not driven into flight. |
 | Chuckie Egg | **Works (caveat)** | Verified 2026-08-08: boots to the title and high-score table. Not driven into a game. |
@@ -88,16 +94,16 @@ memory map. Foundation tests confirm 128K paging works.
 
 | Title | Status | Notes |
 |---|---|---|
-| Robocop (Ocean) | Untested | AY soundtrack |
+| Robocop (Ocean) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (13996 px, 10 colours). Input not driven. |
 | Renegade | **Works (caveat)** | Verified 2026-08-08 on the 128K: loads from `.tap` through the 128 Tape Loader and renders its title screen. Not driven into gameplay, so the verdict stops at "loads and titles". |
-| Target: Renegade | Untested | |
-| R-Type (Spectrum port) | Untested | |
-| Lemmings (Spectrum port) | Untested | |
-| Where Time Stood Still | Untested | The `.z80` to hand is a v1 (48K-format) snapshot of a 128K game, so it cannot run on any model — it drops to BASIC on 48K and 128K alike. Needs a proper 128K image. |
+| Target: Renegade | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (31712 px, 13 colours). Input not driven. |
+| R-Type (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (3724 px, 6 colours). Input not driven. |
+| Lemmings (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (14758 px, 6 colours). Input not driven. |
+| Where Time Stood Still | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (4981 px, 4 colours). Input not driven. |
 | Head over Heels | **Works (caveat)** | Verified 2026-08-08 on the 48K release: accepts input at the options menu and progresses into the Blacktooth Empire world-select. Not driven into play. |
-| Last Ninja 2 | Untested | |
+| Last Ninja 2 | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (10127 px, 10 colours, animating). Input not driven. |
 | Match Day II | **Works (caveat)** | Verified 2026-08-08 on the 128K: accepts input and navigates joystick-select through to the main menu. Not driven into a match. |
-| The Way of the Tiger | Untested | |
+| The Way of the Tiger | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (8411 px, 11 colours). Input not driven. |
 
 ## +3 / +2A disk titles
 
@@ -108,8 +114,8 @@ symmetric, but no individual +3 title has been loaded and run.
 | Title | Status | Notes |
 |---|---|---|
 | Cobra (Ocean, 1986) — +3 disk | Parses cleanly | 194816-byte CPCEMU DSK, 40 tracks, 1 side. Round-trips through `plus3fdc.ParseDiskImage` without errors. Not yet run to gameplay end-to-end. |
-| Lemmings (+3 disk reissue) | Untested | |
-| Where Time Stood Still (+3 disk reissue) | Untested | |
+| Lemmings (+3 disk reissue) | Untested | Not screened: no `.dsk` to hand. |
+| Where Time Stood Still (+3 disk reissue) | Untested | Not screened: a `.dsk` is to hand, but the harness has no +3 disk loader yet. |
 | Driller (+3 disk reissue) | **Works (caveat)** | Verified 2026-08-08 on the 48K tape release, not the +3 disk: boots to the control-options screen with the cockpit HUD rendered. |
 | Total Eclipse (+3 disk reissue) | **Works (caveat)** | Verified 2026-08-08 on the 48K tape release, not the +3 disk: boots to the control-options screen with the full border artwork. |
 
@@ -152,8 +158,8 @@ The honest state, as verified by a contributor:
 | Sonic the Hedgehog | Works (caveat) | Renders level/scroll/sprite/HUD and is controllable (arrows + Right-Alt/Ctrl). Residual: a few HUD icons in the top-right diverge from hardware (a game-loop/interrupt-timing detail, not a render bug). |
 | Nextoid | Works (caveat) | Bat/ball/HUD render and the game is drivable ('S' then SPACE). A load-time reset-to-Welcome (Copper byte-pairing) is fixed. |
 | NextBASIC Invaders | Known issue | Boots and sprites render, but the game throws an `Integer out of range` during play — a NextBASIC `DEFPROC` parameter/local-var storage divergence. Tracked in [janko-jj's reports](https://github.com/conorarmstrong/zx_go/issues). |
-| Baggers in Space (Stonechat Games) | Untested | Public `.nex` distribution; uses Layer 2 + sprites; foundation: `TestModelNextLayer2VisibleEndToEnd` |
-| Warhawk | Untested | Shown booting in the README screenshot; not run to a confident "playable" verdict. |
+| Baggers in Space (Stonechat Games) | Untested | Public `.nex` distribution; uses Layer 2 + sprites; foundation: `TestModelNextLayer2VisibleEndToEnd` Not screened: no copy to hand. |
+| Warhawk | Known issue | Verified 2026-08-11: via the harness's ROM-independent `LoadNEX` it loads, runs its entry stub at `$5C50`, and lands in the ROM main loop at `$1304` where it stays; the display window renders 0 drawn pixels. The README screenshot came from the full NextZXOS boot, so this may be a limitation of the ROM-independent loader rather than an emulator fault. Needs investigation either way. |
 
 If a Next game fails for you, **that is expected at this stage** —
 please file it (with what you see vs. real hardware / a stable
@@ -246,6 +252,72 @@ run by figuring out which class it belongs to:
    wobble.
 7. Is it a Next .NEX file? → Banks 0-7 fully supported; 8-111
    silently skipped today.
+
+## Automated screening
+
+Titles screened headlessly by `TestScreenLocalTitles` (pkg/testharness).
+Each is loaded, run, and measured in the **display window with the
+border cropped** — cropping matters, because a tape loader fills the
+border with moving stripes while the display area stays empty, so an
+uncropped measurement counts a loader as content.
+
+A **Boots** verdict means the guest's own code ran and drew its title,
+menu or attract screen. It does **not** mean the title was played: no
+input is sent. Treat it as a floor, not a ceiling.
+
+The titles themselves are commercial and are not in this repository.
+The test reads a path list from `pkg/testharness/testdata/local_titles.tsv`,
+which is gitignored, and skips entirely when it is absent — CI sees a
+skip, a developer with a collection sees verdicts.
+
+Of 48 titles screened, 47 rendered content and 1 did not (Warhawk,
+recorded above). Several were confirmed by eye against the captured
+frames rather than trusted from the numbers alone: Elite, Renegade,
+Pssst, R-Type, Last Ninja 2, Where Time Stood Still, RoboCop,
+The Way of the Tiger, Lemmings and Target: Renegade.
+
+| Title | Status | Notes |
+|---|---|---|
+| Alien 8 | **Boots** | Screened 2026-08-11: 16388 px, 6 colours. |
+| Auf Wiedersehen Monty | **Boots** | Screened 2026-08-11: 10204 px, 7 colours. |
+| Batman | **Boots** | Screened 2026-08-11: 4904 px, 4 colours. |
+| Bomb Jack | **Boots** | Screened 2026-08-11: 14798 px, 7 colours, animating. |
+| Bubble Bobble | **Boots** | Screened 2026-08-11: 12020 px, 4 colours, animating. |
+| Chase H.Q | **Boots** | Screened 2026-08-11: 5360 px, 4 colours. |
+| Chuckie Egg | **Boots** | Screened 2026-08-11: 25143 px, 7 colours, animating. |
+| Commando | **Boots** | Screened 2026-08-11: 21972 px, 7 colours, animating. |
+| Cookie | **Boots** | Screened 2026-08-11: 3534 px, 3 colours. |
+| Cybernoid | **Boots** | Screened 2026-08-11: 8395 px, 10 colours. |
+| Dan Dare | **Boots** | Screened 2026-08-11: 4559 px, 8 colours. |
+| Deathchase | **Boots** | Screened 2026-08-11: 30189 px, 10 colours, animating. |
+| Double Dragon | **Boots** | Screened 2026-08-11: 6997 px, 4 colours. |
+| Elite | **Boots** | Screened 2026-08-11: 7412 px, 3 colours, animating. |
+| Exolon | **Boots** | Screened 2026-08-11: 29562 px, 11 colours. |
+| Fairlight | **Boots** | Screened 2026-08-11: 22996 px, 11 colours. |
+| Gauntlet | **Boots** | Screened 2026-08-11: 9213 px, 12 colours. |
+| Ghosts 'n Goblins | **Boots** | Screened 2026-08-11: 21901 px, 7 colours, animating. |
+| Green Beret | **Boots** | Screened 2026-08-11: 14333 px, 13 colours. |
+| Head Over Heels | **Boots** | Screened 2026-08-11: 8195 px, 4 colours. |
+| Highway Encounter | **Boots** | Screened 2026-08-11: 17104 px, 7 colours, animating. |
+| Lunar Jetman | **Boots** | Screened 2026-08-11: 3977 px, 5 colours. |
+| Match Day | **Boots** | Screened 2026-08-11: 4084 px, 4 colours. |
+| Midnight Resistance | **Boots** | Screened 2026-08-11: 17259 px, 15 colours. |
+| Movie | **Boots** | Screened 2026-08-11: 17843 px, 13 colours, animating. |
+| Myth | **Boots** | Screened 2026-08-11: 5032 px, 7 colours, animating. |
+| Nebulus | **Boots** | Screened 2026-08-11: 4076 px, 8 colours. |
+| Operation Wolf | **Boots** | Screened 2026-08-11: 4286 px, 4 colours. |
+| Pssst | **Boots** | Screened 2026-08-11: 3313 px, 3 colours. |
+| Rainbow Islands | **Boots** | Screened 2026-08-11: 26765 px, 14 colours. |
+| Renegade | **Boots** | Screened 2026-08-11: 2524 px, 2 colours. |
+| Rex | **Boots** | Screened 2026-08-11: 6921 px, 11 colours. |
+| Saboteur | **Boots** | Screened 2026-08-11: 29650 px, 9 colours. |
+| Sabre Wulf | **Boots** | Screened 2026-08-11: 12580 px, 9 colours. |
+| Starquake | **Boots** | Screened 2026-08-11: 12701 px, 5 colours. |
+| Trap Door | **Boots** | Screened 2026-08-11: 19619 px, 11 colours. |
+| Turrican | **Boots** | Screened 2026-08-11: 5739 px, 9 colours. |
+| Uridium | **Boots** | Screened 2026-08-11: 6323 px, 6 colours, animating. |
+| Wizball | **Boots** | Screened 2026-08-11: 10087 px, 5 colours. |
+| Zynaps | **Boots** | Screened 2026-08-11: 5092 px, 6 colours. |
 
 ## How to add a title
 
