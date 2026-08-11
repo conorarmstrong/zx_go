@@ -161,7 +161,7 @@ which is why the community treats it as the accuracy reference.
 | Snapshots (.sna / .z80 / .szx) | ✅ | ✅ | ✅ | ❌ ¹⁹ |
 | `.nex` (Next snapshot) | ✅ (load) | ✅ | ✅ | ❌ |
 | Tape (TAP / TZX) | ✅ | ⚠️ ²⁰ | ✅ | ⚠️ ²¹ |
-| Disk (DSK / +3) | ✅ | ❔ | ⚠️ | ✅ ²¹ |
+| Disk (DSK / +3) | ✅ ³³ | ❔ | ⚠️ | ✅ ²¹ |
 | TR-DOS / Beta disk (.TRD) | ✅ | ❌ | ✅ | ❌ |
 | Opus Discovery disk (.OPD) | ✅ | ❌ | ❔ | ✅ |
 | RZX recordings | ✅ ²² | ❔ | ⚠️ (playback only) | ❌ |
@@ -289,3 +289,8 @@ open* reference implementation — and on the specific axes of faithful OS boot,
 contention modelling, and an open codebase, it already compares well.
 
 *Spotted an error or an out-of-date row? Please open an issue or PR.*
+
+³³ zx_go loads standard and EXTENDED DSK, including tracks packed denser
+than the nominal gap layout. Copy-protection track layouts, where declared
+sector sizes exceed a physical double-density track, are not modelled and are
+reported as such rather than silently mis-read.

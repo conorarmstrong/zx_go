@@ -8,6 +8,7 @@ package plus3fdc
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -118,8 +119,18 @@ const (
 	sectorInfoOffset = 0x18
 )
 
+// errUnknownSignature marks "no format claimed this image", which is the only
+// case where falling through to the extension-based loaders is right.
+var errUnknownSignature = errors.New("unrecognised disk image")
+
 var (
-	dskSignatureStd    = []byte("MV - CPCEMU Disk-File")
+	// Only the first eight bytes are the standard DSK signature. The rest of
+	// the 0x00-0x21 description field is free text chosen by whichever tool
+	// wrote the image: CPCEMU itself wrote "MV - CPCEMU Disk-File\r\n
+	// Disk-Info\r\n", but real images in circulation carry things like
+	// "MV - CPCEMU / 27 Sep 97 14:45" (Batman - The Movie, Ocean 1989).
+	// Matching the longer string rejects valid disks.
+	dskSignatureStd    = []byte("MV - CPC")
 	dskSignatureExt    = []byte("EXTENDED CPC DSK File")
 	trackInfoSignature = []byte("Track-Info\r\n")
 )
@@ -138,7 +149,7 @@ func ParseDiskImage(data []byte) (*Disk, error) {
 	case bytes.HasPrefix(data, sadSignature):
 		return ParseSAD(data)
 	}
-	return nil, fmt.Errorf("unrecognised disk image: first 16 bytes %x", data[:min(16, len(data))])
+	return nil, fmt.Errorf("%w: first 16 bytes %x", errUnknownSignature, data[:min(16, len(data))])
 }
 
 // ParseDSK parses a DSK image from a byte slice. Both the original
@@ -262,6 +273,26 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 	}
 	if !b.postindexAdd() {
 		return nil, fmt.Errorf("track too small for post-index gap")
+	}
+
+	// Tighten the inter-sector gap if this format is denser than the nominal
+	// layout. Publishers packed more sectors per track by shortening GAP III;
+	// keeping the nominal figure would refuse images that work on hardware.
+	maxSectorLen := 0
+	for j := 0; j < numSectors; j++ {
+		if n := sectorLength(trackData[sectorInfoOffset+j*sectorInfoSize+3]); n > maxSectorLen {
+			maxSectorLen = n
+		}
+	}
+	if !b.planSectors(numSectors, maxSectorLen) {
+		// The declared sectors cannot fit a physical double-density track even
+		// with the gaps at their minimum. That is the signature of a
+		// copy-protection track: an over-large sector size code (N=6 claims
+		// 8192 bytes) padding out a track that physically holds ~6250. Say so,
+		// rather than failing later with an opaque "track too small".
+		return nil, fmt.Errorf("track %d: %d sectors of up to %d bytes exceed a double-density track; "+
+			"looks like a copy-protection layout, which is not modelled",
+			cyl, numSectors, maxSectorLen)
 	}
 
 	// Walk the sector info table; for each sector emit ID + data.

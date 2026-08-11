@@ -1,6 +1,7 @@
 package testharness
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -223,5 +224,49 @@ func TestScreenFileHandlesTZX(t *testing.T) {
 	_, err = h.ScreenFile("testdata/corpus/bin/nonexistent.tzx", 10)
 	if err != nil && strings.Contains(err.Error(), "no screening loader") {
 		t.Fatal(".tzx is rejected as an unknown format")
+	}
+}
+
+// TestInsertPlus3DiskAndBoot pins the +3 disk path end to end. The +3 boots a
+// disk on its own: with a disk in drive A the ROM's loader runs it without any
+// typing, which is exactly what makes the class screenable.
+//
+// It is the largest unscreened class by far — the local collection alone holds
+// 592 .dsk images against the handful of tapes screened so far.
+func TestInsertPlus3DiskAndBoot(t *testing.T) {
+	const disk = "../../games/Cybernoid.dsk"
+	if _, err := os.Stat(disk); err != nil {
+		t.Skipf("no +3 disk to hand: %v", err)
+	}
+	h, err := New(roms.ModelPlus3)
+	if err != nil {
+		t.Skipf("+3 harness: %v", err)
+	}
+	defer h.CloseFiles()
+
+	if err := h.InsertPlus3Disk(0, disk); err != nil {
+		t.Fatalf("InsertPlus3Disk: %v", err)
+	}
+	h.Reboot()
+	h.RunFrames(1500)
+
+	s := h.ScreenTitle(96)
+	if v := Classify(s); v == VerdictBlank {
+		t.Errorf("a +3 disk title classified as Blank (pixels=%d colours=%d): the disk did not boot",
+			s.Pixels, s.Colours)
+	}
+}
+
+// TestScreenFileHandlesDSK pins that screening routes .dsk rather than
+// rejecting it, so the disk class can go in the title list like any other.
+func TestScreenFileHandlesDSK(t *testing.T) {
+	h, err := New(roms.ModelPlus3)
+	if err != nil {
+		t.Skipf("+3 harness: %v", err)
+	}
+	defer h.CloseFiles()
+	_, err = h.ScreenFile("testdata/corpus/bin/nonexistent.dsk", 10)
+	if err != nil && strings.Contains(err.Error(), "no screening loader") {
+		t.Fatal(".dsk is rejected as an unknown format")
 	}
 }

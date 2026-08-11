@@ -211,6 +211,12 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 			return Screening{}, err
 		}
 		h.TypeLoadCommand()
+	case ".dsk", ".edsk":
+		// The +3 boots a disk from reset with no typing, so insert then reset.
+		if err := h.InsertPlus3Disk(0, path); err != nil {
+			return Screening{}, err
+		}
+		h.Reboot()
 	default:
 		return Screening{}, fmt.Errorf("testharness: no screening loader for %q", ext)
 	}

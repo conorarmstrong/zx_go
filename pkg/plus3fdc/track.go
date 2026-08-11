@@ -161,11 +161,50 @@ type trackBuilder struct {
 	t   *Track
 	gap gapKind
 	pos int
+
+	// gap3 is the inter-sector gap actually emitted. It starts at the nominal
+	// IBM System 34 figure and planSectors tightens it when a denser format
+	// would not otherwise fit.
+	gap3 int
 }
 
 // newTrackBuilder wraps a freshly-created Track for byte-stream assembly.
 func newTrackBuilder(t *Track, gap gapKind) *trackBuilder {
-	return &trackBuilder{t: t, gap: gap}
+	return &trackBuilder{t: t, gap: gap, gap3: gapSpecs[gap].len[3]}
+}
+
+// minGap3 is the floor on the inter-sector gap. The gap exists to absorb
+// motor-speed variation between the drive that formatted the disk and the one
+// reading it; the FDC needs enough of it to resynchronise before the next
+// sync field. Twelve bytes is the shortest any real format uses.
+const minGap3 = 12
+
+// planSectors tightens the inter-sector gap so that n sectors of the given
+// size will fit, and reports whether they can.
+//
+// A double-density track physically holds a fixed number of bytes, so a denser
+// format buys its extra sectors out of the gaps — which is exactly what a real
+// formatter does. Keeping the nominal 54-byte GAP III and refusing the disk
+// instead rejects images that work on hardware: ten 512-byte sectors need
+// about 6410 bytes nominally against a 6250-byte track.
+//
+// Returns false only when the sectors cannot fit even at the minimum gap, i.e.
+// when the data genuinely exceeds the medium.
+func (b *trackBuilder) planSectors(n, sectorLen int) bool {
+	if n <= 0 {
+		return true
+	}
+	g := gapSpecs[b.gap]
+	// Per sector, everything except GAP III: ID field then data field.
+	perSector := (g.syncLen + 3 + 1 + 4 + 2 + g.len[2]) + (g.syncLen + 3 + 1 + sectorLen + 2)
+	free := b.remaining() - n*perSector
+	if free < n*minGap3 {
+		return false
+	}
+	if want := free / n; want < b.gap3 {
+		b.gap3 = want
+	}
+	return true
 }
 
 // remaining returns the number of bytes free in the track.
@@ -307,7 +346,7 @@ func (b *trackBuilder) dataAdd(data []byte, deleted, crcError bool) (dataStart i
 	if !b.emitMark() {
 		return 0, false
 	}
-	if b.remaining() < 1+len(data)+2+g.len[3] {
+	if b.remaining() < 1+len(data)+2+b.gap3 {
 		return 0, false
 	}
 	if g.mark < 0 {
@@ -337,7 +376,7 @@ func (b *trackBuilder) dataAdd(data []byte, deleted, crcError bool) (dataStart i
 	b.pos++
 	b.t.data[b.pos] = byte(crc & 0xFF)
 	b.pos++
-	if !b.emitFiller(g.len[3]) {
+	if !b.emitFiller(b.gap3) {
 		return dataStart, false
 	}
 	return dataStart, true

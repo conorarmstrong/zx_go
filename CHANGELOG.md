@@ -4,6 +4,57 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.4]
+
+### Fixed
+
+Screening the `.dsk` class for the first time surfaced three real bugs in the
++3 disk loader. All were found by running 60 real disk images, not by reading
+the code.
+
+- **Standard DSK images were rejected on a too-strict signature.** Only the
+  first eight bytes of the CPCEMU header (`MV - CPC`) are a signature; the rest
+  of the description field is free text chosen by whichever tool wrote the
+  image. Matching the full `MV - CPCEMU Disk-File` refused valid disks —
+  Batman - The Movie (Ocean 1989) carries `MV - CPCEMU / 27 Sep 97 14:45`.
+
+- **Real parse errors were swallowed.** When an image's signature was
+  recognised but its body would not parse, `loadDiskByPath` discarded that
+  error and fell through to its extension fallback, reporting "unrecognised
+  disk image format". That sent the reader looking for a missing loader
+  instead of at the actual fault. The underlying error is now surfaced.
+
+- **Denser-than-nominal track layouts were refused.** The track builder emitted
+  the nominal IBM System 34 gaps, spending 54 bytes on GAP III after every
+  sector. Ten 512-byte sectors need about 6410 bytes that way, against a
+  6250-byte double-density track, so the disk was rejected — even though a real
+  formatter simply shortens the gap to fit, which is how publishers packed
+  them. The inter-sector gap now tightens to fit, down to a 12-byte floor, and
+  refuses only when the data genuinely exceeds the medium.
+
+  Together these took the failures from 12 of 60 disk images to 9.
+
+### Added
+
+- **`.dsk` / `.edsk` screening**, via `Harness.InsertPlus3Disk`. The +3 boots a
+  disk from reset with no typing, which makes the whole class screenable — and
+  it is the largest class by far, with 592 images in the collection screened
+  from.
+
+### Changed
+
+- **The compatibility manifest went from 74 title rows to 135**: 7 Works, 12
+  Works (caveat), 99 Boots, 1 Parses cleanly, 11 Known issue, 5 Untested. 109
+  titles screened, 99 rendered content.
+
+### Known gaps
+
+- **Copy-protection track layouts are not modelled.** Nine of the disks
+  screened declare more sector data than a physical double-density track holds
+  — a size code of N=6 claims 8192 bytes against roughly 6250 — which is a
+  protection scheme rather than a real geometry. The loader now names that as
+  the reason rather than failing with an opaque "track too small".
+
 ## [v1.8.3]
 
 ### Added

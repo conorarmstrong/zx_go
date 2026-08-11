@@ -1,6 +1,7 @@
 package plus3fdc
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,9 +45,15 @@ func loadDiskByPath(path string) (*Disk, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read disk image: %w", err)
 	}
-	// Signature-first dispatch.
-	if d, err := ParseDiskImage(data); err == nil {
+	// Signature-first dispatch. When the signature IS recognised, that parse
+	// error is the answer — reporting "unrecognised format" instead sends the
+	// reader looking for a missing loader rather than at the real fault.
+	d, sigErr := ParseDiskImage(data)
+	if sigErr == nil {
 		return d, nil
+	}
+	if !errors.Is(sigErr, errUnknownSignature) {
+		return nil, fmt.Errorf("%s: %w", path, sigErr)
 	}
 	// Extension fallback for raw-sector formats without magic bytes.
 	switch strings.ToLower(filepath.Ext(path)) {

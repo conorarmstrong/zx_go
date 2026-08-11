@@ -71,7 +71,7 @@ window** — zx_go picks the right loader from the extension.
 | `.dck` / Interface 2 cartridge | File → Insert Interface 2 Cartridge | 16K ROM cartridges. |
 | `.trd` TR-DOS disk | File → Load TR-DOS Disk A/B | Pentagon / 48K / 128K. Enter TR-DOS, then `CAT`/`LOAD`. See below. |
 | `.opd` Opus disk | File → Load Opus Disk 1/2 | 48K only. Type `RUN` to boot the disk, or `CAT 1` to list it. See below. |
-| `.dsk` / `.mgt` disk | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). |
+| `.dsk` / `.mgt` disk | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). A few copy-protected disks are refused with an explanation — see below. |
 | `.p` / `.o` (ZX81/ZX80) | File → Open File | Loads and runs the program. |
 
 **Recent files** (File → Recent) keeps your last-opened items one click away.
@@ -206,6 +206,14 @@ Peripherals are enabled from the **Peripherals** menu and then driven from
   to insert/save cartridges, eject, and toggle write-protect (per drive).
 - **DISCiPLE / +D / disk drives** — enable, then File → Load Disk / DISCiPLE
   Disk, with Save Disk (DSK), Eject, and per-drive Write Protect.
+
+  Most `.dsk` images load, including the EXTENDED variant and disks whose
+  tracks pack more sectors than the nominal gap layout allows. A small number
+  of copy-protected titles are refused with a message naming the reason: their
+  tracks declare more sector data than a physical double-density track can
+  hold (a size code claiming 8192 bytes against roughly 6250), which is a
+  protection scheme rather than a real disk geometry. That layout is not
+  modelled.
 - **Multiface 1 / 128 / 3** — enable one, then press **F12** to trigger its NMI
   (the freezer/poke menu).
 - **ZX Printer** — enable it; printed output is captured and you can save it as

@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **74 title rows: 7 Works, 12 Works
-(caveat), 47 Boots, 1 Parses cleanly, 2 Known issue, 5 Untested.** It was 36
+`docs/compatibility.md` now holds **135 title rows: 7 Works, 12 Works
+(caveat), 99 Boots, 1 Parses cleanly, 11 Known issue, 5 Untested.** It was 36
 rows with 13 Untested before the automated screening added in v1.8.3.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -55,8 +55,14 @@ remaining gap.
   Stood Still +3).
 - [ ] **Drive input.** Screening proves boot and render. Turning a Boots into a
   Works needs keys sent and the result checked, which is per-title work.
-- [ ] **A +3 disk loader for the harness**, which would unlock the whole
-  `.dsk` class — 592 disk images sit in the collection already screened from.
+- [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
+  `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
+  surfaced three real loader bugs, all fixed; see the CHANGELOG.
+- [ ] **Copy-protection track layouts.** Nine of the disks screened declare
+  more sector data than a physical double-density track holds — an N=6 size
+  code claims 8192 bytes against ~6250 — which is a protection scheme rather
+  than a real geometry. The loader now reports this explicitly instead of
+  failing opaquely, but does not model it (`pkg/plus3fdc/disk.go`).
 - [ ] **Investigate Warhawk** (see Known issue): it loads, runs its entry stub,
   and lands back in the ROM main loop rendering nothing.
 

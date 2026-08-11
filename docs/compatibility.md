@@ -270,23 +270,91 @@ The test reads a path list from `pkg/testharness/testdata/local_titles.tsv`,
 which is gitignored, and skips entirely when it is absent — CI sees a
 skip, a developer with a collection sees verdicts.
 
-Of 48 titles screened, 47 rendered content and 1 did not (Warhawk,
-recorded above). Several were confirmed by eye against the captured
-frames rather than trusted from the numbers alone: Elite, Renegade,
-Pssst, R-Type, Last Ninja 2, Where Time Stood Still, RoboCop,
-The Way of the Tiger, Lemmings and Target: Renegade.
+**Of 109 titles screened, 99 rendered content, 1 rendered nothing
+(Warhawk, above) and 9 would not load.** Screening tape, snapshot and
++3 disk formats together is what surfaced three real `.dsk` loader bugs,
+all fixed in v1.8.4 — see the CHANGELOG. The 9 that still fail share one
+cause: a copy-protection track whose declared sector sizes exceed what a
+physical double-density track holds (an N=6 code claims 8192 bytes on a
+~6250-byte track). That layout is not modelled; the loader now says so
+explicitly instead of failing with an opaque message.
+
+Several verdicts were confirmed by eye against the captured frames rather
+than trusted from the numbers: Elite, Renegade, Pssst, R-Type, Last Ninja 2,
+Where Time Stood Still, RoboCop, The Way of the Tiger, Lemmings and
+Target: Renegade.
 
 | Title | Status | Notes |
 |---|---|---|
+| 007 - Licence To Kill (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| 3D Construction Kit (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| 3D Game Maker (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| 3D Grand Prix Championship (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| ACE 2 - The Ultimate Head to Head Conflict (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Action Fighter (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Action Force (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Action Force 2 (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Afterburner (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Alien 8 | **Boots** | Screened 2026-08-11: 16388 px, 6 colours. |
+| Alien Storm (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Alien Syndrome (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| APB - All Points Bulletin (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Arkanoid 2 - Revenge of Doh (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Artura (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Aspar GP Master (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| ATF - Advanced Tactical Fighter (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Auf Wiedersehen Monty | **Boots** | Screened 2026-08-11: 10204 px, 7 colours. |
+| Autocrash (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Back to the Future Part III (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Badlands (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
 | Batman | **Boots** | Screened 2026-08-11: 4904 px, 4 colours. |
+| Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Batman - The Movie (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Bestial Warrior (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Beverly Hills Cop (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Beyond the Ice Palace (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Black Lamp (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Blasteroids (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Bloodwych (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Bomb Jack | **Boots** | Screened 2026-08-11: 14798 px, 7 colours, animating. |
+| Bonanza Bros (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Brian Clough's Football Fortunes (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Bubble Bobble | **Boots** | Screened 2026-08-11: 12020 px, 4 colours, animating. |
+| Bubble Bobble (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Bubble Buster (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Buffalo Bill's Wild West Show (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Buggy Boy (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Buggy Ranger (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Butcher Hill (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| By Fair Means...or Foul (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Cabal (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| California Games (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Capitan Sevilla (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Captain Blood (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Captain Planet (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Carlos Sainz (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Castle Master (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Chain Reaction (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Championship Run (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Chase H.Q | **Boots** | Screened 2026-08-11: 5360 px, 4 colours. |
+| Chase H.Q. (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
+| Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Chuckie Egg | **Boots** | Screened 2026-08-11: 25143 px, 7 colours, animating. |
+| Circus Games (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Colossus 4 Bridge (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Colossus 4 Chess (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Comando Quatro (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
+| Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Commando | **Boots** | Screened 2026-08-11: 21972 px, 7 colours, animating. |
+| Continental Circus (+3 disk) | Known issue | Screened 2026-08-11: the image will not load. Copy-protection track layout, see below. |
 | Cookie | **Boots** | Screened 2026-08-11: 3534 px, 3 colours. |
+| Coursemaster v3.88 (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Cybernoid | **Boots** | Screened 2026-08-11: 8395 px, 10 colours. |
 | Dan Dare | **Boots** | Screened 2026-08-11: 4559 px, 8 colours. |
 | Deathchase | **Boots** | Screened 2026-08-11: 30189 px, 10 colours, animating. |
@@ -316,6 +384,7 @@ The Way of the Tiger, Lemmings and Target: Renegade.
 | Trap Door | **Boots** | Screened 2026-08-11: 19619 px, 11 colours. |
 | Turrican | **Boots** | Screened 2026-08-11: 5739 px, 9 colours. |
 | Uridium | **Boots** | Screened 2026-08-11: 6323 px, 6 colours, animating. |
+| Where Time Stood Still (+3 disk) | **Boots** | Screened 2026-08-11: 5973 px, 7 colours. |
 | Wizball | **Boots** | Screened 2026-08-11: 10087 px, 5 colours. |
 | Zynaps | **Boots** | Screened 2026-08-11: 5092 px, 6 colours. |
 

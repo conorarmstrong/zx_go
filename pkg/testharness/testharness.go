@@ -409,6 +409,14 @@ func (h *Harness) InsertOpusDisk(drive int, path string) error {
 	return nil
 }
 
+// InsertPlus3Disk loads a .dsk into a +3 drive (0 = A, 1 = B).
+//
+// The +3 needs no typing to start a disk: with one in drive A the ROM's own
+// loader runs it from reset, so the caller should Reboot after inserting.
+func (h *Harness) InsertPlus3Disk(drive int, path string) error {
+	return h.peripherals.LoadPlus3Disk(drive, path)
+}
+
 // LoadDiscipleDisk loads a disk image into the specified DISCiPLE drive.
 func (h *Harness) LoadDiscipleDisk(drive int, path string) error {
 	return h.peripherals.LoadDiscipleDisk(drive, path)
