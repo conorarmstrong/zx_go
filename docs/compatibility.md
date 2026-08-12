@@ -164,7 +164,7 @@ The honest state, as verified by a contributor:
 | Nextoid | Works (caveat) | Bat/ball/HUD render and the game is drivable ('S' then SPACE). A load-time reset-to-Welcome (Copper byte-pairing) is fixed. |
 | NextBASIC Invaders | Known issue | Boots and sprites render, but the game throws an `Integer out of range` during play — a NextBASIC `DEFPROC` parameter/local-var storage divergence. Tracked in [janko-jj's reports](https://github.com/conorarmstrong/zx_go/issues). |
 | Baggers in Space (Stonechat Games) | Untested | Public `.nex` distribution; uses Layer 2 + sprites; foundation: `TestModelNextLayer2VisibleEndToEnd` Not screened: no copy to hand. |
-| Warhawk | Known issue | Verified 2026-08-11: via the harness's ROM-independent `LoadNEX` it loads, runs its entry stub at `$5C50`, and lands in the ROM main loop at `$1304` where it stays; the display window renders 0 drawn pixels. The README screenshot came from the full NextZXOS boot, so this may be a limitation of the ROM-independent loader rather than an emulator fault. Needs investigation either way. |
+| Warhawk | **Works** | Verified 2026-08-11 via the genuine NextZXOS NEXLOAD path (`TestNexloadOSGamesIfPresent`, cmd/zx_go): launches and renders, PC=0x9071. It calls NextZXOS at runtime, so it cannot be loaded by bank injection — the game's banks overwrite the ones the OS keeps its screen and workspace in. An earlier entry here recorded it as a Known issue purely because the automated screening used that unsuitable path. |
 
 If a Next game fails for you, **that is expected at this stage** —
 please file it (with what you see vs. real hardware / a stable
@@ -273,6 +273,16 @@ the screen does unprompted. Without that control it credited
 self-animation to the keys; Cybernoid's title menu animates its border,
 and the first version reported almost everything as responding.
 
+**A `.nex` is loaded by bank injection, which cannot host every
+title.** A game that calls NextZXOS at runtime has its banks
+overwrite the ones the OS keeps its screen and workspace in, so it
+dies through no fault of the emulator. A blank frame from that path
+is therefore recorded as *inconclusive*, never as a fault — Warhawk
+was wrongly listed as a Known issue on exactly that mistake while
+working perfectly through the real NEXLOAD path. Such titles need
+`TestNexloadOSGamesIfPresent` (cmd/zx_go), which drives the genuine
+`.nexload` dot command.
+
 **What these verdicts do and do not mean.** *Boots* means the guest's
 own code ran and drew its screen. *Boots (responds)* adds that the
 screen answered a keypress, so the title is waiting for input rather
@@ -287,8 +297,7 @@ build: the collection is uncontrolled, and some titles legitimately
 will not load.
 
 **Of 109 titles screened, 99 rendered content (84 of them
-answering a keypress), 1 rendered nothing (Warhawk, above) and 9
-would not load.** A separate check confirmed **0 of 100** were merely
+answering a keypress), 9 would not load, and 1 was inconclusive.** A separate check confirmed **0 of 100** were merely
 sitting at the 128 menu, which would have inflated every figure here.
 
 Screening tape, snapshot and +3 disk formats together is what surfaced

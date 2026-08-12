@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **135 title rows: 7 Works, 12 Works
-(caveat), 78 Boots (responds), 21 Boots, 1 Parses cleanly, 11 Known issue, 5
+`docs/compatibility.md` now holds **135 title rows: 8 Works, 12 Works
+(caveat), 78 Boots (responds), 21 Boots, 1 Parses cleanly, 10 Known issue, 5
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -68,8 +68,12 @@ remaining gap.
   code claims 8192 bytes against ~6250 — which is a protection scheme rather
   than a real geometry. The loader now reports this explicitly instead of
   failing opaquely, but does not model it (`pkg/plus3fdc/disk.go`).
-- [ ] **Investigate Warhawk** (see Known issue): it loads, runs its entry stub,
-  and lands back in the ROM main loop rendering nothing.
+- [x] ~~Investigate Warhawk~~ — not a fault. It calls NextZXOS at runtime, so
+  bank injection cannot host it; through the genuine NEXLOAD path it launches
+  and renders (`TestNexloadOSGamesIfPresent`, cmd/zx_go). The screening
+  harness had recorded a working title as broken, which is now impossible:
+  a blank frame from bank injection classifies as *inconclusive*, never a
+  fault.
 
 **Items 4 and 7 are blocked on the NEXT half of this one, specifically.** Both
 concern Next-only hardware, so classic titles cannot exercise them however many

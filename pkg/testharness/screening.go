@@ -32,6 +32,12 @@ type Screening struct {
 	// still screen: a title already animating changes on its own, so a change
 	// after a keypress would prove nothing.
 	Responded bool
+	// BankInjected records that the program was loaded by copying banks and
+	// jumping, rather than through the machine's own loader. That path cannot
+	// host a .nex which calls NextZXOS at runtime — the game's banks overwrite
+	// the ones the OS keeps its screen and workspace in — so a blank frame
+	// says nothing about the title.
+	BankInjected bool
 }
 
 // Verdict is the classification of a screening.
@@ -51,6 +57,9 @@ const (
 	VerdictLive
 	// VerdictError means the guest reported a BASIC error.
 	VerdictError
+	// VerdictInconclusive means the load path cannot host this program, so
+	// nothing can be concluded from what it drew. Never a fault.
+	VerdictInconclusive
 )
 
 func (v Verdict) String() string {
@@ -65,6 +74,8 @@ func (v Verdict) String() string {
 		return "Live"
 	case VerdictError:
 		return "Error"
+	case VerdictInconclusive:
+		return "Inconclusive"
 	}
 	return "Unknown"
 }
@@ -96,6 +107,13 @@ func Classify(s Screening) Verdict {
 		return VerdictError
 	}
 	if s.Pixels < MinContentPixels || s.Colours < MinContentColours {
+		// Bank injection cannot host an OS-dependent .nex, so a blank frame
+		// from it is not evidence the title is broken. Warhawk was recorded as
+		// a Known issue on exactly that mistake while working perfectly
+		// through the real NEXLOAD path.
+		if s.BankInjected {
+			return VerdictInconclusive
+		}
 		return VerdictBlank
 	}
 	if s.Moved {
@@ -207,6 +225,7 @@ func measureFrame(pix []byte) (pixels, colours int) {
 // different answers, and conflating them is how an untested title gets
 // recorded as broken.
 func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
+	var bankInjected bool
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
 	case ".sna", ".z80", ".szx":
 		if err := h.LoadSnapshot(path); err != nil {
@@ -216,6 +235,7 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 		if err := h.LoadNEX(path); err != nil {
 			return Screening{}, err
 		}
+		bankInjected = true
 	case ".tap", ".tzx":
 		h.RunFrames(200) // reach the BASIC prompt
 		load := h.LoadTAP
@@ -237,6 +257,7 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	}
 	h.RunFrames(frames)
 	s := h.ScreenTitle(96)
+	s.BankInjected = bankInjected
 	// Probing is only informative on a still screen; see ProbeInput.
 	if !s.Moved && s.Error == "" {
 		s.Responded = h.ProbeInput()

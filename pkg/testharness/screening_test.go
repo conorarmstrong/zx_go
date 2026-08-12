@@ -374,3 +374,37 @@ func TestProbeInputIgnoresSelfAnimation(t *testing.T) {
 		t.Error("a self-animating screen registered as responding to input")
 	}
 }
+
+// TestNexBlankIsInconclusiveNotBroken pins the mislabel that produced a wrong
+// manifest entry for Warhawk.
+//
+// ScreenFile loads a .nex by bank injection, and that path provably cannot
+// host a game which calls NextZXOS at runtime: the game's banks 5/2/0
+// overwrite the ones the OS keeps its screen and workspace in, so the OS
+// handler runs against corrupt state and dies. Warhawk is such a game, works
+// through the real NEXLOAD path (cmd/zx_go TestNexloadOSGamesIfPresent), and
+// was still recorded as a Known issue because screening saw a blank frame.
+//
+// A blank .nex under bank injection is therefore not evidence the title is
+// broken. It must classify as inconclusive so it can never be written down as
+// a fault.
+func TestNexBlankIsInconclusiveNotBroken(t *testing.T) {
+	blank := Screening{Pixels: 0, Colours: 1, BankInjected: true}
+	if got := Classify(blank); got != VerdictInconclusive {
+		t.Errorf("a blank bank-injected .nex classified as %v, want VerdictInconclusive", got)
+	}
+	// A blank loaded any other way really is blank.
+	if got := Classify(Screening{Pixels: 0, Colours: 1}); got != VerdictBlank {
+		t.Errorf("a blank tape/disk classified as %v, want VerdictBlank", got)
+	}
+	// Bank injection that DID draw is judged normally.
+	if got := Classify(Screening{Pixels: 20000, Colours: 8, BankInjected: true}); got != VerdictStatic {
+		t.Errorf("a drawing bank-injected .nex classified as %v, want VerdictStatic", got)
+	}
+}
+
+func TestVerdictInconclusiveName(t *testing.T) {
+	if got := VerdictInconclusive.String(); got != "Inconclusive" {
+		t.Errorf("VerdictInconclusive.String() = %q, want %q", got, "Inconclusive")
+	}
+}

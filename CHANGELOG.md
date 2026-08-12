@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.6]
+
+### Fixed
+
+- **Screening could record a working title as broken, and did.** A `.nex` is
+  loaded by bank injection — banks copied in, then a jump — and that path
+  provably cannot host a game which calls NextZXOS at runtime: the game's
+  banks 5/2/0 overwrite the ones the OS keeps its screen and workspace in, so
+  the OS handler runs against corrupt state and dies. Warhawk is such a game.
+  It works through the genuine NEXLOAD path and is covered by
+  `TestNexloadOSGamesIfPresent`, but automated screening saw a blank frame and
+  it was written into the manifest as a Known issue.
+
+  A blank frame from bank injection now classifies as **Inconclusive** rather
+  than Blank, so this class of title can never be recorded as a fault again.
+  The manifest entry is corrected to Works, with the evidence.
+
+  This was the exact failure mode called out as the worst one a compatibility
+  harness can have, committed anyway a release after saying so.
+
 ## [v1.8.5]
 
 ### Added
