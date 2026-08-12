@@ -107,3 +107,34 @@ func TestComposeWalkRunsAgainOnANewFrame(t *testing.T) {
 		t.Error("the Copper was not stepped on the next frame; the guard is freezing the render")
 	}
 }
+
+// TestLastFrameReturnsTheFrameRenderReturned pins a bug introduced with
+// LastFrame itself.
+//
+// Render has several exits: the 320-pixel base image, the 640-pixel frame the
+// 80-column tilemap path builds, and the hi-res Layer 2 frame. LastFrame
+// originally handed back u.img unconditionally, so in those modes it returned
+// the base the frame was BUILT from rather than the frame itself — the
+// NextZXOS Guide, which renders 80-column, came out as vertical stripes
+// instead of its text.
+func TestLastFrameReturnsTheFrameRenderReturned(t *testing.T) {
+	u, _ := newFloatingBusULA(t)
+	u.SetNextCompositor(wide80Compositor{})
+
+	rendered := u.Render()
+	last := u.LastFrame()
+	if rendered != last {
+		t.Fatalf("LastFrame returned a different image from Render (%dx%d vs %dx%d)",
+			last.Bounds().Dx(), last.Bounds().Dy(),
+			rendered.Bounds().Dx(), rendered.Bounds().Dy())
+	}
+	if got := last.Bounds().Dx(); got != 2*TotalWidth {
+		t.Errorf("80-column frame is %d pixels wide, want %d", got, 2*TotalWidth)
+	}
+}
+
+// wide80Compositor is a stub compositor that reports 80-column tilemap mode,
+// which is what routes Render through the 640-pixel path.
+type wide80Compositor struct{ stubCompositor }
+
+func (wide80Compositor) TilemapIs80Col() bool { return true }

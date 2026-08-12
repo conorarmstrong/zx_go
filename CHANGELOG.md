@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.14]
+
+### Fixed
+
+- **`LastFrame` returned the wrong buffer in 80-column and hi-res modes**, a
+  bug introduced with `LastFrame` itself in v1.8.10. `Render` has several
+  exits — the 320-pixel base, the 640-pixel frame the 80-column tilemap path
+  builds, and the 320x256 hi-res Layer 2 frame — and `LastFrame` handed back
+  the base unconditionally. The NextZXOS Guide, which renders 80-column, came
+  out as vertical stripes instead of its text.
+
+  It now returns exactly what `Render` returned. Two corpus goldens
+  regenerated in v1.8.10 had captured the wrong buffer (320x240 instead of
+  320x256); regenerating them now reproduces the v1.8.9 files **byte for
+  byte**, which is the proof the behaviour is restored rather than merely
+  changed.
+
+### Added
+
+- **NextReg $68 bit 2, the ULA half-pixel horizontal scroll**, is now
+  rendered. `zxula.vhd:353` builds the shift as `px(2 downto 0) & px(8)` — a
+  4-bit count in HALF pixels — so the low bit moves the picture by half of one
+  ULA pixel. The 320-pixel path cannot represent that, but the 640-pixel
+  80-column path gives each ULA pixel two units, and half a pixel is exactly
+  one of them. Applied there; the narrow path still rounds it away, and the
+  bit reads back either way.
+
+### Changed
+
+- **Local-title screening is opt-in** (`ZX_GO_SCREEN=1`). Booting a machine per
+  title for thousands of frames each runs well past Go's default 10-minute
+  package timeout, so left on by default it turned `go test ./...` into a
+  timeout failure for anyone with a title list. It is a measurement tool, and
+  is now run deliberately.
+
+- **+3 disk screening now runs 5000 frames.** Protected titles load in stages:
+  one measured here drew nothing at all until about frame 5000, so the earlier
+  1500-frame budget was recording a mid-load blank as a failure.
+
 ## [v1.8.13]
 
 ### Fixed

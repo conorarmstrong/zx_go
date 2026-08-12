@@ -303,10 +303,11 @@ Still screens are then probed: keys are sent and the display watched for
 a material change, against a **no-key control** so a screen that animates
 on its own is not credited to the keypress.
 
-**A +3 disk is started explicitly.** The machine powers on into its ROM
-menu and stays there until ENTER selects "Loader". An earlier run did not
-send that key, so 61 disk entries recorded the ROM's own menu rather than
-the game; all were wrong and have been re-measured.
+**A +3 disk is started explicitly** — the machine sits in its ROM menu
+until ENTER selects "Loader" — and is given 5000 frames, because
+protected titles load in stages and one measured here drew nothing until
+frame ~5000. An earlier run did neither, so 61 disk entries recorded the
+ROM's own menu rather than the game.
 
 **What these verdicts mean.** *Boots* — the guest's own code ran and drew
 its screen. *Boots (responds)* — it also answered a keypress, so it is
@@ -317,11 +318,13 @@ The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
 build.
 
-**Of 113 titles screened, 100 rendered content (27 animating,
-58 answering a keypress) and 13 did not.**
+**Of 113 titles screened, 100 rendered content (25 animating,
+60 answering a keypress) and 13 did not.**
 Every disk image now loads: of a 250-image sample only one still fails to
 parse, and that one is a truncated dump whose track data runs past the end
-of the file.
+of the file. The titles that load but stay blank are copy-protected: they
+read their protection track, and our sequential layout cannot reproduce
+the overlapping sectors the check looks for.
 
 Verdicts confirmed by eye: Elite, Renegade, Pssst, R-Type, Last Ninja 2,
 Where Time Stood Still, RoboCop, The Way of the Tiger, Lemmings,
@@ -330,20 +333,20 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Title | Status | Notes |
 |---|---|---|
 | 007 - Licence To Kill (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2581 px, 6 colours, answered a keypress. |
-| 3D Construction Kit (+3 disk) | **Boots** | Screened 2026-08-12: 1708 px, 2 colours. |
+| 3D Construction Kit (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1750 px, 2 colours, answered a keypress. |
 | 3D Game Maker (+3 disk) | **Boots** | Screened 2026-08-12: 1126 px, 3 colours, animating. |
 | 3D Grand Prix Championship (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (313 px, 2 colours). |
 | ACE 2 - The Ultimate Head to Head Conflict (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1924 px, 3 colours, answered a keypress. |
 | Action Fighter (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1986 px, 5 colours, answered a keypress. |
 | Action Force (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 3261 px, 2 colours, answered a keypress. |
-| Action Force 2 (+3 disk) | **Boots** | Screened 2026-08-12: 1686 px, 3 colours, animating. |
+| Action Force 2 (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (459 px, 3 colours). |
 | Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (181 px, 2 colours). |
 | Afterburner (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Alien 8 | **Boots (responds)** | Screened 2026-08-12: 16388 px, 6 colours, answered a keypress. |
-| Alien Storm (+3 disk) | **Boots** | Screened 2026-08-12: 3034 px, 6 colours, animating. |
+| Alien Storm (+3 disk) | **Boots** | Screened 2026-08-12: 16075 px, 4 colours, animating. |
 | Alien Syndrome (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (498 px, 2 colours). |
-| APB - All Points Bulletin (+3 disk) | **Boots** | Screened 2026-08-12: 32931 px, 9 colours, animating. |
+| APB - All Points Bulletin (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 32931 px, 9 colours, answered a keypress. |
 | Arkanoid 2 - Revenge of Doh (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2521 px, 2 colours, answered a keypress. |
 | Artura (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2616 px, 7 colours, answered a keypress. |
 | Aspar GP Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 21119 px, 14 colours, answered a keypress. |
@@ -351,16 +354,16 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Auf Wiedersehen Monty | **Boots (responds)** | Screened 2026-08-12: 10204 px, 7 colours, answered a keypress. |
 | Autocrash (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1157 px, 2 colours, answered a keypress. |
 | Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
-| Back to the Future Part III (+3 disk) | **Boots** | Screened 2026-08-12: 13747 px, 8 colours, animating. |
+| Back to the Future Part III (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 8541 px, 5 colours, answered a keypress. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
 | Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
-| Bestial Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 7515 px, 8 colours, animating. |
+| Bestial Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 7326 px, 8 colours, animating. |
 | Beverly Hills Cop (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 29113 px, 10 colours, answered a keypress. |
 | Beyond the Ice Palace (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
-| Black Lamp (+3 disk) | **Boots** | Screened 2026-08-12: 21035 px, 7 colours, animating. |
+| Black Lamp (+3 disk) | **Boots** | Screened 2026-08-12: 22791 px, 7 colours, animating. |
 | Blasteroids (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1425 px, 2 colours, answered a keypress. |
 | Bloodwych (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1343 px, 4 colours, answered a keypress. |
 | Bomb Jack | **Boots** | Screened 2026-08-12: 14798 px, 7 colours, animating. |
@@ -368,34 +371,34 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Brian Clough's Football Fortunes (+3 disk) | **Boots** | Screened 2026-08-12: 8171 px, 6 colours. |
 | Bubble Bobble | **Boots** | Screened 2026-08-12: 12020 px, 4 colours, animating. |
 | Bubble Bobble (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 12158 px, 8 colours, answered a keypress. |
-| Bubble Buster (+3 disk) | **Boots** | Screened 2026-08-12: 9333 px, 5 colours, animating. |
-| Buffalo Bill's Wild West Show (+3 disk) | **Boots** | Screened 2026-08-12: 13688 px, 9 colours, animating. |
+| Bubble Buster (+3 disk) | **Boots** | Screened 2026-08-12: 12020 px, 4 colours, animating. |
+| Buffalo Bill's Wild West Show (+3 disk) | **Boots** | Screened 2026-08-12: 13645 px, 9 colours, animating. |
 | Buggy Boy (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
-| Buggy Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 16904 px, 11 colours, animating. |
+| Buggy Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 16675 px, 11 colours, animating. |
 | Butcher Hill (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
-| By Fair Means...or Foul (+3 disk) | **Boots** | Screened 2026-08-12: 27647 px, 8 colours, animating. |
-| Cabal (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 31939 px, 15 colours, answered a keypress. |
+| By Fair Means...or Foul (+3 disk) | **Boots** | Screened 2026-08-12: 27656 px, 8 colours, animating. |
+| Cabal (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 31697 px, 15 colours, answered a keypress. |
 | California Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
-| Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15102 px, 14 colours, animating. |
+| Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15291 px, 14 colours, animating. |
 | Capitan Sevilla (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (845 px, 2 colours). |
 | Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
 | Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
-| Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16266 px, 9 colours, answered a keypress. |
+| Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16265 px, 9 colours, answered a keypress. |
 | Chain Reaction (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 19893 px, 5 colours, answered a keypress. |
-| Championship Run (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17784 px, 4 colours, answered a keypress. |
+| Championship Run (+3 disk) | **Boots** | Screened 2026-08-12: 17784 px, 4 colours, animating. |
 | Chase H.Q | **Boots (responds)** | Screened 2026-08-12: 5360 px, 4 colours, answered a keypress. |
-| Chase H.Q. (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 11930 px, 12 colours, answered a keypress. |
+| Chase H.Q. (+3 disk) | **Boots** | Screened 2026-08-12: 31933 px, 14 colours, animating. |
 | Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 12464 px, 12 colours, animating. |
 | Chuckie Egg | **Boots** | Screened 2026-08-12: 25143 px, 7 colours, animating. |
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
 | Colossus 4 Bridge (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6327 px, 4 colours, answered a keypress. |
-| Colossus 4 Chess (+3 disk) | **Boots** | Screened 2026-08-12: 6066 px, 2 colours, animating. |
+| Colossus 4 Chess (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 7409 px, 2 colours, answered a keypress. |
 | Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
-| Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 2877 px, 2 colours, animating. |
+| Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 3840 px, 2 colours, animating. |
 | Commando | **Boots** | Screened 2026-08-12: 21972 px, 7 colours, animating. |
-| Continental Circus (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Continental Circus (+3 disk) | **Boots** | Screened 2026-08-12: 33792 px, 4 colours. |
 | Cookie | **Boots (responds)** | Screened 2026-08-12: 3534 px, 3 colours, answered a keypress. |
 | Coursemaster v3.88 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5472 px, 3 colours, answered a keypress. |
 | Cybernoid | **Boots (responds)** | Screened 2026-08-12: 8395 px, 10 colours, answered a keypress. |

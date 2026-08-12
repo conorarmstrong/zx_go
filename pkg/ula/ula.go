@@ -156,7 +156,10 @@ type ULA struct {
 
 	// hasRendered records whether a frame has ever been composed, so
 	// LastFrame can compose one lazily instead of returning a blank image.
-	hasRendered            bool
+	hasRendered bool
+	// lastImg is the frame Render most recently returned, which is not always
+	// u.img: the 80-column and hi-res paths return their own wider buffers.
+	lastImg                *image.RGBA
 	frameStartSpeakerState bool
 
 	// dc models the capacitor-coupled audio output: it high-pass-filters the
@@ -735,17 +738,27 @@ func (u *ULA) ulaDisabledFill() color.RGBA {
 // the screen before the machine has run still gives a picture rather than a
 // blank one.
 func (u *ULA) LastFrame() *image.RGBA {
-	if !u.hasRendered {
+	if !u.hasRendered || u.lastImg == nil {
 		return u.Render()
 	}
-	return u.img
+	return u.lastImg
 }
 
 // Render composes the next frame and returns it.
 //
 // Call it ONCE per emulated frame. It is not idempotent: see LastFrame.
 func (u *ULA) Render() *image.RGBA {
+	img := u.render()
+	// Remember exactly what was returned. Render has several exits — the
+	// 320-pixel base, the 640-pixel 80-column frame, the hi-res Layer 2 frame
+	// — and LastFrame must hand back the one the machine is actually showing,
+	// not the base it was built from.
+	u.lastImg = img
 	u.hasRendered = true
+	return img
+}
+
+func (u *ULA) render() *image.RGBA {
 	// The tape EAR level is advanced per port-$FE read (tapeLevel), not here —
 	// a once-per-frame Update would freeze the level for the whole frame and
 	// starve edge-timed loaders.
@@ -974,14 +987,34 @@ func (u *ULA) renderWide() *image.RGBA {
 	}
 	wide := u.wideImg
 	rowWide := u.wideRow
+	// NextReg $68 bit 2, the ULA half-pixel horizontal scroll. zxula.vhd:353
+	// builds the shift as `px(2 downto 0) & px(8)`, a 4-bit count in HALF
+	// pixels, so the low bit moves the picture by half of one ULA pixel.
+	//
+	// At the 320-pixel width that is not representable and the bit can only be
+	// stored. Here it is: each ULA pixel occupies two units, so half a pixel is
+	// exactly one of them. The whole-pixel part of the scroll is already
+	// applied during the fetch (see ulascroll.go); this is only the remainder.
+	fine := 0
+	if u.ulaFineScrollX {
+		fine = 1
+	}
 	for y := 0; y < TotalHeight; y++ {
 		srcStart := y * u.img.Stride
 		for x := 0; x < TotalWidth; x++ {
 			s := srcStart + x*4
 			r, g, b, a := u.img.Pix[s+0], u.img.Pix[s+1], u.img.Pix[s+2], u.img.Pix[s+3]
-			d := x * 8
+			d := x*8 - fine*4
+			if d < 0 {
+				// The half-unit shifted off the left edge; its partner unit
+				// still lands, so only the very first sample is dropped.
+				rowWide[0], rowWide[1], rowWide[2], rowWide[3] = r, g, b, a
+				continue
+			}
 			rowWide[d+0], rowWide[d+1], rowWide[d+2], rowWide[d+3] = r, g, b, a
-			rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
+			if d+7 < len(rowWide) {
+				rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
+			}
 		}
 		u.nextCompositor.ComposeWideTilemapRow(y, rowWide)
 		dstStart := y * wide.Stride
@@ -1087,14 +1120,34 @@ func (u *ULA) renderHiResLayer2() *image.RGBA {
 	}
 	wide := u.wideImg
 	rowWide := u.wideRow
+	// NextReg $68 bit 2, the ULA half-pixel horizontal scroll. zxula.vhd:353
+	// builds the shift as `px(2 downto 0) & px(8)`, a 4-bit count in HALF
+	// pixels, so the low bit moves the picture by half of one ULA pixel.
+	//
+	// At the 320-pixel width that is not representable and the bit can only be
+	// stored. Here it is: each ULA pixel occupies two units, so half a pixel is
+	// exactly one of them. The whole-pixel part of the scroll is already
+	// applied during the fetch (see ulascroll.go); this is only the remainder.
+	fine := 0
+	if u.ulaFineScrollX {
+		fine = 1
+	}
 	for y := 0; y < TotalHeight; y++ {
 		srcStart := y * u.img.Stride
 		for x := 0; x < TotalWidth; x++ {
 			s := srcStart + x*4
 			r, g, b, a := u.img.Pix[s+0], u.img.Pix[s+1], u.img.Pix[s+2], u.img.Pix[s+3]
-			d := x * 8
+			d := x*8 - fine*4
+			if d < 0 {
+				// The half-unit shifted off the left edge; its partner unit
+				// still lands, so only the very first sample is dropped.
+				rowWide[0], rowWide[1], rowWide[2], rowWide[3] = r, g, b, a
+				continue
+			}
 			rowWide[d+0], rowWide[d+1], rowWide[d+2], rowWide[d+3] = r, g, b, a
-			rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
+			if d+7 < len(rowWide) {
+				rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
+			}
 		}
 		u.nextCompositor.ComposeWideLayer2Row(y, rowWide)
 		dstStart := y * wide.Stride

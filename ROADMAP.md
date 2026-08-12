@@ -56,6 +56,10 @@ remaining gap.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
+- [ ] **Overlapping-sector protection checks.** Twelve titles load and run but
+  stay blank: they read their protection track, and the sequential layout
+  cannot reproduce the overlapping sectors the check looks for. Reproducing
+  them needs angular sector positions the DSK format does not record.
 - [ ] **Verify what the keypress did.** A response proves a title is waiting
   rather than hung; it does not prove the title is playable. Closing that gap
   means per-title expectations — what screen should follow which key — which
@@ -91,17 +95,7 @@ That is what items 4 and 7 were waiting on, and the answer it gives is
 interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
 now blocked; both are simply unmotivated.
 
-### 2. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
-
-Decoded, stored and read back, but not rendered
-(`pkg/ula/ulascroll.go:53`). `zxula.vhd:353` builds the shift as
-`px(2 downto 0) & px(8)`, a 4-bit count in **half** pixels, so displaying
-it needs the ULA layer rendered at twice the horizontal resolution; every
-other path there is whole-pixel.
-
-Bounded, but not small: it needs a 2x-wide ULA render path.
-
-### 3. [correctness] zxnDMA interrupt / match logic and bus arbitration
+### 2. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
 **Unblocked, and unmotivated.** The transfer engine, prescaler and cycle
 timing are complete and spec-checked. Not modelled: the interrupt/match logic
@@ -111,7 +105,7 @@ The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering �
 and none of them needs this. That is the evidence the item was waiting for, and
 it argues for leaving it alone until a title actually demands it.
 
-### 4. [product] GUI stability session
+### 3. [product] GUI stability session
 
 Still open and still **user-driven**: an agent cannot drive the windowed
 app. The headless proxy passed long ago (50 000 frames, no leak, steady
@@ -119,7 +113,7 @@ frame rate, final frame still pixel-perfect), so what remains is
 interactive use — menus, model switching, load/save, resize — over a
 sustained session.
 
-### 5. [product] Windows ARM64 has never been run
+### 4. [product] Windows ARM64 has never been run
 
 Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
 toolchain problem is solved. Nobody has launched the binary. Compiling
@@ -127,7 +121,7 @@ does not prove the OpenGL path works on Windows-on-ARM, which is why the
 release matrix still marks it `experimental` and `README.md` carries the
 caveat. One run on real hardware settles it.
 
-### 6. [research] Copper cycle accuracy
+### 5. [research] Copper cycle accuracy
 
 **Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
 segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,

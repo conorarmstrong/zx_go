@@ -51,13 +51,15 @@ func (u *ULA) SetULAScrollX(v byte) { u.ulaScrollX = v }
 func (u *ULA) SetULAScrollY(v byte) { u.ulaScrollY = v }
 
 // SetULAFineScrollX installs NextReg 0x68 bit 2, the half-pixel horizontal
-// refinement.
+// refinement. zxula.vhd:353 builds the shift as `px(2 downto 0) & px(8)`, a
+// 4-bit count in HALF pixels, so this bit moves the picture by half of one ULA
+// pixel.
 //
-// Stored but not rendered: zxula.vhd:353 builds the shift as
-// `px(2 downto 0) & px(8)`, a 4-bit count in HALF pixels, so showing it needs
-// the ULA layer rendered at twice the horizontal resolution. Everything else
-// here works at whole-pixel granularity, so the flag is carried for read-back
-// and for whenever a 2x path exists.
+// It is applied in the 640-pixel path (renderWide), where each ULA pixel spans
+// two units and half a pixel is exactly one of them — the path the NextZXOS
+// Guide and any 80-column program render through. The 320-pixel path cannot
+// represent a half pixel and rounds it away; the bit is still stored and reads
+// back either way.
 func (u *ULA) SetULAFineScrollX(on bool) { u.ulaFineScrollX = on }
 
 // ULAScroll returns the active NR$26 / NR$27 scroll values.

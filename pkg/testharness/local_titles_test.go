@@ -33,6 +33,16 @@ type localTitle struct {
 
 func loadLocalTitles(t *testing.T) []localTitle {
 	t.Helper()
+	// Opt-in. Screening the full list boots a machine per title and runs
+	// thousands of frames each, which takes well over Go's default 10-minute
+	// package timeout — so left on by default it would turn `go test ./...`
+	// into a timeout failure for anyone who has a title list. It is a
+	// measurement tool, run deliberately:
+	//
+	//	ZX_GO_SCREEN=1 go test ./pkg/testharness -run TestScreenLocalTitles -v -timeout 2h
+	if os.Getenv("ZX_GO_SCREEN") == "" {
+		t.Skip("set ZX_GO_SCREEN=1 to screen local titles (slow; see the compatibility manifest)")
+	}
 	f, err := os.Open(filepath.Join("testdata", "local_titles.tsv"))
 	if err != nil {
 		t.Skip("no testdata/local_titles.tsv — screening of local commercial titles is opt-in")
