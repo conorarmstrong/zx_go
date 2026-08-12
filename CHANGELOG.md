@@ -4,6 +4,58 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.17]
+
+### Fixed
+
+Five +3 disk titles that rendered nothing now load and run: **Captain
+Planet**, **Barbarian II**, **Chase HQ II**, **Back to the Future Part II**
+and **Adidas Championship Tie-Break**. Barbarian II and Captain Planet match
+a +3 reference emulator screen for screen.
+
+These had been recorded as blocked by copy protection the DSK format cannot
+represent. That was wrong, twice — the explanation was inferred from the
+images carrying unusual track layouts, never from evidence that the layout
+caused the failure. Running the same images on a reference settled it: they
+all load there, so the fault was ours. Three controller bugs, all found with
+the new `ZX_GO_FDC_TRACE`:
+
+- **EDSK ST1/ST2 CRC attribution** (`pkg/plus3fdc/disk.go`). `ST1.DE`
+  reports that a CRC error occurred; `ST2.DD` reports it was in the *data*
+  field. Every `DE` was being treated as an ID-field error, which corrupted
+  the ID of exactly the sectors protection flags this way. `READ DATA` then
+  answered "no data" for sectors `READ ID` was still returning — the
+  controller contradicting itself, which is what the command trace showed.
+- **Oversized sectors were refused** (`pkg/plus3fdc/upd765.go`,
+  `track.go`). A sector whose ID declares N=6 (a nominal 8192 bytes) cannot
+  fit a double-density track, and `findSector` rejected it. A real µPD765
+  cannot tell: it reads the ID, streams the bytes N asks for, and crosses
+  the index hole to get them. Track reads now wrap at the index hole, which
+  is what the head physically does.
+- **The ID compare ignored the size code** (`pkg/plus3fdc/upd765.go`). A
+  sector was matched on R alone, so a command asking for N=2 was satisfied
+  by a sector whose ID declares N=0. The µPD765 matches the whole ID. This
+  is load-bearing for protection: Action Force puts a 128-byte sector at
+  R=79 on track 0 and reads it asking for N=2, expecting the read to fail.
+  Fixing the two bugs above without this one broke Action Force, which is
+  how it was found.
+
+### Added
+
+- **`ZX_GO_FDC_TRACE=1`** logs every µPD765 command and result on the +3 /
+  +2A. A title that will not load is almost always asking for something the
+  controller answers wrongly, and the command stream says which one. All
+  three bugs above were found with it. Documented in `DEBUGGER.md`.
+
+### Changed
+
+- `docs/compatibility.md`, `ROADMAP.md`, `README.md` and `docs/manual.md` no
+  longer claim a copy-protection limitation, and the manual no longer says
+  such disks are refused with a message — they load. Known issue is now
+  Comando Quatro (still ours, still unexplained), 3D Grand Prix and Bonanza
+  Bros (a +3 reference fails both of those images the same way we do, so
+  neither is an emulator fault).
+
 ## [v1.8.16]
 
 ### Fixed

@@ -343,9 +343,17 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 		sectorData := trackData[pos : pos+dataBytes]
 
 		// EDSK ST1/ST2 bits propagate to CRC error markings.
-		idCRCError := st1&0x20 != 0 // ST1 bit 5: data CRC error in ID field
-		dataCRCErr := st2&0x20 != 0 // ST2 bit 5: data error in data field
-		deleted := st2&0x40 != 0    // ST2 bit 6: control mark (deleted DAM)
+		//
+		// ST1.DE reports only that a CRC error occurred; ST2.DD reports
+		// that it was in the DATA field. So DE with DD set describes an
+		// intact ID over a bad data field, and DE alone is an ID-field
+		// error. Reading every DE as an ID error corrupted the ID of
+		// exactly the sectors copy protection flags this way, so READ
+		// DATA could not find sectors READ ID was still returning, and
+		// five +3 titles never got past a black screen.
+		dataCRCErr := st2&0x20 != 0                // ST2 bit 5: data error in data field
+		idCRCError := st1&0x20 != 0 && !dataCRCErr // ST1 bit 5, only when not attributed to the data field
+		deleted := st2&0x40 != 0                   // ST2 bit 6: control mark (deleted DAM)
 
 		if !b.idAdd(c, h, r, n, idCRCError) {
 			return nil, fmt.Errorf("track too small to write sector %d ID", j)

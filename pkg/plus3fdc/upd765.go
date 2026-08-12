@@ -2,8 +2,15 @@ package plus3fdc
 
 import (
 	"fmt"
+	"os"
 	"sync"
 )
+
+// fdcTrace logs every command the CPU issues and the result it gets back,
+// enabled with ZX_GO_FDC_TRACE=1. A title that will not load is almost always
+// asking for something the controller answers wrongly, and the command stream
+// says which one; guessing from a black screen does not.
+var fdcTrace = os.Getenv("ZX_GO_FDC_TRACE") != ""
 
 // UPD765 is a NEC µPD765A floppy disk controller emulation covering the
 // command set Spectrum +3 / +2A +3DOS and CP/M software use to read and
@@ -503,6 +510,9 @@ func lookupCommand(b byte) *commandSpec {
 //   - prepares the execution phase (READ DATA)
 //   - returns to idle (SPECIFY, SEEK, RECALIBRATE)
 func (f *UPD765) execute() {
+	if fdcTrace {
+		fmt.Fprintf(os.Stderr, "FDC CMD id=%d bytes=% 02X\n", f.cmd.id, f.cmdBuf[:f.cmdLen])
+	}
 	switch f.cmd.id {
 	case cmdSpecify:
 		f.completeNoResult()
@@ -545,6 +555,9 @@ func (f *UPD765) completeNoResult() {
 
 // beginResult enters the result phase with the supplied bytes.
 func (f *UPD765) beginResult(bytes []byte) {
+	if fdcTrace {
+		fmt.Fprintf(os.Stderr, "FDC RES % 02X\n", bytes)
+	}
 	n := copy(f.resultBuf[:], bytes)
 	f.resultLen = n
 	f.resultIdx = 0
@@ -611,6 +624,17 @@ func (f *UPD765) execSenseDrive() {
 	if f.currentTwoSide() {
 		st3 |= st3TS
 	}
+	// ST3.RY is the FDC's RDY input, and the +3 feeds it from one drive —
+	// drive B is an optional external unit most machines never had. So
+	// ready is a property of the machine, not of the logical unit the
+	// command addressed. Checked against a +3 reference: with a disk in A,
+	// SENSE DRIVE on the empty B answers ready (ST3=0x31); with no disk
+	// anywhere it does not (ST3=0x19). Keying RY on the addressed unit
+	// answered 0x01 for the first case, and Comando Quatro's loader, which
+	// senses drive B before loading anything, gave up on it.
+	//
+	// TRACK 0 comes from the head position, which exists whether or not a
+	// disk is in the drive, so it is not gated on ready either.
 	if f.driveReady(int(f.us)) {
 		st3 |= st3RY
 		if f.pcn[f.us&3] == 0 {
@@ -807,7 +831,7 @@ type sectorLocation struct {
 // for sector R" logic that READ DATA, WRITE DATA, and SCAN all need.
 // Returns (_, st1, false) when the sector can't be found; st1 is the
 // ST1 bits the caller should set in the error result phase.
-func (f *UPD765) findSector(track *Track, wantC, wantR byte, startPos int, wantDeleted, sk bool) (loc sectorLocation, st1 byte, ok bool) {
+func (f *UPD765) findSector(track *Track, wantC, wantR, wantN byte, startPos int, wantDeleted, sk bool) (loc sectorLocation, st1 byte, ok bool) {
 	pos := startPos
 	wrapped := false
 	for {
@@ -824,7 +848,7 @@ func (f *UPD765) findSector(track *Track, wantC, wantR byte, startPos int, wantD
 		if wrapped && idamPos >= startPos {
 			return sectorLocation{}, st1ND, false
 		}
-		if !idCRCOK || r != wantR {
+		if !idCRCOK || r != wantR || n != wantN {
 			pos = idEnd
 			continue
 		}
@@ -832,10 +856,15 @@ func (f *UPD765) findSector(track *Track, wantC, wantR byte, startPos int, wantD
 		if !dok {
 			return sectorLocation{}, st1MA, false
 		}
+		// The declared size is taken at face value even when it exceeds
+		// what fits in a revolution. Copy-protected sectors depend on
+		// that: an N=6 ID over a 6144-byte data field cannot fit a
+		// double-density track, and a real µPD765 cannot tell — it reads
+		// the ID, streams the bytes N asks for, and crosses the index
+		// hole to get them. Refusing here reported "no data" for sectors
+		// READ ID had just found, and left five +3 titles on a black
+		// screen.
 		length := sectorLength(n)
-		if dataStart+length > track.bpt {
-			return sectorLocation{}, st1ND, false
-		}
 		// SK=1 + wrong DAM type → keep walking. The wrap detection
 		// above guarantees we make at most one revolution before
 		// giving up.
@@ -865,7 +894,7 @@ func (f *UPD765) startSectorRead() bool {
 		f.readDataError(st1MA | st1ND)
 		return false
 	}
-	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], f.readWantDeleted, f.readSK)
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.cmdBuf[rdParamN], f.headPos[f.us&3], f.readWantDeleted, f.readSK)
 	if !ok {
 		f.readDataError(st1)
 		return false
@@ -1100,7 +1129,7 @@ func (f *UPD765) execWriteData(deleted bool) {
 		f.readDataError(st1MA | st1ND)
 		return
 	}
-	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], false, false)
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.cmdBuf[rdParamN], f.headPos[f.us&3], false, false)
 	if !ok {
 		f.readDataError(st1)
 		return
@@ -1306,7 +1335,7 @@ func (f *UPD765) execScanData() {
 		f.readDataError(st1MA | st1ND)
 		return
 	}
-	loc, st1, ok := f.findSector(track, wantC, wantR, f.headPos[f.us&3], false, false)
+	loc, st1, ok := f.findSector(track, wantC, wantR, f.cmdBuf[rdParamN], f.headPos[f.us&3], false, false)
 	if !ok {
 		f.readDataError(st1)
 		return

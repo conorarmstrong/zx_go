@@ -36,6 +36,7 @@ Both share the same CPU underneath, so anything you observe in one is observable
   - [Symbol-map annotation](#symbol-map-annotation)
   - [Worked examples](#worked-examples)
 - [Memory watchpoints in headless mode](#memory-watchpoints-in-headless-mode)
+- [FDC command tracing](#fdc-command-tracing)
 - [Common workflows](#common-workflows)
 
 ---
@@ -1116,6 +1117,33 @@ ZX_GO_USE_FPGA_BOOTROM=1 ./bin/zx_go --next \
 On break-fire: stdout has the full state dump; `/tmp/trace.jsonl` has every NextReg / port event from boot to break with PCs and values. From there it's a quick diff against a known-working trace to find the divergence.
 
 ---
+
+## FDC command tracing
+
+Set `ZX_GO_FDC_TRACE=1` to log every µPD765 command the guest issues on the
++3 / +2A and the result bytes it gets back:
+
+```
+ZX_GO_FDC_TRACE=1 ./bin/zx_go --plus3 --disk-a game.dsk
+```
+
+```
+FDC CMD id=4 bytes=4A 00                       READ ID
+FDC RES 00 00 00 01 00 C1 06                   ST0/ST1/ST2 + C H R N
+FDC CMD id=2 bytes=4C 00 01 00 C1 06 C1 2A FF  READ DELETED DATA
+FDC RES 40 04 00 01 00 C1 06                   ST0 abnormal, ST1 = ND
+```
+
+A disk title that will not load is almost always asking for something the
+controller answers wrongly, and the command stream says which one. The
+example above is a real fault: `READ ID` returns sector `C1` while
+`READ DATA` reports "no data" for that same sector, which is the controller
+contradicting itself. Three +3 loader bugs were found this way in v1.8.17.
+
+Read the status bytes against the µPD765 registers: ST0 bits 7..6 are the
+interrupt code (`40` = abnormal termination), ST1 bit 2 is *no data*, bit 5
+*CRC error*, bit 7 *end of cylinder*, and ST2 bit 5 is a data-field CRC
+error with bit 6 a deleted address mark.
 
 ## Common workflows
 

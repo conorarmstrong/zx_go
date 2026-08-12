@@ -324,6 +324,13 @@ protected titles load in stages and one measured here drew nothing until
 frame ~5000. An earlier run did neither, so 61 disk entries recorded the
 ROM's own menu rather than the game.
 
+**Known weakness: the +3 menu still measures as content.** It is drawn in
+the middle of the display, so it clears both the pixel and the canvas
+floors — 5973 px in 7 colours. ENTER is sent to get past it, but a disk
+that fails to boot and leaves the ROM sitting there is scored **Boots
+(responds)** on the ROM's own screen. Bonanza Bros was recorded that way.
+Treat exactly 5973 px / 7 colours on a `.dsk` as "never left the menu".
+
 **What these verdicts mean.** *Boots* — the guest's own code ran and drew
 its screen. *Boots (responds)* — it also answered a keypress, so it is
 waiting for input rather than hung. Neither means playable: what the
@@ -339,23 +346,37 @@ Every disk image now loads: of a 250-image sample only one still fails to
 parse, and that one is a truncated dump whose track data runs past the end
 of the file.
 
-The nine that stay blank are not one problem, and an earlier revision of
-this document was wrong to present them as one. They are:
+**None of these was ever a copy-protection limitation.** Two earlier
+revisions of this document said so — first of twelve titles, then of five —
+and both were wrong. The claim was inferred from the fact that the images
+carry unusual track layouts, never from evidence that the layout was why
+they failed. Running the same images on a +3 reference emulator settled it:
+every one of them loads there, so the fault was always ours.
 
-- **Five copy-protected disks** — Back to the Future II, Barbarian II,
-  Captain Planet, Chase HQ II, Comando Quatro. Each holds whole tracks
-  given over to a single 6144-byte sector, or non-standard ID bases. A
-  flat image cannot carry the angular sector positions the check reads.
-  This is the only group the protection explanation actually fits.
-- **Two disks that fail for their own reasons** — 3D Grand Prix ends at
-  the ROM's tape prompt, and Adidas Tie-Break drops back to BASIC. Both
-  images are ordinary CF2 layouts with no protection anywhere on them, so
-  whatever is wrong is ours. Neither cause is known yet.
-- **Two Next entries that hold no launchable program** — Pogie and THEH
+Three separate controller bugs were behind them, all fixed in v1.8.17:
+
+1. **EDSK ST1/ST2 CRC attribution.** `ST1.DE` reports that a CRC error
+   occurred; `ST2.DD` reports that it was in the *data* field. Reading
+   every `DE` as an ID-field error corrupted the ID of exactly the sectors
+   protection flags this way, so `READ DATA` could not find sectors
+   `READ ID` was still happily returning.
+2. **Oversized sectors were refused.** A sector whose ID declares N=6
+   (a nominal 8192 bytes) cannot fit a double-density track, and the
+   controller rejected it. Real hardware cannot tell: it reads the ID,
+   streams the bytes N asks for, and crosses the index hole to get them.
+3. **`ST3.RY` was per-drive.** The +3 feeds the FDC one READY line, so
+   sensing the empty drive B reports ready when a disk is in A.
+
+That leaves the blanks as:
+
+- **Comando Quatro** — still ours, cause not yet found. Detail in its row.
+- **3D Grand Prix** — the reference behaves identically, so the image is
+  asking for a tape. Not an emulator fault.
+- **Pogie and THEH** — Next entries holding no launchable program. They
   ship assets and a 48K-sized `.snx`, which cannot represent a Next game's
-  banked state. Nothing was ever launched, so nothing can be concluded.
+  banked state, so nothing was ever launched.
 
-Three titles previously listed here as broken were not: Alien Syndrome,
+Three further titles listed here as broken never were: Alien Syndrome,
 Capitan Sevilla and Action Force 2 all run. They were recorded as failures
 by a screening threshold that discarded sparse screens; see "Automated
 screening" for what was wrong with it.
@@ -369,12 +390,12 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | 007 - Licence To Kill (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2581 px, 6 colours, answered a keypress. |
 | 3D Construction Kit (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1750 px, 2 colours, answered a keypress. |
 | 3D Game Maker (+3 disk) | **Boots** | Screened 2026-08-12: 1126 px, 3 colours, animating. |
-| 3D Grand Prix Championship (+3 disk) | Known issue | Screened 2026-08-12: its loader ends at the +3 ROM tape prompt, "Press REC & PLAY, then any key." Not a protection failure -- the disk is a stock 9-sector CF2 layout with nothing unusual on any track. Cause not yet found. |
+| 3D Grand Prix Championship (+3 disk) | Known issue | Screened 2026-08-12: ends at the +3 ROM tape prompt, "Press REC & PLAY, then any key." **A +3 reference does exactly the same with this image**, so this is the dump asking for a tape, not an emulator fault. Kept listed so it is not re-investigated. |
 | ACE 2 - The Ultimate Head to Head Conflict (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1924 px, 3 colours, answered a keypress. |
 | Action Fighter (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1986 px, 5 colours, answered a keypress. |
 | Action Force (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 3261 px, 2 colours, answered a keypress. |
 | Action Force 2 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: draws and animates its own screen (up to 3456 px, 3 colours) and answers a keypress. |
-| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: loader drops back to BASIC, leaving a bare K cursor and an empty canvas (0 px above the editor area). Cause not yet found. |
+| Adidas Championship Tie-Break (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads past the title into its credits screen. Was blank before v1.8.17. |
 | Afterburner (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Alien 8 | **Boots (responds)** | Screened 2026-08-12: 16388 px, 6 colours, answered a keypress. |
@@ -387,10 +408,10 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | ATF - Advanced Tactical Fighter (+3 disk) | **Boots** | Screened 2026-08-12: 31165 px, 9 colours. |
 | Auf Wiedersehen Monty | **Boots (responds)** | Screened 2026-08-12: 10204 px, 7 colours, answered a keypress. |
 | Autocrash (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1157 px, 2 colours, answered a keypress. |
-| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 14 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout; a flat image cannot carry the angular sector positions the check reads. |
+| Back to the Future Part II (+3 disk) | **Boots** | Screened 2026-08-12: title screen, animating. Was blank before v1.8.17. |
 | Back to the Future Part III (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 8541 px, 5 colours, answered a keypress. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
-| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 39 tracks hold a single 6144-byte 01/6 sector, the Speedlock layout. |
+| Barbarian II - The Dungeon of Drax (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and control menu, matching a +3 reference pixel for pixel. Was blank before v1.8.17. |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
@@ -401,7 +422,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Blasteroids (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1425 px, 2 colours, answered a keypress. |
 | Bloodwych (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1343 px, 4 colours, answered a keypress. |
 | Bomb Jack | **Boots** | Screened 2026-08-12: 14798 px, 7 colours, animating. |
-| Bonanza Bros (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
+| Bonanza Bros (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn. **A +3 reference does not boot this image either** — it sits on the ROM menu through 400 emulated seconds — so the dump is very likely not bootable. Its earlier **Boots (responds)** verdict was the +3 ROM's own menu being measured as content, not the game. Ours blanks the screen where the reference stays on the menu, which is a smaller divergence still worth explaining. |
 | Brian Clough's Football Fortunes (+3 disk) | **Boots** | Screened 2026-08-12: 8171 px, 6 colours. |
 | Bubble Bobble | **Boots** | Screened 2026-08-12: 12020 px, 4 colours, animating. |
 | Bubble Bobble (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 12158 px, 8 colours, answered a keypress. |
@@ -416,20 +437,20 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15291 px, 14 colours, animating. |
 | Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. |
 | Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
-| Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames; black screen in the GUI too. 39 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout. |
+| Captain Planet (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads to its control-select menu and answers a keypress. Was blank until the EDSK ST1/ST2 CRC-attribution fix; see the CHANGELOG for v1.8.17. |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
 | Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16265 px, 9 colours, answered a keypress. |
 | Chain Reaction (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 19893 px, 5 colours, answered a keypress. |
 | Championship Run (+3 disk) | **Boots** | Screened 2026-08-12: 17784 px, 4 colours, animating. |
 | Chase H.Q | **Boots (responds)** | Screened 2026-08-12: 5360 px, 4 colours, answered a keypress. |
 | Chase H.Q. (+3 disk) | **Boots** | Screened 2026-08-12: 31933 px, 14 colours, animating. |
-| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 19 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout. |
+| Chase H.Q. II - Special Criminal Investigations (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and credits. Was blank before v1.8.17. |
 | Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 12464 px, 12 colours, animating. |
 | Chuckie Egg | **Boots** | Screened 2026-08-12: 25143 px, 7 colours, animating. |
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
 | Colossus 4 Bridge (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6327 px, 4 colours, answered a keypress. |
 | Colossus 4 Chess (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 7409 px, 2 colours, answered a keypress. |
-| Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. Non-standard sector ID bases throughout (C1-C9 on track 0, E1-E9 elsewhere). |
+| Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: still nothing drawn, and a +3 reference loads it fully. Its loader samples sector E1 on tracks 1, 3, 12 and 13, retries three times and gives up. Ruled out: the data we return is byte-identical to the image for all 126 sectors, and the ID/status bytes look correct. Remaining suspect is rotational timing, which this FDC deliberately does not model. |
 | Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 3840 px, 2 colours, animating. |
 | Commando | **Boots** | Screened 2026-08-12: 21972 px, 7 colours, animating. |
 | Continental Circus (+3 disk) | **Boots** | Screened 2026-08-12: 33792 px, 4 colours. |

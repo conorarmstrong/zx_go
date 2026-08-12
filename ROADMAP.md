@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-12 — v1.8.15)
+## CURRENT STATE (2026-08-13 — v1.8.17)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **154 title rows: 10 Works, 14 Works
-(caveat), 58 Boots (responds), 58 Boots, 1 Parses cleanly, 7 Known issue, 6
+(caveat), 61 Boots (responds), 59 Boots, 1 Parses cleanly, 3 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -56,19 +56,27 @@ remaining gap.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
-- [ ] **Overlapping-sector protection checks.** **Five** titles, not the
-  twelve an earlier revision claimed: Back to the Future II, Barbarian II,
-  Captain Planet, Chase HQ II, Comando Quatro. Each image gives whole tracks
-  over to a single 6144-byte sector, or uses non-standard ID bases. They read
-  their protection track and the sequential layout cannot reproduce the
-  overlapping sectors, which needs angular positions the DSK format does not
-  record. Verified by dumping every track of all ten images rather than
-  assumed from the symptom.
-- [ ] **3D Grand Prix and Adidas Tie-Break fail for unknown reasons.** Both
-  images are stock 9-sector CF2 layouts with no protection anywhere on them,
-  so the cause is ours. 3D Grand Prix ends at the ROM's `Press REC & PLAY`
-  tape prompt; Adidas drops back to BASIC with a bare cursor. Do not fold
-  these back into the protection item — they are not protected disks.
+- [ ] **Comando Quatro still renders nothing.** The last +3 disk title that
+  does. Its
+  loader samples sector E1 on tracks 1, 3, 12 and 13, retries three times and
+  gives up. Ruled out: the data is byte-identical to the image across all 126
+  sectors, and the ID/status bytes match the reference where they have been
+  compared. The open suspect is **rotational timing** — this FDC completes
+  every command instantly and always reports ready, which `pkg/plus3fdc`
+  documents as a deliberate simplification, and a protection check that
+  measures rotation would fail deterministically the way this one does.
+- [ ] **Bonanza Bros does not boot.** Nothing drawn. A +3 reference does not
+  boot this image either — it sits on the ROM menu through 400 emulated
+  seconds — so the dump is probably not bootable. Worth one look because we
+  blank the screen where the reference stays on the menu, which is a real if
+  minor divergence in how a failed boot is reported.
+- [ ] **Confirm the µPD765 result-ID update at EOT.** The controller returns
+  `R+1` however a read ends. The 8272A/µPD765 ID-update table appears to
+  specify `C+1` with `R=01` when the transfer stops *at* EOT (head flip
+  instead, under MT=1). Implementing that changed no title's behaviour and
+  contradicted two existing datasheet-cited tests, so it was reverted pending
+  a reference that can actually be run against. Settle it from the published
+  table before changing anything.
 - [ ] **Verify what the keypress did.** A response proves a title is waiting
   rather than hung; it does not prove the title is playable. Closing that gap
   means per-title expectations — what screen should follow which key — which
@@ -76,12 +84,10 @@ remaining gap.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.
-- [x] ~~Copy-protection track layouts~~ — done. Those tracks overlap sectors:
-  one oversized ID covers the region the ordinary sectors occupy. A flat
-  byte-stream model cannot overlap them, but the image declares its own track
-  length and the guest only ever reads by sector ID, so the track is now sized
-  to what the image describes. Of a 250-image sample, 1 still fails to parse,
-  and that one is a truncated dump.
+- [x] ~~Copy-protection track layouts~~ — done. The image declares its own
+  track length and the guest only ever reads by sector ID, so a track is now
+  sized to what the image describes rather than to a nominal capacity. Of a
+  250-image sample, 1 still fails to parse, and that one is a truncated dump.
 - [x] ~~Investigate Warhawk~~ — not a fault. It calls NextZXOS at runtime, so
   bank injection cannot host it; through the genuine NEXLOAD path it launches
   and renders (`TestNexloadOSGamesIfPresent`, cmd/zx_go). The screening
@@ -165,6 +171,16 @@ Solved problems whose answers were expensive to find.
   addresses. Transfers are **NMI-per-byte**, not DMA, and the byte spacing
   is load-bearing. The interface is **memory-mapped, not port-mapped** — do
   not go hunting for a port map. Full record in `pkg/opus/README.md`.
+- **"+3 disk copy protection we cannot represent" was never real.** Twelve
+  titles were recorded as blocked by it, then five, and both were wrong: the
+  cause was inferred from the images carrying unusual track layouts, never
+  from evidence that the layout caused the failure. A +3 reference emulator
+  loads every one. Three controller bugs were behind them, fixed in v1.8.17:
+  EDSK `ST1.DE` read as an ID-field CRC error when `ST2.DD` attributes it to
+  the data field; oversized (N=6) sectors refused instead of streamed across
+  the index hole; `ST3.RY` treated as per-drive when the +3 has one READY
+  line. **Before blaming a disk format, run the image on a reference** —
+  `ZX_GO_FDC_TRACE=1` then shows which command is answered wrongly.
 - **The bootable SD image is FAT32.** An older FAT16 builder never booted.
 - **The 128K BASIC launch bug is closed** (Multiface-3 `$7F3F`/`$1F3F`
   paging readback, Layer 2 `$123B` readback, zero-filled cold RAM). Do not

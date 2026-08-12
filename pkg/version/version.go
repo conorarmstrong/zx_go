@@ -9,7 +9,7 @@ import (
 
 // Version is the current release. Bump it here for a release; the
 // window title, Help → About dialog, and --version flag all read it.
-const Version = "v1.8.16"
+const Version = "v1.8.17"
 
 // Author and RepoURL identify the project; surfaced in the startup
 // banner and the Help → About dialog.

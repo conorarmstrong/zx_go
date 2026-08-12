@@ -462,9 +462,14 @@ func (t *Track) WriteData(pos int, data []byte) {
 // the byte is marked weak. Used by the FDC's data transfer path; speed
 // matters more than cryptographic randomness here.
 func (t *Track) readByte(i int) byte {
-	if i < 0 || i >= t.bpt {
+	if i < 0 || t.bpt <= 0 {
 		return 0xFF
 	}
+	// The track is a circle. A read that runs past the end of a revolution
+	// crosses the index hole and continues from the start, exactly as the
+	// head does — sectors whose declared size exceeds what physically fits
+	// depend on it.
+	i %= t.bpt
 	if bitTest(t.weak, i) {
 		return byte(rand.Uint32())
 	}
