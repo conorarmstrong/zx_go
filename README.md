@@ -28,6 +28,28 @@ The 48K was the author's first computer; this began as a Go learning exercise an
 
 ---
 
+## Evidence
+
+Rather than ask you to take "faithful" on trust, here is what is actually
+checked, and where it falls short. Every figure below is in the repository.
+
+| What | Evidence |
+| --- | --- |
+| **Z80 correctness** | Passes Frank Cringle's `zexdoc` **and** `zexall` exercisers — the documented *and* undocumented flag behaviour. The binaries are vendored; `go test ./pkg/z80` runs them. |
+| **Next hardware vs. the real FPGA** | A feature-by-feature [conformance matrix](VHDL_CONFORMANCE.md) against the `zxnext.vhd` core, with 32 entries recording what is validated, what is approximated, and why. |
+| **Rendering regressions** | 9 vendored programs, booted headless across 15 machine configurations and asserted **pixel-identical** to committed golden frames ([provenance and per-program results](pkg/testharness/testdata/corpus/CORPUS.md)). |
+| **Real software** | A [145-title compatibility manifest](docs/compatibility.md) covering tapes, snapshots, +3 disks and Next `.nex`, with the method and its limits stated per entry. |
+| **Spectrum Next games** | 9 of the 10 `.nex` games on a real NextZXOS SD card launch and render through the genuine NEXLOAD loader. |
+| **Breadth** | 2,942 test functions across 480 test files. |
+
+**Where it falls short**, from that same manifest: 11 titles are known-broken,
+5 remain untested, and most entries are *Boots* — meaning the title's own code
+ran and drew its screen, not that it was played to completion. The Next's
+game compatibility is the youngest part of the project and is labelled as such
+throughout.
+
+---
+
 ## Highlights
 
 - 🖥️ **The whole family, one emulator** — ZX80 · ZX81 · Spectrum 48K · 128K · +2 · +2A · +3 · Pentagon 128 · **Spectrum Next** · **SAM Coupé**.
@@ -61,6 +83,7 @@ Prefer not to build? Grab a [pre-built binary](#installation).
 
 ## Contents
 
+- [Evidence](#evidence)
 - [Highlights](#highlights)
 - [Quick start](#quick-start)
 - [Supported machines](#supported-machines)
@@ -272,6 +295,8 @@ Wondering how zx_go stacks up against **CSpect**, **ZEsarUX**, and **MAME** (`tb
 | [SAM Coupé](docs/sam-coupe.md) | The MGT SAM Coupé: modes, sound, disk, status. |
 | [Debuggers](DEBUGGER.md) | Full visual + telnet + headless reference. |
 | [Compatibility](docs/compatibility.md) | The tested-title manifest and how class evidence works. |
+| [VHDL conformance](VHDL_CONFORMANCE.md) | Feature-by-feature matrix of the Next emulation against the FPGA core source. |
+| [Test corpus](pkg/testharness/testdata/corpus/CORPUS.md) | The vendored redistributable programs used as pixel-golden regressions: provenance, licences, and what each one exercises. |
 | [Comparison](COMPARISON.md) | vs. other Spectrum Next emulators. |
 
 ---
