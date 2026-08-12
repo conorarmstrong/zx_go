@@ -258,6 +258,34 @@ run by figuring out which class it belongs to:
 7. Is it a Next .NEX file? → Banks 0-7 fully supported; 8-111
    silently skipped today.
 
+## Spectrum Next SD games (NEXLOAD)
+
+Every `.nex` on the SD card, driven through the genuine NextZXOS
+`.nexload` dot command by `TestNexloadSDGames` (cmd/zx_go). That is the
+only path that can host a title which calls the OS at runtime, so it is
+the only honest way to judge Next game compatibility — bank injection
+clobbers the OS's workspace banks and would report working games as
+broken.
+
+**9 of 10 launch and render.** Confirmed by eye for Halls of The Things
+(full menu) and Night-Knight (in-game, sprite and platform drawn).
+
+This is the Next half of the corpus. The classic titles screened
+elsewhere in this document say nothing about Next-only hardware.
+
+| Title | Status | Notes |
+|---|---|---|
+| AngryBloaters | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9c58). Input not driven. |
+| Halls of The Things | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x99d9). Input not driven. |
+| LordsOfMidnight | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x615d). Input not driven. |
+| Nextoid | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0xb46b). Input not driven. |
+| Night-Knight | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x1f3e). Input not driven. |
+| Revival Survival | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x7aca). Input not driven. |
+| Santa's Pressie | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9819). Input not driven. |
+| Sonic | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x3404). Input not driven. |
+| TX-1696 | Known issue | Screened 2026-08-12: NEXLOAD launches it (PC=0xb14d, not the menu loop) but the screen stays blank. Needs investigation. |
+| Warhawk | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9071). Input not driven. |
+
 ## Automated screening
 
 Titles screened headlessly by `TestScreenLocalTitles` (pkg/testharness).

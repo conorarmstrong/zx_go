@@ -6,6 +6,23 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [v1.8.6]
 
+### Added
+
+- **Every Next SD game screened through the genuine NEXLOAD path**
+  (`TestNexloadSDGames`, cmd/zx_go). It discovers each `.nex` on the card and
+  drives the real NextZXOS `.nexload` dot command, which is the only path that
+  can host a title calling the OS at runtime.
+
+  **9 of 10 launch and render**: AngryBloaters, Halls of The Things, Lords of
+  Midnight, Nextoid, Night-Knight, Revival Survival, Santa's Pressie, Sonic
+  and Warhawk. Confirmed by eye for Halls of The Things and Night-Knight.
+
+  This is the Next half of the compatibility corpus, and the evidence roadmap
+  items 4 and 7 were waiting on. Both concern Next-only hardware — the
+  zxnDMA's interrupt/match logic and exact Copper `MOVE` timing — and ten
+  games run correctly without either being modelled. Neither is blocked now;
+  both are simply unmotivated, which is a better answer than a guess.
+
 ### Fixed
 
 - **Screening could record a working title as broken, and did.** A `.nex` is
@@ -23,6 +40,11 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   This was the exact failure mode called out as the worst one a compatibility
   harness can have, committed anyway a release after saying so.
+
+### Known gaps
+
+- **TX-1696** is the one Next SD game that does not render. NEXLOAD launches
+  it — the CPU is at `0xb14d`, not the menu loop — but the screen stays blank.
 
 ## [v1.8.5]
 

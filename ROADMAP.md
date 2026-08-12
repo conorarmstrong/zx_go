@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **135 title rows: 8 Works, 12 Works
-(caveat), 78 Boots (responds), 21 Boots, 1 Parses cleanly, 10 Known issue, 5
+`docs/compatibility.md` now holds **145 title rows: 8 Works, 12 Works
+(caveat), 78 Boots (responds), 30 Boots, 1 Parses cleanly, 11 Known issue, 5
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -75,14 +75,14 @@ remaining gap.
   a blank frame from bank injection classifies as *inconclusive*, never a
   fault.
 
-**Items 4 and 7 are blocked on the NEXT half of this one, specifically.** Both
-concern Next-only hardware, so classic titles cannot exercise them however many
-are screened. The corpus as it stands is 108 classic titles and 1 Next title,
-which is why neither is unblocked yet: growing it in the classic direction does
-not discharge that dependency, however useful it was for the disk loader.
+**The Next half now exists.** `TestNexloadSDGames` (cmd/zx_go) drives every
+`.nex` on the SD card through the genuine NextZXOS NEXLOAD path — the only one
+that can host a title calling the OS at runtime. **9 of 10 launch and render.**
 
-28 unique `.nex` files sit under `roms/next/sd`. Screening those is the
-concrete work that would unblock items 4 and 7.
+That is what items 4 and 7 were waiting on, and the answer it gives is
+"no evidence either is needed": ten Next games run without the zxnDMA
+interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
+now blocked; both are simply unmotivated.
 
 ### 2. [correctness] Sprite per-line bandwidth limit
 
@@ -107,15 +107,13 @@ Bounded, but not small: it needs a 2x-wide ULA render path.
 
 ### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
-**Blocked on Next corpus growth (item 1).** The transfer engine, prescaler and
-cycle timing are complete and spec-checked. Not modelled: the interrupt/match
-logic and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`). No traced
-software has exercised either.
+**Unblocked, and unmotivated.** The transfer engine, prescaler and cycle
+timing are complete and spec-checked. Not modelled: the interrupt/match logic
+and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`).
 
-Note that only Next software can: the zxnDMA is Next hardware, so the 108
-classic titles screened so far say nothing about it. Screening the 28 local
-`.nex` files is what would settle whether any title needs this. Do not start
-it speculatively.
+The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering —
+and none of them needs this. That is the evidence the item was waiting for, and
+it argues for leaving it alone until a title actually demands it.
 
 ### 5. [product] GUI stability session
 
@@ -135,14 +133,13 @@ caveat. One run on real hardware settles it.
 
 ### 7. [research] Copper cycle accuracy
 
-**Blocked on Next corpus growth (item 1).** Since v1.6.4 the Copper is stepped
-in 8-pixel segments, which is exact for `WAIT` — the hardware threshold is
-`x<<3 + 12`, so 8 pixels *is* its resolution. What remains is `MOVE` landing
-mid-segment (`pkg/next/copper/copper.go:19`).
+**Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
+segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
+so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
+(`pkg/next/copper/copper.go:19`).
 
-As with item 4, only Next software can exercise it, so the classic titles
-screened so far contribute nothing here. Whether it is observable at all still
-needs evidence from a real program.
+The 10 Next games now screened render correctly without it, so there is still
+no observed case where it matters. Leave it until one appears.
 
 ---
 
