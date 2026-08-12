@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.16]
+
+### Fixed
+
+- **Screening recorded three working games as broken.** Alien Syndrome,
+  Capitan Sevilla and Action Force 2 all load, draw their own screen and
+  answer input. `MinContentPixels = 1000` threw all three away. The floor had
+  been calibrated against a sparsest-real-screen of 3724, and no title with a
+  bare one-line prompt was in that calibration set — Alien Syndrome's "PRESS
+  ENTER" is 498 pixels.
+
+  Lowering the number could not fix it. Adidas Tie-Break's bare BASIC cursor
+  is 181 pixels and nothing is running, and it answers keypresses too because
+  BASIC echoes what it is sent. Neither pixel count nor input response
+  separates a running game from an idle ROM prompt.
+
+  What separates them is *where* the pixels are. The frame is now measured a
+  second time with the bottom two character rows excluded — the editor and
+  report area the ROM owns — and `Screening` carries `CanvasPixels` /
+  `CanvasColours` alongside the raw counts. Same reasoning as cropping the
+  border: chrome the ROM drew is not evidence the guest drew something.
+
+  The canvas rule can only rescue a frame the main floor rejected, never
+  condemn one it accepted, so no verdict already recorded can move.
+  `TestCanvasRuleOnlyEverRescuesBlank` pins that property.
+
+### Changed
+
+- **The "twelve titles fail on copy protection" claim was wrong**, in both
+  `docs/compatibility.md` and `ROADMAP.md`, and is corrected. Dumping every
+  track of all ten images shows three distinct groups: five genuinely
+  protected disks with whole tracks given to a single 6144-byte sector, two
+  ordinary unprotected disks that fail for reasons still unknown (3D Grand
+  Prix ends at the ROM tape prompt, Adidas drops to BASIC), and three titles
+  that were never broken at all. The manifest is now 7 Known issue, not 10,
+  and each row says what the title actually does.
+
 ## [v1.8.15]
 
 ### Changed

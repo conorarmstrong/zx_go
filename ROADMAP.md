@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **154 title rows: 10 Works, 14 Works
-(caveat), 55 Boots (responds), 58 Boots, 1 Parses cleanly, 10 Known issue, 6
+(caveat), 58 Boots (responds), 58 Boots, 1 Parses cleanly, 7 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -56,10 +56,19 @@ remaining gap.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
-- [ ] **Overlapping-sector protection checks.** Twelve titles load and run but
-  stay blank: they read their protection track, and the sequential layout
-  cannot reproduce the overlapping sectors the check looks for. Reproducing
-  them needs angular sector positions the DSK format does not record.
+- [ ] **Overlapping-sector protection checks.** **Five** titles, not the
+  twelve an earlier revision claimed: Back to the Future II, Barbarian II,
+  Captain Planet, Chase HQ II, Comando Quatro. Each image gives whole tracks
+  over to a single 6144-byte sector, or uses non-standard ID bases. They read
+  their protection track and the sequential layout cannot reproduce the
+  overlapping sectors, which needs angular positions the DSK format does not
+  record. Verified by dumping every track of all ten images rather than
+  assumed from the symptom.
+- [ ] **3D Grand Prix and Adidas Tie-Break fail for unknown reasons.** Both
+  images are stock 9-sector CF2 layouts with no protection anywhere on them,
+  so the cause is ours. 3D Grand Prix ends at the ROM's `Press REC & PLAY`
+  tape prompt; Adidas drops back to BASIC with a bare cursor. Do not fold
+  these back into the protection item — they are not protected disks.
 - [ ] **Verify what the keypress did.** A response proves a title is waiting
   rather than hung; it does not prove the title is playable. Closing that gap
   means per-title expectations — what screen should follow which key — which

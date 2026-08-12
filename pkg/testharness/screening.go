@@ -32,6 +32,13 @@ type Screening struct {
 	// still screen: a title already animating changes on its own, so a change
 	// after a keypress would prove nothing.
 	Responded bool
+	// CanvasPixels and CanvasColours are Pixels and Colours measured over the
+	// display window with the ROM's editor area excluded as well as the
+	// border. They exist to tell a game's own sparse screen apart from an
+	// idle BASIC prompt, which the raw counts cannot: both light a few
+	// hundred pixels. See MinCanvasPixels.
+	CanvasPixels  int
+	CanvasColours int
 	// BankInjected records that the program was loaded by copying banks and
 	// jumping, rather than through the machine's own loader. That path cannot
 	// host a .nex which calls NextZXOS at runtime — the game's banks overwrite
@@ -99,14 +106,45 @@ const (
 	// to clear "one flat colour". It is deliberately low: Elite's title screen
 	// is three colours and is unambiguously content.
 	MinContentColours = 2
+	// MinCanvasPixels is the floor for the second, narrower measurement that
+	// only applies when MinContentPixels has already rejected the frame.
+	//
+	// The pixel count alone cannot separate a game's own one-line prompt from
+	// the ROM's idle BASIC screen: Alien Syndrome's "PRESS ENTER" is 498
+	// pixels and the game plays, while Adidas Championship Tie-Break's bare
+	// "K" cursor is 181 and nothing is running. Input response does not
+	// separate them either, because BASIC echoes what it is sent.
+	//
+	// What separates them is *where* the pixels are. The bottom two character
+	// rows are the editor and report area the ROM owns; everything above is
+	// the program's canvas. Measuring the canvas alone puts the idle prompt at
+	// zero and leaves the game's prompt untouched. This is the same reasoning
+	// that crops the border: do not count chrome the ROM drew as evidence the
+	// guest drew something.
+	//
+	// The floor sits between the two observed populations — nothing spurious
+	// has ever scored above zero on the canvas, and the sparsest real screen
+	// measured is 498.
+	MinCanvasPixels = 200
 )
+
+// editorLines is the height in scanlines of the ROM's editor and report area
+// at the foot of the display: two character rows.
+const editorLines = 2 * 8
 
 // Classify reduces a screening to a verdict.
 func Classify(s Screening) Verdict {
 	if s.Error != "" {
 		return VerdictError
 	}
-	if s.Pixels < MinContentPixels || s.Colours < MinContentColours {
+	blank := s.Pixels < MinContentPixels || s.Colours < MinContentColours
+	// The canvas measurement can only ever rescue a frame the raw counts
+	// rejected, never condemn one they accepted. That keeps every verdict
+	// already recorded intact.
+	if blank && s.CanvasPixels >= MinCanvasPixels && s.CanvasColours >= MinContentColours {
+		blank = false
+	}
+	if blank {
 		// Bank injection cannot host an OS-dependent .nex, so a blank frame
 		// from it is not evidence the title is broken. Warhawk was recorded as
 		// a Known issue on exactly that mistake while working perfectly
@@ -162,6 +200,7 @@ func (h *Harness) ScreenTitle(settle int) Screening {
 	before := h.frameBytes()
 	s := Screening{Error: ScreenError(h.ScreenText())}
 	s.Pixels, s.Colours = measureFrame(before)
+	s.CanvasPixels, s.CanvasColours = measureFrame(dropBottomLines(before, editorLines))
 
 	h.RunFrames(settle)
 	after := h.frameBytes()
@@ -170,6 +209,9 @@ func (h *Harness) ScreenTitle(settle int) Screening {
 	// otherwise be judged on a half-drawn screen.
 	if p, c := measureFrame(after); p > s.Pixels {
 		s.Pixels, s.Colours = p, c
+	}
+	if p, c := measureFrame(dropBottomLines(after, editorLines)); p > s.CanvasPixels {
+		s.CanvasPixels, s.CanvasColours = p, c
 	}
 	if s.Error == "" {
 		s.Error = ScreenError(h.ScreenText())
@@ -199,6 +241,16 @@ func (h *Harness) frameBytes() []byte {
 		out = append(out, img.Pix[row:row+ula.ScreenWidth*4]...)
 	}
 	return out
+}
+
+// dropBottomLines returns the display window with the last n scanlines
+// removed, i.e. the program's canvas without the ROM's editor area.
+func dropBottomLines(pix []byte, n int) []byte {
+	keep := len(pix) - n*ula.ScreenWidth*4
+	if keep < 0 {
+		return nil
+	}
+	return pix[:keep]
 }
 
 // measureFrame counts distinct colours, and pixels differing from the most

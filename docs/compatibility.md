@@ -299,6 +299,21 @@ border cropped** — a tape loader fills the border with moving stripes
 while the display area stays empty, so an uncropped measurement counts a
 loader as content.
 
+The frame is measured a second time with the **bottom two character rows
+excluded**. Those rows are the editor and report area the ROM owns;
+everything above is the program's canvas. The pixel count alone cannot
+separate a game's own one-line prompt from an idle BASIC screen — Alien
+Syndrome's "PRESS ENTER" is 498 pixels and the game plays, while Adidas
+Tie-Break's bare "K" cursor is 181 and nothing is running — and input
+response cannot separate them either, because BASIC echoes what it is
+sent. Where the pixels are does separate them. This is the same reasoning
+that crops the border: chrome the ROM drew is not evidence the guest drew
+something.
+
+The canvas measurement may only ever rescue a frame the main floor
+rejected, never condemn one it accepted, so tightening it cannot silently
+demote a title already recorded as working.
+
 Still screens are then probed: keys are sent and the display watched for
 a material change, against a **no-key control** so a screen that animates
 on its own is not credited to the keypress.
@@ -318,13 +333,32 @@ The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
 build.
 
-**Of 113 titles screened, 100 rendered content (25 animating,
-60 answering a keypress) and 13 did not.**
+**Of 113 titles screened, 104 rendered content (25 animating,
+63 answering a keypress) and 9 did not.**
 Every disk image now loads: of a 250-image sample only one still fails to
 parse, and that one is a truncated dump whose track data runs past the end
-of the file. The titles that load but stay blank are copy-protected: they
-read their protection track, and our sequential layout cannot reproduce
-the overlapping sectors the check looks for.
+of the file.
+
+The nine that stay blank are not one problem, and an earlier revision of
+this document was wrong to present them as one. They are:
+
+- **Five copy-protected disks** — Back to the Future II, Barbarian II,
+  Captain Planet, Chase HQ II, Comando Quatro. Each holds whole tracks
+  given over to a single 6144-byte sector, or non-standard ID bases. A
+  flat image cannot carry the angular sector positions the check reads.
+  This is the only group the protection explanation actually fits.
+- **Two disks that fail for their own reasons** — 3D Grand Prix ends at
+  the ROM's tape prompt, and Adidas Tie-Break drops back to BASIC. Both
+  images are ordinary CF2 layouts with no protection anywhere on them, so
+  whatever is wrong is ours. Neither cause is known yet.
+- **Two Next entries that hold no launchable program** — Pogie and THEH
+  ship assets and a 48K-sized `.snx`, which cannot represent a Next game's
+  banked state. Nothing was ever launched, so nothing can be concluded.
+
+Three titles previously listed here as broken were not: Alien Syndrome,
+Capitan Sevilla and Action Force 2 all run. They were recorded as failures
+by a screening threshold that discarded sparse screens; see "Automated
+screening" for what was wrong with it.
 
 Verdicts confirmed by eye: Elite, Renegade, Pssst, R-Type, Last Ninja 2,
 Where Time Stood Still, RoboCop, The Way of the Tiger, Lemmings,
@@ -335,17 +369,17 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | 007 - Licence To Kill (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2581 px, 6 colours, answered a keypress. |
 | 3D Construction Kit (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1750 px, 2 colours, answered a keypress. |
 | 3D Game Maker (+3 disk) | **Boots** | Screened 2026-08-12: 1126 px, 3 colours, animating. |
-| 3D Grand Prix Championship (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (313 px, 2 colours). |
+| 3D Grand Prix Championship (+3 disk) | Known issue | Screened 2026-08-12: its loader ends at the +3 ROM tape prompt, "Press REC & PLAY, then any key." Not a protection failure -- the disk is a stock 9-sector CF2 layout with nothing unusual on any track. Cause not yet found. |
 | ACE 2 - The Ultimate Head to Head Conflict (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1924 px, 3 colours, answered a keypress. |
 | Action Fighter (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1986 px, 5 colours, answered a keypress. |
 | Action Force (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 3261 px, 2 colours, answered a keypress. |
-| Action Force 2 (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (459 px, 3 colours). |
-| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (181 px, 2 colours). |
+| Action Force 2 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: draws and animates its own screen (up to 3456 px, 3 colours) and answers a keypress. |
+| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: loader drops back to BASIC, leaving a bare K cursor and an empty canvas (0 px above the editor area). Cause not yet found. |
 | Afterburner (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Alien 8 | **Boots (responds)** | Screened 2026-08-12: 16388 px, 6 colours, answered a keypress. |
 | Alien Storm (+3 disk) | **Boots** | Screened 2026-08-12: 16075 px, 4 colours, animating. |
-| Alien Syndrome (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (498 px, 2 colours). |
+| Alien Syndrome (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its own PRESS ENTER screen (498 px on the canvas) and answers a keypress. Confirmed playable in the GUI. |
 | APB - All Points Bulletin (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 32931 px, 9 colours, answered a keypress. |
 | Arkanoid 2 - Revenge of Doh (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2521 px, 2 colours, answered a keypress. |
 | Artura (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2616 px, 7 colours, answered a keypress. |
@@ -353,10 +387,10 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | ATF - Advanced Tactical Fighter (+3 disk) | **Boots** | Screened 2026-08-12: 31165 px, 9 colours. |
 | Auf Wiedersehen Monty | **Boots (responds)** | Screened 2026-08-12: 10204 px, 7 colours, answered a keypress. |
 | Autocrash (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1157 px, 2 colours, answered a keypress. |
-| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 14 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout; a flat image cannot carry the angular sector positions the check reads. |
 | Back to the Future Part III (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 8541 px, 5 colours, answered a keypress. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
-| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 39 tracks hold a single 6144-byte 01/6 sector, the Speedlock layout. |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
@@ -380,22 +414,22 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cabal (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 31697 px, 15 colours, answered a keypress. |
 | California Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
 | Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15291 px, 14 colours, animating. |
-| Capitan Sevilla (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (845 px, 2 colours). |
+| Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. |
 | Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
-| Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames; black screen in the GUI too. 39 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout. |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
 | Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16265 px, 9 colours, answered a keypress. |
 | Chain Reaction (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 19893 px, 5 colours, answered a keypress. |
 | Championship Run (+3 disk) | **Boots** | Screened 2026-08-12: 17784 px, 4 colours, animating. |
 | Chase H.Q | **Boots (responds)** | Screened 2026-08-12: 5360 px, 4 colours, answered a keypress. |
 | Chase H.Q. (+3 disk) | **Boots** | Screened 2026-08-12: 31933 px, 14 colours, animating. |
-| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. 19 tracks hold a single 6144-byte C1/6 sector, the Speedlock layout. |
 | Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 12464 px, 12 colours, animating. |
 | Chuckie Egg | **Boots** | Screened 2026-08-12: 25143 px, 7 colours, animating. |
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
 | Colossus 4 Bridge (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6327 px, 4 colours, answered a keypress. |
 | Colossus 4 Chess (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 7409 px, 2 colours, answered a keypress. |
-| Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
+| Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn (0 px) through 20 000 frames. Non-standard sector ID bases throughout (C1-C9 on track 0, E1-E9 elsewhere). |
 | Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 3840 px, 2 colours, animating. |
 | Commando | **Boots** | Screened 2026-08-12: 21972 px, 7 colours, animating. |
 | Continental Circus (+3 disk) | **Boots** | Screened 2026-08-12: 33792 px, 4 colours. |
