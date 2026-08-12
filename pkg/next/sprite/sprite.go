@@ -59,6 +59,17 @@ type Engine struct {
 	// collisions. Reused across scanlines.
 	lineCovered []bool
 
+	// overtime latches the max-sprites-per-line flag: the sprite engine ran
+	// out of scanline time before finishing its walk. Sticky like collided,
+	// and cleared by the same status read (sprites.vhd:977, 990).
+	overtime bool
+
+	// clocksPerLine is the engine's per-scanline time budget in 28 MHz master
+	// clocks. Set from the machine's line length; zero means "unlimited",
+	// which keeps every existing caller and test behaving as before until it
+	// is wired.
+	clocksPerLine int
+
 	// zeroOnTop mirrors NextReg $15 bit 6 ("sprite_priority", sprites.vhd:73).
 	// When set, the LOWEST-numbered sprite is drawn in front (sprite 0 on top);
 	// the painted pixel is locked in and higher-numbered sprites do not
@@ -127,7 +138,12 @@ func (e *Engine) Clip() (x1, x2, y1, y2 byte, set bool) {
 
 // New returns a fresh Engine with all sprites invisible and the
 // pattern RAM zero.
-func New() *Engine { return &Engine{} }
+// DefaultLineClockBudget is the per-scanline time budget in 28 MHz master
+// clocks for the 228-T-state line the Next boots as: two 7 MHz columns per
+// T-state, four master clocks per column.
+const DefaultLineClockBudget = 228 * 8
+
+func New() *Engine { return &Engine{clocksPerLine: DefaultLineClockBudget} }
 
 // SetEnabled toggles the sprite layer.
 func (e *Engine) SetEnabled(on bool) { e.enabled = on }
@@ -244,17 +260,28 @@ func (e *Engine) cover(sx int) {
 	}
 }
 
+// SetLineClockBudget sets the per-scanline time budget in 28 MHz master
+// clocks. A line carries two 7 MHz columns per T-state and four master clocks
+// per column, so the budget is TStatesPerLine*8 — 1824 on the 228-T-state
+// machines the Next boots as.
+//
+// Zero means unlimited, which is the state before anything wires it.
+func (e *Engine) SetLineClockBudget(clocks int) { e.clocksPerLine = clocks }
+
 // ReadStatus returns the sprite status byte (port $303B read, FPGA
-// sprites.vhd:975): bit 0 = collision (two opaque sprites overlapped
-// since the last read), bit 1 = max-sprites-per-line. Reading CLEARS the
-// latched collision flag. (max-per-line, the per-line bandwidth model,
-// is not yet implemented and reads 0.)
+// sprites.vhd:975): bit 0 = collision (two opaque sprites overlapped since the
+// last read), bit 1 = max-sprites-per-line (the engine ran out of scanline
+// time). Reading CLEARS both latches.
 func (e *Engine) ReadStatus() byte {
 	var s byte
 	if e.collided {
 		s |= 0x01
 	}
+	if e.overtime {
+		s |= 0x02
+	}
 	e.collided = false
+	e.overtime = false
 	return s
 }
 
@@ -468,8 +495,23 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 	for i := range e.lineCovered {
 		e.lineCovered[i] = false
 	}
+	// Per-line time budget, mirroring the FPGA state machine: one master
+	// clock to enter the walk, one per sprite examined (S_QUALIFY), and one
+	// per pixel emitted (S_PROCESS). If the walk has not finished when the
+	// line resets, sprites.vhd:977 raises sprites_overtime and the remaining
+	// sprites are simply never drawn.
+	clocks := 1
+	budget := e.clocksPerLine
+
 	var anchor anchorState
 	for i := 0; i < MaxSprites; i++ {
+		if budget > 0 {
+			clocks++ // S_QUALIFY: one clock to examine this sprite
+			if clocks > budget {
+				e.overtime = true
+				break
+			}
+		}
 		raw := &e.attrs[i]
 		a := raw
 		// Anchor / relative sprites (FPGA sprites.vhd:756-944): a sprite
@@ -511,6 +553,15 @@ func (e *Engine) RenderScanline(y int, dst []byte, width int) {
 		sizeY := SpriteSize * scaleY
 		if y < sy || y >= sy+sizeY {
 			continue
+		}
+		// This sprite draws on this line, so the engine enters S_PROCESS and
+		// spends one clock per pixel it emits.
+		if budget > 0 {
+			clocks += SpriteSize * scaleX
+			if clocks > budget {
+				e.overtime = true
+				break
+			}
 		}
 		row := (y - sy) / scaleY
 		// Sprite pattern RAM is 64 slots × 256 bytes. An 8bpp sprite uses a

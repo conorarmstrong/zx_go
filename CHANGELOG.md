@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.12]
+
+### Added
+
+- **The sprite engine now runs out of scanline time, as the hardware does.**
+  `sprites.vhd` walks the sprite list from a state machine on the 28 MHz master
+  clock — one clock to enter, one per sprite examined, one per pixel emitted —
+  and raises `sprites_overtime` if the walk has not finished when the line
+  resets (sprites.vhd:977), latching bit 1 of the `$303B` status port.
+
+  Neither half was modelled: the limit was unenforced and that bit always read
+  0, so software reading the flag to throttle its own sprite use saw a machine
+  that never saturates, and scenes that should visibly drop sprites rendered
+  complete.
+
+  The budget follows the machine's line length — two 7 MHz columns per T-state,
+  four master clocks per column, so 1824 clocks on a 228-T-state line. With 16
+  pixel-wide sprites that is 107 of 128 drawn before the line runs out, which
+  is the arithmetic the hardware does.
+
+  Verified against the whole Next SD library afterwards: all 10 games still
+  launch and render, and the 15 pixel-golden frames are unchanged.
+
 ## [v1.8.11]
 
 ### Fixed

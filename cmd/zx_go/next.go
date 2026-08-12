@@ -829,6 +829,10 @@ func wireNextSubsystems(e *emulator) error {
 	pal := palette.NewBank()
 	prio := next.NewLayerPriority()
 	sprites := sprite.New()
+	// The engine's per-scanline time budget follows the machine's line
+	// length: two 7 MHz columns per T-state, four 28 MHz master clocks per
+	// column (sprites.vhd's state machine runs on clock_master_i).
+	sprites.SetLineClockBudget(ula.TStatesPerLineFor(roms.ModelNext) * 8)
 	cop := copper.New()
 	cop.SetRegWriter(disp)
 	rtcEngine := rtcpkg.New()

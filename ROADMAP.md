@@ -90,18 +90,7 @@ That is what items 4 and 7 were waiting on, and the answer it gives is
 interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
 now blocked; both are simply unmotivated.
 
-### 2. [correctness] Sprite per-line bandwidth limit
-
-Real hardware runs out of sprite bandwidth within a scanline, drops the
-overflow, and latches bit 1 of the `$303B` status port. Neither is
-modelled: the limit is unenforced and that bit always reads 0
-(`pkg/next/sprite/sprite.go:250`).
-
-Compatibility-relevant rather than cosmetic. Software that reads the flag
-to throttle its own sprite use sees a machine that never saturates, and
-scenes that should visibly drop sprites render complete.
-
-### 3. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
+### 2. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
 
 Decoded, stored and read back, but not rendered
 (`pkg/ula/ulascroll.go:53`). `zxula.vhd:353` builds the shift as
@@ -111,7 +100,7 @@ other path there is whole-pixel.
 
 Bounded, but not small: it needs a 2x-wide ULA render path.
 
-### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
+### 3. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
 **Unblocked, and unmotivated.** The transfer engine, prescaler and cycle
 timing are complete and spec-checked. Not modelled: the interrupt/match logic
@@ -121,7 +110,7 @@ The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering �
 and none of them needs this. That is the evidence the item was waiting for, and
 it argues for leaving it alone until a title actually demands it.
 
-### 5. [product] GUI stability session
+### 4. [product] GUI stability session
 
 Still open and still **user-driven**: an agent cannot drive the windowed
 app. The headless proxy passed long ago (50 000 frames, no leak, steady
@@ -129,7 +118,7 @@ frame rate, final frame still pixel-perfect), so what remains is
 interactive use — menus, model switching, load/save, resize — over a
 sustained session.
 
-### 6. [product] Windows ARM64 has never been run
+### 5. [product] Windows ARM64 has never been run
 
 Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
 toolchain problem is solved. Nobody has launched the binary. Compiling
@@ -137,7 +126,7 @@ does not prove the OpenGL path works on Windows-on-ARM, which is why the
 release matrix still marks it `experimental` and `README.md` carries the
 caveat. One run on real hardware settles it.
 
-### 7. [research] Copper cycle accuracy
+### 6. [research] Copper cycle accuracy
 
 **Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
 segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
