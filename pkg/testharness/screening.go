@@ -227,7 +227,10 @@ func measureFrame(pix []byte) (pixels, colours int) {
 func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	var bankInjected bool
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
-	case ".sna", ".z80", ".szx":
+	// .snx is a NextZXOS-flavoured snapshot; the ones on the SD card are
+	// byte-for-byte 48K .sna (27-byte header + 49152), so the same loader
+	// handles them.
+	case ".sna", ".z80", ".szx", ".snx":
 		if err := h.LoadSnapshot(path); err != nil {
 			return Screening{}, err
 		}

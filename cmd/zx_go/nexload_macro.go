@@ -38,6 +38,9 @@ var nexKeyMatrix = func() map[rune][][2]int {
 		'/':  {sym, {0, 0x10}}, // SYMBOL SHIFT + V
 		'-':  {sym, {6, 0x08}}, // SYMBOL SHIFT + J
 		'\'': {sym, {4, 0x08}}, // SYMBOL SHIFT + 7
+		'"':  {sym, {5, 0x01}}, // SYMBOL SHIFT + P
+		':':  {sym, {0, 0x02}}, // SYMBOL SHIFT + Z
+		',':  {sym, {7, 0x08}}, // SYMBOL SHIFT + N
 	}
 	for r, k := range letters {
 		m[r] = [][2]int{k}

@@ -69,19 +69,38 @@ func New() *Snapshot {
 	return s
 }
 
-// DetectFormat detects the snapshot format based on file extension and content
+// snaSize128KAlt is the 128K SNA variant carrying one extra bank, for the case
+// where the page mapped at $C000 is not already among the five stored banks.
+// The other two sizes are SNA48K_SIZE / SNA128K_SIZE in sna.go.
+const snaSize128KAlt = SNA128K_SIZE + 16384
+
+// DetectFormat detects the snapshot format from the file extension, falling
+// back to the file's size when the extension is not one we know.
+//
+// The fallback exists because snapshots circulate under other names: NextZXOS
+// ships games whose snapshots carry a .snx extension and are byte-for-byte
+// 48K SNA. Without it those are rejected as an unsupported format, which is
+// what the extension-only version did despite this function's contract having
+// always promised to look at content too.
 func DetectFormat(path string) SnapshotFormat {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".sna":
 		return FormatSNA
 	case ".z80":
 		return FormatZ80
 	case ".szx":
 		return FormatSZX
-	default:
-		return FormatUnknown
 	}
+	// Unknown extension: an exact SNA size is unambiguous enough to act on.
+	// Z80 and SZX are variable-length and carry no size signature, so they
+	// are deliberately not guessed at.
+	if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+		switch fi.Size() {
+		case SNA48K_SIZE, SNA128K_SIZE, snaSize128KAlt:
+			return FormatSNA
+		}
+	}
+	return FormatUnknown
 }
 
 // Load loads a snapshot from a file.

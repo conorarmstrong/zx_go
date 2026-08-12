@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conorarmstrong/zx_go/pkg/next/install/installtest"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -83,6 +84,14 @@ func TestScreenLocalTitles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := os.Stat(tc.path); err != nil {
 				t.Skipf("not present: %v", err)
+			}
+			// A Next screened this way runs on the embedded 48K ROM in a
+			// sandboxed install dir, not NextZXOS: bank injection and the
+			// tape trap both need the plain ROM, and a test must never touch
+			// the real install directory.
+			if tc.model == roms.ModelNext {
+				installtest.RedirectConfig(t)
+				installOpenBottomROM(t)
 			}
 			h, err := New(tc.model)
 			if err != nil {

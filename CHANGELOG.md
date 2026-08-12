@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.7]
+
+### Added
+
+- **The rest of the Next SD card screened.** v1.8.6 covered the 10 `.nex`
+  games; this covers everything else on it.
+
+  - **NextBASIC games** (`TestNextBasicSDGames`) launch the way a user does:
+    Command Line, `.cd`, `LOAD`, `RUN`. All three run — Orb, baSnake and
+    NextBASIC Invaders. The path must be **quoted**: `.cd` splits its argument
+    on spaces, so `/games/next/nextbasic invaders` was read as two paths and
+    both reported missing, which is why that game would not load.
+  - **NEXTipede** loads from tape and runs its DEMO MODE attract sequence.
+  - **Pogie and THEH** have nothing to launch: only assets and a 49179-byte
+    `.snx`, which is a 48K snapshot and cannot hold a Next game's banked
+    state. Recorded as such rather than as failures.
+
+- **`DetectFormat` now falls back to file size** when the extension is
+  unknown, which its contract had always claimed ("extension and content")
+  while only ever looking at the extension. NextZXOS ships snapshots named
+  `.snx` that are byte-for-byte 48K SNA; nothing could load them. Z80 and SZX
+  are variable-length and are deliberately not guessed at.
+
+### Fixed
+
+- **NextBASIC Invaders was listed as a Known issue and is not one.** Verified
+  by playing it: it autostarts to its control-selection screen, and ~48
+  seconds of emulated play show the full invader formation, bases and shots
+  with **no `Integer out of range`**. The two root causes that entry cited
+  were fixed in earlier releases without the record being revisited.
+
+- **A launch check that could not tell a game from a cursor.** The Next SD
+  screening judged "did it render" with `uniformImage`, which only asks
+  whether every pixel is identical — so a bare BASIC prompt with one flashing
+  cursor block passed it, and NextBASIC Invaders was reported as rendering
+  when it had not run at all. It now measures drawn pixels and distinct
+  colours inside the display window with the border cropped, the same basis
+  the rest of the screening uses.
+
 ## [v1.8.6]
 
 ### Added

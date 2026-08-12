@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **145 title rows: 8 Works, 12 Works
-(caveat), 78 Boots (responds), 30 Boots, 1 Parses cleanly, 11 Known issue, 5
+`docs/compatibility.md` now holds **150 title rows: 9 Works, 12 Works
+(caveat), 78 Boots (responds), 33 Boots, 1 Parses cleanly, 10 Known issue, 7
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -79,8 +79,14 @@ remaining gap.
 `.nex` on the SD card through the genuine NextZXOS NEXLOAD path — the only one
 that can host a title calling the OS at runtime. **9 of 10 launch and render.**
 
+**Every Next game on the SD card is now accounted for**: 14 of the 16 title
+directories run — 9 of 10 `.nex` through NEXLOAD, all 3 NextBASIC programs
+through the Command Line, and NEXTipede from tape. TX-1696 launches but
+renders nothing. Pogie and THEH hold only assets and a 48K-sized `.snx`, which
+cannot represent a Next game's banked state, so there is nothing to launch.
+
 That is what items 4 and 7 were waiting on, and the answer it gives is
-"no evidence either is needed": ten Next games run without the zxnDMA
+"no evidence either is needed": fourteen Next programs run without the zxnDMA
 interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
 now blocked; both are simply unmotivated.
 

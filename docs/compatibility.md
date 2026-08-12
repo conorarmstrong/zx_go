@@ -162,7 +162,7 @@ The honest state, as verified by a contributor:
 |---|---|---|
 | Sonic the Hedgehog | Works (caveat) | Renders level/scroll/sprite/HUD and is controllable (arrows + Right-Alt/Ctrl). Residual: a few HUD icons in the top-right diverge from hardware (a game-loop/interrupt-timing detail, not a render bug). |
 | Nextoid | Works (caveat) | Bat/ball/HUD render and the game is drivable ('S' then SPACE). A load-time reset-to-Welcome (Copper byte-pairing) is fixed. |
-| NextBASIC Invaders | Known issue | Boots and sprites render, but the game throws an `Integer out of range` during play — a NextBASIC `DEFPROC` parameter/local-var storage divergence. Tracked in [janko-jj's reports](https://github.com/conorarmstrong/zx_go/issues). |
+| NextBASIC Invaders | **Works** | Verified 2026-08-12: loads from the Command Line and autostarts to its control-selection screen; started at difficulty 0 and played for ~48 seconds of emulated time with the full invader formation, bases and shots rendering. **No `Integer out of range`.** The earlier entry recorded a fault whose two root causes were fixed in later releases without this record being revisited. |
 | Baggers in Space (Stonechat Games) | Untested | Public `.nex` distribution; uses Layer 2 + sprites; foundation: `TestModelNextLayer2VisibleEndToEnd` Not screened: no copy to hand. |
 | Warhawk | **Works** | Verified 2026-08-11 via the genuine NextZXOS NEXLOAD path (`TestNexloadOSGamesIfPresent`, cmd/zx_go): launches and renders, PC=0x9071. It calls NextZXOS at runtime, so it cannot be loaded by bank injection — the game's banks overwrite the ones the OS keeps its screen and workspace in. An earlier entry here recorded it as a Known issue purely because the automated screening used that unsuitable path. |
 
@@ -283,6 +283,11 @@ elsewhere in this document say nothing about Next-only hardware.
 | Revival Survival | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x7aca). Input not driven. |
 | Santa's Pressie | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9819). Input not driven. |
 | Sonic | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x3404). Input not driven. |
+| Orb | **Boots** | NextBASIC. Screened 2026-08-12 via the Command Line (`.cd` then `LOAD`): title and instructions screen render (9775 px, 38 colours). |
+| baSnake | **Boots** | NextBASIC. Screened 2026-08-12: full instructions screen renders (4742 px, 6 colours). |
+| NEXTipede | **Boots** | Next tape. Screened 2026-08-12: loads and runs its DEMO MODE attract sequence — mushrooms, centipede and spider all animating. |
+| Pogie | Untested | Not screenable from the files present: the directory holds only assets (`.spr`, `.cpa`, `.map`) plus a 49179-byte `.snx`, which is a 48K snapshot and cannot hold a Next game's banked state. No standalone loadable program. |
+| THEH | Untested | Not screenable from the files present, as Pogie: assets plus a 48K-sized `.snx`. Loading that snapshot alone gives a black screen. |
 | TX-1696 | Known issue | Screened 2026-08-12: NEXLOAD launches it (PC=0xb14d, not the menu loop) but the screen stays blank. Needs investigation. |
 | Warhawk | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9071). Input not driven. |
 
