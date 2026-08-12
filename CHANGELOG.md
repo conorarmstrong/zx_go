@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.15]
+
+### Changed
+
+- **File dialogs open large enough to be useful.** Every file browser — Open
+  File, the snapshot load/save pickers, all the disk, tape, ROM, cartridge and
+  recording pickers, 25 in total — now opens at 90% of the emulator window
+  instead of Fyne's default, which showed only a handful of entries at a time
+  and made a directory of hundreds of snapshots or games painful to navigate.
+  The size floors at 900x700 and is clamped to the window, since a dialog
+  cannot be larger than the window it belongs to (`cmd/zx_go/filedialog_size.go`).
+
+### Verified
+
+- **A 30-minute interactive GUI session ran clean**, which was the one open
+  roadmap item an agent could not close: the headless proxy had passed long ago
+  (50 000 frames, no leak, steady frame rate, final frame still pixel-perfect),
+  but nothing had exercised the windowed app over a sustained real session.
+
 ## [v1.8.14]
 
 ### Fixed

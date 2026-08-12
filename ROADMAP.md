@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-11 — v1.8.2)
+## CURRENT STATE (2026-08-12 — v1.8.15)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **150 title rows: 9 Works, 12 Works
-(caveat), 78 Boots (responds), 33 Boots, 1 Parses cleanly, 10 Known issue, 7
+`docs/compatibility.md` now holds **154 title rows: 10 Works, 14 Works
+(caveat), 55 Boots (responds), 58 Boots, 1 Parses cleanly, 10 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -90,7 +90,7 @@ through the Command Line, and NEXTipede from tape. TX-1696 launches but
 renders nothing. Pogie and THEH hold only assets and a 48K-sized `.snx`, which
 cannot represent a Next game's banked state, so there is nothing to launch.
 
-That is what items 4 and 7 were waiting on, and the answer it gives is
+That is what items 2 and 4 were waiting on, and the answer it gives is
 "no evidence either is needed": fourteen Next programs run without the zxnDMA
 interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
 now blocked; both are simply unmotivated.
@@ -105,15 +105,7 @@ The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering �
 and none of them needs this. That is the evidence the item was waiting for, and
 it argues for leaving it alone until a title actually demands it.
 
-### 3. [product] GUI stability session
-
-Still open and still **user-driven**: an agent cannot drive the windowed
-app. The headless proxy passed long ago (50 000 frames, no leak, steady
-frame rate, final frame still pixel-perfect), so what remains is
-interactive use — menus, model switching, load/save, resize — over a
-sustained session.
-
-### 4. [product] Windows ARM64 has never been run
+### 3. [product] Windows ARM64 has never been run
 
 Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
 toolchain problem is solved. Nobody has launched the binary. Compiling
@@ -121,7 +113,7 @@ does not prove the OpenGL path works on Windows-on-ARM, which is why the
 release matrix still marks it `experimental` and `README.md` carries the
 caveat. One run on real hardware settles it.
 
-### 5. [research] Copper cycle accuracy
+### 4. [research] Copper cycle accuracy
 
 **Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
 segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,

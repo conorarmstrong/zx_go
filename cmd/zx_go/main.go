@@ -552,7 +552,7 @@ func savePlus3Disk(emu *emulator, w fyne.Window, drive int) {
 			"Wrote drive "+driveName+" to "+filepath.Base(path)+".", w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".dsk"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // insertInterface2Cartridge opens a file picker for a 16KB .rom
@@ -588,7 +588,7 @@ func insertInterface2Cartridge(emu *emulator, w fyne.Window, currentModel roms.S
 				".\n\nThe emulator has been rebooted into the cartridge.", w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // ejectInterface2Cartridge removes any inserted Interface 2
@@ -635,7 +635,7 @@ func loadDiscipleDisk(emu *emulator, w fyne.Window, drive int) {
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{
 		".mgt", ".img", ".sad", ".dsk", ".trd", ".opd", ".d40", ".d80",
 	}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // loadPlus3Disk opens a file picker for a DSK image and mounts it in the
@@ -673,7 +673,7 @@ func loadPlus3Disk(emu *emulator, w fyne.Window, currentModel roms.SpectrumModel
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{
 		".dsk", ".udi", ".mgt", ".img", ".trd", ".sad", ".d40", ".d80",
 	}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // loadTRDDisk shows a .TRD file picker and mounts the chosen image in the given
@@ -714,7 +714,7 @@ func loadTRDDisk(emu *emulator, w fyne.Window, drive int) {
 				"From BASIC, enter TR-DOS with: RANDOMIZE USR 15616  (or the 128 menu).", w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".trd"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // loadOPDDisk shows a .OPD file picker and mounts the chosen image in the
@@ -757,7 +757,7 @@ func loadOPDDisk(emu *emulator, w fyne.Window, drive int) {
 		dialog.ShowInformation("Opus Disk Loaded", msg, w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".opd"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // saveOPDDisk writes the disk in the given Opus drive back out to a file.
@@ -795,7 +795,7 @@ func saveOPDDisk(emu *emulator, w fyne.Window, drive int) {
 			fmt.Sprintf("Drive %d saved to:\n%s", drive+1, filepath.Base(path)), w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".opd"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // ejectOPDDisk removes the disk in the given Opus drive, asking first if the
@@ -861,7 +861,7 @@ func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 				filepath.Base(path), drive+1), w)
 	}, w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".mgt", ".sad", ".dsk", ".img"}))
-	fd.Show()
+	showFileDialog(fd, w)
 }
 
 // userKeymapPath returns the absolute path to the user's keymap override
@@ -2053,7 +2053,7 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 				dialog.ShowInformation("Microdrive", fmt.Sprintf("Cartridge loaded into Drive %d:\n%s", slot+1, filepath.Base(path)), w)
 			}, w)
 			fd.SetFilter(storage.NewExtensionFileFilter([]string{".mdr"}))
-			fd.Show()
+			showFileDialog(fd, w)
 		})
 		save := fyne.NewMenuItem("Save Cartridge...", func() {
 			if !emu.peripherals.MicrodriveCartridgeInserted(slot) {
@@ -2080,7 +2080,7 @@ func makeMicrodriveMenu(emu *emulator, w fyne.Window) *fyne.MenuItem {
 				dialog.ShowInformation("Microdrive", fmt.Sprintf("Drive %d saved to:\n%s", slot+1, filepath.Base(path)), w)
 			}, w)
 			fd.SetFilter(storage.NewExtensionFileFilter([]string{".mdr"}))
-			fd.Show()
+			showFileDialog(fd, w)
 		})
 		eject := fyne.NewMenuItem("Eject", func() {
 			emu.peripherals.EjectMicrodrive(slot)
@@ -3373,7 +3373,7 @@ func main() {
 					dialog.ShowInformation("Opened", fmt.Sprintf("Loaded %s from:\n%s", kind, filepath.Base(path)), w)
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap", ".tzx", ".z80", ".sna", ".szx", ".rzx", ".nex", ".p", ".81", ".o", ".80"}))
-				fd.Show()
+				showFileDialog(fd, w)
 			}),
 			recentSubmenu,
 			fyne.NewMenuItemSeparator(),
@@ -3427,7 +3427,7 @@ func main() {
 						dialog.ShowInformation("ROM Loaded", fmt.Sprintf("Loaded %s\n(%d bytes)\n\nEmulator rebooted.", reader.URI().Name(), len(data)), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rom"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Load Snapshot...", func() {
 					slog.Debug("load snapshot dialog opened")
@@ -3465,7 +3465,7 @@ func main() {
 						_ = reader.Close()
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Save Snapshot...", func() {
 					slog.Debug("save snapshot dialog opened")
@@ -3499,7 +3499,7 @@ func main() {
 						_ = writer.Close()
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".z80", ".sna", ".szx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 			),
 			fileSubmenu("Spectrum Next",
@@ -3526,7 +3526,7 @@ func main() {
 								"\n\nRestart ModelNext (Machine menu) to pick up the change.",
 							w)
 					}, w)
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Set Next SD Card Image (.img/.mmc)...", func() {
 					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
@@ -3552,7 +3552,7 @@ func main() {
 							w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".img", ".mmc", ".IMG", ".MMC"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Clear Next SD Card Setting", func() {
 					cfg.NextSDDir = ""
@@ -3590,7 +3590,7 @@ func main() {
 						_ = reader.Close()
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Load Tape (TZX)...", func() {
 					fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
@@ -3614,7 +3614,7 @@ func main() {
 						_ = reader.Close()
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Insert Interface 2 Cartridge...", func() {
 					insertInterface2Cartridge(emu, w, currentModel)
@@ -3752,7 +3752,7 @@ func main() {
 						dialog.ShowInformation("RZX Playback", fmt.Sprintf("Playing back:\n%s", filepath.Base(path)), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Stop RZX Playback", func() {
 					emu.stopRZXPlayback()
@@ -3778,7 +3778,7 @@ func main() {
 						dialog.ShowInformation("RZX Recording", fmt.Sprintf("Recording to:\n%s", filepath.Base(path)), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".rzx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Stop RZX Recording", func() {
 					if err := emu.stopRZXRecording(); err != nil {
@@ -3825,7 +3825,7 @@ func main() {
 						dialog.ShowInformation("ZX Printer", fmt.Sprintf("Saved %d rows to:\n%s", printer.Rows(), filepath.Base(path)), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Clear ZX Printer Output", func() {
 					if !emu.peripherals.IsZXPrinterEnabled() {
@@ -3858,7 +3858,7 @@ func main() {
 						dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tap"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Save Tape (TZX)...", func() {
 					tp := emu.ula.GetTapePlayer()
@@ -3883,7 +3883,7 @@ func main() {
 						dialog.ShowInformation("Tape Saved", fmt.Sprintf("Saved %d block(s) to:\n%s", tp.BlockCount(), writer.URI().Name()), w)
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".tzx"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}),
 				fyne.NewMenuItem("Stop Tape", func() {
 					if emu.ula != nil {
@@ -3993,7 +3993,7 @@ func main() {
 						fyne.Do(func() { w.MainMenu().Refresh() })
 					}, w)
 					fd.SetFilter(storage.NewExtensionFileFilter([]string{".wav"}))
-					fd.Show()
+					showFileDialog(fd, w)
 				}
 				return item
 			}(),
@@ -4020,7 +4020,7 @@ func main() {
 					dialog.ShowInformation("Screenshot Saved", "Saved screenshot to:\n"+filepath.Base(path), w)
 				}, w)
 				fd.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
-				fd.Show()
+				showFileDialog(fd, w)
 			}),
 		),
 		fyne.NewMenu("Machine",
