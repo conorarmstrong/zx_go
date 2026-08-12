@@ -151,8 +151,12 @@ type ULA struct {
 	// bit 4 appends an (offset, state) tuple here. Render() walks the
 	// list at end of frame to synthesise audio samples and pushes
 	// them to the audio system. Reset at start of every frame.
-	audioEvents            []audioEvent
-	frameStartTstate       uint64
+	audioEvents      []audioEvent
+	frameStartTstate uint64
+
+	// hasRendered records whether a frame has ever been composed, so
+	// LastFrame can compose one lazily instead of returning a blank image.
+	hasRendered            bool
 	frameStartSpeakerState bool
 
 	// dc models the capacitor-coupled audio output: it high-pass-filters the
@@ -713,7 +717,35 @@ func (u *ULA) ulaDisabledFill() color.RGBA {
 	return color.RGBA{A: 0xFF}
 }
 
+// LastFrame returns the most recently rendered frame WITHOUT composing a new
+// one.
+//
+// Use this to look at the screen — screenshots, measurements, debugger views.
+// Render() is not an observation: on the Next its compose walk steps the
+// Copper as it goes, because a MOVE has to affect the segments after it within
+// the same frame. Calling Render() again for a frame therefore runs the Copper
+// program a second time and leaves the visual registers somewhere the machine
+// never was. Measured on TX-1696: the first render produced its title screen
+// in 20 colours, and every render after it a black frame, from identical state
+// with no CPU time in between.
+//
+// Render() stays what it is — "advance the picture by one frame" — and callers
+// that merely want to see it use this instead.
+// It composes once, lazily, if nothing has been rendered yet — so asking for
+// the screen before the machine has run still gives a picture rather than a
+// blank one.
+func (u *ULA) LastFrame() *image.RGBA {
+	if !u.hasRendered {
+		return u.Render()
+	}
+	return u.img
+}
+
+// Render composes the next frame and returns it.
+//
+// Call it ONCE per emulated frame. It is not idempotent: see LastFrame.
 func (u *ULA) Render() *image.RGBA {
+	u.hasRendered = true
 	// The tape EAR level is advanced per port-$FE read (tapeLevel), not here —
 	// a once-per-frame Update would freeze the level for the whole frame and
 	// starve edge-timed loaders.

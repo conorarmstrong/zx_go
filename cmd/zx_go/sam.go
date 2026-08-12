@@ -114,7 +114,7 @@ func runSAMHeadless(f *cliFlags) {
 			os.Exit(1)
 		}
 		defer func() { _ = out.Close() }()
-		if err := png.Encode(out, emu.renderFrame()); err != nil {
+		if err := png.Encode(out, emu.lastFrame()); err != nil {
 			slog.Error("sam: screenshot encode failed", "err", err)
 			os.Exit(1)
 		}

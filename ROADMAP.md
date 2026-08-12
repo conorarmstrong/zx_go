@@ -90,32 +90,7 @@ That is what items 4 and 7 were waiting on, and the answer it gives is
 interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
 now blocked; both are simply unmotivated.
 
-### 2. [correctness] Render() mutates the machine
-
-`ULA.Render()` is not a pure observation: the Next compose walk steps the
-Copper and replays the raster journal. Rendering the same frame twice
-therefore runs the Copper program twice and leaves the NextRegs somewhere the
-machine never was.
-
-Measured on TX-1696 from identical state with no CPU time in between:
-
-    render 0: 5333 drawn pixels, 20 colours   (the real title screen)
-    render 1: 0 drawn pixels, 1 colour        (black)
-    render 2: 0 drawn pixels, 1 colour
-
-Anything that renders alongside a render gets a picture the machine was never
-showing — a screenshot taken next to a frame, a measurement, a debugger view.
-It also means the Copper only advances when something renders, so a loop that
-runs frames without rendering starves it entirely.
-
-The fix is architectural: step the Copper during frame execution rather than
-during composition. That touches the most output-sensitive code in the
-emulator — 15 pixel-golden entries assert exact frames — so it wants doing
-deliberately, not at the end of a long session. `pkg/ula/ula.go`
-`applyNextCompositor`; `pkg/ula/render_idempotent_test.go` pins the classic
-path, which was always fine.
-
-### 3. [correctness] Sprite per-line bandwidth limit
+### 2. [correctness] Sprite per-line bandwidth limit
 
 Real hardware runs out of sprite bandwidth within a scanline, drops the
 overflow, and latches bit 1 of the `$303B` status port. Neither is
@@ -126,7 +101,7 @@ Compatibility-relevant rather than cosmetic. Software that reads the flag
 to throttle its own sprite use sees a machine that never saturates, and
 scenes that should visibly drop sprites render complete.
 
-### 4. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
+### 3. [correctness] NR$68 bit 2 — ULA half-pixel horizontal scroll
 
 Decoded, stored and read back, but not rendered
 (`pkg/ula/ulascroll.go:53`). `zxula.vhd:353` builds the shift as
@@ -136,7 +111,7 @@ other path there is whole-pixel.
 
 Bounded, but not small: it needs a 2x-wide ULA render path.
 
-### 5. [correctness] zxnDMA interrupt / match logic and bus arbitration
+### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
 **Unblocked, and unmotivated.** The transfer engine, prescaler and cycle
 timing are complete and spec-checked. Not modelled: the interrupt/match logic
@@ -146,7 +121,7 @@ The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering �
 and none of them needs this. That is the evidence the item was waiting for, and
 it argues for leaving it alone until a title actually demands it.
 
-### 6. [product] GUI stability session
+### 5. [product] GUI stability session
 
 Still open and still **user-driven**: an agent cannot drive the windowed
 app. The headless proxy passed long ago (50 000 frames, no leak, steady
@@ -154,7 +129,7 @@ frame rate, final frame still pixel-perfect), so what remains is
 interactive use — menus, model switching, load/save, resize — over a
 sustained session.
 
-### 7. [product] Windows ARM64 has never been run
+### 6. [product] Windows ARM64 has never been run
 
 Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
 toolchain problem is solved. Nobody has launched the binary. Compiling
@@ -162,7 +137,7 @@ does not prove the OpenGL path works on Windows-on-ARM, which is why the
 release matrix still marks it `experimental` and `README.md` carries the
 caveat. One run on real hardware settles it.
 
-### 8. [research] Copper cycle accuracy
+### 7. [research] Copper cycle accuracy
 
 **Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
 segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,

@@ -449,7 +449,7 @@ func (sc *snapshotConfig) emit() {
 
 	if sc.saveScreens {
 		path := fmt.Sprintf("%s%06d.png", sc.prefix, sc.frameIdx)
-		img := emu.ula.Render()
+		img := emu.ula.LastFrame()
 		fp, err := os.Create(path)
 		if err != nil {
 			slog.Warn("snapshot.screen: create failed", "path", path, "err", err)

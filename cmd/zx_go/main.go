@@ -1730,7 +1730,7 @@ func ensureFileExt(path, ext string) string {
 // produces. The pixel data is copied before encode so the PNG write
 // can't race the emulator goroutine mutating the framebuffer.
 func writeScreenshotPNG(emu *emulator, w io.Writer) error {
-	src := emu.renderFrame()
+	src := emu.lastFrame()
 	imgCopy := image.NewRGBA(src.Bounds())
 	copy(imgCopy.Pix, src.Pix)
 	return png.Encode(w, imgCopy)

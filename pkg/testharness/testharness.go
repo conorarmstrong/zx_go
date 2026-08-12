@@ -280,7 +280,11 @@ func (h *Harness) WriteMemory(addr uint16, val byte) { h.mem.Write(addr, val) }
 // returned RGBA pointer is owned by the ULA and may be overwritten
 // by the next Render call (i.e. the next RunFrames invocation), so
 // callers that need a stable copy should clone it.
-func (h *Harness) ScreenImage() *image.RGBA { return h.ula.Render() }
+// ScreenImage returns the last rendered frame. It does NOT compose a new one:
+// RunFrames already renders each frame, and on the Next a second compose of
+// the same frame steps the Copper again and yields a picture the machine never
+// showed. See ULA.LastFrame.
+func (h *Harness) ScreenImage() *image.RGBA { return h.ula.LastFrame() }
 
 // SaveScreenshot captures the current screen and writes it as a
 // PNG to path. Useful for human debugging when an automated test

@@ -56,6 +56,22 @@ func newZX8xEmulator(model roms.SpectrumModel) (*emulator, error) {
 // renderFrame returns the current display image for any machine type. ZX80/ZX81
 // produce a fresh image per presented frame; the Spectrum/Next path renders the
 // ULA composite in place.
+// lastFrame returns the most recently rendered frame without composing a new
+// one. Use it to LOOK at the screen — screenshots, dumps, debugger views.
+// renderFrame advances the picture and, on the Next, steps the Copper as it
+// composes; calling it merely to inspect gives a frame the machine never
+// showed. See ULA.LastFrame.
+func (e *emulator) lastFrame() *image.RGBA {
+	if e.zx8x != nil {
+		return e.zx8x.Image()
+	}
+	if e.sam != nil {
+		return e.sam.Render()
+	}
+	return e.ula.LastFrame()
+}
+
+// renderFrame composes the next frame. Call it once per emulated frame.
 func (e *emulator) renderFrame() *image.RGBA {
 	if e.zx8x != nil {
 		return e.zx8x.Image()

@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.10]
+
+### Fixed
+
+- **Looking at the screen no longer changes it.** `ULA.Render()` composes a
+  frame, and on the Next that walk steps the Copper as it goes — a MOVE has to
+  affect the segments after it within the same frame, so the coupling is
+  correct and Render is legitimately a mutation. The bug was that *inspection*
+  went through it: screenshots, measurements and debugger views all called
+  Render again, running the Copper program a second time for a frame the
+  machine had already shown.
+
+  Measured on TX-1696 from identical state with no CPU time in between: the
+  first render produced its title screen in 20 colours, and every render after
+  it a black frame.
+
+  New `ULA.LastFrame()` returns the frame already composed, and composes once
+  lazily if none has been. Screenshots, the debugger view, the headless dumps
+  and `Harness.ScreenImage` now use it. `Render()` keeps its meaning — advance
+  the picture by one frame — and is documented as once-per-frame.
+
+  A frame-identity cache was tried first and rejected: the CPU's T-state
+  counter is frame-relative and rebases, so `FrameID()` is always 0 and the
+  cache froze the picture at the first frame. That showed up as blank corpus
+  frames, which the liveness floor caught.
+
+- **Four corpus goldens regenerated**, because they had captured the bug. The
+  harness rendered each frame and then rendered the final one *again* to
+  capture it, so the committed frames were composed twice: the Next entries
+  (tilemap, specbong, mrk_zilogdma) had their border-tilemap pass applied over
+  already-composited pixels, and mrk_z80bltst — a plain 48K program — had an
+  extra FLASH tick, because merely looking at the screen advanced the flash
+  phase.
+
+  The GUI only ever renders once per frame, so it was always showing the new
+  output; the old goldens recorded something only the test harness produced.
+
 ## [v1.8.9]
 
 ### Fixed

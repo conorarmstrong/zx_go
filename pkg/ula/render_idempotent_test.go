@@ -41,3 +41,69 @@ func TestRenderIsIdempotentForAFrame(t *testing.T) {
 		}
 	}
 }
+
+// TestLastFrameDoesNotStepTheCopper is the Next-path guard, and the bug that
+// actually bit.
+//
+// The compose walk steps the Copper as it goes, because a MOVE has to affect
+// the segments after it within the same frame. That coupling is correct, so
+// Render() is legitimately a mutation — but then merely LOOKING at the screen
+// must not go through it. It did: screenshots and measurements called Render()
+// again, running the Copper program a second time for the same frame. On
+// TX-1696 the first render produced its title screen in 20 colours and every
+// render after it a black frame, from identical state with no CPU time in
+// between.
+func TestLastFrameDoesNotStepTheCopper(t *testing.T) {
+	u, _ := newFloatingBusULA(t)
+	c := &recordingCopper{}
+	u.SetNextCopper(c)
+	u.SetNextCompositor(stubCompositor{})
+
+	u.Render()
+	first := len(c.steps)
+	if first == 0 {
+		t.Fatal("precondition: the Copper was never stepped by a render")
+	}
+
+	for i := 0; i < 3; i++ {
+		u.LastFrame()
+		if len(c.steps) != first {
+			t.Fatalf("LastFrame call %d stepped the Copper %d extra times; looking at the screen must not run it",
+				i+1, len(c.steps)-first)
+		}
+	}
+}
+
+// TestLastFrameComposesLazily pins that asking for the screen before anything
+// has run still gives a picture, not a blank one.
+func TestLastFrameComposesLazily(t *testing.T) {
+	u, _ := newFloatingBusULA(t)
+	c := &recordingCopper{}
+	u.SetNextCopper(c)
+	u.SetNextCompositor(stubCompositor{})
+
+	u.LastFrame() // nothing rendered yet
+	if len(c.steps) == 0 {
+		t.Error("LastFrame on a fresh ULA composed nothing")
+	}
+}
+
+// TestComposeWalkRunsAgainOnANewFrame pins the other half: the guard must not
+// freeze the picture. When the frame advances, the walk runs again.
+func TestComposeWalkRunsAgainOnANewFrame(t *testing.T) {
+	u, mem := newFloatingBusULA(t)
+	c := &recordingCopper{}
+	u.SetNextCopper(c)
+	u.SetNextCompositor(stubCompositor{})
+
+	u.Render()
+	first := len(c.steps)
+
+	// Advance the machine by a whole frame and render again.
+	*mem.TStates += uint64(TStatesPerLine * LinesPerFrame)
+	u.Render()
+
+	if len(c.steps) <= first {
+		t.Error("the Copper was not stepped on the next frame; the guard is freezing the render")
+	}
+}

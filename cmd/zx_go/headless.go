@@ -611,7 +611,7 @@ func runHeadless(f *cliFlags) {
 					if err != nil {
 						return
 					}
-					_ = png.Encode(fp, emu.renderFrame())
+					_ = png.Encode(fp, emu.lastFrame())
 					_ = fp.Close()
 					slog.Info("nav shot", "path", p, "cursor", cur)
 				}
@@ -825,7 +825,7 @@ func runHeadless(f *cliFlags) {
 							if dir := os.Getenv("ZX_GO_NAV_SHOTS"); dir != "" {
 								p := fmt.Sprintf("%s/postlaunch-%05d.png", dir, i)
 								if fp, err := os.Create(p); err == nil {
-									_ = png.Encode(fp, emu.renderFrame())
+									_ = png.Encode(fp, emu.lastFrame())
 									_ = fp.Close()
 									slog.Info("POSTLAUNCH shot", "path", p)
 								}
@@ -1013,7 +1013,7 @@ func runHeadless(f *cliFlags) {
 	}
 
 	if f.saveScreen != "" {
-		img := emu.renderFrame()
+		img := emu.lastFrame()
 		fp, err := os.Create(f.saveScreen)
 		if err != nil {
 			slog.Error("save-screen: create", "path", f.saveScreen, "err", err)
