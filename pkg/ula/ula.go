@@ -31,6 +31,11 @@ const (
 // (BeamPosition / ActiveVideoLine on the Next, which boots in 128K timing).
 const TStatesPerLine = 228
 
+// LinesPerFrame is the scanline count of a 128K-family frame (311 lines of
+// 228 T-states = 70908). The raster counters wrap here, as the FPGA's vc does
+// at c_max_vc — a line number outside this range is not a raster position.
+const LinesPerFrame = 311
+
 // copperSegmentPixels is the width of one compositing segment. It is the
 // Copper's own horizontal resolution: its WAIT column field is 6 bits taken
 // as 8-pixel units (device/copper.vhd:94), so stepping and composing at this
@@ -1093,7 +1098,18 @@ func (u *ULA) BeamPosition() (line, hpos int) {
 	if t < 0 {
 		t = 0
 	}
-	line = (t / TStatesPerLine) & 0x1FF
+	// Wrap at the frame, not at 9 bits. The old `& 0x1FF` bounded the line at
+	// 511, which is not a raster position: a frame is LinesPerFrame lines, and
+	// software polling NextReg $1E/$1F for a scanline is comparing against a
+	// number that must exist.
+	//
+	// Wrapping here also makes the counter independent of when the origin was
+	// last reset, which matters because that reset lives in the audio frame
+	// flush: with audio disabled, or in a loop that does not render every
+	// frame, the offset grows without bound and the masked version became a
+	// free-running counter with no relation to the beam.
+	t %= TStatesPerLine * LinesPerFrame
+	line = t / TStatesPerLine
 	hpos = (t % TStatesPerLine) / 4
 	return line, hpos
 }

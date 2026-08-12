@@ -4,6 +4,41 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.8]
+
+### Fixed
+
+- **The active video line was not a raster position.** `NextReg $1E/$1F` report
+  the beam's scanline, and software waits on them: TX-1696 polls the pair about
+  1700 times a frame. Two defects made the number meaningless.
+
+  `BeamPosition` masked the line with `& 0x1FF`, bounding it at 511. A
+  128K-family frame is 311 lines, so it reported scanlines that do not exist —
+  measured sweeping 0..511 against a real range of 0..310. It now wraps at the
+  frame.
+
+  Worse, the origin it measures from was only reset inside `flushAudioFrame`,
+  which returns early when audio is disabled and is reached only from
+  `Render()`. Any run with audio off, or any loop not rendering every frame,
+  let the offset grow without bound and turned the "raster line" into a
+  free-running counter unrelated to the beam. Wrapping at the frame makes the
+  result independent of when the origin was last reset.
+
+  The pixel-golden corpus is unchanged by this, so the rendered output of every
+  vendored program is byte-identical; what changes is what software *reading*
+  the raster registers sees.
+
+  A pre-existing test asserted the old behaviour outright — "9-bit counter
+  wraps: 513 & 0x1FF == 1" — so the bug was written down as intended. It now
+  pins the frame wrap.
+
+### Known gaps
+
+- **TX-1696** still does not render. The raster fix moves it past the wait it
+  was stuck in (PC advances from `0x8a5e` to a new loop at `0xc670`), and it
+  demonstrably draws into Layer 2, but it never sets the Layer 2 enable bit —
+  it writes `NR$69 = 0x00` and `OUT $123B, 0x00`. Root cause not yet found.
+
 ## [v1.8.7]
 
 ### Added

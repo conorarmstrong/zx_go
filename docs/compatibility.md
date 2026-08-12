@@ -288,7 +288,7 @@ elsewhere in this document say nothing about Next-only hardware.
 | NEXTipede | **Boots** | Next tape. Screened 2026-08-12: loads and runs its DEMO MODE attract sequence — mushrooms, centipede and spider all animating. |
 | Pogie | Untested | Not screenable from the files present: the directory holds only assets (`.spr`, `.cpa`, `.map`) plus a 49179-byte `.snx`, which is a 48K snapshot and cannot hold a Next game's banked state. No standalone loadable program. |
 | THEH | Untested | Not screenable from the files present, as Pogie: assets plus a 48K-sized `.snx`. Loading that snapshot alone gives a black screen. |
-| TX-1696 | Known issue | Screened 2026-08-12: NEXLOAD launches it (PC=0xb14d, not the menu loop) but the screen stays blank. Needs investigation. |
+| TX-1696 | Known issue | Investigated 2026-08-12. NEXLOAD launches it and it draws into Layer 2 (banks 9/10/11 hold thousands of bytes), but it never makes Layer 2 visible: it writes `NR$69 = 0x00` and `OUT $123B, 0x00`, never setting the enable bit. It polls the active-video-line registers `NR$1E`/`NR$1F` ~1700 times a frame waiting for a scanline. Fixing a real raster bug found by this investigation (see v1.8.8) moves it past that wait — the PC advances from `0x8a5e` to a new loop at `0xc670` — but it still renders nothing. Root cause not yet found. |
 | Warhawk | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9071). Input not driven. |
 
 ## Automated screening

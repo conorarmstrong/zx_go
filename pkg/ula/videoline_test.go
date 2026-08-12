@@ -27,10 +27,14 @@ func TestActiveVideoLine(t *testing.T) {
 	if got := u.ActiveVideoLine(); got != 7 {
 		t.Errorf("ActiveVideoLine = %d, want 7 (must advance)", got)
 	}
-	// 9-bit counter wraps: 513 & 0x1FF == 1.
+	// The counter wraps at the FRAME, not at 9 bits. This previously asserted
+	// `513 & 0x1FF == 1`, which encoded a bug: 511 is not a raster position,
+	// and software polling NextReg $1E/$1F for a scanline compares against a
+	// line that has to exist. Line 513 is line 513-311 = 202 of the next
+	// frame.
 	ts = 100 + uint64(TStatesPerLine*513)
-	if got := u.ActiveVideoLine(); got != 1 {
-		t.Errorf("ActiveVideoLine = %d, want 1 (9-bit wrap)", got)
+	if got, want := u.ActiveVideoLine(), 513-LinesPerFrame; got != want {
+		t.Errorf("ActiveVideoLine = %d, want %d (wraps at the frame)", got, want)
 	}
 	// No T-state source → 0, not a panic.
 	if got := (&ULA{}).ActiveVideoLine(); got != 0 {
