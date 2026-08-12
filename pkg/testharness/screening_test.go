@@ -408,3 +408,35 @@ func TestVerdictInconclusiveName(t *testing.T) {
 		t.Errorf("VerdictInconclusive.String() = %q, want %q", got, "Inconclusive")
 	}
 }
+
+// TestPlus3DiskReachesTheProgramNotTheROMMenu pins the flaw that put 61 wrong
+// entries in the compatibility manifest.
+//
+// A +3 powers on into its ROM menu — Loader / +3 BASIC / Calculator / 48
+// BASIC — and sits there until ENTER selects "Loader". Screening a disk
+// without sending that key measures the ROM's own menu, which looks like a
+// drawn screen and whose highlight moves under a probe keypress, so every disk
+// scored "Boots (responds)" whether or not the disk was readable at all.
+//
+// The same class of error was checked for on the tape path (0 of 100 titles
+// were sitting at the 128 menu) and never checked on this one.
+func TestPlus3DiskReachesTheProgramNotTheROMMenu(t *testing.T) {
+	const disk = "../../games/Cybernoid.dsk"
+	if _, err := os.Stat(disk); err != nil {
+		t.Skipf("no +3 disk to hand: %v", err)
+	}
+	h, err := New(roms.ModelPlus3)
+	if err != nil {
+		t.Skipf("+3 harness: %v", err)
+	}
+	defer h.CloseFiles()
+
+	s, err := h.ScreenFile(disk, 3000)
+	if err != nil {
+		t.Fatalf("ScreenFile: %v", err)
+	}
+	if screen := h.ScreenText(); strings.Contains(screen, "Loader") {
+		t.Errorf("still at the +3 ROM loader menu after screening (pixels=%d) — the disk was never started",
+			s.Pixels)
+	}
+}

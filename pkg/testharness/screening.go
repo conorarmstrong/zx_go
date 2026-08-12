@@ -250,11 +250,19 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 		}
 		h.TypeLoadCommand()
 	case ".dsk", ".edsk":
-		// The +3 boots a disk from reset with no typing, so insert then reset.
 		if err := h.InsertPlus3Disk(0, path); err != nil {
 			return Screening{}, err
 		}
 		h.Reboot()
+		// A +3 powers on into its ROM menu — Loader / +3 BASIC / Calculator /
+		// 48 BASIC — and stays there until ENTER selects the highlighted
+		// "Loader". Without this the screening measures the ROM's own menu,
+		// which is a drawn screen whose highlight moves under a probe
+		// keypress, so every disk scored as booting and responding whether or
+		// not it was readable at all.
+		h.RunFrames(200) // reach the menu
+		h.TapKey("Return")
+		h.RunFrames(100)
 	default:
 		return Screening{}, fmt.Errorf("testharness: no screening loader for %q", ext)
 	}

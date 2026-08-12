@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.11]
+
+### Fixed
+
+- **61 disk entries in the compatibility manifest were measuring the ROM's own
+  menu.** A +3 powers on into Loader / +3 BASIC / Calculator / 48 BASIC and
+  stays there until ENTER selects "Loader". The screening never sent that key,
+  so every `.dsk` title scored on the ROM menu — a drawn screen whose highlight
+  moves under a probe keypress, giving "Boots (responds)" whether or not the
+  disk was readable at all.
+
+  Screening now starts the loader explicitly. Re-measured, the picture is
+  quite different: 27 titles animate where 12 did before, and 007 Licence To
+  Kill — previously recorded as booting — turns out to reach its actual title
+  screen and control menu, which it never had.
+
+  The same class of error was checked for on the tape path early on (0 of 100
+  titles were sitting at the 128 menu) and simply never checked on this one.
+
+- **Where Time Stood Still (+3 disk reissue)** is no longer Untested: the
+  harness gained a +3 disk loader in v1.8.4 and the entry was never revisited.
+
 ## [v1.8.10]
 
 ### Fixed
