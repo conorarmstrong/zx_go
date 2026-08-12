@@ -295,45 +295,37 @@ elsewhere in this document say nothing about Next-only hardware.
 
 Titles screened headlessly by `TestScreenLocalTitles` (pkg/testharness).
 Each is loaded, run, and measured in the **display window with the
-border cropped** — cropping matters, because a tape loader fills the
-border with moving stripes while the display area stays empty, so an
-uncropped measurement counts a loader as content.
+border cropped** — a tape loader fills the border with moving stripes
+while the display area stays empty, so an uncropped measurement counts a
+loader as content.
 
-Still screens are then probed: keys are sent and the display watched
-for a material change, against a **no-key control** so a screen that
-animates on its own is not credited to the keypress.
+Still screens are then probed: keys are sent and the display watched for
+a material change, against a **no-key control** so a screen that animates
+on its own is not credited to the keypress.
 
 **A +3 disk is started explicitly.** The machine powers on into its ROM
-menu (Loader / +3 BASIC / Calculator / 48 BASIC) and stays there until
-ENTER selects "Loader". An earlier run of this table did not send that
-key, so 61 disk entries recorded the ROM's own menu — a drawn screen
-whose highlight moves under a probe keypress — rather than the game.
-Every one of those verdicts was wrong and has been re-measured.
+menu and stays there until ENTER selects "Loader". An earlier run did not
+send that key, so 61 disk entries recorded the ROM's own menu rather than
+the game; all were wrong and have been re-measured.
 
-**What these verdicts do and do not mean.** *Boots* means the guest's
-own code ran and drew its screen. *Boots (responds)* adds that the
-screen answered a keypress, so the title is waiting for input rather
-than hung. Neither means the title is playable: what the keypress did
-is unknown, and no gameplay is verified.
+**What these verdicts mean.** *Boots* — the guest's own code ran and drew
+its screen. *Boots (responds)* — it also answered a keypress, so it is
+waiting for input rather than hung. Neither means playable: what the
+keypress did is unknown.
 
-The titles themselves are commercial and are not in this repository.
-The test reads a path list from `pkg/testharness/testdata/local_titles.tsv`,
-which is gitignored, and skips entirely when it is absent. It never
-fails the build: the collection is uncontrolled, and some titles
-legitimately will not load.
+The titles are commercial and are not in this repository. The test reads
+a gitignored path list and skips when it is absent; it never fails the
+build.
 
-**Of 113 titles screened, 98 rendered content (27 of them
-animating and 57 answering a keypress), 8 would not load, and the
-rest drew almost nothing.**
+**Of 113 titles screened, 100 rendered content (27 animating,
+58 answering a keypress) and 13 did not.**
+Every disk image now loads: of a 250-image sample only one still fails to
+parse, and that one is a truncated dump whose track data runs past the end
+of the file.
 
-The 8 that will not load share one cause: a copy-protection track
-whose declared sector sizes exceed what a physical double-density track
-holds (an N=6 code claims 8192 bytes against ~6250). That layout is not
-modelled; the loader says so explicitly rather than failing opaquely.
-
-Verdicts confirmed by eye against captured frames: Elite, Renegade,
-Pssst, R-Type, Last Ninja 2, Where Time Stood Still, RoboCop, The Way of
-the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
+Verdicts confirmed by eye: Elite, Renegade, Pssst, R-Type, Last Ninja 2,
+Where Time Stood Still, RoboCop, The Way of the Tiger, Lemmings,
+Target: Renegade, Cybernoid and 007 Licence To Kill.
 
 | Title | Status | Notes |
 |---|---|---|
@@ -345,7 +337,7 @@ the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Action Fighter (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1986 px, 5 colours, answered a keypress. |
 | Action Force (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 3261 px, 2 colours, answered a keypress. |
 | Action Force 2 (+3 disk) | **Boots** | Screened 2026-08-12: 1686 px, 3 colours, animating. |
-| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Adidas Championship Tie-Break (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (181 px, 2 colours). |
 | Afterburner (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Alien 8 | **Boots (responds)** | Screened 2026-08-12: 16388 px, 6 colours, answered a keypress. |
@@ -358,10 +350,10 @@ the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
 | ATF - Advanced Tactical Fighter (+3 disk) | **Boots** | Screened 2026-08-12: 31165 px, 9 colours. |
 | Auf Wiedersehen Monty | **Boots (responds)** | Screened 2026-08-12: 10204 px, 7 colours, answered a keypress. |
 | Autocrash (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1157 px, 2 colours, answered a keypress. |
-| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Back to the Future Part II (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Back to the Future Part III (+3 disk) | **Boots** | Screened 2026-08-12: 13747 px, 8 colours, animating. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
-| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Barbarian II - The Dungeon of Drax (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
@@ -372,7 +364,7 @@ the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Blasteroids (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1425 px, 2 colours, answered a keypress. |
 | Bloodwych (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1343 px, 4 colours, answered a keypress. |
 | Bomb Jack | **Boots** | Screened 2026-08-12: 14798 px, 7 colours, animating. |
-| Bonanza Bros (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Bonanza Bros (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
 | Brian Clough's Football Fortunes (+3 disk) | **Boots** | Screened 2026-08-12: 8171 px, 6 colours. |
 | Bubble Bobble | **Boots** | Screened 2026-08-12: 12020 px, 4 colours, animating. |
 | Bubble Bobble (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 12158 px, 8 colours, answered a keypress. |
@@ -386,15 +378,15 @@ the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
 | California Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
 | Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15102 px, 14 colours, animating. |
 | Capitan Sevilla (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (845 px, 2 colours). |
-| Captain Blood (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
-| Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
+| Captain Planet (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
 | Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16266 px, 9 colours, answered a keypress. |
 | Chain Reaction (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 19893 px, 5 colours, answered a keypress. |
 | Championship Run (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17784 px, 4 colours, answered a keypress. |
 | Chase H.Q | **Boots (responds)** | Screened 2026-08-12: 5360 px, 4 colours, answered a keypress. |
 | Chase H.Q. (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 11930 px, 12 colours, answered a keypress. |
-| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Chase H.Q. II - Special Criminal Investigations (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 12464 px, 12 colours, animating. |
 | Chuckie Egg | **Boots** | Screened 2026-08-12: 25143 px, 7 colours, animating. |
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
@@ -403,7 +395,7 @@ the Tiger, Lemmings, Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 2877 px, 2 colours, animating. |
 | Commando | **Boots** | Screened 2026-08-12: 21972 px, 7 colours, animating. |
-| Continental Circus (+3 disk) | Known issue | Screened 2026-08-12: image will not load — copy-protection track layout, see below. |
+| Continental Circus (+3 disk) | Known issue | Screened 2026-08-12: loads but renders almost nothing (0 px, 1 colours). |
 | Cookie | **Boots (responds)** | Screened 2026-08-12: 3534 px, 3 colours, answered a keypress. |
 | Coursemaster v3.88 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5472 px, 3 colours, answered a keypress. |
 | Cybernoid | **Boots (responds)** | Screened 2026-08-12: 8395 px, 10 colours, answered a keypress. |

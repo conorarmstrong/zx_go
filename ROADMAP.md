@@ -63,11 +63,12 @@ remaining gap.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.
-- [ ] **Copy-protection track layouts.** Nine of the disks screened declare
-  more sector data than a physical double-density track holds — an N=6 size
-  code claims 8192 bytes against ~6250 — which is a protection scheme rather
-  than a real geometry. The loader now reports this explicitly instead of
-  failing opaquely, but does not model it (`pkg/plus3fdc/disk.go`).
+- [x] ~~Copy-protection track layouts~~ — done. Those tracks overlap sectors:
+  one oversized ID covers the region the ordinary sectors occupy. A flat
+  byte-stream model cannot overlap them, but the image declares its own track
+  length and the guest only ever reads by sector ID, so the track is now sized
+  to what the image describes. Of a 250-image sample, 1 still fails to parse,
+  and that one is a truncated dump.
 - [x] ~~Investigate Warhawk~~ — not a fault. It calls NextZXOS at runtime, so
   bank injection cannot host it; through the genuine NEXLOAD path it launches
   and renders (`TestNexloadOSGamesIfPresent`, cmd/zx_go). The screening

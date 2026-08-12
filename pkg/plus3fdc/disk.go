@@ -265,19 +265,8 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 		return nil, fmt.Errorf("sector info table overflows track header (%d sectors)", numSectors)
 	}
 
-	t := newTrack(bytesPerTrackDD, filler, cyl, head, sectorN)
-	b := newTrackBuilder(t, gapMFM)
-
-	if !b.preindexAdd() {
-		return nil, fmt.Errorf("track too small for pre-index gap")
-	}
-	if !b.postindexAdd() {
-		return nil, fmt.Errorf("track too small for post-index gap")
-	}
-
-	// Tighten the inter-sector gap if this format is denser than the nominal
-	// layout. Publishers packed more sectors per track by shortening GAP III;
-	// keeping the nominal figure would refuse images that work on hardware.
+	// Scan the sector table first: the track size and the gap plan both need
+	// to know how much data this track actually carries.
 	totalData, maxSectorLen := 0, 0
 	for j := 0; j < numSectors; j++ {
 		base := sectorInfoOffset + j*sectorInfoSize
@@ -295,6 +284,32 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 			maxSectorLen = idLen
 		}
 	}
+	// Size the track to what this image actually describes, not to the
+	// nominal double-density figure.
+	//
+	// A copy-protection track packs more sector data than a physical track
+	// holds by OVERLAPPING sectors: one oversized ID covers the region the
+	// ordinary sectors occupy, read back through a different ID. A flat
+	// byte-stream model cannot overlap them, but the guest only ever reads by
+	// sector ID, so laying them out end to end in a longer track returns the
+	// right bytes for every read — where refusing the disk returns none.
+	//
+	// The nominal size is still the floor, so ordinary disks are laid out
+	// exactly as before.
+	bpt := bytesPerTrackDD
+	if need := requiredTrackBytes(gapMFM, numSectors, totalData); need > bpt {
+		bpt = need
+	}
+	t := newTrack(bpt, filler, cyl, head, sectorN)
+	b := newTrackBuilder(t, gapMFM)
+
+	if !b.preindexAdd() {
+		return nil, fmt.Errorf("track too small for pre-index gap")
+	}
+	if !b.postindexAdd() {
+		return nil, fmt.Errorf("track too small for post-index gap")
+	}
+
 	if !b.planSectors(numSectors, totalData) {
 		// The declared sectors cannot fit a physical double-density track even
 		// with the gaps at their minimum. That is the signature of a

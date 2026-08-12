@@ -565,3 +565,19 @@ func (t *Track) dataAt(start int) (dataStart int, deleted bool, ok bool) {
 	}
 	return 0, false, false
 }
+
+// requiredTrackBytes is the track length needed to lay out n sectors carrying
+// totalData bytes at the minimum inter-sector gap, plus the pre- and
+// post-index gaps.
+//
+// Used to size a track that carries more data than a nominal double-density
+// one: see the overlapping-sector note in ParseDSK.
+func requiredTrackBytes(gap gapKind, n, totalData int) int {
+	g := gapSpecs[gap]
+	perSector := (g.syncLen + 3 + 1 + 4 + 2 + g.len[2]) + (g.syncLen + 3 + 1 + 2) + minGap3
+	// The pre- and post-index gaps carry their own sync and mark bytes on top
+	// of the filler counts, and the figure only has to be an upper bound, so
+	// it is rounded up rather than accounted byte by byte.
+	const indexSlack = 128
+	return g.len[0] + g.len[1] + indexSlack + n*perSector + totalData
+}

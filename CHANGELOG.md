@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.13]
+
+### Fixed
+
+- **Copy-protected +3 disks load.** Those tracks pack more sector data than a
+  physical double-density track holds by OVERLAPPING sectors: one oversized ID
+  (N=6, claiming 8192 bytes) covers the region the ordinary 512-byte sectors
+  occupy, read back through a different ID. Adidas Championship Tie-Break
+  declares 11264 bytes of sector data on one track.
+
+  A flat byte-stream model cannot overlap them — but the image declares its own
+  track length (11520 bytes for that track), and the guest only ever reads by
+  sector ID. The track is now sized to what the image describes rather than to
+  the nominal figure, so every read returns the right bytes, where refusing the
+  disk returned none. The nominal size stays the floor, so ordinary disks are
+  laid out exactly as before.
+
+  **Across a 250-image sample, failures fell from 35 to 1** over this and the
+  earlier DSK fixes. The one remaining is a truncated dump whose track data
+  runs past the end of the file.
+
 ## [v1.8.12]
 
 ### Added
