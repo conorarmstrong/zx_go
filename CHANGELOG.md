@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.18]
+
+### Fixed
+
+- **Comando Quatro loads and runs.** The last +3 disk title that rendered
+  nothing. Reaching the end of a cylinder is an **abnormal** termination on
+  the µPD765, not a normal one: the host is expected to end a transfer by
+  asserting Terminal Count, and an FDC that instead runs past the last sector
+  and stops of its own accord reports that in ST0's interrupt code as well as
+  ST1.EN. We set EN but reported normal completion.
+
+  The game's own loader is the proof. Its read routine checks the three
+  status bytes literally:
+
+  ```
+  FDCC  LD A,($FECA) / CP $40 / JR NZ,fail   ; ST0 must be $40
+  FDD3  LD A,($FECB) / CP $80 / JR NZ,fail   ; ST1 must be $80
+  FDDA  LD A,($FECC) / AND A  / JR NZ,fail   ; ST2 must be $00
+  ```
+
+  Reporting `ST0 = $00` failed that check, so it retried three times, gave up
+  one sector into the 40766 bytes it wanted from track 3, and jumped to
+  `$F9EC` — inside the range it had just failed to load. Hence a black screen
+  and a CPU sliding through empty RAM.
+
+  Found by tracing the guest: catching the runaway with a CPU pre-fetch hook,
+  then disassembling the loader that jumped into it.
+
 ## [v1.8.17]
 
 ### Fixed

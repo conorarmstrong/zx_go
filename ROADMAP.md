@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-13 — v1.8.17)
+## CURRENT STATE (2026-08-13 — v1.8.18)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **154 title rows: 10 Works, 14 Works
-(caveat), 61 Boots (responds), 59 Boots, 1 Parses cleanly, 3 Known issue, 6
+(caveat), 62 Boots (responds), 59 Boots, 1 Parses cleanly, 2 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -56,27 +56,17 @@ remaining gap.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
-- [ ] **Comando Quatro still renders nothing.** The last +3 disk title that
-  does. Its
-  loader samples sector E1 on tracks 1, 3, 12 and 13, retries three times and
-  gives up. Ruled out: the data is byte-identical to the image across all 126
-  sectors, and the ID/status bytes match the reference where they have been
-  compared. The open suspect is **rotational timing** — this FDC completes
-  every command instantly and always reports ready, which `pkg/plus3fdc`
-  documents as a deliberate simplification, and a protection check that
-  measures rotation would fail deterministically the way this one does.
 - [ ] **Bonanza Bros does not boot.** Nothing drawn. A +3 reference does not
   boot this image either — it sits on the ROM menu through 400 emulated
   seconds — so the dump is probably not bootable. Worth one look because we
   blank the screen where the reference stays on the menu, which is a real if
   minor divergence in how a failed boot is reported.
-- [ ] **Confirm the µPD765 result-ID update at EOT.** The controller returns
-  `R+1` however a read ends. The 8272A/µPD765 ID-update table appears to
-  specify `C+1` with `R=01` when the transfer stops *at* EOT (head flip
-  instead, under MT=1). Implementing that changed no title's behaviour and
-  contradicted two existing datasheet-cited tests, so it was reverted pending
-  a reference that can actually be run against. Settle it from the published
-  table before changing anything.
+- [ ] **The µPD765 result-ID update at EOT is still unconfirmed.** A read that
+  ends at EOT now correctly terminates abnormally (v1.8.18), but the result
+  ID is still `R+1`; the 8272A/µPD765 ID-update table appears to specify
+  `C+1` with `R=01` (head flip under MT=1). Implementing that changed no
+  title's behaviour and contradicted two datasheet-cited tests, so it was
+  left alone. Settle it from the published table before changing anything.
 - [ ] **Verify what the keypress did.** A response proves a title is waiting
   rather than hung; it does not prove the title is playable. Closing that gap
   means per-title expectations — what screen should follow which key — which

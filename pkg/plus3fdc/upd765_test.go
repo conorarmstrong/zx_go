@@ -413,8 +413,11 @@ func TestUPD765FormatThenReadDataRoundTrip(t *testing.T) {
 			got = append(got, f.ReadData())
 		}
 		res := drainResult(t, f, 7)
-		if res[0]&st0IC0 != 0 {
-			t.Errorf("READ DATA r=%d abnormal: ST0=%02X", r, res[0])
+		// Each of these reads ends at EOT, which the µPD765 reports as an
+		// abnormal termination with ST1.EN — see
+		// TestEndOfCylinderIsAnAbnormalTermination.
+		if res[0]&0xC0 != 0x40 {
+			t.Errorf("READ DATA r=%d: ST0=%02X, want IC=01 at end of cylinder", r, res[0])
 		}
 		for i, b := range got {
 			if b != filler {
@@ -656,8 +659,10 @@ func TestUPD765ReadDataMultiSector(t *testing.T) {
 	if res[1]&st1EN == 0 {
 		t.Errorf("multi-sector EOT: ST1=%02X, EN clear, want set", res[1])
 	}
-	if res[0]&st0IC0 != 0 {
-		t.Errorf("multi-sector: ST0=%02X, IC0 set, want normal", res[0])
+	// Running off the end of the cylinder terminates abnormally; see
+	// TestEndOfCylinderIsAnAbnormalTermination.
+	if res[0]&0xC0 != 0x40 {
+		t.Errorf("multi-sector: ST0=%02X, want IC=01 at end of cylinder", res[0])
 	}
 }
 
@@ -1192,8 +1197,10 @@ func TestUPD765ReadDataSector(t *testing.T) {
 
 	// FDC should now be in result phase.
 	res := drainResult(t, f, 7)
-	if res[0]&(st0IC0|st0IC1) != 0 {
-		t.Errorf("READ DATA ST0=%02X: IC bits set, expected normal", res[0])
+	// EOT equals R here, so the transfer runs off the end of the cylinder
+	// and terminates abnormally; see TestEndOfCylinderIsAnAbnormalTermination.
+	if res[0]&0xC0 != 0x40 {
+		t.Errorf("READ DATA ST0=%02X: want IC=01 at end of cylinder", res[0])
 	}
 }
 
@@ -1440,8 +1447,10 @@ func TestUPD765ReadDataSkipsBadIDCRC(t *testing.T) {
 		}
 	}
 	res := drainResult(t, f, 7)
-	if res[0]&st0IC0 != 0 {
-		t.Errorf("expected normal termination, got ST0=%02X", res[0])
+	// The good sector is read, then the transfer reaches EOT and terminates
+	// abnormally; see TestEndOfCylinderIsAnAbnormalTermination.
+	if res[0]&0xC0 != 0x40 {
+		t.Errorf("ST0=%02X: want IC=01 at end of cylinder", res[0])
 	}
 }
 

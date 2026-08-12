@@ -459,8 +459,10 @@ func TestDSReadDataKnownSector(t *testing.T) {
 	}
 
 	res := dsResult(t, f, 7)
-	if res[0]&(st0IC0|st0IC1) != 0 {
-		t.Errorf("READ DATA ST0=%02X: IC nonzero, want normal", res[0])
+	// The read ends at EOT, an abnormal termination on this controller —
+	// see TestEndOfCylinderIsAnAbnormalTermination in the FDC tests.
+	if res[0]&0xC0 != 0x40 {
+		t.Errorf("READ DATA ST0=%02X: want IC=01, end of cylinder", res[0])
 	}
 	// ST2 must be clean: no CRC / wrong-cylinder / control-mark errors.
 	if res[2] != 0 {
@@ -763,7 +765,7 @@ func TestDSTypicalLoadSequence(t *testing.T) {
 		}
 	}
 	res := dsResult(t, f, 7)
-	if res[0]&(st0IC0|st0IC1) != 0 {
-		t.Errorf("load READ DATA ST0=%02X: IC nonzero, want normal", res[0])
+	if res[0]&0xC0 != 0x40 {
+		t.Errorf("load READ DATA ST0=%02X: want IC=01, end of cylinder", res[0])
 	}
 }

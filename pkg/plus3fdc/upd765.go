@@ -1092,9 +1092,22 @@ func (f *UPD765) finishReadResult() {
 		st0 = f.makeST0(icAbnormal)
 		st2 |= st2WC
 	}
-	// Multi-sector transfers that reach EOT set ST1.EN.
+	// Running off the end of the cylinder is an ABNORMAL termination, not a
+	// normal one. The host is expected to end a transfer by asserting
+	// Terminal Count; an FDC that instead reaches the last sector and stops
+	// of its own accord reports that with ST0's interrupt code as well as
+	// ST1.EN.
+	//
+	// Comando Quatro's loader checks the three status bytes literally —
+	// ST0 == $40, ST1 == $80, ST2 == $00 — before accepting a sector and
+	// moving to the next. Reporting a normal termination failed that check,
+	// so it retried three times, gave up one sector into the 40766 bytes it
+	// wanted, and jumped into memory it had never filled.
 	if f.cmdBuf[rdParamR] >= f.cmdBuf[rdParamEOT] {
 		st1 |= st1EN
+		if st0&(st0IC0|st0IC1) == 0 {
+			st0 = f.makeST0(icAbnormal)
+		}
 	}
 	f.beginResult([]byte{
 		st0, st1, st2,

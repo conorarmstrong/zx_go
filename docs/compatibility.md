@@ -450,7 +450,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
 | Colossus 4 Bridge (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6327 px, 4 colours, answered a keypress. |
 | Colossus 4 Chess (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 7409 px, 2 colours, answered a keypress. |
-| Comando Quatro (+3 disk) | Known issue | Screened 2026-08-12: still nothing drawn, and a +3 reference loads it fully. Its loader samples sector E1 on tracks 1, 3, 12 and 13, retries three times and gives up. Ruled out: the data we return is byte-identical to the image for all 126 sectors, and the ID/status bytes look correct. Remaining suspect is rotational timing, which this FDC deliberately does not model. |
+| Comando Quatro (+3 disk) | **Boots (responds)** | Screened 2026-08-13: loads through its multi-track read to the Gamesoft screen and on to the control menu, matching a +3 reference. Needs 20000 frames — the load is 40766 bytes from one track. Was blank until end-of-cylinder was reported as an abnormal termination (v1.8.18). |
 | Comando Tracer (+3 disk) | **Boots** | Screened 2026-08-12: 3840 px, 2 colours, animating. |
 | Commando | **Boots** | Screened 2026-08-12: 21972 px, 7 colours, animating. |
 | Continental Circus (+3 disk) | **Boots** | Screened 2026-08-12: 33792 px, 4 colours. |
