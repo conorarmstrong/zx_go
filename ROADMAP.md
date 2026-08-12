@@ -71,9 +71,14 @@ remaining gap.
 - [ ] **Investigate Warhawk** (see Known issue): it loads, runs its entry stub,
   and lands back in the ROM main loop rendering nothing.
 
-**Items 4 and 7 are blocked on this one.** Both are deferred for the same
-reason — no software we run exercises them — so the corpus is what unblocks
-them. Doing either before this is building on speculation.
+**Items 4 and 7 are blocked on the NEXT half of this one, specifically.** Both
+concern Next-only hardware, so classic titles cannot exercise them however many
+are screened. The corpus as it stands is 108 classic titles and 1 Next title,
+which is why neither is unblocked yet: growing it in the classic direction does
+not discharge that dependency, however useful it was for the disk loader.
+
+28 unique `.nex` files sit under `roms/next/sd`. Screening those is the
+concrete work that would unblock items 4 and 7.
 
 ### 2. [correctness] Sprite per-line bandwidth limit
 
@@ -98,11 +103,15 @@ Bounded, but not small: it needs a 2x-wide ULA render path.
 
 ### 4. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
-**Blocked on item 1.** The transfer engine, prescaler and cycle timing are
-complete and spec-checked. Not modelled: the interrupt/match logic and
-DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`). No traced software has
-exercised either, which is why it was deferred, and a larger corpus is what
-would surface a title that does. Do not start this speculatively.
+**Blocked on Next corpus growth (item 1).** The transfer engine, prescaler and
+cycle timing are complete and spec-checked. Not modelled: the interrupt/match
+logic and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`). No traced
+software has exercised either.
+
+Note that only Next software can: the zxnDMA is Next hardware, so the 108
+classic titles screened so far say nothing about it. Screening the 28 local
+`.nex` files is what would settle whether any title needs this. Do not start
+it speculatively.
 
 ### 5. [product] GUI stability session
 
@@ -122,11 +131,14 @@ caveat. One run on real hardware settles it.
 
 ### 7. [research] Copper cycle accuracy
 
-**Blocked on item 1.** Since v1.6.4 the Copper is stepped in 8-pixel
-segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
-so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
-(`pkg/next/copper/copper.go:19`). Whether that is observable at all needs
-evidence from real software, which is what a larger corpus provides.
+**Blocked on Next corpus growth (item 1).** Since v1.6.4 the Copper is stepped
+in 8-pixel segments, which is exact for `WAIT` — the hardware threshold is
+`x<<3 + 12`, so 8 pixels *is* its resolution. What remains is `MOVE` landing
+mid-segment (`pkg/next/copper/copper.go:19`).
+
+As with item 4, only Next software can exercise it, so the classic titles
+screened so far contribute nothing here. Whether it is observable at all still
+needs evidence from a real program.
 
 ---
 
