@@ -4,6 +4,42 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.9]
+
+### Fixed
+
+- **TX-1696 runs. It was never an emulator fault.** The last Next SD game that
+  would not render is solved: it loads its assets from `C:/common/ayfx3.afb`
+  and `C:/common/highScore.bin` — absolute paths at the **root** of the SD
+  card — while this card shipped them only inside
+  `/games/Next/TX-1696/common/`.
+
+  Traced through the guest's own calls: the first `F_OPEN` (`main.nex`)
+  succeeds with handle `0x02`; the second returns carry-set with `0x11`. The
+  game does not check carry, uses the errno as a file handle, and every
+  `F_READ` on it then fails with `0x0D` and zero bytes — so it retries for
+  ever, never enables Layer 2, and shows a blank screen.
+
+  Confirmed from both ends: walking the card image's FAT shows no `/common`
+  directory at the root, and copying the game's `common/` folder there makes
+  it run — title screen, PLAY/CREDITS/SETTINGS menu and ship all rendering.
+
+  **Users with this game should copy its `common/` folder to their card root.**
+
+### Known gaps
+
+- **`Render()` mutates the machine**, found while chasing the above. The Next
+  compose walk steps the Copper and replays the raster journal, so rendering
+  the same frame twice runs the Copper program twice. Measured on TX-1696 from
+  identical state with no CPU time between calls: the first render produced its
+  title screen (5333 drawn pixels, 20 colours) and every render after it a
+  black frame. Anything rendering alongside a render sees a picture the machine
+  was never showing, and the Copper only advances when something renders.
+
+  Not fixed here: the correct change moves Copper stepping out of the
+  composition path, which touches the most output-sensitive code in the
+  emulator, and is now item 2 on the roadmap rather than a rushed patch.
+
 ## [v1.8.8]
 
 ### Fixed
