@@ -24,7 +24,7 @@ func buildTrack(t *testing.T, sectors int, sizeCode byte) bool {
 	if !b.preindexAdd() || !b.postindexAdd() {
 		t.Fatal("gap setup failed")
 	}
-	b.planSectors(sectors, sectorLength(sizeCode))
+	b.planSectors(sectors, sectors*sectorLength(sizeCode))
 	data := make([]byte, sectorLength(sizeCode))
 	for j := 0; j < sectors; j++ {
 		if !b.idAdd(0, 0, byte(j+1), sizeCode, false) {

@@ -278,21 +278,32 @@ func buildTrackFromDSK(trackData []byte, extended bool) (*Track, error) {
 	// Tighten the inter-sector gap if this format is denser than the nominal
 	// layout. Publishers packed more sectors per track by shortening GAP III;
 	// keeping the nominal figure would refuse images that work on hardware.
-	maxSectorLen := 0
+	totalData, maxSectorLen := 0, 0
 	for j := 0; j < numSectors; j++ {
-		if n := sectorLength(trackData[sectorInfoOffset+j*sectorInfoSize+3]); n > maxSectorLen {
-			maxSectorLen = n
+		base := sectorInfoOffset + j*sectorInfoSize
+		idLen := sectorLength(trackData[base+3])
+		emit := idLen
+		if extended {
+			// Only the ID-length-worth is emitted; see the weak-sector note
+			// below, where a longer stored length means multiple copies.
+			if stored := int(binary.LittleEndian.Uint16(trackData[base+6 : base+8])); stored < emit {
+				emit = stored
+			}
+		}
+		totalData += emit
+		if idLen > maxSectorLen {
+			maxSectorLen = idLen
 		}
 	}
-	if !b.planSectors(numSectors, maxSectorLen) {
+	if !b.planSectors(numSectors, totalData) {
 		// The declared sectors cannot fit a physical double-density track even
 		// with the gaps at their minimum. That is the signature of a
 		// copy-protection track: an over-large sector size code (N=6 claims
 		// 8192 bytes) padding out a track that physically holds ~6250. Say so,
 		// rather than failing later with an opaque "track too small".
-		return nil, fmt.Errorf("track %d: %d sectors of up to %d bytes exceed a double-density track; "+
+		return nil, fmt.Errorf("%d sectors of up to %d bytes exceed a double-density track; "+
 			"looks like a copy-protection layout, which is not modelled",
-			cyl, numSectors, maxSectorLen)
+			numSectors, maxSectorLen)
 	}
 
 	// Walk the sector info table; for each sector emit ID + data.

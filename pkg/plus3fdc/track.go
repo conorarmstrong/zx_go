@@ -179,8 +179,8 @@ func newTrackBuilder(t *Track, gap gapKind) *trackBuilder {
 // sync field. Twelve bytes is the shortest any real format uses.
 const minGap3 = 12
 
-// planSectors tightens the inter-sector gap so that n sectors of the given
-// size will fit, and reports whether they can.
+// planSectors tightens the inter-sector gap so that n sectors totalling
+// totalDataBytes will fit, and reports whether they can.
 //
 // A double-density track physically holds a fixed number of bytes, so a denser
 // format buys its extra sectors out of the gaps — which is exactly what a real
@@ -190,14 +190,18 @@ const minGap3 = 12
 //
 // Returns false only when the sectors cannot fit even at the minimum gap, i.e.
 // when the data genuinely exceeds the medium.
-func (b *trackBuilder) planSectors(n, sectorLen int) bool {
+func (b *trackBuilder) planSectors(n, totalDataBytes int) bool {
 	if n <= 0 {
 		return true
 	}
 	g := gapSpecs[b.gap]
-	// Per sector, everything except GAP III: ID field then data field.
-	perSector := (g.syncLen + 3 + 1 + 4 + 2 + g.len[2]) + (g.syncLen + 3 + 1 + sectorLen + 2)
-	free := b.remaining() - n*perSector
+	// Per sector, everything except GAP III and the data itself: the ID field
+	// and the data field's sync, mark and CRC. Data is counted once, in total,
+	// rather than as n copies of the largest sector — a track whose sectors
+	// differ in size would otherwise be judged against a worst case it does
+	// not contain, and have its gaps tightened when nominal ones would fit.
+	perSector := (g.syncLen + 3 + 1 + 4 + 2 + g.len[2]) + (g.syncLen + 3 + 1 + 2)
+	free := b.remaining() - n*perSector - totalDataBytes
 	if free < n*minGap3 {
 		return false
 	}
