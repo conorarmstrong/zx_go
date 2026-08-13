@@ -39,8 +39,8 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **154 title rows: 10 Works, 14 Works
-(caveat), 62 Boots (responds), 59 Boots, 1 Parses cleanly, 2 Known issue, 6
+`docs/compatibility.md` now holds **158 title rows: 10 Works, 14 Works
+(caveat), 62 Boots (responds), 62 Boots, 1 Parses cleanly, 3 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,

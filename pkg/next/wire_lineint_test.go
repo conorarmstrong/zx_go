@@ -9,10 +9,11 @@ import (
 
 // TestWireLineInterruptNR22EnableComputesOffset verifies the
 // NR$22/$23 → cpu.LineIntOffsetTstates pipeline. Per nextreg.txt 0x22
-// bit 1 enables line interrupt. The target line is relative to the
-// 256×192 active area (vpos = target-1+min_vactive, min_vactive=64 =
-// the top border), measured from frameStart (absolute line 0). So
-// target 192 → (192-1+64) × 228.
+// bit 1 enables line interrupt. The target is an ABSOLUTE raster line and
+// fires at target-1, per zxula_timing.vhd — see
+// TestLineInterruptTargetIsAnAbsoluteRasterLine for the quoted source and
+// for why the earlier "+min_vactive" reading was wrong. So target 192 →
+// 191 × 228.
 func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -24,7 +25,7 @@ func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x02) // bit 1 = enable, bit 0 = 0
 
-	want := uint64(192-1+64) * 228
+	want := uint64(192-1) * 228
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
@@ -85,14 +86,14 @@ func TestWireLineInterruptNR22MSBCombines(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x03) // bit 1 enable + bit 0 MSB
 
-	want := uint64(256-1+64) * 228
+	want := uint64(256-1) * 228
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
 }
 
 // TestWireLineInterruptScalesWithSpeed locks in NR$07 speed-multiplier
-// scaling. At 28 MHz (multiplier 8), line 100 → (100-1+64) × 228 × 8.
+// scaling. At 28 MHz (multiplier 8), target 100 → line 99 → 99 × 228 × 8.
 func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -106,7 +107,7 @@ func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	disp.Select(0x07)
 	disp.WriteData(0x03) // 28 MHz, multiplier 8
 
-	want := uint64(100-1+64) * 228 * 8
+	want := uint64(100-1) * 228 * 8
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates @ 28MHz = %d, want %d", got, want)
 	}

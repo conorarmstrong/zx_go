@@ -4,6 +4,35 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.20]
+
+### Fixed
+
+- **The NR$22/$23 line-interrupt target was offset by 64 lines**, so any
+  target near the end of the frame could never fire. The target is an
+  absolute raster line; we treated it as relative to the 256x192 active area
+  and added `min_vactive`. `zxula_timing.vhd` is explicit:
+
+  ```vhdl
+  if i_int_line = 0 then
+     int_line_num <= c_max_vc;
+  else
+     int_line_num <= unsigned(i_int_line) - 1;
+  ...
+  if (i_inten_line = '1') and (hc_ula = 255) and (cvc = int_line_num) then
+  ```
+
+  and `cvc` is a plain 0..c_max_vc raster counter with no active-area offset.
+  A target of 0 selects the last line of the frame, which we mapped to line 0.
+
+  Found from a Next game that disables the ULA frame interrupt (NR$22 bit 2)
+  and drives itself entirely from a line interrupt at line 310 of 311. We
+  waited on line 373, which does not exist, so the CPU sat halted in IM 2 on
+  a black screen forever.
+
+  Three tests asserted the old offset and are corrected, now citing the VHDL
+  rather than a reading of the register docs.
+
 ## [v1.8.19]
 
 ### Fixed

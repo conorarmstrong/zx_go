@@ -1311,6 +1311,11 @@ func WireCPUSpeed(d *nextregs.Dispatcher, cpu *z80.CPU) {
 	})
 }
 
+// linesPerFrame is the scanline count of the 50 Hz frame the line-interrupt
+// target is measured against, matching c_max_vc+1 in zxula_timing.vhd and
+// ula.LinesPerFrame.
+const linesPerFrame = 311
+
 // WireLineInterrupt installs NR$22 / NR$23 OnWrite handlers so the
 // guest can program a per-frame "line interrupt" — a second INT
 // pulse asserted when the ULA scan-line counter hits the target line.
@@ -1346,14 +1351,26 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
 			return
 		}
 		target := uint16(nr23) | (uint16(nr22&0x01) << 8)
-		// Raster position: the target line interrupt fires at
-		// vpos = target-1+min_vactive, i.e. the target line is relative
-		// to the 256x192 active area (min_vactive=64 = our top border),
-		// not the frame top. frameStart is absolute line 0.
-		const minVactive = 64
-		var lineAbs uint64
+		// The target is an ABSOLUTE raster line, not one relative to the
+		// 256x192 active area. zxula_timing.vhd:
+		//
+		//	if i_int_line = 0 then
+		//	   int_line_num <= c_max_vc;
+		//	else
+		//	   int_line_num <= unsigned(i_int_line) - 1;
+		//	...
+		//	if (i_inten_line = '1') and (hc_ula = 255) and (cvc = int_line_num)
+		//
+		// and cvc is a plain 0..c_max_vc raster counter with no active-area
+		// offset. A target of 0 selects the last line of the frame.
+		//
+		// A previous "+min_vactive" of 64 lines pushed targets near the end
+		// of the frame past the last line, where they could never match:
+		// Eternal Battle asks for line 310 of 311 with the frame interrupt
+		// disabled, waited on line 373, and sat halted in IM 2 forever.
+		lineAbs := uint64(linesPerFrame - 1)
 		if target != 0 {
-			lineAbs = uint64(target-1) + minVactive
+			lineAbs = uint64(target - 1)
 		}
 		cpu.LineIntOffsetTstates = lineAbs * tstatesPerScanLine * uint64(cpu.SpeedMultiplier())
 	}

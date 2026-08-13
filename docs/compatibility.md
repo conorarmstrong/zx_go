@@ -291,6 +291,18 @@ elsewhere in this document say nothing about Next-only hardware.
 | TX-1696 | **Works** | Solved 2026-08-12. **Not an emulator fault: the game's assets must sit at the SD card root.** It opens `C:/common/ayfx3.afb` and `C:/common/highScore.bin` — absolute paths at the root of C: — while this card shipped them only inside `/games/Next/TX-1696/common/`. The open fails, the game does not check carry and uses the errno as a file handle, so every read then fails and it retries for ever with a blank screen. Copy the game's `common/` folder to the card root and it runs: title screen, PLAY/CREDITS/SETTINGS menu and ship all render. |
 | Warhawk | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9071). Input not driven. |
 
+### Community titles (SpecNext itch.io releases)
+
+Four native Next releases, run through the same genuine NEXLOAD / NextBASIC
+Command Line paths as the rest of this section.
+
+| Title | Status | Notes |
+|---|---|---|
+| Dougie Do | **Boots** | Verified 2026-08-13: `.nex` through NEXLOAD; title screen with sprite, credits and "PRESS I FOR INSTRUCTIONS". |
+| BasInvaders | **Boots** | Verified 2026-08-13: NextBASIC; full title screen, 14351 px in 16 colours, with the scoring table and hi-score line. |
+| Blok Boy | **Boots** | Verified 2026-08-13: NextBASIC; title screen, logo and scoring table, "PRESS M/O TO START". |
+| Eternal Battle | Known issue | Screened 2026-08-13: launches, then sits halted on a black screen. It disables the ULA frame interrupt and drives itself from a line interrupt, which exposed a real bug in our NR$22/$23 target (fixed in v1.8.20, see the CHANGELOG); that released its first halt but it now stops later, still black. It runs at 320x224 and streams music from SD via Copper plus covox, neither of which has been ruled in or out yet. |
+
 ## Automated screening
 
 Titles screened headlessly by `TestScreenLocalTitles` (pkg/testharness).
