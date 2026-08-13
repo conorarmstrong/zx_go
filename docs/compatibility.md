@@ -433,7 +433,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Blasteroids (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1425 px, 2 colours, answered a keypress. |
 | Bloodwych (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1343 px, 4 colours, answered a keypress. |
 | Bomb Jack | **Boots** | Screened 2026-08-12: 14798 px, 7 colours, animating. |
-| Bonanza Bros (+3 disk) | Known issue | Screened 2026-08-12: nothing drawn. **A +3 reference does not boot this image either** — it sits on the ROM menu through 400 emulated seconds — so the dump is very likely not bootable. Its earlier **Boots (responds)** verdict was the +3 ROM's own menu being measured as content, not the game. Ours blanks the screen where the reference stays on the menu, which is a smaller divergence still worth explaining. |
+| Bonanza Bros (+3 disk) | Known issue | Screened 2026-08-13: nothing drawn. **Checked against two independent reference emulators.** One reaches the +3 menu, accepts Loader, and goes to a black screen after 150 emulated seconds, exactly as we do; the other never leaves the menu at all. Two of the three blank, so the dump is very likely not bootable and our behaviour matches a reference precisely. Its earlier **Boots (responds)** verdict was the +3 ROM's own menu being measured as content, not the game. |
 | Brian Clough's Football Fortunes (+3 disk) | **Boots** | Screened 2026-08-12: 8171 px, 6 colours. |
 | Bubble Bobble | **Boots** | Screened 2026-08-12: 12020 px, 4 colours, animating. |
 | Bubble Bobble (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 12158 px, 8 colours, answered a keypress. |

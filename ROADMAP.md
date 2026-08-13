@@ -56,11 +56,13 @@ remaining gap.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
-- [ ] **Bonanza Bros does not boot.** Nothing drawn. A +3 reference does not
-  boot this image either — it sits on the ROM menu through 400 emulated
-  seconds — so the dump is probably not bootable. Worth one look because we
-  blank the screen where the reference stays on the menu, which is a real if
-  minor divergence in how a failed boot is reported.
+- [x] ~~Bonanza Bros divergence~~ — closed, nothing to fix. Two independent
+  reference emulators were checked: one blanks the screen after selecting
+  Loader exactly as we do, the other never leaves the +3 menu. We match a
+  reference precisely, so the earlier note that "we blank where the reference
+  stays on the menu" was wrong — that reference is the outlier. The image is
+  very likely not bootable. Control for the comparison: Captain Planet
+  measures 27098 lit pixels in both that emulator and ours.
 - [ ] **The µPD765 result-ID update at EOT is still unconfirmed.** A read that
   ends at EOT now correctly terminates abnormally (v1.8.18), but the result
   ID is still `R+1`; the 8272A/µPD765 ID-update table appears to specify
