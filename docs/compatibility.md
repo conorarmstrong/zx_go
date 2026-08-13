@@ -340,20 +340,20 @@ The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
 build.
 
-**Of 113 titles screened, 104 rendered content (25 animating,
-63 answering a keypress) and 9 did not.**
+**Of 113 titles screened, 108 rendered content (29 animating,
+65 answering a keypress) and 4 did not.**
 Every disk image now loads: of a 250-image sample only one still fails to
 parse, and that one is a truncated dump whose track data runs past the end
 of the file.
 
 **None of these was ever a copy-protection limitation.** Two earlier
-revisions of this document said so — first of twelve titles, then of five —
-and both were wrong. The claim was inferred from the fact that the images
-carry unusual track layouts, never from evidence that the layout was why
-they failed. Running the same images on a +3 reference emulator settled it:
-every one of them loads there, so the fault was always ours.
+revisions of this document said so, first of twelve titles and then of
+five, and both were wrong. The claim was inferred from the fact that the
+images carry unusual track layouts, never from evidence that the layout was
+why they failed. Running the same images on a +3 reference emulator settled
+it: every one of them loads there, so the fault was always ours.
 
-Three separate controller bugs were behind them, all fixed in v1.8.17:
+Four controller bugs were behind them:
 
 1. **EDSK ST1/ST2 CRC attribution.** `ST1.DE` reports that a CRC error
    occurred; `ST2.DD` reports that it was in the *data* field. Reading
@@ -364,14 +364,25 @@ Three separate controller bugs were behind them, all fixed in v1.8.17:
    (a nominal 8192 bytes) cannot fit a double-density track, and the
    controller rejected it. Real hardware cannot tell: it reads the ID,
    streams the bytes N asks for, and crosses the index hole to get them.
-3. **`ST3.RY` was per-drive.** The +3 feeds the FDC one READY line, so
-   sensing the empty drive B reports ready when a disk is in A.
+3. **The sector ID compare ignored the size code.** Sectors matched on R
+   alone, so a request for N=2 was satisfied by a sector whose ID declares
+   N=0. Action Force relies on that read failing.
+4. **End of cylinder was reported as a normal termination.** The +3 asserts
+   no Terminal Count, so a transfer that runs to EOT stopped because the
+   controller ran out of cylinder, which is an abnormal termination with
+   `ST1.EN`. Comando Quatro's loader checks the three status bytes literally
+   and rejected anything else.
+
+The first three shipped in v1.8.17 and the fourth in v1.8.18. A fifth
+candidate, treating `ST3.RY` as machine-wide rather than per-drive, was
+tried and **reverted**: it fixed nothing and its only evidence was an
+artefact of the reference emulator wiring a single drive.
 
 That leaves the blanks as:
 
-- **Comando Quatro** — still ours, cause not yet found. Detail in its row.
-- **3D Grand Prix** — the reference behaves identically, so the image is
-  asking for a tape. Not an emulator fault.
+- **3D Grand Prix** and **Bonanza Bros** — the reference fails both images
+  the same way we do. 3D Grand Prix ends at the ROM tape prompt; Bonanza
+  Bros never leaves the +3 menu. Neither is an emulator fault.
 - **Pogie and THEH** — Next entries holding no launchable program. They
   ship assets and a 48K-sized `.snx`, which cannot represent a Next game's
   banked state, so nothing was ever launched.

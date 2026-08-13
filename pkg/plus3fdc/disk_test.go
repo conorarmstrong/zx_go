@@ -316,7 +316,7 @@ func TestSaveDSKPreservesIDAMOnlySector(t *testing.T) {
 		got = append(got, f.ReadData())
 	}
 	res = drainResult(t, f, 7)
-	if res[0]&0xC0 != 0x40 {
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("normal sector after reload: ST0=%02X, want IC=01 at end of cylinder", res[0])
 	}
 	for i := range want {

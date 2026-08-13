@@ -165,12 +165,17 @@ Solved problems whose answers were expensive to find.
   titles were recorded as blocked by it, then five, and both were wrong: the
   cause was inferred from the images carrying unusual track layouts, never
   from evidence that the layout caused the failure. A +3 reference emulator
-  loads every one. Three controller bugs were behind them, fixed in v1.8.17:
-  EDSK `ST1.DE` read as an ID-field CRC error when `ST2.DD` attributes it to
-  the data field; oversized (N=6) sectors refused instead of streamed across
-  the index hole; `ST3.RY` treated as per-drive when the +3 has one READY
-  line. **Before blaming a disk format, run the image on a reference** —
-  `ZX_GO_FDC_TRACE=1` then shows which command is answered wrongly.
+  loads every one. Four controller bugs were behind them: EDSK `ST1.DE` read
+  as an ID-field CRC error when `ST2.DD` attributes it to the data field;
+  oversized (N=6) sectors refused instead of streamed across the index hole;
+  the sector ID compare ignoring the size code; and end of cylinder reported
+  as a normal termination when the +3, asserting no Terminal Count, makes it
+  an abnormal one. First three in v1.8.17, the fourth in v1.8.18. A fifth
+  candidate, `ST3.RY` machine-wide rather than per-drive, was tried and
+  **reverted** — it fixed nothing and its only evidence was an artefact of
+  the reference emulator wiring a single drive. **Before blaming a disk
+  format, run the image on a reference** — `ZX_GO_FDC_TRACE=1` then shows
+  which command is answered wrongly.
 - **The bootable SD image is FAT32.** An older FAT16 builder never booted.
 - **The 128K BASIC launch bug is closed** (Multiface-3 `$7F3F`/`$1F3F`
   paging readback, Layer 2 `$123B` readback, zero-filled cold RAM). Do not

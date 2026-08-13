@@ -459,9 +459,12 @@ func TestDSReadDataKnownSector(t *testing.T) {
 	}
 
 	res := dsResult(t, f, 7)
-	// The read ends at EOT, an abnormal termination on this controller —
-	// see TestEndOfCylinderIsAnAbnormalTermination in the FDC tests.
-	if res[0]&0xC0 != 0x40 {
+	// The read runs to EOT. ST0 IC (datasheet, "Status Register 0") encodes
+	// 01 = "execution of the command was started but was not successfully
+	// completed", and a transfer the host never ended with Terminal Count
+	// stops only because the FDC ran out of cylinder — it did not deliver
+	// what was asked, so IC is 01 and ST1.EN marks the reason.
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("READ DATA ST0=%02X: want IC=01, end of cylinder", res[0])
 	}
 	// ST2 must be clean: no CRC / wrong-cylinder / control-mark errors.
@@ -765,7 +768,9 @@ func TestDSTypicalLoadSequence(t *testing.T) {
 		}
 	}
 	res := dsResult(t, f, 7)
-	if res[0]&0xC0 != 0x40 {
+	// Ends at EOT with no Terminal Count from the host, so IC = 01; see the
+	// note on the same check in TestDSReadDataKnownSector.
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("load READ DATA ST0=%02X: want IC=01, end of cylinder", res[0])
 	}
 }

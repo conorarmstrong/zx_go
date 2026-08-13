@@ -164,10 +164,12 @@ func TestUPD765WriteDataRoundTrip(t *testing.T) {
 		f.WriteData(b)
 	}
 
-	// Drain result phase.
+	// Drain result phase. The write ran to EOT, which on a machine that
+	// asserts no Terminal Count is the FDC stopping of its own accord; see
+	// TestWriteEndOfCylinderMatchesRead.
 	res := drainResult(t, f, 7)
-	if res[0]&(st0IC0|st0IC1) != 0 {
-		t.Errorf("WRITE DATA result ST0=%02X: IC bits set, want normal", res[0])
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
+		t.Errorf("WRITE DATA result ST0=%02X: want IC=01 at end of cylinder", res[0])
 	}
 
 	// Now READ DATA for the same sector and check the bytes.
@@ -416,7 +418,7 @@ func TestUPD765FormatThenReadDataRoundTrip(t *testing.T) {
 		// Each of these reads ends at EOT, which the µPD765 reports as an
 		// abnormal termination with ST1.EN — see
 		// TestEndOfCylinderIsAnAbnormalTermination.
-		if res[0]&0xC0 != 0x40 {
+		if res[0]&(st0IC0|st0IC1) != st0IC0 {
 			t.Errorf("READ DATA r=%d: ST0=%02X, want IC=01 at end of cylinder", r, res[0])
 		}
 		for i, b := range got {
@@ -661,7 +663,7 @@ func TestUPD765ReadDataMultiSector(t *testing.T) {
 	}
 	// Running off the end of the cylinder terminates abnormally; see
 	// TestEndOfCylinderIsAnAbnormalTermination.
-	if res[0]&0xC0 != 0x40 {
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("multi-sector: ST0=%02X, want IC=01 at end of cylinder", res[0])
 	}
 }
@@ -1199,7 +1201,7 @@ func TestUPD765ReadDataSector(t *testing.T) {
 	res := drainResult(t, f, 7)
 	// EOT equals R here, so the transfer runs off the end of the cylinder
 	// and terminates abnormally; see TestEndOfCylinderIsAnAbnormalTermination.
-	if res[0]&0xC0 != 0x40 {
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("READ DATA ST0=%02X: want IC=01 at end of cylinder", res[0])
 	}
 }
@@ -1449,7 +1451,7 @@ func TestUPD765ReadDataSkipsBadIDCRC(t *testing.T) {
 	res := drainResult(t, f, 7)
 	// The good sector is read, then the transfer reaches EOT and terminates
 	// abnormally; see TestEndOfCylinderIsAnAbnormalTermination.
-	if res[0]&0xC0 != 0x40 {
+	if res[0]&(st0IC0|st0IC1) != st0IC0 {
 		t.Errorf("ST0=%02X: want IC=01 at end of cylinder", res[0])
 	}
 }

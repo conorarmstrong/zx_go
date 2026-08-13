@@ -960,13 +960,16 @@ func (f *UPD765) execRead() byte {
 		b := f.ioTrack.data[f.ioPos]
 		f.ioPos++
 		if f.ioPos >= f.ioEnd {
-			st0 := f.makeST0(icNormal)
+			// Exhausting the requested length is the same self-termination
+			// a READ DATA reports when it runs out of cylinder: the host
+			// asserted no Terminal Count, so the FDC stopped on its own.
+			st0, st1 := f.selfTerminated(true)
 			// Echo the first IDAM found on the track as the result CHRN.
 			var rc, rh, rr, rn byte
 			if c, h, r, n, _, ok := f.ioTrack.idAt(0); ok {
 				rc, rh, rr, rn = c, h, r, n
 			}
-			f.beginResult([]byte{st0, 0, 0, rc, rh, rr, rn})
+			f.beginResult([]byte{st0, st1, 0, rc, rh, rr, rn})
 			f.ioTrack = nil
 		}
 		return b
@@ -1014,21 +1017,23 @@ func (f *UPD765) execRead() byte {
 			f.headPos[f.us&3] = f.ioPos
 		}
 
-		// Multi-sector transfer: if the current R is below EOT and we
-		// didn't hit an abnormal condition, advance R and start the
-		// next sector. Otherwise finish with the result phase.
-		abnormal := f.readDataCRC || f.readWrongCyl || f.readCM
-		if !abnormal && f.cmdBuf[rdParamR] < f.cmdBuf[rdParamEOT] {
+		// Multi-sector transfer: unless a condition stopped us, step to
+		// the next sector. The FDC compares R against EOT for equality,
+		// so an R that starts above EOT never matches and it keeps
+		// stepping until it runs off the end of the track and reports
+		// "no data" — it does not stop after one sector.
+		stopped := f.readDataCRC || f.readWrongCyl || f.readCM
+		if !stopped && f.cmdBuf[rdParamR] != f.cmdBuf[rdParamEOT] {
 			f.cmdBuf[rdParamR]++
-			if f.startSectorRead() {
-				return b
-			}
-			// startSectorRead already populated the result phase on
-			// failure.
+			// startSectorRead populates the result phase itself if the
+			// next sector is not there, so its verdict needs no branch.
+			f.startSectorRead()
 			return b
 		}
 
-		f.finishReadResult()
+		// Reaching EOT is the only way the transfer runs out of cylinder;
+		// anything else stopped it before it tried to step past.
+		f.finishReadResult(!stopped)
 	}
 	return b
 }
@@ -1073,15 +1078,46 @@ func (f *UPD765) execReadDiag() {
 	f.phase = phaseExecution
 }
 
+// selfTerminated builds the ST0/ST1 pair for a transfer the controller ended
+// by itself, which on this machine is every transfer there is.
+//
+// A host normally ends a µPD765 transfer by asserting Terminal Count once it
+// has taken the bytes it wanted. The +3 never asserts TC, so the controller
+// always runs on until something stops it: either it would have had to step
+// past the last sector of the cylinder, or a condition aborted the command.
+// In neither case did the command transfer what was asked of it, which is
+// precisely the datasheet's definition of IC=01, "execution of the command
+// was started but was not successfully completed".
+//
+// pastEOT distinguishes the first case, and is the only thing ST1.EN means:
+// the FDC tried to reach a sector beyond EOT. A command that stopped earlier
+// for its own reason never made that attempt, so EN stays clear and the host
+// can tell "this sector is bad" from "I ran out of cylinder".
+//
+// Comando Quatro's loader is the evidence for the interrupt code. It checks
+// the three status bytes literally — ST0 == $40, ST1 == $80, ST2 == $00 —
+// before accepting a sector and moving to the next. Reporting a normal
+// termination failed that check, so it retried three times, gave up one
+// sector into the 40766 bytes it wanted, and jumped into memory it had never
+// filled.
+func (f *UPD765) selfTerminated(pastEOT bool) (st0, st1 byte) {
+	st0 = f.makeST0(icAbnormal)
+	if pastEOT {
+		st1 = st1EN
+	}
+	return st0, st1
+}
+
 // finishReadResult builds the result phase for a READ DATA / READ DEL
 // DATA transfer, capturing CRC / wrong-cyl / deleted-DAM state in the
 // three status bytes.
-func (f *UPD765) finishReadResult() {
-	st0 := f.makeST0(icNormal)
-	st1 := byte(0)
+//
+// pastEOT reports that the transfer ran out of cylinder rather than stopping
+// on a condition; see selfTerminated.
+func (f *UPD765) finishReadResult(pastEOT bool) {
+	st0, st1 := f.selfTerminated(pastEOT)
 	st2 := byte(0)
 	if f.readDataCRC {
-		st0 = f.makeST0(icAbnormal)
 		st1 |= st1DE
 		st2 |= st2DD
 	}
@@ -1089,25 +1125,7 @@ func (f *UPD765) finishReadResult() {
 		st2 |= st2CM
 	}
 	if f.readWrongCyl {
-		st0 = f.makeST0(icAbnormal)
 		st2 |= st2WC
-	}
-	// Running off the end of the cylinder is an ABNORMAL termination, not a
-	// normal one. The host is expected to end a transfer by asserting
-	// Terminal Count; an FDC that instead reaches the last sector and stops
-	// of its own accord reports that with ST0's interrupt code as well as
-	// ST1.EN.
-	//
-	// Comando Quatro's loader checks the three status bytes literally —
-	// ST0 == $40, ST1 == $80, ST2 == $00 — before accepting a sector and
-	// moving to the next. Reporting a normal termination failed that check,
-	// so it retried three times, gave up one sector into the 40766 bytes it
-	// wanted, and jumped into memory it had never filled.
-	if f.cmdBuf[rdParamR] >= f.cmdBuf[rdParamEOT] {
-		st1 |= st1EN
-		if st0&(st0IC0|st0IC1) == 0 {
-			st0 = f.makeST0(icAbnormal)
-		}
 	}
 	f.beginResult([]byte{
 		st0, st1, st2,
@@ -1125,8 +1143,6 @@ func (f *UPD765) execWriteData(deleted bool) {
 	hduds := f.cmdBuf[rdParamHDS]
 	f.us = hduds & 0x03
 	f.hd = (hduds >> 2) & 0x01
-	wantC := f.cmdBuf[rdParamC]
-	wantR := f.cmdBuf[rdParamR]
 
 	if f.wp[physicalDrive(f.us)] {
 		st0 := f.makeST0(icAbnormal)
@@ -1137,19 +1153,33 @@ func (f *UPD765) execWriteData(deleted bool) {
 		return
 	}
 
+	if !f.startSectorWrite(deleted) {
+		// startSectorWrite has already populated the result phase.
+		return
+	}
+	f.phase = phaseExecution
+}
+
+// startSectorWrite locates the sector named by the current command's CHRN and
+// primes the execution phase to receive its bytes. Returns false if it is not
+// there, having populated the result phase with the error.
+func (f *UPD765) startSectorWrite(deleted bool) bool {
+	wantC := f.cmdBuf[rdParamC]
+	wantR := f.cmdBuf[rdParamR]
+
 	track := f.currentTrack()
 	if track == nil {
 		f.readDataError(st1MA | st1ND)
-		return
+		return false
 	}
 	loc, st1, ok := f.findSector(track, wantC, wantR, f.cmdBuf[rdParamN], f.headPos[f.us&3], false, false)
 	if !ok {
 		f.readDataError(st1)
-		return
+		return false
 	}
 	if loc.dataStart+loc.length+2 > track.bpt {
 		f.readDataError(st1ND)
-		return
+		return false
 	}
 	// Overwrite the DAM byte (1 byte before dataStart) so WRITE DATA
 	// on a previously-deleted sector flips it back to FB, and vice
@@ -1169,7 +1199,7 @@ func (f *UPD765) execWriteData(deleted bool) {
 	f.ioPos = loc.dataStart
 	f.ioEnd = loc.dataStart + loc.length
 	f.ioCRC = initialDataCRC(deleted)
-	f.phase = phaseExecution
+	return true
 }
 
 // execWrite accepts one sector data byte from the CPU during a WRITE
@@ -1195,9 +1225,26 @@ func (f *UPD765) execWrite(b byte) {
 		} else {
 			f.headPos[f.us&3] = f.ioPos
 		}
-		st0 := f.makeST0(icNormal)
+
+		// WRITE DATA spans consecutive sectors up to EOT exactly as READ
+		// DATA does, and stops on the same comparison: R against EOT for
+		// equality, so an R above EOT keeps stepping until it runs off the
+		// track. A single-sector write silently discarded everything the
+		// host sent after the first sector.
+		if f.cmdBuf[rdParamR] != f.cmdBuf[rdParamEOT] {
+			f.cmdBuf[rdParamR]++
+			deleted := f.cmd != nil && f.cmd.id == cmdWriteDelData
+			// startSectorWrite populates the result phase itself if the
+			// next sector is not there.
+			f.startSectorWrite(deleted)
+			return
+		}
+
+		// The +3 asserts no Terminal Count, so reaching EOT means the FDC
+		// stopped of its own accord — the same termination a read reports.
+		st0, st1 := f.selfTerminated(true)
 		f.beginResult([]byte{
-			st0, 0, 0,
+			st0, st1, 0,
 			f.cmdBuf[rdParamC], f.cmdBuf[rdParamH], f.cmdBuf[rdParamR] + 1, f.cmdBuf[rdParamN],
 		})
 		f.ioTrack = nil

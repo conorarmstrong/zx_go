@@ -4,6 +4,55 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.19]
+
+### Fixed
+
+Code review of v1.8.18 found the end-of-cylinder work was done in the read
+path only, so reads and writes disagreed for identical commands. The
+termination rule now lives in one place, `selfTerminated`:
+
+- **WRITE DATA and READ DIAGNOSTIC reported a normal termination** where
+  READ DATA reported an abnormal one. The +3 asserts no Terminal Count, so
+  every transfer ends because the controller itself stopped, and the
+  datasheet defines IC=01 as "execution started but was not successfully
+  completed". A loader checking a write result the way Comando Quatro checks
+  a read result would have read a good write as a failure.
+- **`ST1.EN` was set whenever the transfer stopped at or after EOT**, even
+  when it stopped for another reason. EN means the FDC tried to reach a
+  sector beyond EOT, so a read aborted at the last sector by a data CRC
+  error reported `$A0` where hardware reports `$20`, blurring "this sector is
+  bad" into "I ran out of cylinder".
+- **R was compared against EOT with `>=`.** The FDC compares for equality, so
+  an R that starts above EOT never matches and it keeps stepping until it
+  runs off the track and reports no-data. The old form stopped after one
+  sector and called it end-of-cylinder, which since v1.8.18 turned a reported
+  success into a reported error.
+- **A multi-sector read cut short by a deleted address mark reported
+  success.** Stopping after 3 of 9 requested sectors is not a successful
+  completion; it now reports IC=01 with EN clear, since it never reached EOT.
+- **WRITE DATA only ever wrote one sector**, though the package header
+  documented it as spanning consecutive sectors to EOT. A guest writing 9
+  sectors had 8 of them silently discarded and was told the write succeeded.
+
+### Changed
+
+- `docs/compatibility.md` and `ROADMAP.md` credited an `ST3.RY` change that
+  was **reverted** and never shipped, and still listed Comando Quatro as an
+  open failure. Both corrected, with the reverted attempt recorded so it is
+  not retried. Screening counts refreshed: 108 of 113 render content.
+- The datasheet-derived test suite had been edited to cite this emulator's
+  own tests and a game's loader. Its whole value is independence, so those
+  assertions now cite the datasheet's own definition of IC and EN.
+
+### Testing
+
+- `TestShortOfEndOfCylinderStaysNormal` asserted nothing about the status it
+  was named for: inverting the guard it covered left the suite green. Replaced
+  with tests that reach the result phase, and each new condition is checked by
+  mutation — inverting EN, forcing IC normal, or restoring `>=` now fails 2,
+  16 and 1 tests respectively.
+
 ## [v1.8.18]
 
 ### Fixed
