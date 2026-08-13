@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"image"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,12 +52,33 @@ func TestNexloadSDGames(t *testing.T) {
 		name := filepath.Base(filepath.Dir(host))
 
 		t.Run(name, func(t *testing.T) {
-			emu := bootNextToMenu(t)
-			nexloadFromMenu(emu, sdPath, 1400)
+			// The launch is driven by typing into the real NextZXOS command
+			// line one synthetic keystroke at a time. That is the faithful
+			// path, but it is not perfectly reliable: a dropped character
+			// makes the whole line wrong, NEXLOAD finds no such file, and the
+			// OS drops back to the menu. Attempt it a few times from a fresh
+			// boot before calling the game broken, so the suite measures the
+			// emulator rather than the typing. A game that genuinely does not
+			// launch fails every attempt.
+			var emu *emulator
+			var img *image.RGBA
+			var nonBlank, launched bool
+			const attempts = 3
+			for try := 0; try < attempts; try++ {
+				emu = bootNextToMenu(t)
+				nexloadFromMenu(emu, sdPath, 1400)
 
-			img := emu.renderFrame()
-			nonBlank := !uniformImage(img)
-			launched := emu.cpu.PC != nextMenuLoopPC
+				img = emu.renderFrame()
+				nonBlank = !uniformImage(img)
+				launched = emu.cpu.PC != nextMenuLoopPC
+				if launched {
+					break
+				}
+				if try+1 < attempts {
+					t.Logf("%s: returned to the menu, retrying the command line (attempt %d of %d)",
+						name, try+2, attempts)
+				}
+			}
 
 			if dir := os.Getenv("NEX_RENDER_OUT_DIR"); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)

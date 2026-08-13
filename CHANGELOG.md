@@ -4,6 +4,36 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.21]
+
+### Fixed
+
+- **The NEXLOAD test harness launched games from the card root**, so a title
+  that opens its assets by a path relative to the current directory found
+  none of them. A real user reaches a game through the Browser, which changes
+  into its folder first; `nexloadFromMenu` now does the same.
+
+  Eternal Battle is the case in point. Every relative open failed, and the
+  game did not check for the error: it built its IM 2 table, ran off into its
+  own data, hit an `FF` byte, `RST 38`'d into a filler ramp and halted. That
+  looked like a hardware fault and was not one. With the working directory
+  set it renders its full title screen.
+
+  This is a harness fix, not an emulator change; the binary behaves as
+  v1.8.20 did. It is released so the version and the compatibility record
+  stay in step.
+
+- **The harness retries the command line before calling a game broken.**
+  Typing into a real OS prompt one synthetic keystroke at a time is not
+  perfectly reliable, and a single dropped character makes the whole line
+  wrong. That made the suite pass or fail on test ordering. A game that
+  genuinely does not launch still fails every attempt.
+
+### Changed
+
+- All 12 `.nex` games on the SD card now launch and render, and every title
+  directory holding a launchable program runs.
+
 ## [v1.8.20]
 
 ### Fixed

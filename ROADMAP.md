@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **158 title rows: 10 Works, 14 Works
-(caveat), 62 Boots (responds), 62 Boots, 1 Parses cleanly, 3 Known issue, 6
+(caveat), 62 Boots (responds), 63 Boots, 1 Parses cleanly, 2 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -106,13 +106,17 @@ remaining gap.
 
 **The Next half now exists.** `TestNexloadSDGames` (cmd/zx_go) drives every
 `.nex` on the SD card through the genuine NextZXOS NEXLOAD path — the only one
-that can host a title calling the OS at runtime. **9 of 10 launch and render.**
+that can host a title calling the OS at runtime. **All 12 launch and render.**
 
-**Every Next game on the SD card is now accounted for**: 14 of the 16 title
-directories run — 9 of 10 `.nex` through NEXLOAD, all 3 NextBASIC programs
-through the Command Line, and NEXTipede from tape. TX-1696 launches but
-renders nothing. Pogie and THEH hold only assets and a 48K-sized `.snx`, which
-cannot represent a Next game's banked state, so there is nothing to launch.
+**Every Next game on the SD card is now accounted for**: every title directory
+holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
+programs through the Command Line, and NEXTipede from tape. Pogie and THEH
+hold only assets and a 48K-sized `.snx`, which cannot represent a Next game's
+banked state, so there is nothing to launch.
+
+TX-1696's own entry records why it needed its assets at the card root: it
+opens `C:/common/...` by absolute path. That is unrelated to the working
+directory and is not an emulator fault.
 
 That is what items 2 and 4 were waiting on, and the answer it gives is
 "no evidence either is needed": fourteen Next programs run without the zxnDMA

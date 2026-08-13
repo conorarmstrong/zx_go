@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path"
 	"strings"
 	"testing"
 
@@ -51,15 +52,67 @@ func nexTypeLine(emu *emulator, s string) {
 
 // nexloadFromMenu drives the real NextZXOS NEXLOAD on sdPath. It expects the
 // machine at the main menu with the cursor on "Browser" (as left by
-// bootNextToMenu), steps down to "Command Line", types `.nexload <path>`,
-// presses ENTER, then runs loadFrames frames to let the OS load and start the
-// game. The path is typed lowercase; spaces are typed literally (NEXLOAD takes
-// the rest of the line as the filename, so no quoting is needed).
+// bootNextToMenu), steps down to "Command Line", changes to the game's own
+// directory, types `.nexload <file>`, presses ENTER, then runs loadFrames
+// frames to let the OS load and start the game. The path is typed lowercase;
+// spaces are typed literally (NEXLOAD takes the rest of the line as the
+// filename, so no quoting is needed).
+//
+// The CD matters, exactly as it does for the NextBASIC harness. A game that
+// loads assets at runtime opens them by a path relative to the current
+// directory, and a user reaches a game through the Browser, which changes
+// into its folder first. Launching by absolute path from the root left the
+// current directory at "/", so every relative open failed: Eternal Battle
+// built its IM 2 table, got nothing back, and ran off into its own data until
+// it hit an FF byte and RST 38'd into a filler ramp. That looked like a
+// hardware bug and is not one.
+// nexWaitPrompt runs until the display has stopped changing, which is how the
+// command prompt signals it has finished the previous line and is ready for
+// the next one.
+//
+// Waiting a fixed number of frames here was a race: too short and the next
+// typed line lost characters, and whether it was long enough depended on what
+// else had run in the same process, so the suite passed or failed on test
+// ordering. Waiting on the main-menu loop PC did not work either, because the
+// command prompt never reaches it. Screen stability is the thing actually
+// being waited for, so wait on that.
+func nexWaitPrompt(emu *emulator, maxFrames int) {
+	prev, _ := nextScreen(emu)
+	stable := 0
+	for i := 0; i < maxFrames; i++ {
+		nexRunFrames(emu, 5)
+		h, _ := nextScreen(emu)
+		if h == prev {
+			if stable++; stable >= 6 { // ~30 frames unchanged
+				return
+			}
+		} else {
+			stable = 0
+			prev = h
+		}
+	}
+}
+
 func nexloadFromMenu(emu *emulator, sdPath string, loadFrames int) {
 	nexPressCombo(emu, [][2]int{{0, 0x01}, {4, 0x10}}, 4, 10) // cursor DOWN -> Command Line
 	nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12)            // ENTER -> the command prompt
-	nexRunFrames(emu, 80)
-	nexTypeLine(emu, ".nexload "+strings.ToLower(sdPath))
+	nexRunFrames(emu, 200)
+
+	dir, file := path.Split(sdPath)
+	dir = strings.TrimSuffix(dir, "/")
+	if dir != "" {
+		// Quoted because .cd splits its argument on spaces.
+		nexTypeLine(emu, `.cd "`+strings.ToLower(dir)+`"`)
+		nexRunFrames(emu, 25)
+		nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12)
+		// Wait for the command prompt to come back rather than guessing a
+		// frame count. A fixed wait here was a race: too short and the
+		// next line lost characters, and whether it was long enough
+		// depended on what had run before in the same process.
+		nexWaitPrompt(emu, 200)
+	}
+
+	nexTypeLine(emu, ".nexload "+strings.ToLower(file))
 	nexRunFrames(emu, 15)
 	nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12) // ENTER -> run NEXLOAD
 	nexRunFrames(emu, loadFrames)

@@ -301,7 +301,7 @@ Command Line paths as the rest of this section.
 | Dougie Do | **Boots** | Verified 2026-08-13: `.nex` through NEXLOAD; title screen with sprite, credits and "PRESS I FOR INSTRUCTIONS". |
 | BasInvaders | **Boots** | Verified 2026-08-13: NextBASIC; full title screen, 14351 px in 16 colours, with the scoring table and hi-score line. |
 | Blok Boy | **Boots** | Verified 2026-08-13: NextBASIC; title screen, logo and scoring table, "PRESS M/O TO START". |
-| Eternal Battle | Known issue | Screened 2026-08-13: launches, then sits halted on a black screen. It disables the ULA frame interrupt and drives itself from a line interrupt, which exposed a real bug in our NR$22/$23 target (fixed in v1.8.20, see the CHANGELOG); that released its first halt but it now stops later, still black. It runs at 320x224 and streams music from SD via Copper plus covox, neither of which has been ruled in or out yet. |
+| Eternal Battle | **Boots** | Verified 2026-08-13: full title screen with artwork and the New Game / Leaderboard menu. Needs the current directory set to its own folder, as the Browser does; launching by absolute path left every relative asset open failing and the game ran off into its own data. Finding that also exposed a real bug in our NR$22/$23 line-interrupt target, fixed in v1.8.20. |
 
 ## Automated screening
 
