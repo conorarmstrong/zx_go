@@ -774,3 +774,48 @@ func TestDSTypicalLoadSequence(t *testing.T) {
 		t.Errorf("load READ DATA ST0=%02X: want IC=01, end of cylinder", res[0])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Result-phase ID after a transfer that ran to EOT
+// ---------------------------------------------------------------------------
+
+// The result CHRN is NOT rewritten to "C+1, R=01" when a +3 transfer reaches
+// EOT, even though the published Result Phase Table lists exactly that for
+// "Final Sector Transferred to Host: Equal to EOT".
+//
+// That table is qualified. Its preamble reads: "If the host terminates a read
+// or write operation in the [controller], then the ID information in the
+// result phase is dependent upon the state of the MT bit and EOT byte...
+// The termination must be normal." Both conditions fail here. The +3 wires no
+// Terminal Count, so the host never terminates anything, and a transfer that
+// runs out of cylinder is by definition not a normal termination — ST1's EN
+// bit is defined as "tried to access a sector beyond the final sector of the
+// track. Will be set if TC is not issued after Read or Write."
+//
+// So the sector address simply advances to the one the controller tried and
+// could not reach, which is what EN is reporting. R+1 and the ID naming that
+// sector are the same statement.
+//
+// Recorded because implementing the table's C+1/R=01 here is a plausible
+// misreading: it was tried, changed no title's behaviour, and was reverted.
+func TestDSResultIDAfterEOTIsNotTheHostTerminationCase(t *testing.T) {
+	f := NewUPD765()
+	f.AttachDisk(0, dsDisk(t))
+
+	// READ DATA cyl 0 head 0, R=1, EOT=3 — runs to EOT with no TC.
+	dsCommand(t, f, 0x46, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x2A, 0xFF)
+	for i := 0; i < 3*512; i++ {
+		f.ReadData()
+	}
+	res := dsResult(t, f, 7)
+
+	if res[1]&st1EN == 0 {
+		t.Fatalf("ST1=%02X: EN clear, so this is not the no-TC case the note describes", res[1])
+	}
+	if res[3] != 0 {
+		t.Errorf("result C=%d, want 0 unchanged — C+1 belongs to the host-terminated case", res[3])
+	}
+	if res[5] != 4 {
+		t.Errorf("result R=%d, want 4: the sector the controller tried to reach and could not", res[5])
+	}
+}

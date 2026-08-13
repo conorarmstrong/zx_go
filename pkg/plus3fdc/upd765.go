@@ -1089,10 +1089,18 @@ func (f *UPD765) execReadDiag() {
 // precisely the datasheet's definition of IC=01, "execution of the command
 // was started but was not successfully completed".
 //
-// pastEOT distinguishes the first case, and is the only thing ST1.EN means:
-// the FDC tried to reach a sector beyond EOT. A command that stopped earlier
-// for its own reason never made that attempt, so EN stays clear and the host
-// can tell "this sector is bad" from "I ran out of cylinder".
+// pastEOT distinguishes the first case, and is the only thing ST1.EN means.
+// The published definition of ST1 bit 7 is "tried to access a sector beyond
+// the final sector of the track. Will be set if TC is not issued after Read
+// or Write" — both halves of which describe this machine exactly. A command
+// that stopped earlier for its own reason never made that attempt, so EN
+// stays clear and the host can tell "this sector is bad" from "I ran out of
+// cylinder".
+//
+// The result ID is left at R+1 rather than the "C+1, R=01" of the published
+// Result Phase Table: that table covers the host terminating a transfer with
+// TC, and states the termination must be normal. Neither holds here. See
+// TestDSResultIDAfterEOTIsNotTheHostTerminationCase.
 //
 // Comando Quatro's loader is the evidence for the interrupt code. It checks
 // the three status bytes literally — ST0 == $40, ST1 == $80, ST2 == $00 —

@@ -63,12 +63,16 @@ remaining gap.
   stays on the menu" was wrong — that reference is the outlier. The image is
   very likely not bootable. Control for the comparison: Captain Planet
   measures 27098 lit pixels in both that emulator and ours.
-- [ ] **The µPD765 result-ID update at EOT is still unconfirmed.** A read that
-  ends at EOT now correctly terminates abnormally (v1.8.18), but the result
-  ID is still `R+1`; the 8272A/µPD765 ID-update table appears to specify
-  `C+1` with `R=01` (head flip under MT=1). Implementing that changed no
-  title's behaviour and contradicted two datasheet-cited tests, so it was
-  left alone. Settle it from the published table before changing anything.
+- [x] ~~Confirm the result-ID update at EOT~~ — settled from the published
+  datasheet, and the current behaviour is right. The Result Phase Table's
+  "C+1, R=01" row is qualified by its own preamble: it describes the *host*
+  terminating a transfer, and "the termination must be normal". The +3 wires
+  no Terminal Count, so neither holds, and ST1.EN is defined as "tried to
+  access a sector beyond the final sector of the track. Will be set if TC is
+  not issued after Read or Write". Leaving the ID at R+1 names the sector the
+  controller tried and could not reach, which is the same statement EN makes.
+  Pinned by TestDSResultIDAfterEOTIsNotTheHostTerminationCase so it is not
+  re-litigated.
 - [ ] **Verify what the keypress did.** A response proves a title is waiting
   rather than hung; it does not prove the title is playable. Closing that gap
   means per-title expectations — what screen should follow which key — which
