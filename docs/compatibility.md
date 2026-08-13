@@ -99,9 +99,9 @@ memory map. Foundation tests confirm 128K paging works.
 
 | Title | Status | Notes |
 |---|---|---|
-| Robocop (Ocean) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (13996 px, 10 colours). Input not driven. |
+| Robocop (Ocean) | Known issue | Screened 2026-08-13 by differential comparison against a reference emulator. **The screen previously recorded here (13996 px) is the loading screen, not the title screen.** Its `.tap` holds 16 blocks; we load 6 and stop, then sit static for 400 s of guest time without re-entering the ROM loader. The reference reads all 16: blocks 7-16 are Ocean's loader calling LD-BYTES with a non-standard flag (136), so the handover from the ROM loader to the game's own loader is not happening on our side. |
 | Renegade | **Works (caveat)** | Verified 2026-08-08 on the 128K: loads from `.tap` through the 128 Tape Loader and renders its title screen. Not driven into gameplay, so the verdict stops at "loads and titles". |
-| Target: Renegade | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (31712 px, 13 colours). Input not driven. |
+| Target: Renegade | Known issue | Screened 2026-08-13: same fault as Robocop. 16 blocks on the tape, we load 6 and stop static at 16896 lit. The previously recorded 31712 px title screen was the loading screen. |
 | R-Type (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (3724 px, 6 colours). Input not driven. |
 | Lemmings (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (14758 px, 6 colours). Input not driven. |
 | Where Time Stood Still | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (4981 px, 4 colours). Input not driven. |

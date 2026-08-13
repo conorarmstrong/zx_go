@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"image"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,6 +41,15 @@ func TestNexloadSDGames(t *testing.T) {
 	if len(nexFiles) == 0 {
 		t.Skip("no .nex games on the SD card")
 	}
+	// The bug this suite used to have was an ordering bug: each launch left
+	// the machine in a slightly different state and the next one raced it.
+	// Go's -shuffle does not reorder sub-tests, so NEX_SD_REVERSE=1 is the
+	// hook for running the corpus backwards and proving order does not matter.
+	if os.Getenv("NEX_SD_REVERSE") != "" {
+		for i, j := 0, len(nexFiles)-1; i < j; i, j = i+1, j-1 {
+			nexFiles[i], nexFiles[j] = nexFiles[j], nexFiles[i]
+		}
+	}
 
 	for _, host := range nexFiles {
 		rel, err := filepath.Rel(sdRoot, host)
@@ -53,32 +61,19 @@ func TestNexloadSDGames(t *testing.T) {
 
 		t.Run(name, func(t *testing.T) {
 			// The launch is driven by typing into the real NextZXOS command
-			// line one synthetic keystroke at a time. That is the faithful
-			// path, but it is not perfectly reliable: a dropped character
-			// makes the whole line wrong, NEXLOAD finds no such file, and the
-			// OS drops back to the menu. Attempt it a few times from a fresh
-			// boot before calling the game broken, so the suite measures the
-			// emulator rather than the typing. A game that genuinely does not
-			// launch fails every attempt.
-			var emu *emulator
-			var img *image.RGBA
-			var nonBlank, launched bool
-			const attempts = 3
-			for try := 0; try < attempts; try++ {
-				emu = bootNextToMenu(t)
-				nexloadFromMenu(emu, sdPath, 1400)
-
-				img = emu.renderFrame()
-				nonBlank = !uniformImage(img)
-				launched = emu.cpu.PC != nextMenuLoopPC
-				if launched {
-					break
-				}
-				if try+1 < attempts {
-					t.Logf("%s: returned to the menu, retrying the command line (attempt %d of %d)",
-						name, try+2, attempts)
-				}
+			// line one synthetic keystroke at a time — the faithful path.
+			// Every character is confirmed against the OS's own copy of the
+			// line, so a typing failure is reported as one, here, instead of
+			// turning into a verdict about the game.
+			emu := bootNextToMenu(t)
+			launched, err := nexloadFromMenu(emu, sdPath, 1400)
+			if err != nil {
+				t.Fatalf("%s: driving the NextZXOS command line: %v", name, err)
 			}
+
+			img := emu.renderFrame()
+			nonBlank := !uniformImage(img)
+			backAtOS := nexAtOSKeyWait(emu)
 
 			if dir := os.Getenv("NEX_RENDER_OUT_DIR"); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)
@@ -89,17 +84,35 @@ func TestNexloadSDGames(t *testing.T) {
 				}
 			}
 
+			// The strict condition: the game must still be running its own
+			// code at the end of the window. "It ran for a while and then
+			// handed the machine back" is NOT a pass — a title that loads,
+			// runs and dies would look identical to one that works, and
+			// accepting it would blind this suite to that whole class of
+			// regression across the corpus.
+			//
+			// This is only assertable because the guest clock is pinned in
+			// bootNextToMenu. Without that the outcome varies run to run on
+			// the same binary, and the temptation is to widen the verdict
+			// until the variation fits inside it. Fix the nondeterminism
+			// instead.
 			verdict := "Renders"
 			switch {
 			case !launched:
 				verdict = "DidNotLaunch"
+			case backAtOS:
+				verdict = "ReturnedToOS"
 			case !nonBlank:
 				verdict = "Blank"
 			}
 			t.Logf("SDVERDICT %-14s %-28s PC=%#04x nonblank=%v", verdict, name, emu.cpu.PC, nonBlank)
 
 			if !launched {
-				t.Errorf("%s: NEXLOAD returned to the menu — the game did not launch", name)
+				t.Errorf("%s: NEXLOAD never handed the machine over — the game did not launch", name)
+			}
+			if backAtOS {
+				t.Errorf("%s: back at the NextZXOS key-wait at the end of the window (PC=%#04x) — "+
+					"the game launched and then gave the machine back", name, emu.cpu.PC)
 			}
 		})
 	}

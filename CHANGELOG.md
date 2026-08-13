@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.22]
+
+### Fixed
+
+- **The Next launch harness was host-clock coupled.** `bootNextToMenu` left
+  the guest RTC on `time.Now()`, and NextZXOS runs a per-second redraw off it,
+  so whether a keypress landed in the idle context depended on host wall-clock
+  rate — machine speed, and what else was running. Measured: three identical
+  runs of TX-1696 gave three different verdicts. The RTC is now pinned, which
+  `cmd/zx_go/next.go` already documented as the reason that env var exists.
+  All 12 SD games now render on every run, including the verbose run whose
+  different timing used to flip the result.
+
+### Changed
+
+- **The launch assertion is strict again.** An intermediate version made
+  "the game ran and then handed the machine back" a passing outcome, which
+  would have hidden a load-then-die regression across the whole corpus. That
+  widening was compensating for the nondeterminism above; with the clock
+  pinned it is not needed, and returning to the OS now fails.
+
+- **Robocop and Target Renegade are corrected from Boots to Known issue.**
+  Differential comparison against a reference emulator shows both stop after
+  6 of their 16 tape blocks and sit static. The screens previously recorded
+  as their title screens (13996 px and 31712 px) are loading screens. The
+  underlying gap — the handover from the ROM loader to a game's own loader
+  using a non-standard flag — is now an open roadmap item.
+
 ## [v1.8.21]
 
 ### Fixed

@@ -15,6 +15,23 @@ import (
 // The CD matters. NextBASIC's LOAD resolves against the current directory, so
 // `LOAD "/full/path/prog.bas"` fails with "File not found" — verified — while
 // `.cd <dir>` followed by `LOAD "prog.bas"` works.
+// nexTypeLineBlind types an ASCII string without confirming each character
+// against the OS, unmapped characters silently skipped.
+//
+// The NEXLOAD harness uses nexTypeLine, which confirms every character against
+// the OS's own copy of the command line and is immune to the OS being busy.
+// That cannot be used here: NextBASIC's LOAD leaves the previous line in the
+// bank-7 mirror instead of clearing it, and a running program never touches it
+// at all, so there is nothing to confirm against once LOAD has been submitted.
+// This suite therefore keeps the timing-based typist it was written against.
+func nexTypeLineBlind(emu *emulator, s string) {
+	for _, c := range s {
+		if keys, ok := nexKeyMatrix[c]; ok {
+			nexPressCombo(emu, keys, 4, 10)
+		}
+	}
+}
+
 func runBasicFromMenu(emu *emulator, sdDir, file string, runFrames int) {
 	enter := func(frames int) {
 		nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12)
@@ -26,17 +43,17 @@ func runBasicFromMenu(emu *emulator, sdDir, file string, runFrames int) {
 	// The path is quoted because .cd splits its argument on spaces: an
 	// unquoted "/games/next/nextbasic invaders" is read as two paths and both
 	// are reported missing, which is why NextBASIC Invaders would not load.
-	nexTypeLine(emu, `.cd "`+strings.ToLower(sdDir)+`"`)
+	nexTypeLineBlind(emu, `.cd "`+strings.ToLower(sdDir)+`"`)
 	nexRunFrames(emu, 10)
 	enter(120)
 
-	nexTypeLine(emu, `load "`+strings.ToLower(file)+`"`)
+	nexTypeLineBlind(emu, `load "`+strings.ToLower(file)+`"`)
 	nexRunFrames(emu, 15)
 	enter(400)
 
 	// Some programs autostart on LOAD; a RUN afterwards is harmless for those
 	// and necessary for the rest.
-	nexTypeLine(emu, "run")
+	nexTypeLineBlind(emu, "run")
 	nexRunFrames(emu, 15)
 	enter(runFrames)
 }

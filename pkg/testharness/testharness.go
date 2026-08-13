@@ -80,6 +80,18 @@ type Harness struct {
 	// attribute/pattern state after exercising the $303B/$5B/$57
 	// port-write path.
 	nextSprites *sprite.Engine
+
+	// elapsedT is the harness's own absolute guest clock, in T-states. The
+	// CPU's counter cannot serve: ExecuteFrame subtracts the frame budget
+	// back off at every frame boundary, so CPU.Tstates() is frame-relative
+	// and wraps ~50 times a second. See GuestTstates.
+	elapsedT uint64
+
+	// tapeBlocks counts LD-BYTES trap fires since the tape was attached, and
+	// tapeLastLoad is the guest T-state of the most recent one. Together they
+	// are the tape load's observable event stream — see TapeBlocksConsumed.
+	tapeBlocks   int
+	tapeLastLoad uint64
 }
 
 // New constructs a fresh Harness for the given Spectrum model. The
@@ -165,8 +177,35 @@ func (h *Harness) Reboot() {
 func (h *Harness) RunFrames(n int) {
 	for i := 0; i < n; i++ {
 		h.cpu.ExecuteFrame(TstatesPerFrame)
+		h.elapsedT += TstatesPerFrame * uint64(h.cpu.SpeedMultiplier())
 		h.ula.Render()
 		h.peripherals.Frame()
+	}
+}
+
+// GuestTstates is the emulated time the machine has run for, in T-states,
+// counted from construction.
+//
+// It exists because CPU.Tstates() is not this: ExecuteFrame subtracts the frame
+// budget back off at each frame boundary, so the CPU's counter is a
+// frame-relative residual and comparing two of them across a frame edge is
+// meaningless. Anything measuring a window longer than a frame — a settle
+// period, the gap between two tape blocks — has to use this one.
+//
+// Resolution is one frame: the counter advances at the frame boundary, not
+// per instruction.
+func (h *Harness) GuestTstates() uint64 { return h.elapsedT }
+
+// RunUntilTstates runs whole frames until the guest clock reaches target,
+// overshooting by at most one frame.
+//
+// T-states are the unit to express a settle window in when a run is being
+// compared against another machine: they are guest time, whereas a frame count
+// is only guest time if both machines agree on the frame length — and the
+// harness deliberately runs TstatesPerFrame on every model.
+func (h *Harness) RunUntilTstates(target uint64) {
+	for h.elapsedT < target {
+		h.RunFrames(1)
 	}
 }
 
@@ -275,6 +314,25 @@ func (h *Harness) Memory(addr uint16) byte { return h.mem.Read(addr) }
 // WriteMemory writes a single byte. Writes to ROM areas are
 // silently ignored, the same as the real CPU.
 func (h *Harness) WriteMemory(addr uint16, val byte) { h.mem.Write(addr, val) }
+
+// DisplayFile returns a copy of the 6912-byte ULA display file — 6144 bytes of
+// bitmap followed by 768 attribute bytes — taken from the RAM page the machine
+// is actually displaying. On the 128K family that is page 5 or, once $7FFD
+// bit 3 is set, the shadow screen in page 7; reading $4000 would always give
+// page 5 and so would compare a screen nobody was looking at.
+//
+// It is the same 6912 bytes a .scr file holds, which makes it directly
+// comparable with any other emulator's screen dump. Unlike a rendered frame it
+// is FLASH-phase independent — FLASH is attribute bit 7, and the bytes never
+// change with the phase — so a flashing cursor is correctly not motion.
+func (h *Harness) DisplayFile() []byte {
+	page := h.mem.GetPage(h.mem.ScreenPage)
+	out := make([]byte, 6912)
+	if len(page) >= 6912 {
+		copy(out, page[:6912])
+	}
+	return out
+}
 
 // ScreenImage returns the current rendered screen image. The
 // returned RGBA pointer is owned by the ULA and may be overwritten

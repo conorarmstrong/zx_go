@@ -27,7 +27,9 @@ func TestNightKnightRepro(t *testing.T) {
 		t.Skipf("%s not present", path)
 	}
 	emu := bootNextToMenu(t)
-	nexloadFromMenu(emu, "/games/Next/Night-Knight/Night-Knight-Demo.nex", 0)
+	if _, err := nexloadFromMenu(emu, "/games/Next/Night-Knight/Night-Knight-Demo.nex", 0); err != nil {
+		t.Fatalf("driving the NextZXOS command line: %v", err)
+	}
 
 	const wantPC, wantSP = 0x1f3e, 0x5fdf
 	reached := false
@@ -66,7 +68,9 @@ func TestNightKnightNoStackLeak(t *testing.T) {
 		t.Skipf("%s not present", path)
 	}
 	emu := bootNextToMenu(t)
-	nexloadFromMenu(emu, "/games/Next/Night-Knight/Night-Knight-Demo.nex", 0)
+	if _, err := nexloadFromMenu(emu, "/games/Next/Night-Knight/Night-Knight-Demo.nex", 0); err != nil {
+		t.Fatalf("driving the NextZXOS command line: %v", err)
+	}
 
 	reachedBank5 := false
 	for i := 0; i < 600; i++ {

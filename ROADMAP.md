@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **158 title rows: 10 Works, 14 Works
-(caveat), 62 Boots (responds), 63 Boots, 1 Parses cleanly, 2 Known issue, 6
+(caveat), 62 Boots (responds), 61 Boots, 1 Parses cleanly, 4 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -73,6 +73,17 @@ remaining gap.
   controller tried and could not reach, which is the same statement EN makes.
   Pinned by TestDSResultIDAfterEOTIsNotTheHostTerminationCase so it is not
   re-litigated.
+- [ ] **Custom tape loaders stop after the ROM blocks.** Found by differential
+  comparison, not by screening. Robocop and Target Renegade each hold 16 tape
+  blocks; we load the 6 with standard flags and then never re-enter the ROM
+  loader, sitting static for 400 s of guest time. A reference emulator reads
+  all 16: blocks 7-16 are the game's own loader calling LD-BYTES with a
+  non-standard flag (136), so the handover from the ROM loader to the game
+  loader is not happening. Reproduce with `_tools/tapeprobe` (block count vs
+  guest time). This is a real emulator gap and it sits behind an unknown
+  number of the 42 tape-loaded 128K rows, whose verdicts only ever asserted
+  "something was drawn" — which a loading screen satisfies.
+
 - [~] **Verify what the keypress did.** Partly automated, and no longer purely
   manual. A response proves a title is waiting rather than hung; it does not
   prove the title is playable. Rather than hand-write an expectation per

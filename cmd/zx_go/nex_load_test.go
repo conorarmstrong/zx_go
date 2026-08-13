@@ -56,6 +56,15 @@ func saveNexShot(emu *emulator, name string) {
 // so this skips cleanly in CI).
 func bootNextToMenu(t *testing.T) *emulator {
 	t.Helper()
+	// Pin the guest clock. NextZXOS runs a per-second redraw task off the
+	// RTC, so with a live clock the menu is sometimes mid-redraw when a key
+	// arrives and sometimes not — which makes every launch outcome a
+	// function of host wall-clock rate, i.e. of machine speed and of what
+	// else is running. Measured: three identical runs of TX-1696 produced
+	// three different verdicts. next.go documents this env var for exactly
+	// this reason; the harness simply was not using it.
+	t.Setenv("ZX_GO_RTC_FIXED", "2026-01-01T00:00:00Z")
+
 	prev := cliFlagsActive
 	nf := cliFlags{}
 	if prev != nil {

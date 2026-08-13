@@ -2,6 +2,7 @@ package testharness
 
 import (
 	"fyne.io/fyne/v2"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
@@ -49,15 +50,18 @@ func (h *Harness) LoadTZX(path string) error {
 func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 	h.ula.SetTapePlayer(tp)
 	tp.Play()
+	h.tapeBlocks, h.tapeLastLoad = 0, 0
 
 	h.cpu.TrapCheck = func(pc uint16) bool {
-		if pc != 0x0556 || !tp.HasMoreBlocks() {
+		if pc != 0x0556 || !h.tapeTrapROMActive() || !tp.HasMoreBlocks() {
 			return false
 		}
 		block := tp.NextBlock()
 		if block == nil {
 			return false
 		}
+		h.tapeBlocks++
+		h.tapeLastLoad = h.elapsedT
 		// LD-BYTES contract: A = expected flag byte, carry = LOAD (vs VERIFY),
 		// IX = destination, DE = byte count. A tape block is [flag, data…,
 		// checksum].
@@ -102,6 +106,95 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 		return true
 	}
 	return nil
+}
+
+// tapeTrapROMActive reports whether the 48 BASIC ROM — the one that holds
+// LD-BYTES at $0556 — is the ROM currently paged at $0000. The fast-load trap
+// may only fire then: on any other ROM, $0556 is unrelated code, and trapping
+// it hands a tape block to whatever IX/DE happened to hold.
+//
+// This mirrors cmd/zx_go's tapeTrapROMActive, so a headless 128K tape run
+// behaves the same way as the session a user gets. The Next is the one
+// deliberate difference: the GUI's Next runs NextZXOS, where this loader is
+// not the tape path at all, whereas the harness boots the Next to 48K BASIC on
+// the embedded 48K ROM precisely so tape-loaded conformance programs can run
+// without the proprietary OS (see LoadTAP).
+func (h *Harness) tapeTrapROMActive() bool {
+	switch h.mem.GetCurrentModel() {
+	case roms.Model48K, roms.ModelNext:
+		return true
+	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
+		return h.mem.GetROMBank() == 1
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		return h.mem.GetROMBank() == 3
+	default:
+		return false
+	}
+}
+
+// TapeBlocksConsumed is how many tape blocks the LD-BYTES trap has injected
+// since the tape was attached — i.e. how many times the guest entered the ROM
+// loader and got a block back.
+//
+// It exists so a differential run can prove both machines consumed the same
+// tape before any screen is compared. Two machines that loaded different
+// amounts of a tape will differ on screen for reasons that have nothing to do
+// with emulation faithfulness, so an unequal count has to void the comparison
+// rather than be reported as a divergence.
+func (h *Harness) TapeBlocksConsumed() int { return h.tapeBlocks }
+
+// TapeLastLoadTstate is the absolute CPU T-state at which the last block was
+// injected, or 0 if none has been. Loading is "finished" when this stops
+// advancing — see RunUntilTapeIdle.
+func (h *Harness) TapeLastLoadTstate() uint64 { return h.tapeLastLoad }
+
+// RunUntilTapeIdle runs the machine until the tape stops being read, and
+// reports whether that actually happened.
+//
+// Idle means at least one block has been loaded and quietT T-states of guest
+// time have passed since the last one. That is an event in the guest, not a
+// duration guessed in advance, which is what lets two different machines be
+// compared at equivalent points: both wait for their own loader to stop.
+//
+// It returns false if deadlineT T-states elapse first — the tape is still
+// loading, or the title uses a loader that never enters LD-BYTES. A false here
+// must void a comparison rather than produce a verdict: two machines caught at
+// different points in a load differ on screen for reasons that say nothing
+// about faithfulness.
+func (h *Harness) RunUntilTapeIdle(quietT, deadlineT uint64) bool {
+	deadline := h.elapsedT + deadlineT
+	for {
+		if h.tapeBlocks > 0 && h.elapsedT-h.tapeLastLoad >= quietT {
+			return true
+		}
+		if h.elapsedT >= deadline {
+			return false
+		}
+		h.RunFrames(1)
+	}
+}
+
+// StartTapeLoad starts the machine's own tape loader, whichever way this model
+// starts one: a 48K needs LOAD"" typed at the K prompt, while the 128/+2 power
+// on into a ROM menu whose pre-highlighted first entry is Tape Loader, so
+// ENTER alone is the whole sequence. The caller must already have run the
+// machine to that prompt or menu.
+//
+// The 48K sequence appears to work on a 128K, but only by accident: J and
+// SYMBOL SHIFT+P do nothing at the menu and the trailing ENTER selects Tape
+// Loader. Anything relying on that coincidence breaks the moment the menu
+// gains a keystroke.
+//
+// The +2A/+3 are deliberately not special-cased: their menu's first entry is
+// the disk Loader, not a tape loader, so there is no single keystroke that
+// starts a tape and pretending otherwise would start something else.
+func (h *Harness) StartTapeLoad() {
+	switch h.mem.GetCurrentModel() {
+	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
+		h.TapKey(fyne.KeyReturn)
+	default:
+		h.TypeLoadCommand()
+	}
 }
 
 // TypeLoadCommand types `LOAD""` + ENTER at the 48K BASIC prompt (K cursor):

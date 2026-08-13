@@ -48,15 +48,69 @@ var nexKeyMatrix = func() map[rune][][2]int {
 	return m
 }()
 
+// nexCmdEcho returns the command line as NextZXOS itself holds it. The OS keeps
+// the line being edited in RAM bank 7 as plain ASCII, NUL padded: the first 32
+// columns at $0000 and the continuation row at $0028. That layout is empirical
+// — dumped by typing known strings — but it needs no trusting: a layout change
+// makes the very first character typed fail to confirm.
+//
+// It is what makes typing at the command line honest. The OS finishes a command
+// and only then clears the line, and while it is busy it takes keys from the ROM
+// and throws them away, so a keystroke sent on a frame count can vanish without
+// trace. Reading the OS's own copy of the line says whether a character actually
+// arrived.
+func nexCmdEcho(e *emulator) string {
+	p := e.mem.GetPage(7)
+	if len(p) < 0x43 {
+		return ""
+	}
+	var b []byte
+	for _, r := range [2][2]int{{0x00, 0x20}, {0x28, 0x43}} {
+		for i := r[0]; i < r[1]; i++ {
+			if c := p[i]; c >= 0x20 && c < 0x7f {
+				b = append(b, c)
+			}
+		}
+	}
+	return string(b)
+}
+
 // macroStep is one stage of the NEXLOAD macro. Keys are held for the whole
 // step (released and re-pressed on entry to each step); frames is how many
-// emulated frames the step lasts. A step with waitMenu set instead runs until
-// the CPU reaches the NextZXOS menu wait loop (or a safety timeout), which is
-// how the boot phase waits for an interactive prompt.
+// emulated frames the step lasts. A step with until set ends as soon as until
+// reports true — it is waiting on something the guest did, and frames is only
+// its safety bound. A step with waitMenu set instead runs until the CPU reaches
+// the NextZXOS menu wait loop (or a safety timeout), which is how the boot
+// phase waits for an interactive prompt.
 type macroStep struct {
 	keys     [][2]int
 	frames   int
 	waitMenu bool
+	until    func(e *emulator) bool
+}
+
+// nexMacroSettled returns a per-step predicate that reports true once the guest
+// has completed scans keyboard scans, counted as frames in which its port-$FE
+// read count advanced. It is the guest's clock, not the host's, so the gap
+// between keystrokes stays right however busy the machine is — and it is what
+// stops the ROM's key re-arm delivering a letter twice when the next character
+// is a SYMBOL SHIFT combo on the same key ("m" then ".", which is SYMBOL
+// SHIFT + M).
+func nexMacroSettled(scans int) func(e *emulator) bool {
+	var prev uint64
+	var started bool
+	done := 0
+	return func(e *emulator) bool {
+		if e.ula == nil {
+			return true
+		}
+		n := e.ula.FEReadCount()
+		if started && n != prev {
+			done++
+		}
+		prev, started = n, true
+		return done >= scans
+	}
 }
 
 // nexloadMacro drives the genuine NextZXOS `.nexload` dot command from the GUI
@@ -80,6 +134,12 @@ func newNexloadMacro(sdPath string) *nexloadMacro {
 	var steps []macroStep
 	hold := func(keys [][2]int, frames int) { steps = append(steps, macroStep{keys: keys, frames: frames}) }
 	wait := func(frames int) { steps = append(steps, macroStep{frames: frames}) }
+	holdUntil := func(keys [][2]int, timeout int, until func(*emulator) bool) {
+		steps = append(steps, macroStep{keys: keys, frames: timeout, until: until})
+	}
+	waitUntil := func(timeout int, until func(*emulator) bool) {
+		steps = append(steps, macroStep{frames: timeout, until: until})
+	}
 
 	steps = append(steps, macroStep{waitMenu: true}) // boot to the welcome screen
 	hold([][2]int{{7, 0x01}}, 40)                    // SPACE -> "Start NextZXOS"
@@ -87,14 +147,29 @@ func newNexloadMacro(sdPath string) *nexloadMacro {
 	hold([][2]int{{0, 0x01}, {4, 0x10}}, 6)          // cursor DOWN -> Command Line
 	wait(10)
 	hold([][2]int{{6, 0x01}}, 6) // ENTER -> command prompt
-	wait(92)
-	for _, c := range ".nexload " + strings.ToLower(sdPath) {
-		if keys, ok := nexKeyMatrix[c]; ok {
-			hold(keys, 4)
-			wait(10)
+	// Wait for the prompt itself, not for a frame count: the menu leaves its
+	// own data in the bank-7 command-line area, so an empty line is the
+	// prompt's own signal that it has started and is ready to be typed at.
+	waitUntil(300, func(e *emulator) bool { return nexCmdEcho(e) == "" })
+
+	// Type the command, confirming each character against the OS's copy of
+	// the line before moving on. A fixed hold-and-wait per key was a race:
+	// whenever the OS was still busy the keystroke was taken by the ROM and
+	// discarded, and the whole line came out wrong.
+	line := ".nexload " + strings.ToLower(sdPath)
+	typed := ""
+	for _, c := range line {
+		keys, ok := nexKeyMatrix[c]
+		if !ok {
+			continue
 		}
+		typed += string(c)
+		want := typed
+		// The hold is bounded well under the ROM's auto-repeat delay, so a
+		// character the OS never takes cannot arrive twice instead.
+		holdUntil(keys, 20, func(e *emulator) bool { return nexCmdEcho(e) == want })
+		waitUntil(20, nexMacroSettled(6))
 	}
-	wait(15)
 	hold([][2]int{{6, 0x01}}, 6) // ENTER -> run NEXLOAD
 	wait(1500)                   // let the OS load and start the game
 
@@ -127,6 +202,11 @@ func (m *nexloadMacro) tick(e *emulator) bool {
 			m.idx++
 			m.frame = 0
 		}
+		return false
+	}
+	if s.until != nil && s.until(e) {
+		m.idx++
+		m.frame = 0
 		return false
 	}
 	if m.frame >= s.frames {
