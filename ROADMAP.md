@@ -73,10 +73,23 @@ remaining gap.
   controller tried and could not reach, which is the same statement EN makes.
   Pinned by TestDSResultIDAfterEOTIsNotTheHostTerminationCase so it is not
   re-litigated.
-- [ ] **Verify what the keypress did.** A response proves a title is waiting
-  rather than hung; it does not prove the title is playable. Closing that gap
-  means per-title expectations — what screen should follow which key — which
-  is genuine manual work and cannot be inferred.
+- [~] **Verify what the keypress did.** Partly automated, and no longer purely
+  manual. A response proves a title is waiting rather than hung; it does not
+  prove the title is playable. Rather than hand-write an expectation per
+  title, `_tools/refdiff` (local-only) drives zx_go and a reference emulator
+  through the same load-and-keypress sequence and compares the resulting
+  6912-byte display file. **Six +3 disk titles verified so far**, two of them
+  byte-identical.
+
+  Known limit of the method: the reference runs in real time while we step
+  frames, so titles that are still loading when the comparison is taken
+  cannot be synchronised. It is reliable for titles that settle on a screen.
+  Adidas Tie-Break is the one open case, where the reference sticks at 1447
+  lit pixels regardless of how long it is given while a second reference
+  loads the title fully, as we do.
+
+  Remaining work is breadth: the tape and 128K classes have no equivalent
+  harness yet.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.

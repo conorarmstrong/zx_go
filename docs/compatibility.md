@@ -405,13 +405,13 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | ACE 2 - The Ultimate Head to Head Conflict (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1924 px, 3 colours, answered a keypress. |
 | Action Fighter (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1986 px, 5 colours, answered a keypress. |
 | Action Force (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 3261 px, 2 colours, answered a keypress. |
-| Action Force 2 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: draws and animates its own screen (up to 3456 px, 3 colours) and answers a keypress. |
+| Action Force 2 (+3 disk) | **Boots (responds)** | Screened 2026-08-12: draws and animates its own screen (up to 3456 px, 3 colours) and answers a keypress. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, same lit-pixel count, 4.2% of bytes differ after SPACE. |
 | Adidas Championship Tie-Break (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads past the title into its credits screen. Was blank before v1.8.17. |
 | Afterburner (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Airborne Ranger (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Alien 8 | **Boots (responds)** | Screened 2026-08-12: 16388 px, 6 colours, answered a keypress. |
 | Alien Storm (+3 disk) | **Boots** | Screened 2026-08-12: 16075 px, 4 colours, animating. |
-| Alien Syndrome (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its own PRESS ENTER screen (498 px on the canvas) and answers a keypress. Confirmed playable in the GUI. |
+| Alien Syndrome (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its own PRESS ENTER screen (498 px on the canvas) and answers a keypress. Confirmed playable in the GUI. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, display file byte-identical after SPACE. |
 | APB - All Points Bulletin (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 32931 px, 9 colours, answered a keypress. |
 | Arkanoid 2 - Revenge of Doh (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2521 px, 2 colours, answered a keypress. |
 | Artura (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 2616 px, 7 colours, answered a keypress. |
@@ -422,7 +422,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Back to the Future Part II (+3 disk) | **Boots** | Screened 2026-08-12: title screen, animating. Was blank before v1.8.17. |
 | Back to the Future Part III (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 8541 px, 5 colours, answered a keypress. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
-| Barbarian II - The Dungeon of Drax (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and control menu, matching a +3 reference pixel for pixel. Was blank before v1.8.17. |
+| Barbarian II - The Dungeon of Drax (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and control menu, matching a +3 reference pixel for pixel. Was blank before v1.8.17. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, display file byte-identical bar one pixel after SPACE. |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
@@ -446,16 +446,16 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cabal (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 31697 px, 15 colours, answered a keypress. |
 | California Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
 | Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15291 px, 14 colours, animating. |
-| Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. |
+| Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, display file byte-identical after SPACE. |
 | Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
-| Captain Planet (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads to its control-select menu and answers a keypress. Was blank until the EDSK ST1/ST2 CRC-attribution fix; see the CHANGELOG for v1.8.17. |
+| Captain Planet (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads to its control-select menu and answers a keypress. Was blank until the EDSK ST1/ST2 CRC-attribution fix; see the CHANGELOG for v1.8.17. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, 1.4% of the display file differs after SPACE. |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
 | Castle Master (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 16265 px, 9 colours, answered a keypress. |
 | Chain Reaction (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 19893 px, 5 colours, answered a keypress. |
 | Championship Run (+3 disk) | **Boots** | Screened 2026-08-12: 17784 px, 4 colours, animating. |
 | Chase H.Q | **Boots (responds)** | Screened 2026-08-12: 5360 px, 4 colours, answered a keypress. |
 | Chase H.Q. (+3 disk) | **Boots** | Screened 2026-08-12: 31933 px, 14 colours, animating. |
-| Chase H.Q. II - Special Criminal Investigations (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and credits. Was blank before v1.8.17. |
+| Chase H.Q. II - Special Criminal Investigations (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and credits. Was blank before v1.8.17. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, 2.0% of the display file differs after SPACE. |
 | Choy-Lee-Fut Kung-Fu Warrior (+3 disk) | **Boots** | Screened 2026-08-12: 12464 px, 12 colours, animating. |
 | Chuckie Egg | **Boots** | Screened 2026-08-12: 25143 px, 7 colours, animating. |
 | Circus Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 25933 px, 12 colours, answered a keypress. |
