@@ -437,6 +437,24 @@ func (tp *TapePlayer) Blocks() []BlockSummary {
 	return out
 }
 
+// BlockIsData reports whether the block at idx carries bytes a loader can
+// read, as opposed to bare signal or flow control.
+//
+// It exists so a count of blocks read can use the same population as
+// DataBlockCount. Crediting any index against a data-block total lets the
+// figure exceed 100%: a turbo TZX laid out as [pure tone][pulse sequence]
+// [data] has the guest's edge loop running while the cursor sits on the tone
+// and the pulse sequence, so all three indices were being credited against a
+// total that counted one.
+func (tp *TapePlayer) BlockIsData(idx int) bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	if idx < 0 || idx >= len(tp.blocks) {
+		return false
+	}
+	return tp.blocks[idx].kind == kindData
+}
+
 // DataBlockCount is how many of the tape's blocks carry bytes a loader can
 // read: headers, standard data, turbo and pure-data blocks.
 //

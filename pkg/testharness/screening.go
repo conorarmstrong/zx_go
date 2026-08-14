@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
 )
 
@@ -168,6 +169,10 @@ const (
 	// has ever scored above zero on the canvas, and the sparsest real screen
 	// measured is 498.
 	MinCanvasPixels = 200
+	// flatBitmapMaxColours bounds the flat-bitmap veto. The eight frames it
+	// was added for measured exactly 2 colours; a screen painted in the
+	// attribute bytes over a solid bitmap is real artwork and uses many more.
+	flatBitmapMaxColours = 2
 )
 
 // editorLines is the height in scanlines of the ROM's editor and report area
@@ -223,11 +228,16 @@ func Classify(s Screening) Verdict {
 	if s.TapeIncomplete {
 		return VerdictInconclusive
 	}
-	// A bitmap with one repeated value has no shape on it, whatever the
-	// attributes make of it, and no pixel count can tell you that. Checked
-	// before the floors because it is the stronger statement: the floors ask
-	// how much is lit, this asks whether anything was drawn.
-	if s.FlatBitmap {
+	// A bitmap with one repeated value has no shape on it, and no pixel count
+	// can tell you that: uninitialised video memory measures 18432 px in 2
+	// colours and clears both floors.
+	//
+	// Bounded by the colour count so it cannot condemn attribute-only
+	// artwork. A picture painted in the 768 attribute bytes over a solid
+	// bitmap is a real screen and uses many colours; the frames this exists
+	// to reject used exactly two. Without the bound this veto sits in front of
+	// a strictly better measurement — the composited frame — and overrules it.
+	if s.FlatBitmap && s.Colours <= flatBitmapMaxColours {
 		if s.BankInjected {
 			return VerdictInconclusive
 		}
@@ -294,6 +304,7 @@ func (h *Harness) ScreenTitle(settle int) Screening {
 		settle += flashPeriod - r
 	}
 	before := h.frameBytes()
+	flatBefore := h.flatBitmap()
 	s := Screening{Error: ScreenError(h.ScreenText())}
 	s.Pixels, s.Colours = measureFrame(before)
 	s.CanvasPixels, s.CanvasColours = measureFrame(dropBottomLines(before, editorLines))
@@ -313,23 +324,48 @@ func (h *Harness) ScreenTitle(settle int) Screening {
 		s.Error = ScreenError(h.ScreenText())
 	}
 	s.Moved = !bytes.Equal(before, after)
-	s.FlatBitmap = h.flatBitmap()
+	// Both samples, not just the last one. Pixels and Colours keep whichever
+	// sample was busier, so judging flatness on the other one lets a title
+	// that wipes its bitmap during the settle be condemned on a frame whose
+	// own recorded pixel count proves it drew something.
+	s.FlatBitmap = flatBefore && h.flatBitmap()
 	return s
 }
 
 // flatBitmap reports whether the guest's display file bitmap holds one
 // repeated value, i.e. carries no shape at all.
 //
-// Attributes are deliberately not consulted, exactly as in the differential
-// tool: a flat bitmap is one plain rectangle however many colours it is
-// painted in, and it was the colour count that let these frames past.
+// Attributes are deliberately not consulted: a flat bitmap is one plain
+// rectangle however many colours it is painted in, and it was the colour
+// count that let these frames past.
 //
-// Models with no display file — the Next running its own video modes — answer
-// false, because "there is no display file to be flat" is not evidence of a
-// blank screen.
+// It answers false for any machine whose picture is not that display file.
+// The Next draws Layer 2, tilemap and sprite modes over an ULA bitmap it may
+// never touch, and DisplayFile still hands one back for it — so asking this
+// question there condemned working Layer 2 titles, which is the worst error
+// this harness can make.
 func (h *Harness) flatBitmap() bool {
+	if h.mem.GetCurrentModel() == roms.ModelNext {
+		return false
+	}
 	scr, ok := h.DisplayFile()
 	if !ok || len(scr) < 6144 {
+		return false
+	}
+	return FlatBitmapScreen(scr)
+}
+
+// FlatBitmapScreen reports whether a 6912-byte display file carries no shape:
+// every byte of its 6144-byte bitmap holds the same value.
+//
+// Exported because _tools/refdiff asks the same question and the two must not
+// drift — the same reasoning that exported TapeIdleQuietT. They had already
+// drifted on the short-input case before this was shared.
+//
+// A display file too short to hold a bitmap is not evidence either way, so it
+// answers false: "we could not look" must not read as "nothing was drawn".
+func FlatBitmapScreen(scr []byte) bool {
+	if len(scr) < 6144 {
 		return false
 	}
 	for i := 1; i < 6144; i++ {
@@ -440,7 +476,8 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 		// Then wait for the loader to fall silent rather than for a frame
 		// count, because a frame count cannot know how long a load takes. A
 		// title that loads itself decodes tape edges in real time — RoboCop
-		// spends ~24000 frames on the ten blocks its BASIC loader hands over,
+		// spends ~24000 frames on the ten blocks its BASIC loader hands OVER TO the
+		// game's own loader,
 		// and the manifest's 3000 caught it mid-load and recorded its LOADING
 		// screen as the title. The deadline comes from the tape: a load cannot
 		// outlast the medium it reads.

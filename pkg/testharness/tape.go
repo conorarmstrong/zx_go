@@ -99,7 +99,11 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 		}
 		if success {
 			h.cpu.F |= z80.FLAG_C
-			if offered >= 0 {
+			// NextBlock only ever returns a data block, so this is really an
+			// assertion that the two agree about the population being counted
+			// — not a bounds check, which cannot fail here because NextBlock
+			// increments the cursor before returning.
+			if tp.BlockIsData(offered) {
 				h.tapeDecoded[offered] = true
 			}
 		} else {
@@ -170,8 +174,15 @@ func (h *Harness) tapeTrapROMActive() bool {
 }
 
 // TapeBlocksConsumed is how many tape blocks the LD-BYTES trap has injected
-// since the tape was attached — i.e. how many times the guest entered the ROM
-// loader and got a block back.
+// since the tape was attached or the machine was last rebooted — i.e. how many
+// times the guest entered the ROM loader and got a block back.
+//
+// Reboot leaves the tape mounted and its cursor where it was, but resets this
+// and every other load counter, because they describe a load the rebooted
+// machine did not perform. The consequence to know: after a reboot mid-tape
+// the counters cover only the remainder while TapeBlocksTotal still spans the
+// whole tape, so the ratio understates. Rewind the player if you need the two
+// to describe the same span.
 //
 // It exists so a differential run can prove both machines consumed the same
 // tape before any screen is compared. Two machines that loaded different
@@ -225,10 +236,15 @@ func (h *Harness) tapeFrameTick() {
 	// reading the tape" from "the tape rolled past an idle guest", and a
 	// failed read belongs on the first side of that line, not the second.
 	//
-	// The cursor sits one past the last block once the tape has run out, and
-	// that index is not a block: crediting it reported 19 blocks decoded off
-	// an 18-block tape. A guest still hunting for a pilot that will never
-	// arrive has not read anything.
+	// Only blocks that carry bytes, because that is the population the total
+	// counts. A turbo TZX interleaves bare signal blocks with its payloads,
+	// and crediting those against a data-block total let the published figure
+	// exceed 100%.
+	//
+	// The cursor also sits one past the last block once the tape has run out,
+	// and that index is not a block: crediting it reported 19 blocks decoded
+	// off an 18-block tape. A guest still hunting for a pilot that will never
+	// arrive has not read anything. BlockIsData rejects both.
 	if h.tapeDecoded == nil {
 		// A tape mounted straight onto the ULA — Harness.ULA() is exported and
 		// SetTapePlayer is how the GUI and pkg/ula do it — never went through
@@ -236,7 +252,7 @@ func (h *Harness) tapeFrameTick() {
 		// panics inside RunFrames, which is a poor way to learn that.
 		h.tapeDecoded = map[int]bool{}
 	}
-	if blk := tp.CurrentBlock(); blk >= 0 && blk < tp.BlockCount() {
+	if blk := tp.CurrentBlock(); tp.BlockIsData(blk) {
 		h.tapeDecoded[blk] = true
 	}
 }
@@ -305,7 +321,7 @@ func (h *Harness) tapeLastActivity() uint64 {
 // Both signals are needed. Waiting only on trap fires reports idle the instant
 // the last trapped block lands, which on a title that then loads itself is the
 // start of the load rather than the end of it: RoboCop trapped 6 blocks of 16
-// and its own loader took another ~24000 frames over the remaining nine, all
+// and its own loader took another ~24000 frames over the remaining ten, all
 // of it invisible to the trap counter.
 //
 // It returns false if deadlineT T-states elapse first — the tape is still
@@ -356,8 +372,20 @@ func (h *Harness) StartTapeLoad() bool {
 	case roms.Model48K:
 		h.TypeLoadCommand()
 		return true
+	case roms.ModelNext:
+		// The harness boots the Next to 48 BASIC on the embedded ROM precisely
+		// so tape-loaded conformance programs can run without the proprietary
+		// OS (see LoadTAP), and the corpus ships zilogdma.tap as a Next entry.
+		// So the 48K sequence is right here, but only while that ROM is the
+		// one paged low: through the bootrom chain or NextZXOS there is no
+		// 48-BASIC prompt to type at. Same test the fast-load trap gates on.
+		if h.mem.GetROMBank() != 0 {
+			return false
+		}
+		h.TypeLoadCommand()
+		return true
 	default:
-		// ZX80/ZX81, SAM, Next: no classic 48-BASIC tape prompt to type at.
+		// ZX80/ZX81, SAM: no classic 48-BASIC tape prompt to type at.
 		return false
 	}
 }

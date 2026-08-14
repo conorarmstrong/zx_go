@@ -211,8 +211,8 @@ func TestTapeBlocksDecodedNeverExceedsTheTape(t *testing.T) {
 // manifest was written from one of them.
 //
 // TapeBlocksConsumed counts fast-load trap fires, so it misses every block a
-// title's own loader decodes off the EAR bit — RoboCop trapped 6 of 16 and
-// read the other nine itself.
+// title's own loader decodes off the EAR bit — RoboCop traps 6 of its 16 and
+// reads the other ten itself.
 //
 // The player's own cursor, TapePlayer.CurrentBlock, has the opposite fault: it
 // advances whenever the tape rolls. The player is stepped from every port-$FE

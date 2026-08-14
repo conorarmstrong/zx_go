@@ -377,7 +377,7 @@ question:
   at a menu keeps the tape moving while loading nothing.
 
 **A short count is usually not a fault.** Most of these titles are
-multiloads: Lemmings decodes 4 blocks of 125 and puts up "PRESS SPACE TO
+multiloads: Lemmings decodes 2 blocks of 125 and puts up "PRESS SPACE TO
 BEGIN", because the other 121 are levels that load once you start. Read
 the screen before reading the count — `tapeprobe -shots` writes one per
 title, and `refdiff -keep` writes ours beside a reference's.

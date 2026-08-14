@@ -372,6 +372,7 @@ func (f *UPD765) resetLocked() {
 	f.readCM = false
 	f.readDataCRC = false
 	f.readWrongCyl = false
+	f.readDiagNoID = false
 	f.readWantDeleted = false
 	f.readSK = false
 	f.scanMatch = false
@@ -1082,33 +1083,36 @@ func (f *UPD765) execReadDiag() {
 	f.readCM = false
 	f.readDataCRC = false
 	f.readWrongCyl = false
-	f.readDiagNoID = !trackHasID(track, f.cmdBuf[rdParamR], n)
+	f.readDiagNoID = !trackHasID(track,
+		f.cmdBuf[rdParamC], f.cmdBuf[rdParamH], f.cmdBuf[rdParamR], n)
 	f.phase = phaseExecution
 }
 
-// trackHasID reports whether any sector on the track carries the given R and
-// N, which is the comparison READ A TRACK makes.
+// trackHasID reports whether any sector on the track carries the ID the
+// command named, which is the comparison READ A TRACK makes.
 //
 // The datasheet: "the FDC compares the ID information read from each sector
 // with the value stored in the IDR and sets the ND flag of Status Register 1
-// to a 1 if there is no comparison." R and N are the fields findSector matches
-// on, so the two commands agree about what "the same sector" means.
+// to a 1 if there is no comparison." The IDR holds C, H, R and N, so all four
+// are compared.
+//
+// It deliberately does NOT borrow findSector's comparison, which ignores C.
+// findSector can afford to, because READ DATA reports a cylinder mismatch
+// separately through ST2.WC; READ A TRACK has no WC path, so a sector on the
+// wrong cylinder is simply not the sector that was asked for. Protection
+// layouts turn exactly this distinction into a check.
 //
 // This is how a protection track is inspected. California Games seeks to
 // cylinder 7, whose sectors are numbered $B1-$B8, and reads it asking for
-// R=01; the answer to that question is ND, and it stops when it does not get
-// one.
-func trackHasID(t *Track, wantR, wantN byte) bool {
+// R=01; the answer to that question is ND.
+func trackHasID(t *Track, wantC, wantH, wantR, wantN byte) bool {
 	for pos := 0; ; {
-		_, _, r, n, idEnd, ok := t.idAt(pos)
+		c, hd, r, n, idEnd, ok := t.idAt(pos)
 		if !ok {
 			return false
 		}
-		if r == wantR && n == wantN {
+		if c == wantC && hd == wantH && r == wantR && n == wantN {
 			return true
-		}
-		if idEnd <= pos {
-			return false // no forward progress; a malformed track
 		}
 		pos = idEnd
 	}

@@ -20,19 +20,19 @@ import (
 // the bitmap has any structure at all, rather than counting lit pixels — and
 // it reported all eight as BLANK. This brings the same test to the screening.
 
-// flatBitmapScreen fills the display file with one repeated bitmap byte and
-// two attribute values, which is exactly the shape of the frames those rows
-// were scored on.
+// flatBitmapScreen fills the display file with one repeated bitmap byte over a
+// uniform attribute, which is the shape of the frames those rows were scored
+// on: 18432 px in exactly 2 colours.
+//
+// The colour count is load-bearing. The veto is bounded by it so that artwork
+// painted in the attribute bytes over a solid bitmap — a real screen, and a
+// many-coloured one — is not condemned along with uninitialised memory.
 func flatBitmapScreen(h *Harness) {
 	for a := 0x4000; a < 0x5800; a++ {
 		h.WriteMemory(uint16(a), 0x55)
 	}
 	for a := 0x5800; a < 0x5B00; a++ {
-		attr := byte(0x28) // green paper, black ink
-		if a%2 == 0 {
-			attr = 0x11 // blue paper, blue ink
-		}
-		h.WriteMemory(uint16(a), attr)
+		h.WriteMemory(uint16(a), 0x28) // green paper, black ink
 	}
 }
 
@@ -62,6 +62,38 @@ func TestScreenTitleReportsAFlatBitmapAsNoContent(t *testing.T) {
 	if got := Classify(s); got != VerdictBlank {
 		t.Errorf("Classify = %v for a flat bitmap measuring %d px in %d colours, want %v",
 			got, s.Pixels, s.Colours, VerdictBlank)
+	}
+}
+
+// The veto must not condemn a picture painted in the attribute bytes over a
+// solid bitmap. That is real artwork, it is common on the Spectrum, and its
+// bitmap is every bit as flat as uninitialised memory's — the colour count is
+// what separates them.
+func TestClassifyKeepsAttributeArtworkOverAFlatBitmap(t *testing.T) {
+	h, err := New(roms.Model48K)
+	if err != nil {
+		t.Fatalf("New(48K): %v", err)
+	}
+	t.Cleanup(h.CloseFiles)
+	h.RunFrames(200)
+	for a := 0x4000; a < 0x5800; a++ {
+		h.WriteMemory(uint16(a), 0xFF) // solid: every pixel is ink
+	}
+	// A different colour per cell is what makes this a picture rather than a
+	// rectangle, and it is the thing the pixel count alone cannot see.
+	for a := 0x5800; a < 0x5B00; a++ {
+		h.WriteMemory(uint16(a), byte(a%64))
+	}
+	h.RunFrames(1)
+
+	s := h.ScreenTitle(0)
+
+	if !s.FlatBitmap {
+		t.Fatalf("FlatBitmap = false, so this test is not exercising the case it exists for")
+	}
+	if got := Classify(s); got == VerdictBlank {
+		t.Errorf("Classify = Blank for attribute artwork measuring %d px in %d colours",
+			s.Pixels, s.Colours)
 	}
 }
 
