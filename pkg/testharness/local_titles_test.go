@@ -117,6 +117,12 @@ func TestScreenLocalTitles(t *testing.T) {
 			v := Classify(s)
 			t.Logf("VERDICT %-10s pixels=%-6d colours=%-3d moved=%-5v err=%q",
 				v, s.Pixels, s.Colours, s.Moved, s.Error)
+			// A tape row's manifest note has to quote a load figure, so log
+			// the one that means what it says. See Screening.TapeBlocksDecoded.
+			if s.TapeBlocksTotal > 0 {
+				t.Logf("   tape %d of %d blocks decoded by the guest",
+					s.TapeBlocksDecoded, s.TapeBlocksTotal)
+			}
 
 			if dir := os.Getenv("ZX_GO_SCREEN_SHOTS"); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)

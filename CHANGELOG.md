@@ -4,6 +4,87 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.9.0]
+
+A minor rather than a patch release: it adds exported API to `pkg/testharness`
+(`Harness.TapeBlocksDecoded`, the `TapeIdleQuietT` constant, and the two new
+`Screening` fields), and `pkg/ula` gains `TapePlayer.DataBlockCount`.
+
+### Added
+
+- **`Harness.TapeBlocksDecoded` — how much of a tape the guest actually
+  read.** Neither existing count answers that. `TapeBlocksConsumed` counts
+  fast-load trap fires and so is blind to a title's own loader: RoboCop traps
+  6 of its 16 blocks and decodes the other ten off the EAR bit.
+  `TapePlayer.CurrentBlock` has the opposite fault — the player is stepped
+  from every port-$FE read, so the tape keeps rolling under a title that is
+  merely scanning its keyboard at a menu, and the cursor runs on through
+  blocks nothing is reading. The new count credits a block only when the
+  guest read it, through either path, and `Screening` now carries it so a
+  manifest note is written from the right figure rather than whichever came
+  to hand.
+
+### Fixed
+
+- **Seven compatibility rows were wrong, and are corrected.** RoboCop, Target
+  Renegade and The Way of the Tiger decode **every block on their tape** —
+  Target Renegade was measured *in play*, with both scores, the energy bar
+  and the 6:00 timer on screen. Lemmings, Gauntlet, Turrican, Double Dragon,
+  Last Ninja 2 and Myth are multiloads sitting on their own title screen with
+  the rest of the tape still to come. *Known issue* rows drop from 11 to 2,
+  and the two that remain are +3 disk dumps whose behaviour a reference
+  emulator reproduces exactly.
+- **The v1.8.23 note below claimed R-Type "now loads all 24 of its blocks".
+  It does not, and never should have.** That figure was the tape player's
+  cursor, which advances whether or not anything is reading it. R-Type
+  decodes 8 blocks — side 1, exactly the header/data pairs its block table
+  lists before the layout changes — and settles on **"REWIND SIDE 2 THEN
+  PRESS ANY KEY"**, which a reference emulator does too, at 3724 lit pixels
+  each, 0.1% apart and both still. Movie's "all 6" was the same mistake; it
+  decodes 2.
+
+### Tooling (local-only)
+
+- `_tools/tapeprobe` reports the decoded count, dumps a tape's block table
+  (`-blocks`) and writes a screenshot per title (`-shots`). The shot is taken
+  *after* the screening's input probe, which is stated in the flag help
+  because it matters: R-Type's shot shows the ERROR IN LOADING that follows
+  keys being pressed at its rewind prompt.
+- `_tools/refdiff` now covers the tape class: across its 18 rows the block
+  counts agree with a reference emulator on 15, and every pair was read by eye
+  as the same correct sequence. Three fixes were needed to get there, all of
+  them things the tool was measuring wrongly:
+  - It compared **our trap fires against the reference's loader entries**, two
+    different quantities, and voided five titles as SPLIT for it. RoboCop and
+    Target Renegade each read all 16 blocks on their tape while the trap fired
+    6 times, and were reported as having loaded less than half of what the
+    reference did. It now compares blocks decoded.
+  - The motion guard sampled over **0.29 s**, which sees a scroller and is
+    blind to a screen that holds a page for seconds and then swaps. Gauntlet
+    III's credits scored PARTIAL at 21% for two machines showing consecutive
+    pages of the same sequence, each perfectly still when sampled. Now 5 s,
+    settable with `-motion`.
+  - A short quiet window mistook a loader handover for the end of a load, so
+    both sides sampled a screen still being drawn. `-settle` walks them on
+    together.
+  - `-keep` writes both screens as PNGs. Without the pictures a verdict is a
+    percentage between two screens nobody has read, which is how a
+    "side-change prompt" got recorded for a screen no one had looked at.
+
+  The +3 disk rows were re-run because that path shares the motion window:
+  every percentage is unchanged or better, no regression. It did surface that
+  two of them claimed more than they had — Barbarian II and Capitan Sevilla
+  report INERT, meaning SPACE moved *neither* machine, so their matching
+  screens said nothing about input handling. Both menus take number keys.
+  Those rows now say screen-verified rather than input-verified.
+
+  What the fixes could not remove, and what the pictures show: **an attract
+  cycle puts the two machines on different phases of the same correct
+  sequence.** Renegade and Turrican came back byte-identical on one run and
+  6.4% and 14.0% apart on the next with nothing changed but the quiet window,
+  so a byte-identical verdict on a cycling title is a coincidence of sampling
+  rather than a property worth quoting.
+
 ## [v1.8.23]
 
 ### Fixed

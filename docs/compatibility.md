@@ -99,16 +99,16 @@ memory map. Foundation tests confirm 128K paging works.
 
 | Title | Status | Notes |
 |---|---|---|
-| Robocop (Ocean) | Known issue | Screened 2026-08-13 by differential comparison against a reference emulator. **The screen previously recorded here (13996 px) is the loading screen, not the title screen.** Its `.tap` holds 16 blocks; we load 6 and stop, then sit static for 400 s of guest time without re-entering the ROM loader. The reference reads all 16: blocks 7-16 are Ocean's loader calling LD-BYTES with a non-standard flag (136), so the handover from the ROM loader to the game's own loader is not happening on our side. |
+| Robocop (Ocean) | **Works (caveat)** | Re-measured 2026-08-14: **all 16 of 16 tape blocks decoded**, and the screen is the game's own boot-sequence intro (COMMAND.COM / LOAD BIOS / RAM CHECK / SYSTEM SET). Not driven into play. The previous entry here said "we load 6 and stop" and blamed the handover to Ocean's loader; that was read off the trap counter, which cannot see a loader that decodes edges itself. Six is what the trap fires; the guest reads all sixteen. |
 | Renegade | **Works (caveat)** | Verified 2026-08-08 on the 128K: loads from `.tap` through the 128 Tape Loader and renders its title screen. Not driven into gameplay, so the verdict stops at "loads and titles". |
-| Target: Renegade | Known issue | Screened 2026-08-13: same fault as Robocop. 16 blocks on the tape, we load 6 and stop static at 16896 lit. The previously recorded 31712 px title screen was the loading screen. |
-| R-Type (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (3724 px, 6 colours). Input not driven. |
-| Lemmings (Spectrum port) | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **4 of 125 tape blocks** load. The screen previously recorded as its title (14758 px) is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Target: Renegade | **Works** | Re-measured 2026-08-14: **all 16 of 16 tape blocks decoded**, and the screen is the game *in play* — the car-park level with both scores, the energy bar and the 6:00 timer. The previous entry claimed the same non-existent fault as Robocop, from the same misread counter. |
+| R-Type (Spectrum port) | **Works (caveat)** | Verified 2026-08-14 by differential comparison against a reference emulator: both settle on the same screen — the R-Type logo over **"REWIND SIDE 2 THEN PRESS ANY KEY"** — at 3724 lit pixels each, **0.1% apart, both still**. It decodes 8 of the 24 blocks on the image and then asks for side 2, so the remaining blocks are behind a tape nobody rewound. Eight is exactly the four header/data pairs its block table lists before the layout changes, which is what side 1 is. Automated screening probes a still screen with keys, and pressing on at that prompt gets "ERROR IN LOADING" — so the shot saved by `tapeprobe -shots` shows the error, not the prompt. The 3724 px this row used to record was described as a "side-change prompt", which was right by luck: nothing had read the text. |
+| Lemmings (Spectrum port) | **Boots (responds)** | Re-measured 2026-08-14: 2 of 125 blocks decoded, and the screen is the full title — Psygnosis credit, "A DMA DESIGN GAME", **"PRESS SPACE TO BEGIN"** and a load bar. Those two are its front end; the rest are levels, which load after you start. The previous entry read a short count as a failure. |
 | Where Time Stood Still | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (4981 px, 4 colours). Input not driven. |
 | Head over Heels | **Works (caveat)** | Verified 2026-08-08 on the 48K release: accepts input at the options menu and progresses into the Blacktooth Empire world-select. Not driven into play. |
-| Last Ninja 2 | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **6 of 16 tape blocks** load. Gets through lnin2$ and lnin2-1; lnin2-2 onwards never load. The 10127 px recorded as its title screen is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Last Ninja 2 | **Boots (responds)** | Re-measured 2026-08-14: 6 of 16 blocks decoded, and the screen is the game's own title — the NINJA 2 logo, the System 3 credits, the USING/HOLDING inventory panel and the POWER meter. That is its front end; the rest of the tape is level data. |
 | Match Day II | **Works (caveat)** | Verified 2026-08-08 on the 128K: accepts input and navigates joystick-select through to the main menu. Not driven into a match. |
-| The Way of the Tiger | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **16 of 18 tape blocks** load. Improved from 4 of 18 by the loader-silence fix, but still short. A partial load draws a screen, which is why screening called this a title screen. |
+| The Way of the Tiger | **Works (caveat)** | Verified 2026-08-14 by looking at the screen and by differential comparison, **not by a block count**: the game reaches its main menu — Play The Whole Game / Practice Unarmed Combat / Practice Pole Fighting / Practice Sword Fighting, with the ENDURANCE and INNER FORCE bars — and a reference emulator run alongside it settles on the same "PRESS ANY KEY" frame, 0.0% apart. Automated screening calls it *inconclusive* because its menu polls the keyboard hard enough to look like a tape loader's edge loop, so the load never registers as having gone quiet. **No load figure is quoted here on purpose.** An earlier revision said "all 18 of 18 blocks decoded"; that number was produced by the very polling that makes the screening inconclusive, since a guest above the read-rate threshold is credited with every block the tape rolls past. See `Harness.TapeBlocksDecoded`. |
 
 ## +3 / +2A disk titles
 
@@ -348,6 +348,32 @@ its screen. *Boots (responds)* — it also answered a keypress, so it is
 waiting for input rather than hung. Neither means playable: what the
 keypress did is unknown.
 
+**How much of a tape loaded: quote `Harness.TapeBlocksDecoded`, nothing
+else.** On 2026-08-14 seven rows here were downgraded to *Known issue* on
+a block count that did not mean what it was taken to mean, and all seven
+have now been put back. There are three counts and only one answers the
+question:
+
+- **Decoded** (`TapeBlocksDecoded`) — blocks the guest itself read,
+  through the fast-load trap or by decoding pulses off the EAR bit.
+- **Trapped** (`TapeBlocksConsumed`) — trap fires only. It is blind to a
+  title's own loader in one direction and too generous in the other: it
+  counts every block *offered* to the guest, including ones handed over
+  and rejected on a flag mismatch. RoboCop traps 6 of its 16 and reads
+  the rest itself, so the row here once said "we load 6 and stop" for a
+  title that loads all sixteen and runs; Elite traps 6 and reads 4,
+  because two of those were offered to a loader that did not want them.
+  Decoded being *below* trapped is normal and is not a fault.
+- **Position** (`TapePlayer.CurrentBlock`) — where the tape has rolled
+  to. The player is stepped from every port-$FE read, so a title sitting
+  at a menu keeps the tape moving while loading nothing.
+
+**A short count is usually not a fault.** Most of these titles are
+multiloads: Lemmings decodes 4 blocks of 125 and puts up "PRESS SPACE TO
+BEGIN", because the other 121 are levels that load once you start. Read
+the screen before reading the count — `tapeprobe -shots` writes one per
+title, and `refdiff -keep` writes ours beside a reference's.
+
 The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
 build.
@@ -434,7 +460,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Back to the Future Part II (+3 disk) | **Boots** | Screened 2026-08-12: title screen, animating. Was blank before v1.8.17. |
 | Back to the Future Part III (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 8541 px, 5 colours, answered a keypress. |
 | Badlands (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 17648 px, 5 colours, answered a keypress. |
-| Barbarian II - The Dungeon of Drax (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and control menu, matching a +3 reference pixel for pixel. Was blank before v1.8.17. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, display file byte-identical bar one pixel after SPACE. |
+| Barbarian II - The Dungeon of Drax (+3 disk) | **Boots (responds)** | Screened 2026-08-12: title screen and control menu, matching a +3 reference pixel for pixel. Was blank before v1.8.17. **Screen verified against a reference emulator**: driven through the same load sequence, display file byte-identical bar one pixel. Re-run 2026-08-14 with a longer motion window, unchanged. The keypress is *not* verified, and the earlier wording here overstated it: the differential run reports INERT, meaning SPACE moved neither machine's screen — its menu takes 0-5, not SPACE. Two screens agreeing about how they ignore a key is not evidence about input. |
 | Batman | **Boots (responds)** | Screened 2026-08-12: 4904 px, 4 colours, answered a keypress. |
 | Batman - The Caped Crusader (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Batman - The Movie (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 1208 px, 2 colours, answered a keypress. |
@@ -458,7 +484,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cabal (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 31697 px, 15 colours, answered a keypress. |
 | California Games (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 5973 px, 7 colours, answered a keypress. |
 | Cannon Bubble (+3 disk) | **Boots** | Screened 2026-08-12: 15291 px, 14 colours, animating. |
-| Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, display file byte-identical after SPACE. |
+| Capitan Sevilla (+3 disk) | **Boots (responds)** | Screened 2026-08-12: reaches its game-select menu, 1/2 for Capitan Sevilla I or II (845 px on the canvas), and starts loading on a keypress. **Screen verified against a reference emulator**: display file byte-identical. Re-run 2026-08-14 with a longer motion window, unchanged. As with Barbarian II the keypress is *not* verified — the run reports INERT, SPACE moved neither machine, and this menu wants 1 or 2. |
 | Captain Blood (+3 disk) | **Boots** | Screened 2026-08-12: 5839 px, 5 colours. |
 | Captain Planet (+3 disk) | **Boots (responds)** | Screened 2026-08-12: loads to its control-select menu and answers a keypress. Was blank until the EDSK ST1/ST2 CRC-attribution fix; see the CHANGELOG for v1.8.17. **Input verified against a reference emulator**: driven through the same load-and-keypress sequence, 1.4% of the display file differs after SPACE. |
 | Carlos Sainz (+3 disk) | **Boots (responds)** | Screened 2026-08-12: 6307 px, 7 colours, answered a keypress. |
@@ -482,11 +508,11 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cybernoid | **Boots (responds)** | Screened 2026-08-12: 8395 px, 10 colours, answered a keypress. |
 | Dan Dare | **Boots** | Screened 2026-08-12: 4559 px, 8 colours. |
 | Deathchase | **Boots** | Screened 2026-08-12: 30189 px, 10 colours, animating. |
-| Double Dragon | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **16 of 55 tape blocks** load. The 6997 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Double Dragon | **Boots (responds)** | Re-measured 2026-08-14: 15 of 55 blocks decoded, and the screen is the game's own arcade attract — the Double Dragon 3 logo, BILLY, "PLAYER 2 PUSH FIRE", COINS 08 and "MISSION 1: U.S.A." The rest of the tape is mission data. |
 | Elite | **Boots** | Screened 2026-08-12: 7412 px, 3 colours, animating. |
 | Exolon | **Boots (responds)** | Screened 2026-08-12: 29562 px, 11 colours, answered a keypress. |
 | Fairlight | **Boots (responds)** | Screened 2026-08-12: 22996 px, 11 colours, answered a keypress. |
-| Gauntlet | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **11 of 86 tape blocks** load. Stops after gau3-1. The 9213 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Gauntlet | **Boots (responds)** | Re-measured 2026-08-14: 10 of 86 blocks decoded, and the screen is the full Gauntlet III title — logo, "Copyright 1990 Tengen Inc", "Tm Atari Games Corporation". The rest of the tape is level data. |
 | Ghosts 'n Goblins | **Boots** | Screened 2026-08-12: 21901 px, 7 colours, animating. |
 | Green Beret | **Boots (responds)** | Screened 2026-08-12: 14333 px, 13 colours, answered a keypress. |
 | Head Over Heels | **Boots (responds)** | Screened 2026-08-12: 8195 px, 4 colours, answered a keypress. |
@@ -495,7 +521,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Match Day | **Boots (responds)** | Screened 2026-08-12: 4084 px, 4 colours, answered a keypress. |
 | Midnight Resistance | **Boots (responds)** | Screened 2026-08-12: 17259 px, 15 colours, answered a keypress. |
 | Movie | **Boots** | Screened 2026-08-12: 17641 px, 13 colours. |
-| Myth | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **6 of 12 tape blocks** load. The 5032 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Myth | **Boots** | Re-measured 2026-08-14: 7 of 12 blocks decoded, and the screen is the game's own title — the MYTH stonework logo over "HISTORY IN THE MAKING" on a starfield. Screening reports it Live, so it is animating rather than hung. |
 | Nebulus | **Boots (responds)** | Screened 2026-08-12: 4076 px, 8 colours, answered a keypress. |
 | NEXTipede (Next tape) | **Boots** | Screened 2026-08-12: 1719 px, 2 colours, animating. |
 | Operation Wolf | **Boots (responds)** | Screened 2026-08-12: 4286 px, 4 colours, answered a keypress. |
@@ -507,7 +533,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Sabre Wulf | **Boots** | Screened 2026-08-12: 12580 px, 9 colours. |
 | Starquake | **Boots (responds)** | Screened 2026-08-12: 12701 px, 5 colours, answered a keypress. |
 | Trap Door | **Boots (responds)** | Screened 2026-08-12: 19619 px, 11 colours, answered a keypress. |
-| Turrican | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **9 of 30 tape blocks** load. Stops after tur2-A. The 5739 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
+| Turrican | **Boots** | Re-measured 2026-08-14: 8 of 30 blocks decoded, and the screen is the Turrican II title logo over "COPYRIGHT 1991 RAINBOW ARTS". Screening reports it Live, so it is animating rather than hung. The rest of the tape is level data. |
 | Uridium | **Boots** | Screened 2026-08-12: 6323 px, 6 colours, animating. |
 | Where Time Stood Still (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Where Time Stood Still (+3 disk)#01 | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |

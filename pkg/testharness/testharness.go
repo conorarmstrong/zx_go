@@ -107,6 +107,12 @@ type Harness struct {
 	tapeFEReads   uint64
 	tapeLastEdge  uint64
 	tapeEdgesSeen bool
+
+	// tapeDecoded is the set of tape block indices the guest itself read,
+	// either through the trap or by decoding the block's pulses. Its size is
+	// TapeBlocksDecoded, which is the only counter here that answers "how much
+	// of this tape did the title load".
+	tapeDecoded map[int]bool
 }
 
 // New constructs a fresh Harness for the given Spectrum model. The
@@ -181,6 +187,9 @@ func (h *Harness) Reboot() {
 	h.cpu.Reset()
 	h.ula.Reset()
 	_ = h.mem.Reset()
+	// Media stay mounted, so a tape survives the reboot — but the record of
+	// what was read off it does not describe the machine that is now running.
+	h.resetTapeLoadCounters()
 }
 
 // RunFrames executes n full emulator frames synchronously on the

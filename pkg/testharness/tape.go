@@ -50,8 +50,7 @@ func (h *Harness) LoadTZX(path string) error {
 func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 	h.ula.SetTapePlayer(tp)
 	tp.Play()
-	h.tapeBlocks, h.tapeLastLoad = 0, 0
-	h.tapeFEReads, h.tapeLastEdge, h.tapeEdgesSeen = h.ula.FEReadCount(), 0, false
+	h.resetTapeLoadCounters()
 
 	h.cpu.TrapCheck = func(pc uint16) bool {
 		if pc != 0x0556 || !h.tapeTrapROMActive() || !tp.HasMoreBlocks() {
@@ -63,6 +62,12 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 		}
 		h.tapeBlocks++
 		h.tapeLastLoad = h.elapsedT
+		// NextBlock advances the cursor past the block it returned, so the
+		// block the guest was offered is the one before it. Whether it counts
+		// as READ is decided below, once the flag and length have been
+		// checked — a block handed over and rejected is a load error, not a
+		// block the title loaded.
+		offered := tp.CurrentBlock() - 1
 		// LD-BYTES contract: A = expected flag byte, carry = LOAD (vs VERIFY),
 		// IX = destination, DE = byte count. A tape block is [flag, data…,
 		// checksum].
@@ -94,6 +99,9 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 		}
 		if success {
 			h.cpu.F |= z80.FLAG_C
+			if offered >= 0 {
+				h.tapeDecoded[offered] = true
+			}
 		} else {
 			h.cpu.F &^= z80.FLAG_C
 		}
@@ -107,6 +115,20 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 		return true
 	}
 	return nil
+}
+
+// resetTapeLoadCounters puts every signal describing a tape load back to its
+// start-of-load value.
+//
+// It is called when a tape is attached, and again from Reboot. Reboot
+// deliberately leaves inserted media mounted, so without this a machine
+// rebooted mid-tape carries the previous run's blocks into the new one and
+// TapeBlocksDecoded reports the union of the two — a figure the compatibility
+// manifest quotes.
+func (h *Harness) resetTapeLoadCounters() {
+	h.tapeBlocks, h.tapeLastLoad = 0, 0
+	h.tapeFEReads, h.tapeLastEdge, h.tapeEdgesSeen = h.ula.FEReadCount(), 0, false
+	h.tapeDecoded = map[int]bool{}
 }
 
 // tapeTrapROMActive reports whether the 48 BASIC ROM — the one that holds
@@ -187,12 +209,76 @@ func (h *Harness) tapeFrameTick() {
 	reads := h.ula.FEReadCount()
 	rate := reads - h.tapeFEReads
 	h.tapeFEReads = reads
-	if h.ula.GetTapePlayer() == nil || rate <= tapeEdgeReadsPerFrame {
+	tp := h.ula.GetTapePlayer()
+	if tp == nil || rate <= tapeEdgeReadsPerFrame {
 		return
 	}
 	h.tapeEdgesSeen = true
 	h.tapeLastEdge = h.elapsedT
+	// The guest spent this frame decoding edges, and the block the tape is on
+	// is the one it was decoding.
+	//
+	// The one way this credits a block the guest did not get is a loader that
+	// is still in its edge loop as the cursor rolls into the next block and
+	// then gives up on it. That guest was trying to read the block, which is
+	// the distinction being drawn here — the counter separates "the guest was
+	// reading the tape" from "the tape rolled past an idle guest", and a
+	// failed read belongs on the first side of that line, not the second.
+	//
+	// The cursor sits one past the last block once the tape has run out, and
+	// that index is not a block: crediting it reported 19 blocks decoded off
+	// an 18-block tape. A guest still hunting for a pilot that will never
+	// arrive has not read anything.
+	if h.tapeDecoded == nil {
+		// A tape mounted straight onto the ULA — Harness.ULA() is exported and
+		// SetTapePlayer is how the GUI and pkg/ula do it — never went through
+		// attachTape, so nothing allocated the set. Writing to a nil map
+		// panics inside RunFrames, which is a poor way to learn that.
+		h.tapeDecoded = map[int]bool{}
+	}
+	if blk := tp.CurrentBlock(); blk >= 0 && blk < tp.BlockCount() {
+		h.tapeDecoded[blk] = true
+	}
 }
+
+// TapeBlocksDecoded is how many distinct blocks of the tape the guest itself
+// read — through the fast-load trap, or by decoding the block's pulses off the
+// EAR bit.
+//
+// It exists because neither of the other two counts answers that question, and
+// the compatibility manifest was once written from one of them.
+//
+// TapeBlocksConsumed counts trap fires, so it cannot see a title's own loader:
+// RoboCop traps 6 blocks of its 16 and reads the other ten itself.
+//
+// TapePlayer.CurrentBlock has the opposite fault. The player is stepped from
+// every port-$FE read, so the tape keeps rolling under a guest that is merely
+// scanning its keyboard at a menu, and the cursor runs on through blocks
+// nothing is reading. That is how R-Type came to be recorded as having loaded
+// all 24 of its blocks when it had read 10 and was sitting at its side-change
+// prompt.
+//
+// # This is an upper bound, and there is one way it can be wrong
+//
+// A block read through the trap is certain: the guest asked, the bytes were
+// handed over and the flag matched. A block credited from the read rate is an
+// inference — the guest was hammering port $FE while the tape sat on that
+// block — and a keyboard poll tight enough to clear the threshold looks
+// exactly like a loader's edge loop. Such a guest is credited with every block
+// that rolls past it.
+//
+// What contains that is the load having to fall silent: a guest polling above
+// the threshold never lets RunUntilTapeIdle report the load finished, so the
+// screening marks it TapeIncomplete and the figure is not one to quote. See
+// Screening.TapeBlocksDecoded, which samples at the idle point for exactly
+// this reason. The Way of the Tiger is the live example — its menu polls hard
+// enough to be indistinguishable from a loader.
+//
+// Frame granularity is the other limit. The credit goes to whichever block the
+// cursor sits on at the end of the frame, so a turbo loader that retires
+// several blocks inside one frame is credited with one of them, and a decode
+// straddling a frame boundary can be credited to the block after it.
+func (h *Harness) TapeBlocksDecoded() int { return len(h.tapeDecoded) }
 
 // tapeLoadStarted reports whether anything has yet read the tape: a block
 // through the trap, or the guest decoding edges itself.

@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
 // A title's own loader does not call LD-BYTES at $0556. Ocean's, on the
@@ -156,19 +154,7 @@ const customLoaderDelayFrames = 60
 // into the loader.
 func startCustomLoader(t *testing.T) *Harness {
 	t.Helper()
-	h, err := New(roms.Model48K)
-	if err != nil {
-		t.Fatalf("New(48K): %v", err)
-	}
-	t.Cleanup(h.CloseFiles)
-	if err := h.LoadTAP(writeCustomLoaderTAP(t)); err != nil {
-		t.Fatalf("LoadTAP: %v", err)
-	}
-	for i, b := range customLoaderCode {
-		h.WriteMemory(uint16(customLoaderOrg+i), b)
-	}
-	h.CPU().PC = customLoaderOrg
-	return h
+	return startLoader(t, customLoaderCode)
 }
 
 // checkCustomLoaderLoaded asserts the guest got every block, byte for byte.
@@ -209,7 +195,7 @@ func TestRunUntilTapeIdleWaitsForACustomLoader(t *testing.T) {
 	const deadlineT = 1 << 31 // ~10 min of guest time; the load needs ~20 s
 	h := startCustomLoader(t)
 
-	if !h.RunUntilTapeIdle(tapeIdleQuietT, deadlineT) {
+	if !h.RunUntilTapeIdle(TapeIdleQuietT, deadlineT) {
 		t.Fatalf("RunUntilTapeIdle hit the deadline; guest reached $%04X with %d of %d blocks",
 			h.CPU().PC, h.Memory(customLoaderTick), customLoaderBlocks)
 	}
@@ -226,9 +212,9 @@ func TestRunUntilTapeIdleWaitsForACustomLoader(t *testing.T) {
 // long the harness is prepared to wait.
 func TestTapeIdleQuietWindowOutlastsAnInterBlockGap(t *testing.T) {
 	gapT := uint64(customLoaderDelayFrames) * TstatesPerFrame
-	if tapeIdleQuietT <= gapT {
-		t.Fatalf("tapeIdleQuietT = %d T does not outlast a %d-frame inter-block gap (%d T)",
-			tapeIdleQuietT, customLoaderDelayFrames, gapT)
+	if TapeIdleQuietT <= gapT {
+		t.Fatalf("TapeIdleQuietT = %d T does not outlast a %d-frame inter-block gap (%d T)",
+			TapeIdleQuietT, customLoaderDelayFrames, gapT)
 	}
 }
 

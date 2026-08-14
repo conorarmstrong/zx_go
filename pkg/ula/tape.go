@@ -437,6 +437,27 @@ func (tp *TapePlayer) Blocks() []BlockSummary {
 	return out
 }
 
+// DataBlockCount is how many of the tape's blocks carry bytes a loader can
+// read: headers, standard data, turbo and pure-data blocks.
+//
+// BlockCount is the length of the whole block list, which on a TZX also holds
+// bare signal (pure tone, pulse sequence, set level) and flow control (pause,
+// jump, loop start and end). Those are not blocks a title loads, so counting
+// them makes a fully loaded tape read as a fraction of itself: a turbo tape
+// laid out as [pure tone][pulse sequence][data] per payload reports three
+// times as many blocks as it has.
+func (tp *TapePlayer) DataBlockCount() int {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	n := 0
+	for _, b := range tp.blocks {
+		if b.kind == kindData {
+			n++
+		}
+	}
+	return n
+}
+
 // SeekToBlock positions the tape at the given block index. Playback is
 // stopped (the caller can call Play afterwards). Out-of-range indices are
 // clamped to the last playable block — clamping past the end would leave

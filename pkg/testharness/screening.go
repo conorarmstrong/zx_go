@@ -46,6 +46,26 @@ type Screening struct {
 	// false here must void a comparison rather than produce a verdict, so it
 	// is carried here rather than discarded at the call site.
 	TapeIncomplete bool
+	// TapeBlocksDecoded and TapeBlocksTotal are how many blocks of the tape
+	// the guest itself read, and how many byte-carrying blocks the tape holds.
+	// Both are zero unless this screening loaded a tape.
+	//
+	// They are recorded because the manifest note for a tape title has to
+	// quote a load figure, and quoting the wrong one is what put seven wrong
+	// rows in docs/compatibility.md — see Harness.TapeBlocksDecoded for which
+	// counter says what. Carrying the right number here means the note is
+	// written from it rather than from whichever count came to hand.
+	//
+	// Sampled at the moment the load fell silent, not at the end of the run.
+	// After that point the title is running its own code, and a menu that
+	// polls the keyboard hard enough to look like a loader keeps earning
+	// credit for blocks the tape merely rolls past.
+	//
+	// When TapeIncomplete is set the load never fell silent, so there is no
+	// such moment and the figure is an upper bound rather than a count. Do not
+	// quote it.
+	TapeBlocksDecoded int
+	TapeBlocksTotal   int
 	// BankInjected records that the program was loaded by copying banks and
 	// jumping, rather than through the machine's own loader. That path cannot
 	// host a .nex which calls NextZXOS at runtime — the game's banks overwrite
@@ -139,8 +159,15 @@ const (
 // at the foot of the display: two character rows.
 const editorLines = 2 * 8
 
-// tapeIdleQuietT is how long a tape must show no loader activity before a load
+// TapeIdleQuietT is how long a tape must show no loader activity before a load
 // counts as finished: five seconds of guest time.
+//
+// It is exported for the same reason ula.LoadReadThreshold is: more than one
+// place decides when a load has stopped, and they must not drift. _tools/refdiff
+// had its own one-second window, calibrated for trapped blocks — which land
+// microseconds apart — and it declared RoboCop finished after 8 of 16 blocks
+// while the reference read all 16, then reported the two machines as having
+// loaded different amounts of tape.
 //
 // It has to outlast the gap between one block and the next. A loader is not
 // polling continuously — between blocks it pages, decompresses and sets a
@@ -156,7 +183,7 @@ const editorLines = 2 * 8
 // runs the machine on for a few hundred more frames after the load really has
 // finished, while one that is too short screens a loading screen and records
 // it as the title.
-const tapeIdleQuietT = 5 * 3_500_000
+const TapeIdleQuietT = 5 * 3_500_000
 
 // tapeLoadBudget scales the tape's nominal play time into a guest-time budget
 // for a real-time load. A load costs strictly more than the medium: the quiet
@@ -325,6 +352,9 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	// Tape loads are the only path that can time out mid-load; everything
 	// else is complete by construction.
 	tapeIdle := true
+	// Sampled inside the tape branch, at the moment the load falls silent, so
+	// they describe the load rather than whatever the title did afterwards.
+	var tapeDecoded, tapeTotal int
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
 	// .snx is a NextZXOS-flavoured snapshot; the ones on the SD card are
 	// byte-for-byte 48K .sna (27-byte header + 49152), so the same loader
@@ -347,11 +377,21 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 		if err := load(path); err != nil {
 			return Screening{}, err
 		}
-		h.TypeLoadCommand()
+		// Start the machine's own loader, whichever way this model starts one.
+		// Typing LOAD"" unconditionally worked on the 128K only by accident —
+		// J and SYMBOL SHIFT+P do nothing at its menu and the trailing ENTER
+		// happens to select Tape Loader — and on a +2A/+3 that same ENTER lands
+		// on the pre-highlighted DISK Loader and starts a disk load. See
+		// StartTapeLoad, which was written for this dispatch and refuses the
+		// models it cannot start rather than doing something else.
+		if !h.StartTapeLoad() {
+			return Screening{}, fmt.Errorf(
+				"testharness: %s has no tape loader to start on this model", filepath.Base(path))
+		}
 		// Then wait for the loader to fall silent rather than for a frame
 		// count, because a frame count cannot know how long a load takes. A
 		// title that loads itself decodes tape edges in real time — RoboCop
-		// spends ~24000 frames on the nine blocks its BASIC loader hands over,
+		// spends ~24000 frames on the ten blocks its BASIC loader hands over,
 		// and the manifest's 3000 caught it mid-load and recorded its LOADING
 		// screen as the title. The deadline comes from the tape: a load cannot
 		// outlast the medium it reads.
@@ -366,8 +406,14 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 			// needed 998 frames, 1.61x. Passing PlayTstates() straight in
 			// made the wait terminate on the deadline mid-load, every time,
 			// for exactly the titles it was written for.
-			budget := tp.PlayTstates()*tapeLoadBudgetMul + tapeIdleQuietT
-			tapeIdle = h.RunUntilTapeIdle(tapeIdleQuietT, budget)
+			budget := tp.PlayTstates()*tapeLoadBudgetMul + TapeIdleQuietT
+			tapeIdle = h.RunUntilTapeIdle(TapeIdleQuietT, budget)
+			// Sample here, not after the settle below. Past this point the
+			// title is running its own code, and a menu polling port $FE hard
+			// enough to look like a loader goes on earning credit for blocks
+			// the tape merely rolls past — so a figure taken later depends on
+			// the manifest's frame column rather than on the load.
+			tapeDecoded, tapeTotal = h.TapeBlocksDecoded(), tp.DataBlockCount()
 		}
 	case ".dsk", ".edsk":
 		if err := h.InsertPlus3Disk(0, path); err != nil {
@@ -389,6 +435,7 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	h.RunFrames(frames)
 	s := h.ScreenTitle(96)
 	s.TapeIncomplete = !tapeIdle
+	s.TapeBlocksDecoded, s.TapeBlocksTotal = tapeDecoded, tapeTotal
 	s.BankInjected = bankInjected
 	// Probing is only informative on a still screen; see ProbeInput.
 	if !s.Moved && s.Error == "" {

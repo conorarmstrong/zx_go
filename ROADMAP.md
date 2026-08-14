@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-13 — v1.8.18)
+## CURRENT STATE (2026-08-14 — v1.9.0)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -39,9 +39,14 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **158 title rows: 10 Works, 14 Works
-(caveat), 59 Boots (responds), 57 Boots, 1 Parses cleanly, 11 Known issue, 6
+`docs/compatibility.md` now holds **158 title rows: 11 Works, 17 Works
+(caveat), 63 Boots (responds), 58 Boots, 1 Parses cleanly, 2 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
+
+Known issue fell from 11 to 2 on 2026-08-14, and that was a correction rather
+than a fix: nine of those rows were working titles, downgraded on a tape-block
+count that did not mean what it was taken to mean. Both survivors are +3 disk
+dumps whose behaviour a reference emulator reproduces exactly.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
 runs it, and measures the display window with the border cropped. A **Boots**
@@ -73,23 +78,38 @@ remaining gap.
   controller tried and could not reach, which is the same statement EN makes.
   Pinned by TestDSResultIDAfterEOTIsNotTheHostTerminationCase so it is not
   re-litigated.
-- [ ] **Nine tape titles still load only part of their tape.** Measured by
-  counting blocks consumed, not by looking at the screen: Lemmings 4 of 125,
-  Gauntlet 11 of 86, Turrican 9 of 30, Double Dragon 16 of 55, Last Ninja 2
-  6 of 16, Myth 6 of 12, RoboCop and Target Renegade 15 of 16, The Way of the
-  Tiger 16 of 18. Reproduce with `go run ./_tools/tapeprobe -corpus`.
+- [x] ~~Nine tape titles load only part of their tape~~ — **settled
+  2026-08-14: none of them is a fault, and there was never a tenth.** Each
+  was screened, its screen looked at, and the block count taken from
+  `Harness.TapeBlocksDecoded` rather than from a counter that measures
+  something else.
 
-  The framing this item had before was wrong and is worth not repeating: the
-  emulator is **not** failing to carry these loads. A custom loader that
-  bypasses `$0556` decodes edges perfectly well — a synthetic test pinning
-  that passed before any change was made. What was broken was that the
-  harness could not SEE such a load, so it screened mid-load and recorded a
-  loading screen as a title screen. Fixing the measurement moved R-Type from
-  8 of 24 to all 24 and Movie to all 6 without touching the emulator.
+  RoboCop and Target Renegade decode **every block on their tape** — the old
+  figures were trap fires, which cannot see a loader that decodes edges itself.
+  Lemmings, Gauntlet, Turrican, Double Dragon, Last Ninja 2 and Myth are
+  multiloads sitting on their own title screen or menu with the rest of the
+  tape still to come: Lemmings shows "PRESS SPACE TO BEGIN" after 2 blocks of
+  125, and the rest are levels.
 
-  So the remaining nine are an open question, not a known emulator bug. The
-  next step is to establish, per title, whether the guest has stopped asking
-  for data (our fault) or is waiting for input (not a fault at all).
+  The Way of the Tiger reaches its main menu and matches a reference on the
+  same frame, but **no block figure is quoted for it**. Its menu polls the
+  keyboard hard enough to clear the loader read-rate threshold, and that is
+  precisely the case where the counter credits a guest with every block the
+  tape rolls past. An earlier revision of this item said "all 18 of 18",
+  which was the polling being counted as loading.
+
+  R-Type was briefly written up here as a genuine failure on the strength of
+  a screenshot reading ERROR IN LOADING. It is not one. Both we and a
+  reference emulator settle on **"REWIND SIDE 2 THEN PRESS ANY KEY"** at
+  3724 lit pixels each, 0.1% apart and both still. The error screen came
+  after the screening's own probe keys pressed on at that prompt.
+
+  Two lessons worth not relearning. **A block count is not a load figure
+  unless it is the decoded one** — the trap counter undercounts and the
+  player's cursor overcounts, and quoting either put seven wrong rows in
+  `docs/compatibility.md`. **Look at the screen**: every conclusion here
+  turned on reading the text, and every wrong one before it turned on a
+  pixel total.
 
 - [~] **Verify what the keypress did.** Partly automated, and no longer purely
   manual. A response proves a title is waiting rather than hung; it does not
@@ -99,15 +119,55 @@ remaining gap.
   6912-byte display file. **Six +3 disk titles verified so far**, two of them
   byte-identical.
 
-  Known limit of the method: the reference runs in real time while we step
-  frames, so titles that are still loading when the comparison is taken
-  cannot be synchronised. It is reliable for titles that settle on a screen.
-  Adidas Tie-Break is the one open case, where the reference sticks at 1447
-  lit pixels regardless of how long it is given while a second reference
-  loads the title fully, as we do.
+  Both sides are now paced in **guest** T-states rather than one stepping
+  frames while the other free-ran, so the old "cannot be synchronised" limit
+  is gone; the run prints the residual skew per title. Adidas Tie-Break is
+  the one open case, where the reference sticks at 1447 lit pixels regardless
+  of how long it is given while a second reference loads the title fully, as
+  we do.
 
-  Remaining work is breadth: the tape and 128K classes have no equivalent
-  harness yet.
+  **The tape class is now covered.** Across its 18 rows the block counts agree
+  with the reference on 15, and every pair was read by eye: each is the same
+  correct sequence, differing only in where the sample landed. Getting there
+  needed three fixes to the tool, each of it measuring the wrong thing — it
+  compared our trap fires against the reference's loader entries, its motion
+  guard sampled over 0.29 s and could not see a page swap, and its quiet window
+  mistook a loader handover for the end of a load.
+
+  **The method's real limit, and it is not fixable by tuning: an attract cycle
+  puts the two machines on different phases of the same correct sequence.**
+  RoboCop's title against its control menu, Target Renegade's title against its
+  high-score table, Gauntlet III's credits one page apart, Operation Wolf's
+  credits against its title art. The proof that this is phase and not
+  divergence is that it moves: Renegade and Turrican came back byte-identical
+  on one run and 6.4% and 14.0% apart on the next, with nothing changed but the
+  quiet window. **So a byte-identical verdict on a cycling title is a
+  coincidence of sampling, not a property to quote.** The longer motion window
+  voids most of these as ANIMATED rather than calling them divergences, and the
+  reliable move is to read the PNGs `-keep` writes.
+
+  What would actually fix it is comparing a *sequence* of samples and asking
+  whether the reference's screen appears anywhere in ours — phase-tolerant
+  matching. Not built; noted so it is not rediscovered.
+
+  Two counts still disagree for a structural reason rather than a fault: ours
+  is blocks the guest read, the reference's is entries into the ROM loader, and
+  a title's own loader never appears in the second. R-Type reads 10 where the
+  reference logs 9 and both settle on the same screen to 0.1%; The Way of the
+  Tiger reads all 18 where the reference logs 9. The run voids both, which is
+  conservative and right, but it is the guard admitting the two quantities are
+  not comparable rather than finding anything.
+
+  The +3 disk rows were re-run after the motion window changed, since that path
+  shares it: every percentage is unchanged or slightly better than recorded
+  (Action Force 2 4.2%, Captain Planet 1.3% from 1.4%, Chase H.Q. II 0.6% from
+  2.0%, Barbarian II and Capitan Sevilla still 0.0%). No regression. It did
+  surface that two of those rows claimed more than they had: Barbarian II and
+  Capitan Sevilla report INERT, meaning SPACE moved *neither* machine, so their
+  matching screens said nothing about input. Both menus take number keys. The
+  rows now say screen-verified rather than input-verified.
+
+  Remaining work is breadth: the 128K class beyond the tape rows.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.
