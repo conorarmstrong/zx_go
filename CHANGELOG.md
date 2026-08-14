@@ -8,6 +8,19 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **READ A TRACK did not report ND for an ID that is not on the track.** The
+  uPD765A datasheet is explicit: "the FDC compares the ID information read from
+  each sector with the value stored in the IDR and sets the ND flag of Status
+  Register 1 to a 1 if there is no comparison." We returned ST1=$80 —
+  end-of-cylinder alone — when the sector named was nowhere on the track. This
+  is the fifth bug in `pkg/plus3fdc` found by tracing the guest rather than
+  theorising about the hardware, and like the other four it is what a
+  protection track is read for.
+
+  It was found from California Games, whose loader seeks to a protection track
+  numbered $B1-$B8 and asks for R=01. **It does not fix that title** — the run
+  is unchanged at 632 lit pixels — so it ships on the datasheet's authority,
+  not as a compatibility fix.
 - **A flat bitmap is no longer scored as a title screen.** A display file whose
   every bitmap byte holds one value carries no shape at all, but uninitialised
   video memory renders as even vertical stripes and measures 18432 px in 2

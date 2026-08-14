@@ -49,8 +49,18 @@ emulator's evidence.** MAME's `specpls3`, driven from our own vendored ROMs
 mount four of them**: "floppy tracks=45, drive tracks=42", where a real +3 drive
 has 40. Three more it mounts and fails on identically to us, ending on the same
 vertical stripe pattern. Add the two already checked against two references
-(Bonanza Bros, 3D Grand Prix) and only **California Games** is still undecided —
-MAME's ENTER did not register there, so it never started the load.
+(Bonanza Bros, 3D Grand Prix) and only **California Games** is still open.
+
+It is no longer undecided so much as **characterised**. `ZX_GO_FDC_TRACE=1`
+shows the loader reading its data cylinders normally, recalibrating, seeking to
+cylinder 7 — a protection track numbered $B1-$B8 — and issuing exactly one
+READ DIAGNOSTIC for R=01, which is the last command it ever sends. The image is
+sound (42 cylinders, boot sector checksum 3). Tracing it turned up a real
+datasheet violation: READ A TRACK was not setting ND when the ID it is given is
+absent from the track. **Fixing that did not change the title**, so what its
+loader wants from that track is the open question. The next step is to
+disassemble backwards from the READ DIAGNOSTIC — the method that cracked
+Comando Quatro — rather than to try another status-byte guess.
 
 Both directions of that were corrections rather than fixes, on the same day.
 Nine rows came *up* off Known issue: they were working titles downgraded on a
@@ -261,6 +271,15 @@ Kept so they are not re-proposed.
   (`pkg/sam/io.go`).
 - [⊘] **Beta Disk density bit** (status bit 5) — TR-DOS is always MFM
   (`pkg/betadisk/interface.go`).
+- [⊘] **A +3 drive's cylinder limit.** A real +3 3" drive has 40 cylinders and
+  cannot seek past the head stop; we accept a seek to any cylinder the image
+  declares. Four corpus images declare **45**, and MAME refuses to mount them
+  for exactly this reason ("floppy tracks=45, drive tracks=42"). Modelling the
+  limit would be more faithful, and it is deliberately not done: it would make
+  no title work — those four fail on all three emulators either way — while
+  risking the images that legitimately use 41 or 42 tracks, since the real
+  limit varies by drive. Revisit only if a title is found that depends on a
+  seek failing.
 
 ---
 

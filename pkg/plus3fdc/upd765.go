@@ -213,6 +213,10 @@ type UPD765 struct {
 	readCM       bool // DAM type on disk didn't match the commanded type
 	readDataCRC  bool // data CRC verification failed
 	readWrongCyl bool // IDAM C didn't match the requested C
+	// readDiagNoID records that a READ DIAGNOSTIC found no sector on the track
+	// carrying the ID it was given, which the datasheet answers with ND. See
+	// trackHasID.
+	readDiagNoID bool
 
 	// Read/scan direction flags derived from the current command's
 	// opcode.
@@ -964,6 +968,9 @@ func (f *UPD765) execRead() byte {
 			// a READ DATA reports when it runs out of cylinder: the host
 			// asserted no Terminal Count, so the FDC stopped on its own.
 			st0, st1 := f.selfTerminated(true)
+			if f.readDiagNoID {
+				st1 |= st1ND
+			}
 			// Echo the first IDAM found on the track as the result CHRN.
 			var rc, rh, rr, rn byte
 			if c, h, r, n, _, ok := f.ioTrack.idAt(0); ok {
@@ -1075,7 +1082,36 @@ func (f *UPD765) execReadDiag() {
 	f.readCM = false
 	f.readDataCRC = false
 	f.readWrongCyl = false
+	f.readDiagNoID = !trackHasID(track, f.cmdBuf[rdParamR], n)
 	f.phase = phaseExecution
+}
+
+// trackHasID reports whether any sector on the track carries the given R and
+// N, which is the comparison READ A TRACK makes.
+//
+// The datasheet: "the FDC compares the ID information read from each sector
+// with the value stored in the IDR and sets the ND flag of Status Register 1
+// to a 1 if there is no comparison." R and N are the fields findSector matches
+// on, so the two commands agree about what "the same sector" means.
+//
+// This is how a protection track is inspected. California Games seeks to
+// cylinder 7, whose sectors are numbered $B1-$B8, and reads it asking for
+// R=01; the answer to that question is ND, and it stops when it does not get
+// one.
+func trackHasID(t *Track, wantR, wantN byte) bool {
+	for pos := 0; ; {
+		_, _, r, n, idEnd, ok := t.idAt(pos)
+		if !ok {
+			return false
+		}
+		if r == wantR && n == wantN {
+			return true
+		}
+		if idEnd <= pos {
+			return false // no forward progress; a malformed track
+		}
+		pos = idEnd
+	}
 }
 
 // selfTerminated builds the ST0/ST1 pair for a transfer the controller ended
