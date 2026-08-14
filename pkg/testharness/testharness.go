@@ -81,7 +81,9 @@ type Harness struct {
 	// port-write path.
 	nextSprites *sprite.Engine
 
-	// elapsedT is the harness's own absolute guest clock, in T-states. The
+	// elapsedT is the harness's own absolute guest clock, in T-states of
+	// elapsed guest TIME (one frame's worth per frame, independent of any
+	// turbo multiplier), not cycles executed. The
 	// CPU's counter cannot serve: ExecuteFrame subtracts the frame budget
 	// back off at every frame boundary, so CPU.Tstates() is frame-relative
 	// and wraps ~50 times a second. See GuestTstates.
@@ -92,6 +94,19 @@ type Harness struct {
 	// are the tape load's observable event stream — see TapeBlocksConsumed.
 	tapeBlocks   int
 	tapeLastLoad uint64
+
+	// tapeFEReads is the ULA's port-$FE read count as of the last frame
+	// boundary, tapeLastEdge the guest T-state of the most recent frame whose
+	// read rate showed a loader decoding tape edges, and tapeEdgesSeen whether
+	// that has ever happened.
+	//
+	// Trap fires alone cannot say whether a tape is still loading: a title's
+	// own loader reads the EAR bit directly and never enters $0556, so the trap
+	// count freezes while minutes of loading are still to come. The read rate
+	// is the signal that does see it — see tapeFrameTick and RunUntilTapeIdle.
+	tapeFEReads   uint64
+	tapeLastEdge  uint64
+	tapeEdgesSeen bool
 }
 
 // New constructs a fresh Harness for the given Spectrum model. The
@@ -177,9 +192,16 @@ func (h *Harness) Reboot() {
 func (h *Harness) RunFrames(n int) {
 	for i := 0; i < n; i++ {
 		h.cpu.ExecuteFrame(TstatesPerFrame)
-		h.elapsedT += TstatesPerFrame * uint64(h.cpu.SpeedMultiplier())
+		// One frame of guest time, whatever speed the CPU is running at.
+		// Scaling by SpeedMultiplier counted CPU cycles EXECUTED, not time
+		// elapsed, so on a Next at 28 MHz a frame added eight times as much
+		// and every window expressed in this clock — all of which are
+		// documented as "N seconds of guest time" — was eight times shorter
+		// than it claimed. A tape wait of "one second" was an eighth of one.
+		h.elapsedT += TstatesPerFrame
 		h.ula.Render()
 		h.peripherals.Frame()
+		h.tapeFrameTick()
 	}
 }
 
@@ -325,13 +347,28 @@ func (h *Harness) WriteMemory(addr uint16, val byte) { h.mem.Write(addr, val) }
 // comparable with any other emulator's screen dump. Unlike a rendered frame it
 // is FLASH-phase independent — FLASH is attribute bit 7, and the bytes never
 // change with the phase — so a flashing cursor is correctly not motion.
-func (h *Harness) DisplayFile() []byte {
-	page := h.mem.GetPage(h.mem.ScreenPage)
-	out := make([]byte, 6912)
-	if len(page) >= 6912 {
-		copy(out, page[:6912])
+func (h *Harness) DisplayFile() ([]byte, bool) {
+	// Only the Spectrum family keeps a 6912-byte display file in a RAM page.
+	// A ZX80/ZX81 harness has ScreenPage 0 (memory.setupZX8x), so returning
+	// "whatever is in page 0" handed back the first 6912 bytes of ordinary
+	// RAM as if it were a .scr — and a short or missing page silently became
+	// 6912 zeros, which reads as a blank screen rather than as "no screen
+	// available". Both produce a confident wrong comparison in a tool that
+	// advertises the result as directly comparable with another emulator's
+	// screen dump, so say whether the value means anything.
+	switch h.mem.GetCurrentModel() {
+	case roms.Model48K, roms.Model128K, roms.ModelPlus2, roms.ModelPlus2A,
+		roms.ModelPlus3, roms.ModelPentagon, roms.ModelNext:
+	default:
+		return nil, false
 	}
-	return out
+	page := h.mem.GetPage(h.mem.ScreenPage)
+	if len(page) < 6912 {
+		return nil, false
+	}
+	out := make([]byte, 6912)
+	copy(out, page[:6912])
+	return out, true
 }
 
 // ScreenImage returns the current rendered screen image. The

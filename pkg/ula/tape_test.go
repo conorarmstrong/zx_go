@@ -301,3 +301,40 @@ func TestTapePlayerEmptyTAP(t *testing.T) {
 		t.Error("Expected error loading empty TAP file")
 	}
 }
+
+// TestPlayTstatesIsTheRemainingTapeLength pins the tape's own playing time,
+// which is what bounds a wait on a title that loads itself: such a load cannot
+// outlast the tape.
+//
+// The expected figures are derived from the standard-speed encoding rather
+// than from the player, so a change to pulse generation shows up here:
+// pilot (8063 pulses for a header, 3223 for data) x 2168 T, sync 667 + 735,
+// two pulses of 855 T per 0 bit and 1710 T per 1 bit, then the 1 s pause TAP
+// playback appends.
+func TestPlayTstatesIsTheRemainingTapeLength(t *testing.T) {
+	const (
+		headerT = 21101686 // block 1 of createTestTAP: 7 bytes, 14 one-bits
+		dataT   = 10844546 // block 2: 20 bytes, 48 one-bits
+	)
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, t.TempDir())); err != nil {
+		t.Fatalf("LoadTAP: %v", err)
+	}
+	if got := tp.PlayTstates(); got != headerT+dataT {
+		t.Errorf("PlayTstates on a fresh tape = %d, want %d", got, headerT+dataT)
+	}
+	// Past the header, only the data block is left to play.
+	tp.SeekToBlock(1)
+	if got := tp.PlayTstates(); got != dataT {
+		t.Errorf("PlayTstates from block 1 = %d, want %d", got, dataT)
+	}
+	// A played-out tape has nothing left, and must not report the whole tape
+	// again — a deadline computed from it would never expire.
+	tp.SeekToBlock(1)
+	for i := 0; i < 2; i++ {
+		_ = tp.NextBlock()
+	}
+	if got := tp.PlayTstates(); got != 0 {
+		t.Errorf("PlayTstates at the end of the tape = %d, want 0", got)
+	}
+}

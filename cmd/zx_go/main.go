@@ -85,7 +85,7 @@ const (
 	// the CPU is considered to be in a tape loader's edge-timing loop (which
 	// polls $FE thousands of times per frame) rather than a running game
 	// (which reads it only sparsely, for the keyboard). Gates fast-load turbo.
-	tapeLoadReadThreshold = 500
+	tapeLoadReadThreshold = ula.LoadReadThreshold
 )
 
 // frameTStatesForModel returns the ULA frame length in 3.5 MHz T-states

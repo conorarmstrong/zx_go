@@ -39,6 +39,13 @@ type Screening struct {
 	// hundred pixels. See MinCanvasPixels.
 	CanvasPixels  int
 	CanvasColours int
+	// TapeIncomplete records that a tape load hit its deadline while the
+	// loader was still working. The screen at that moment is a LOADING
+	// screen, and reporting it as the title is precisely the error that put
+	// nine wrong verdicts in the manifest. RunUntilTapeIdle's own doc says a
+	// false here must void a comparison rather than produce a verdict, so it
+	// is carried here rather than discarded at the call site.
+	TapeIncomplete bool
 	// BankInjected records that the program was loaded by copying banks and
 	// jumping, rather than through the machine's own loader. That path cannot
 	// host a .nex which calls NextZXOS at runtime — the game's banks overwrite
@@ -132,10 +139,47 @@ const (
 // at the foot of the display: two character rows.
 const editorLines = 2 * 8
 
+// tapeIdleQuietT is how long a tape must show no loader activity before a load
+// counts as finished: five seconds of guest time.
+//
+// It has to outlast the gap between one block and the next. A loader is not
+// polling continuously — between blocks it pages, decompresses and sets a
+// screen up, touching no port at all, and only then starts hunting the next
+// pilot. Measured across the whole tape corpus, the longest such gap that a
+// load then carried on through is 51 frames, a shade over one second: RoboCop
+// and Target Renegade both, with The Way of the Tiger at 50. One second of
+// quiet therefore lands squarely inside a real gap — it is what declared
+// RoboCop finished after 6 of its 16 blocks. Five seconds clears the measured
+// worst case by five times.
+//
+// Erring long is cheap and erring short is not: a window that is too long only
+// runs the machine on for a few hundred more frames after the load really has
+// finished, while one that is too short screens a loading screen and records
+// it as the title.
+const tapeIdleQuietT = 5 * 3_500_000
+
+// tapeLoadBudget scales the tape's nominal play time into a guest-time budget
+// for a real-time load. A load costs strictly more than the medium: the quiet
+// window is charged to the same budget, and the tape only advances inside
+// ULA.tapeLevel, whose frame-relative guard drops the interval across every
+// frame boundary, so the medium runs slower than guest time. 1.61x was
+// measured on the synthetic custom-loader tape; 3x is deliberately well clear.
+// Overshooting costs wall-clock on a title that has already finished;
+// undershooting screens a partial load and calls it a title screen, which is
+// the error this exists to stop.
+const tapeLoadBudgetMul = 3
+
 // Classify reduces a screening to a verdict.
 func Classify(s Screening) Verdict {
 	if s.Error != "" {
 		return VerdictError
+	}
+	// A load that was still running when the budget expired says nothing
+	// about the title: what is on screen is its loading screen. Nine manifest
+	// rows recorded exactly that as a working title screen, so this is not a
+	// hypothetical.
+	if s.TapeIncomplete {
+		return VerdictInconclusive
 	}
 	blank := s.Pixels < MinContentPixels || s.Colours < MinContentColours
 	// The canvas measurement can only ever rescue a frame the raw counts
@@ -278,6 +322,9 @@ func measureFrame(pix []byte) (pixels, colours int) {
 // recorded as broken.
 func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	var bankInjected bool
+	// Tape loads are the only path that can time out mid-load; everything
+	// else is complete by construction.
+	tapeIdle := true
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
 	// .snx is a NextZXOS-flavoured snapshot; the ones on the SD card are
 	// byte-for-byte 48K .sna (27-byte header + 49152), so the same loader
@@ -301,6 +348,27 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 			return Screening{}, err
 		}
 		h.TypeLoadCommand()
+		// Then wait for the loader to fall silent rather than for a frame
+		// count, because a frame count cannot know how long a load takes. A
+		// title that loads itself decodes tape edges in real time — RoboCop
+		// spends ~24000 frames on the nine blocks its BASIC loader hands over,
+		// and the manifest's 3000 caught it mid-load and recorded its LOADING
+		// screen as the title. The deadline comes from the tape: a load cannot
+		// outlast the medium it reads.
+		if tp := h.ULA().GetTapePlayer(); tp != nil {
+			// The deadline must exceed the load, not merely the tape. A
+			// real-time load costs strictly MORE guest time than the tape's
+			// nominal play time: the quiet window is charged to the same
+			// budget, and the tape only advances inside ULA.tapeLevel, whose
+			// frame-relative guard drops the interval across every frame
+			// boundary — so the medium runs slower than guest time. Measured
+			// on the synthetic custom-loader tape, a 620-frame nominal tape
+			// needed 998 frames, 1.61x. Passing PlayTstates() straight in
+			// made the wait terminate on the deadline mid-load, every time,
+			// for exactly the titles it was written for.
+			budget := tp.PlayTstates()*tapeLoadBudgetMul + tapeIdleQuietT
+			tapeIdle = h.RunUntilTapeIdle(tapeIdleQuietT, budget)
+		}
 	case ".dsk", ".edsk":
 		if err := h.InsertPlus3Disk(0, path); err != nil {
 			return Screening{}, err
@@ -320,6 +388,7 @@ func (h *Harness) ScreenFile(path string, frames int) (Screening, error) {
 	}
 	h.RunFrames(frames)
 	s := h.ScreenTitle(96)
+	s.TapeIncomplete = !tapeIdle
 	s.BankInjected = bankInjected
 	// Probing is only informative on a still screen; see ProbeInput.
 	if !s.Moved && s.Error == "" {

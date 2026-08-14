@@ -4,6 +4,53 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.23]
+
+### Fixed
+
+- **The harness could not see a tape load that bypasses the ROM loader**, so
+  it screened such titles mid-load and recorded their loading screens as
+  title screens. R-Type now loads all 24 of its blocks (was 8) and Movie all
+  6, with **no change to the emulator** — a test pinning that a custom
+  edge-decoding loader already works passed before any fix. The screening
+  wait now also watches loader activity, and its deadline is derived from the
+  tape with headroom for the fact that a real-time load costs more guest time
+  than the medium's nominal length.
+- **An unfinished tape load is now Inconclusive, not a verdict.** The wait's
+  result was being discarded, so a load that hit its deadline was
+  indistinguishable from one that completed.
+- **The harness guest clock counted cycles executed, not time elapsed.** It
+  scaled by the turbo multiplier, so on a Next at 28 MHz every window
+  documented as "N seconds of guest time" was an eighth of that.
+- **The harness enabled the $0556 tape trap on the Next unconditionally**,
+  reintroducing the hazard that function exists to prevent: through the
+  bootrom chain, NextZXOS or divMMC RAM, $0556 holds unrelated code, and
+  firing there consumes a block, writes it wherever IX/DE point, and returns
+  to a bogus PC. Now gated on the embedded 48K ROM being paged.
+- **StartTapeLoad started a DISK load on the +2A/+3.** Its own doc said those
+  models were left alone; instead they fell through to typing LOAD"", whose
+  trailing ENTER selects the +3 menu's pre-highlighted disk Loader. It now
+  refuses and says so, and callers honour the refusal.
+- **DisplayFile returned ordinary RAM as a screen** on models that have no
+  display file, and 6912 zeros for a short page — both read as "a blank
+  screen" in a tool that compares it against another emulator's dump.
+- Seven findings in the NextZXOS launch harness, listed in the previous
+  commit: a doubled-character race, ENTER injected into a running game, a
+  near-vacuous launch assertion, a PC logged 20 frames after its verdict, a
+  prompt-open check that could pass before ENTER was processed, a GUI macro
+  that dropped keystrokes silently, and an orphaned doc comment.
+- The tape-loader read threshold was duplicated by hand in the GUI and the
+  harness with a comment in each asserting they were identical and nothing
+  enforcing it. It now has one definition in `pkg/ula`.
+
+### Changed
+
+- **Seven more manifest rows corrected from Boots to Known issue.** Counting
+  tape blocks instead of looking at the screen shows Lemmings loads 4 of 125,
+  Gauntlet 11 of 86, Turrican 9 of 30, Double Dragon 16 of 55, Last Ninja 2
+  6 of 16, Myth 6 of 12, The Way of the Tiger 16 of 18. A partial load draws
+  a screen, which is exactly why screening called them title screens.
+
 ## [v1.8.22]
 
 ### Fixed

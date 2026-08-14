@@ -77,3 +77,24 @@ func TestDropBottomLinesKeepsTheCanvas(t *testing.T) {
 		t.Errorf("canvas measured %d pixels, want %d", p, want)
 	}
 }
+
+// A tape load that hit its deadline is not evidence about the title: the
+// screen at that moment is the loading screen. Nine manifest rows recorded a
+// partial load as a working title screen before this was carried out of
+// ScreenFile instead of discarded.
+func TestIncompleteTapeLoadIsInconclusive(t *testing.T) {
+	busy := Screening{Pixels: 30000, Colours: 12, Moved: true, TapeIncomplete: true}
+	if got := Classify(busy); got != VerdictInconclusive {
+		t.Errorf("Classify(%+v) = %v, want VerdictInconclusive — a loading screen is not a verdict", busy, got)
+	}
+	// And it must not swallow a genuine error report.
+	bad := Screening{Error: "R Tape loading error", TapeIncomplete: true}
+	if got := Classify(bad); got != VerdictError {
+		t.Errorf("Classify(%+v) = %v, want VerdictError", bad, got)
+	}
+	// A completed load is unaffected.
+	ok := Screening{Pixels: 30000, Colours: 12, Moved: true}
+	if got := Classify(ok); got != VerdictLive {
+		t.Errorf("Classify(%+v) = %v, want VerdictLive", ok, got)
+	}
+}

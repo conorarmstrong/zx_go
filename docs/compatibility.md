@@ -103,12 +103,12 @@ memory map. Foundation tests confirm 128K paging works.
 | Renegade | **Works (caveat)** | Verified 2026-08-08 on the 128K: loads from `.tap` through the 128 Tape Loader and renders its title screen. Not driven into gameplay, so the verdict stops at "loads and titles". |
 | Target: Renegade | Known issue | Screened 2026-08-13: same fault as Robocop. 16 blocks on the tape, we load 6 and stop static at 16896 lit. The previously recorded 31712 px title screen was the loading screen. |
 | R-Type (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (3724 px, 6 colours). Input not driven. |
-| Lemmings (Spectrum port) | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (14758 px, 6 colours). Input not driven. |
+| Lemmings (Spectrum port) | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **4 of 125 tape blocks** load. The screen previously recorded as its title (14758 px) is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Where Time Stood Still | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (4981 px, 4 colours). Input not driven. |
 | Head over Heels | **Works (caveat)** | Verified 2026-08-08 on the 48K release: accepts input at the options menu and progresses into the Blacktooth Empire world-select. Not driven into play. |
-| Last Ninja 2 | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (10127 px, 10 colours, animating). Input not driven. |
+| Last Ninja 2 | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **6 of 16 tape blocks** load. Gets through lnin2$ and lnin2-1; lnin2-2 onwards never load. The 10127 px recorded as its title screen is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Match Day II | **Works (caveat)** | Verified 2026-08-08 on the 128K: accepts input and navigates joystick-select through to the main menu. Not driven into a match. |
-| The Way of the Tiger | **Boots** | Verified 2026-08-11 by automated screening: rendered its title screen (8411 px, 11 colours). Input not driven. |
+| The Way of the Tiger | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **16 of 18 tape blocks** load. Improved from 4 of 18 by the loader-silence fix, but still short. A partial load draws a screen, which is why screening called this a title screen. |
 
 ## +3 / +2A disk titles
 
@@ -482,11 +482,11 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Cybernoid | **Boots (responds)** | Screened 2026-08-12: 8395 px, 10 colours, answered a keypress. |
 | Dan Dare | **Boots** | Screened 2026-08-12: 4559 px, 8 colours. |
 | Deathchase | **Boots** | Screened 2026-08-12: 30189 px, 10 colours, animating. |
-| Double Dragon | **Boots (responds)** | Screened 2026-08-12: 6997 px, 4 colours, answered a keypress. |
+| Double Dragon | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **16 of 55 tape blocks** load. The 6997 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Elite | **Boots** | Screened 2026-08-12: 7412 px, 3 colours, animating. |
 | Exolon | **Boots (responds)** | Screened 2026-08-12: 29562 px, 11 colours, answered a keypress. |
 | Fairlight | **Boots (responds)** | Screened 2026-08-12: 22996 px, 11 colours, answered a keypress. |
-| Gauntlet | **Boots (responds)** | Screened 2026-08-12: 9213 px, 12 colours, answered a keypress. |
+| Gauntlet | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **11 of 86 tape blocks** load. Stops after gau3-1. The 9213 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Ghosts 'n Goblins | **Boots** | Screened 2026-08-12: 21901 px, 7 colours, animating. |
 | Green Beret | **Boots (responds)** | Screened 2026-08-12: 14333 px, 13 colours, answered a keypress. |
 | Head Over Heels | **Boots (responds)** | Screened 2026-08-12: 8195 px, 4 colours, answered a keypress. |
@@ -495,7 +495,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Match Day | **Boots (responds)** | Screened 2026-08-12: 4084 px, 4 colours, answered a keypress. |
 | Midnight Resistance | **Boots (responds)** | Screened 2026-08-12: 17259 px, 15 colours, answered a keypress. |
 | Movie | **Boots** | Screened 2026-08-12: 17641 px, 13 colours. |
-| Myth | **Boots** | Screened 2026-08-12: 5032 px, 7 colours, animating. |
+| Myth | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **6 of 12 tape blocks** load. The 5032 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Nebulus | **Boots (responds)** | Screened 2026-08-12: 4076 px, 8 colours, answered a keypress. |
 | NEXTipede (Next tape) | **Boots** | Screened 2026-08-12: 1719 px, 2 colours, animating. |
 | Operation Wolf | **Boots (responds)** | Screened 2026-08-12: 4286 px, 4 colours, answered a keypress. |
@@ -507,7 +507,7 @@ Target: Renegade, Cybernoid and 007 Licence To Kill.
 | Sabre Wulf | **Boots** | Screened 2026-08-12: 12580 px, 9 colours. |
 | Starquake | **Boots (responds)** | Screened 2026-08-12: 12701 px, 5 colours, answered a keypress. |
 | Trap Door | **Boots (responds)** | Screened 2026-08-12: 19619 px, 11 colours, answered a keypress. |
-| Turrican | **Boots (responds)** | Screened 2026-08-12: 5739 px, 9 colours, answered a keypress. |
+| Turrican | Known issue | Re-measured 2026-08-14 by counting tape blocks consumed rather than by looking at the screen: **9 of 30 tape blocks** load. Stops after tur2-A. The 5739 px recorded is a loading screen. A partial load draws a screen, which is why screening called this a title screen. |
 | Uridium | **Boots** | Screened 2026-08-12: 6323 px, 6 colours, animating. |
 | Where Time Stood Still (+3 disk) | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |
 | Where Time Stood Still (+3 disk)#01 | **Boots** | Screened 2026-08-12: 18432 px, 2 colours. |

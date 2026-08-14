@@ -56,6 +56,18 @@ type TapePlayer struct {
 // maxTapeWalkSteps bounds any walk over the block list that TZX flow control
 // can steer. A jump or loop end moves the cursor backwards, so a malformed or
 // hostile tape can describe a cycle; a real tape resolves in far fewer steps.
+// LoadReadThreshold is the per-frame port-$FE read count above which the CPU
+// is taken to be in a tape loader's edge-timing loop (which polls $FE
+// thousands of times a frame) rather than a running game (which reads it only
+// sparsely, for the keyboard).
+//
+// It lives here because both the GUI and the headless harness gate on it, and
+// they must agree: a headless run that disagrees with the session a user gets
+// about when a load is running is worse than either rule on its own. It was
+// duplicated by hand in both, with a comment in each asserting they were
+// identical and nothing enforcing it.
+const LoadReadThreshold = 500
+
 const maxTapeWalkSteps = 1 << 16
 
 // tapeLoopFrame is one open TZX counted loop.
@@ -325,6 +337,31 @@ func (tp *TapePlayer) NextBlock() []byte {
 	out := make([]byte, len(block))
 	copy(out, block)
 	return out
+}
+
+// PlayTstates is how much guest time the tape still takes to play out from the
+// block it is on: the sum of every remaining block's pulse durations,
+// generated exactly the way playback generates them.
+//
+// It exists to bound a wait on a load. A title that decodes tape edges itself
+// cannot load for longer than the tape takes to play, so the tape's own length
+// is a deadline taken from the medium rather than a number picked in advance —
+// the same reasoning that has the harness wait for the loader to fall silent
+// instead of counting frames.
+//
+// TZX flow control is not followed: a tape whose blocks loop plays for longer
+// than this says. It is a scale, not a guarantee.
+func (tp *TapePlayer) PlayTstates() uint64 {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	var total uint64
+	for i := tp.blockIdx; i >= 0 && i < len(tp.blocks); i++ {
+		pulses, _ := tp.generatePulsesData(tp.blocks[i])
+		for _, p := range pulses {
+			total += uint64(p)
+		}
+	}
+	return total
 }
 
 // HasMoreBlocks returns true if at least one more block is available.

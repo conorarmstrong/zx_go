@@ -51,6 +51,7 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 	h.ula.SetTapePlayer(tp)
 	tp.Play()
 	h.tapeBlocks, h.tapeLastLoad = 0, 0
+	h.tapeFEReads, h.tapeLastEdge, h.tapeEdgesSeen = h.ula.FEReadCount(), 0, false
 
 	h.cpu.TrapCheck = func(pc uint16) bool {
 		if pc != 0x0556 || !h.tapeTrapROMActive() || !tp.HasMoreBlocks() {
@@ -121,8 +122,22 @@ func (h *Harness) attachTape(tp *ula.TapePlayer) error {
 // without the proprietary OS (see LoadTAP).
 func (h *Harness) tapeTrapROMActive() bool {
 	switch h.mem.GetCurrentModel() {
-	case roms.Model48K, roms.ModelNext:
+	case roms.Model48K:
 		return true
+	case roms.ModelNext:
+		// The Next screens tapes on the embedded 48K ROM, so the trap is
+		// wanted — but only while that ROM is actually the one at $0000.
+		// Trusting $0556 unconditionally here reintroduced exactly the
+		// hazard this function exists to prevent: through the FPGA bootrom
+		// chain, NextZXOS, or divMMC RAM paged low, $0556 holds unrelated
+		// code, and firing there consumes a tape block, writes it wherever
+		// IX/DE happen to point, and returns to a bogus PC popped off the
+		// stack. The GUI has always returned false for the Next for this
+		// reason; a harness that screens a Next tape needs the narrower
+		// test, not the looser one.
+		// ROM bank 0 is the embedded 48 BASIC the Next tape screening runs
+		// on. Anything else paged low is not a machine with LD-BYTES there.
+		return h.mem.GetROMBank() == 0
 	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
 		return h.mem.GetROMBank() == 1
 	case roms.ModelPlus2A, roms.ModelPlus3:
@@ -148,23 +163,73 @@ func (h *Harness) TapeBlocksConsumed() int { return h.tapeBlocks }
 // advancing — see RunUntilTapeIdle.
 func (h *Harness) TapeLastLoadTstate() uint64 { return h.tapeLastLoad }
 
+// tapeEdgeReadsPerFrame is the port-$FE read count in a single frame above
+// which the guest is taken to be inside a tape loader's edge-timing loop
+// rather than merely scanning the keyboard.
+//
+// A loader polls the EAR bit hundreds to thousands of times a frame to time
+// one edge; the ROM's keyboard scan reads the port eight times a frame. The
+// two populations are three orders of magnitude apart, so the exact figure
+// matters little — it is the GUI's tapeLoadReadThreshold, kept identical so a
+// headless run and the session a user gets agree on when a load is running.
+const tapeEdgeReadsPerFrame = ula.LoadReadThreshold
+
+// tapeFrameTick samples the loader-activity signal, once per frame, from the
+// ULA's monotonic port-$FE read counter. Called from RunFrames.
+//
+// This is the only signal that sees a title loading itself. The fast-load trap
+// keys on PC == $0556, and a publisher's loader does not go there: Ocean's, on
+// the RoboCop and Target Renegade tapes, sets AF' by hand and jumps to $0562 —
+// four instructions into the same ROM routine, below the trap point. Every
+// block after the BASIC loader then arrives edge by edge in real time, over
+// minutes of guest time, without the trap counter moving once.
+func (h *Harness) tapeFrameTick() {
+	reads := h.ula.FEReadCount()
+	rate := reads - h.tapeFEReads
+	h.tapeFEReads = reads
+	if h.ula.GetTapePlayer() == nil || rate <= tapeEdgeReadsPerFrame {
+		return
+	}
+	h.tapeEdgesSeen = true
+	h.tapeLastEdge = h.elapsedT
+}
+
+// tapeLoadStarted reports whether anything has yet read the tape: a block
+// through the trap, or the guest decoding edges itself.
+func (h *Harness) tapeLoadStarted() bool { return h.tapeBlocks > 0 || h.tapeEdgesSeen }
+
+// tapeLastActivity is the guest T-state of the most recent sign of a load,
+// from either path.
+func (h *Harness) tapeLastActivity() uint64 {
+	if h.tapeLastEdge > h.tapeLastLoad {
+		return h.tapeLastEdge
+	}
+	return h.tapeLastLoad
+}
+
 // RunUntilTapeIdle runs the machine until the tape stops being read, and
 // reports whether that actually happened.
 //
-// Idle means at least one block has been loaded and quietT T-states of guest
-// time have passed since the last one. That is an event in the guest, not a
-// duration guessed in advance, which is what lets two different machines be
-// compared at equivalent points: both wait for their own loader to stop.
+// Idle means a load has started — a block through the trap, or the guest
+// reading tape edges for itself — and quietT T-states of guest time have
+// passed with no sign of either. That is an event in the guest, not a duration
+// guessed in advance, which is what lets two different machines be compared at
+// equivalent points: both wait for their own loader to stop.
+//
+// Both signals are needed. Waiting only on trap fires reports idle the instant
+// the last trapped block lands, which on a title that then loads itself is the
+// start of the load rather than the end of it: RoboCop trapped 6 blocks of 16
+// and its own loader took another ~24000 frames over the remaining nine, all
+// of it invisible to the trap counter.
 //
 // It returns false if deadlineT T-states elapse first — the tape is still
-// loading, or the title uses a loader that never enters LD-BYTES. A false here
-// must void a comparison rather than produce a verdict: two machines caught at
-// different points in a load differ on screen for reasons that say nothing
-// about faithfulness.
+// loading. A false here must void a comparison rather than produce a verdict:
+// two machines caught at different points in a load differ on screen for
+// reasons that say nothing about faithfulness.
 func (h *Harness) RunUntilTapeIdle(quietT, deadlineT uint64) bool {
 	deadline := h.elapsedT + deadlineT
 	for {
-		if h.tapeBlocks > 0 && h.elapsedT-h.tapeLastLoad >= quietT {
+		if h.tapeLoadStarted() && h.elapsedT-h.tapeLastActivity() >= quietT {
 			return true
 		}
 		if h.elapsedT >= deadline {
@@ -188,12 +253,26 @@ func (h *Harness) RunUntilTapeIdle(quietT, deadlineT uint64) bool {
 // The +2A/+3 are deliberately not special-cased: their menu's first entry is
 // the disk Loader, not a tape loader, so there is no single keystroke that
 // starts a tape and pretending otherwise would start something else.
-func (h *Harness) StartTapeLoad() {
+func (h *Harness) StartTapeLoad() bool {
 	switch h.mem.GetCurrentModel() {
 	case roms.Model128K, roms.ModelPlus2, roms.ModelPentagon:
 		h.TapKey(fyne.KeyReturn)
-	default:
+		return true
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		// Refuse rather than do something else. The doc above says these are
+		// deliberately not special-cased because their menu's first entry is
+		// the disk Loader, but falling through to TypeLoadCommand did not
+		// leave them alone: its trailing ENTER lands on that pre-highlighted
+		// Loader and starts a DISK load. The caller then cannot tell "the
+		// tape never started" from "the tape loader is broken", which is the
+		// worst of both. Say so instead.
+		return false
+	case roms.Model48K:
 		h.TypeLoadCommand()
+		return true
+	default:
+		// ZX80/ZX81, SAM, Next: no classic 48-BASIC tape prompt to type at.
+		return false
 	}
 }
 

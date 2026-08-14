@@ -40,7 +40,7 @@ converted into "arbitrary `.NEX` titles run".
 ### 1. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **158 title rows: 10 Works, 14 Works
-(caveat), 62 Boots (responds), 61 Boots, 1 Parses cleanly, 4 Known issue, 6
+(caveat), 59 Boots (responds), 57 Boots, 1 Parses cleanly, 11 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
@@ -73,16 +73,23 @@ remaining gap.
   controller tried and could not reach, which is the same statement EN makes.
   Pinned by TestDSResultIDAfterEOTIsNotTheHostTerminationCase so it is not
   re-litigated.
-- [ ] **Custom tape loaders stop after the ROM blocks.** Found by differential
-  comparison, not by screening. Robocop and Target Renegade each hold 16 tape
-  blocks; we load the 6 with standard flags and then never re-enter the ROM
-  loader, sitting static for 400 s of guest time. A reference emulator reads
-  all 16: blocks 7-16 are the game's own loader calling LD-BYTES with a
-  non-standard flag (136), so the handover from the ROM loader to the game
-  loader is not happening. Reproduce with `_tools/tapeprobe` (block count vs
-  guest time). This is a real emulator gap and it sits behind an unknown
-  number of the 42 tape-loaded 128K rows, whose verdicts only ever asserted
-  "something was drawn" — which a loading screen satisfies.
+- [ ] **Nine tape titles still load only part of their tape.** Measured by
+  counting blocks consumed, not by looking at the screen: Lemmings 4 of 125,
+  Gauntlet 11 of 86, Turrican 9 of 30, Double Dragon 16 of 55, Last Ninja 2
+  6 of 16, Myth 6 of 12, RoboCop and Target Renegade 15 of 16, The Way of the
+  Tiger 16 of 18. Reproduce with `go run ./_tools/tapeprobe -corpus`.
+
+  The framing this item had before was wrong and is worth not repeating: the
+  emulator is **not** failing to carry these loads. A custom loader that
+  bypasses `$0556` decodes edges perfectly well — a synthetic test pinning
+  that passed before any change was made. What was broken was that the
+  harness could not SEE such a load, so it screened mid-load and recorded a
+  loading screen as a title screen. Fixing the measurement moved R-Type from
+  8 of 24 to all 24 and Movie to all 6 without touching the emulator.
+
+  So the remaining nine are an open question, not a known emulator bug. The
+  next step is to establish, per title, whether the guest has stopped asking
+  for data (our fault) or is waiting for input (not a fault at all).
 
 - [~] **Verify what the keypress did.** Partly automated, and no longer purely
   manual. A response proves a title is waiting rather than hung; it does not

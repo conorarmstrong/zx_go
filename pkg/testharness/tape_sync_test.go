@@ -120,7 +120,10 @@ func TestDisplayFileFollowsShadowScreen(t *testing.T) {
 	const marker = 0xA5
 	h.WriteMemory(0xC000, marker)
 
-	got := h.DisplayFile()
+	got, ok := h.DisplayFile()
+	if !ok {
+		t.Fatal("DisplayFile reports no display file on a 128K")
+	}
 	if len(got) != 6912 {
 		t.Fatalf("DisplayFile length = %d, want 6912", len(got))
 	}
@@ -129,7 +132,7 @@ func TestDisplayFileFollowsShadowScreen(t *testing.T) {
 	}
 	// The returned slice must be a copy: refdiff holds a before/after pair.
 	got[0] ^= 0xFF
-	if again := h.DisplayFile(); again[0] != marker {
+	if again, _ := h.DisplayFile(); again[0] != marker {
 		t.Fatal("DisplayFile returned a live view of RAM, not a copy")
 	}
 }
