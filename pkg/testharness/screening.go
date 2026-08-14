@@ -66,6 +66,21 @@ type Screening struct {
 	// quote it.
 	TapeBlocksDecoded int
 	TapeBlocksTotal   int
+	// FlatBitmap records that every byte of the guest's display file bitmap
+	// holds the same value, so whatever colour the attributes paint it, no
+	// shape was drawn.
+	//
+	// It exists because the pixel and colour floors cannot see this. A screen
+	// of uniform $55 with two attribute values — uninitialised video memory,
+	// which renders as even vertical stripes — measures 18432 px in 2 colours
+	// and clears both floors easily. Eight +3 disk rows were recorded as
+	// *Boots* on exactly that measurement, five of them identical to the
+	// pixel, which is the tell: unrelated games do not draw the same screen.
+	//
+	// The differential tool has always applied this test and reported all
+	// eight as blank. Asking whether the bitmap has any structure is a better
+	// question than asking how much of it is lit.
+	FlatBitmap bool
 	// BankInjected records that the program was loaded by copying banks and
 	// jumping, rather than through the machine's own loader. That path cannot
 	// host a .nex which calls NextZXOS at runtime — the game's banks overwrite
@@ -208,6 +223,16 @@ func Classify(s Screening) Verdict {
 	if s.TapeIncomplete {
 		return VerdictInconclusive
 	}
+	// A bitmap with one repeated value has no shape on it, whatever the
+	// attributes make of it, and no pixel count can tell you that. Checked
+	// before the floors because it is the stronger statement: the floors ask
+	// how much is lit, this asks whether anything was drawn.
+	if s.FlatBitmap {
+		if s.BankInjected {
+			return VerdictInconclusive
+		}
+		return VerdictBlank
+	}
 	blank := s.Pixels < MinContentPixels || s.Colours < MinContentColours
 	// The canvas measurement can only ever rescue a frame the raw counts
 	// rejected, never condemn one they accepted. That keeps every verdict
@@ -288,7 +313,31 @@ func (h *Harness) ScreenTitle(settle int) Screening {
 		s.Error = ScreenError(h.ScreenText())
 	}
 	s.Moved = !bytes.Equal(before, after)
+	s.FlatBitmap = h.flatBitmap()
 	return s
+}
+
+// flatBitmap reports whether the guest's display file bitmap holds one
+// repeated value, i.e. carries no shape at all.
+//
+// Attributes are deliberately not consulted, exactly as in the differential
+// tool: a flat bitmap is one plain rectangle however many colours it is
+// painted in, and it was the colour count that let these frames past.
+//
+// Models with no display file — the Next running its own video modes — answer
+// false, because "there is no display file to be flat" is not evidence of a
+// blank screen.
+func (h *Harness) flatBitmap() bool {
+	scr, ok := h.DisplayFile()
+	if !ok || len(scr) < 6144 {
+		return false
+	}
+	for i := 1; i < 6144; i++ {
+		if scr[i] != scr[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // flashPeriod is the ULA FLASH cycle in frames (16 on, 16 off).

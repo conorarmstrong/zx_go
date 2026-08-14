@@ -39,14 +39,26 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **158 title rows: 11 Works, 17 Works
-(caveat), 63 Boots (responds), 58 Boots, 1 Parses cleanly, 2 Known issue, 6
+`docs/compatibility.md` now holds **158 title rows: 11 Works, 18 Works
+(caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
-Known issue fell from 11 to 2 on 2026-08-14, and that was a correction rather
-than a fix: nine of those rows were working titles, downgraded on a tape-block
-count that did not mean what it was taken to mean. Both survivors are +3 disk
-dumps whose behaviour a reference emulator reproduces exactly.
+**Eight of the eleven Known issue rows are settled as bad dumps, on a third
+emulator's evidence.** MAME's `specpls3`, driven from our own vendored ROMs
+(CRCs `9bc85686` / `db551783`, matching its expected set exactly), **refuses to
+mount four of them**: "floppy tracks=45, drive tracks=42", where a real +3 drive
+has 40. Three more it mounts and fails on identically to us, ending on the same
+vertical stripe pattern. Add the two already checked against two references
+(Bonanza Bros, 3D Grand Prix) and only **California Games** is still undecided —
+MAME's ENTER did not register there, so it never started the load.
+
+Both directions of that were corrections rather than fixes, on the same day.
+Nine rows came *up* off Known issue: they were working titles downgraded on a
+tape-block count that did not mean what it was taken to mean. Nine went *down*
+after a differential sweep of the whole +3 disk class — eight of them scored
+**Boots** on 18432 px in 2 colours, which is the uniform stripe pattern of
+uninitialised video memory rather than any title screen. Five unrelated games
+measured it to the pixel, which is the tell.
 
 Screening (`TestScreenLocalTitles`, pkg/testharness) loads a title headlessly,
 runs it, and measures the display window with the border cropped. A **Boots**

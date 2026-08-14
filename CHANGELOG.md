@@ -4,6 +4,62 @@ All notable changes to this project are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A flat bitmap is no longer scored as a title screen.** A display file whose
+  every bitmap byte holds one value carries no shape at all, but uninitialised
+  video memory renders as even vertical stripes and measures 18432 px in 2
+  colours — clearing both content floors. Eight +3 disk rows were recorded as
+  *Boots* on exactly that figure, five of them identical to the pixel, which is
+  what gave it away: unrelated games do not draw the same screen. `Screening`
+  now carries `FlatBitmap` and `Classify` treats it as blank. This is the test
+  `_tools/refdiff` has always applied, and it reported all eight as blank.
+
+### Changed (compatibility manifest)
+
+A differential sweep of all 62 +3 disk rows against a reference emulator.
+**12 come back byte-identical, 10 more match as PHASE** (the same sequence
+sampled at a different point), and nine rows were corrected:
+
+- Eight flat-screen rows above drop from *Boots* to *Known issue*. Both
+  machines are blank on those images, so this is very likely the dumps rather
+  than an emulator fault — but nothing drew a title.
+- California Games drops too: its *Boots (responds)* was measured on the +3 ROM
+  menu, which this manifest's own notes say to read as "never left the menu".
+- Barbarian II and Capitan Sevilla go the other way, up to **Works (caveat)**.
+  Both were recorded as screen-verified-only because the differential run sent
+  SPACE alone and reported INERT; their menus take number keys. With the full
+  probe set both reach the game and match the reference to 0.0%.
+- Three titles score DIVERGES with **us ahead of the reference**: Back to the
+  Future Part III reaches gameplay while the reference drops to a BASIC report,
+  Chase H.Q. acts on its own "PRESS ENTER FOR OPTIONS" prompt where the
+  reference does not, and Comando Quatro reaches its control menu while the
+  reference is still on the loading artwork.
+
+**Eight of the eleven Known issue rows are settled as bad dumps rather than
+emulator faults**, on a third emulator's evidence. MAME `specpls3`, driven from
+our own vendored ROMs, **refuses to mount four of them** — "floppy tracks=45,
+drive tracks=42", against a real +3 drive's 40 — and fails three more
+identically to us, ending on the same vertical stripe pattern. Only California
+Games remains undecided.
+
+### Tooling (local-only)
+
+- `_tools/refdiff` probes with a **set** of keys rather than one, matching the
+  screening harness, because SPACE alone reported INERT for two titles whose
+  menus take numbers. Our side leads and the reference replays the same count:
+  the two runs cannot agree live, and comparing differently-driven machines
+  proves nothing. A side effect is that driving input largely dissolves the
+  attract-phase problem, by pulling both machines into a menu.
+- New **PHASE** verdict for what remains. Each side samples 12 screens 3 s
+  apart, and the question becomes whether one machine's screen appears anywhere
+  in the other's sequence rather than whether two frames match. It only ever
+  rescues a pair the pointwise verdict failed, and a voiding verdict still
+  wins. Pinned by unit tests, because driving a real title is not a reliable
+  way to reach the branch — the probe keys synchronise the machines.
+
 ## [v1.9.0]
 
 A minor rather than a patch release: it adds exported API to `pkg/testharness`
