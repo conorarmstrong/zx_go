@@ -51,8 +51,16 @@ sampled at a different point), and nine rows were corrected:
   reference does not, and Comando Quatro reaches its control menu while the
   reference is still on the loading artwork.
 
-**Eight of the eleven Known issue rows are settled as bad dumps rather than
-emulator faults**, on a third emulator's evidence. MAME `specpls3`, driven from
+**California Games was not broken: it loads and waits for a keypress.** It was
+filed as a Known issue because it draws almost nothing and no reference would
+corroborate it — ZEsarUX never leaves its own ROM menu on that image and MAME's
+automated ENTER never registered. Disassembly settled what comparison could
+not: the guest sits at `$7670` in `EI / HALT / RET`, called from a loop that
+spins until `$76CC` returns carry, and `$76CC` scans nine bytes at `$5B0C` for a
+pressed key. Tapping SPACE moves the PC immediately.
+
+**Every Known issue row now carries third-emulator evidence**, on a third
+emulator's reading rather than inference. MAME `specpls3`, driven from
 our own vendored ROMs, **refuses to mount four of them** — "floppy tracks=45,
 drive tracks=42", against a real +3 drive's 40 — and fails three more
 identically to us, ending on the same vertical stripe pattern. Only California

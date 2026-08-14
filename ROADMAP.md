@@ -48,19 +48,29 @@ emulator's evidence.** MAME's `specpls3`, driven from our own vendored ROMs
 (CRCs `9bc85686` / `db551783`, matching its expected set exactly), **refuses to
 mount four of them**: "floppy tracks=45, drive tracks=42", where a real +3 drive
 has 40. Three more it mounts and fails on identically to us, ending on the same
-vertical stripe pattern. Add the two already checked against two references
-(Bonanza Bros, 3D Grand Prix) and only **California Games** is still open.
+vertical stripe pattern. Add the two already checked against two references (Bonanza Bros, 3D Grand
+Prix) and **every Known issue row is now evidenced by a third emulator**.
 
-It is no longer undecided so much as **characterised**. `ZX_GO_FDC_TRACE=1`
-shows the loader reading its data cylinders normally, recalibrating, seeking to
-cylinder 7 — a protection track numbered $B1-$B8 — and issuing exactly one
-READ DIAGNOSTIC for R=01, which is the last command it ever sends. The image is
-sound (42 cylinders, boot sector checksum 3). Tracing it turned up a real
-datasheet violation: READ A TRACK was not setting ND when the ID it is given is
-absent from the track. **Fixing that did not change the title**, so what its
-loader wants from that track is the open question. The next step is to
-disassemble backwards from the READ DIAGNOSTIC — the method that cracked
-Comando Quatro — rather than to try another status-byte guess.
+**California Games came off the list entirely: it loads, and it was waiting for
+a keypress.** Two references could not corroborate it — ZEsarUX never leaves its
+own ROM menu on that image, and MAME's automated ENTER never registered — so
+comparison was a dead end and disassembly settled it instead. The guest sits at
+`$7670` inside `EI / HALT / RET`, called from
+`7720 CALL $766B / 7723 CALL $76CC / 7726 JP NC,$7720`, and `$76CC` scans nine
+bytes at `$5B0C` for a non-zero entry, returning carry set with a key code.
+That is a keyboard poll: the loop reads "wait until a key is pressed". Tapping
+SPACE moves the PC off `$7670` at once.
+
+The lesson to keep: **when no reference will corroborate a title, disassemble
+the loop rather than keep hunting for a reference.** Two emulators refusing to
+start an image says nothing about ours. `_tools/loaderstop` does the whole
+sequence — sample the PC, dump the stack, disassemble the callers, press a key
+and report whether it moved.
+
+Tracing it also turned up a genuine datasheet violation on the way: READ A
+TRACK was not setting ND when the ID it is given is absent from the track, now
+fixed with the datasheet's wording behind it. It did **not** change this title,
+and is recorded as a correctness fix rather than a compatibility one.
 
 Both directions of that were corrections rather than fixes, on the same day.
 Nine rows came *up* off Known issue: they were working titles downgraded on a
