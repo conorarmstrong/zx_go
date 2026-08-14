@@ -9,12 +9,6 @@ import (
 	"testing"
 )
 
-// runBasicFromMenu launches a NextBASIC program the way a user would: open the
-// Command Line, change to the program's directory, LOAD it, then RUN.
-//
-// The CD matters. NextBASIC's LOAD resolves against the current directory, so
-// `LOAD "/full/path/prog.bas"` fails with "File not found" — verified — while
-// `.cd <dir>` followed by `LOAD "prog.bas"` works.
 // nexTypeLineBlind types an ASCII string without confirming each character
 // against the OS, unmapped characters silently skipped.
 //
@@ -32,6 +26,12 @@ func nexTypeLineBlind(emu *emulator, s string) {
 	}
 }
 
+// runBasicFromMenu launches a NextBASIC program the way a user would: open the
+// Command Line, change to the program's directory, LOAD it, then RUN.
+//
+// The CD matters. NextBASIC's LOAD resolves against the current directory, so
+// `LOAD "/full/path/prog.bas"` fails with "File not found" — verified — while
+// `.cd <dir>` followed by `LOAD "prog.bas"` works.
 func runBasicFromMenu(emu *emulator, sdDir, file string, runFrames int) {
 	enter := func(frames int) {
 		nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12)

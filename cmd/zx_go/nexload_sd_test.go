@@ -73,6 +73,12 @@ func TestNexloadSDGames(t *testing.T) {
 
 			img := emu.renderFrame()
 			nonBlank := !uniformImage(img)
+			// Sample the PC that goes with THIS verdict before nexAtOSKeyWait
+			// runs the guest on: it advances 20 frames, so reporting
+			// emu.cpu.PC afterwards described a machine 20 frames past the
+			// state the verdict came from, and could contradict the verdict
+			// it was printed beside.
+			verdictPC := emu.cpu.PC
 			backAtOS := nexAtOSKeyWait(emu)
 
 			if dir := os.Getenv("NEX_RENDER_OUT_DIR"); dir != "" {
@@ -105,14 +111,14 @@ func TestNexloadSDGames(t *testing.T) {
 			case !nonBlank:
 				verdict = "Blank"
 			}
-			t.Logf("SDVERDICT %-14s %-28s PC=%#04x nonblank=%v", verdict, name, emu.cpu.PC, nonBlank)
+			t.Logf("SDVERDICT %-14s %-28s PC=%#04x nonblank=%v", verdict, name, verdictPC, nonBlank)
 
 			if !launched {
-				t.Errorf("%s: NEXLOAD never handed the machine over — the game did not launch", name)
+				t.Errorf("%s: NEXLOAD never handed the machine over (PC=%#04x) — the game did not launch", name, verdictPC)
 			}
 			if backAtOS {
 				t.Errorf("%s: back at the NextZXOS key-wait at the end of the window (PC=%#04x) — "+
-					"the game launched and then gave the machine back", name, emu.cpu.PC)
+					"the game launched and then gave the machine back", name, verdictPC)
 			}
 		})
 	}

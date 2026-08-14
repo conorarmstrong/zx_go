@@ -20,6 +20,12 @@ const nextMenuLoopPC = 0x0c90
 // Spectrum keyboard-matrix (row, mask) presses. Symbols use SYMBOL SHIFT
 // (row 7, 0x02) plus the symbol's key. Paths are typed lowercase — the SD card
 // is FAT (case-insensitive) so this still matches mixed-case folder names.
+// nexMacroHoldFrames bounds how long one character is held waiting for the OS
+// to echo it. Generous on purpose: expiry means a dropped keystroke and a
+// corrupted command line, and unlike the test typist this engine cannot
+// re-offer the key.
+const nexMacroHoldFrames = 200
+
 var nexKeyMatrix = func() map[rune][][2]int {
 	sym := [2]int{7, 0x02} // SYMBOL SHIFT
 	letters := map[rune][2]int{
@@ -165,11 +171,38 @@ func newNexloadMacro(sdPath string) *nexloadMacro {
 		}
 		typed += string(c)
 		want := typed
-		// The hold is bounded well under the ROM's auto-repeat delay, so a
-		// character the OS never takes cannot arrive twice instead.
-		holdUntil(keys, 20, func(e *emulator) bool { return nexCmdEcho(e) == want })
+		// Hold the character until the OS's own copy of the line shows it.
+		//
+		// The bound is a safety net, not a retry: when it expires the step
+		// simply advances. That is why it is generous. A keystroke dropped
+		// because NextZXOS was busy leaves a line missing a character
+		// (".nexlad /games/…"), NEXLOAD reports no such file, and the GUI
+		// drops back to the prompt with nothing on screen to explain it.
+		//
+		// It cannot be turned into a re-offer here the way the test typist
+		// does: these calls append macro STEPS, so a loop would press the key
+		// a fixed number of times whatever happened and duplicate characters.
+		// Making expiry loud is the honest half-measure — the user gets a
+		// diagnostic instead of a silent wrong filename.
+		holdUntil(keys, nexMacroHoldFrames, func(e *emulator) bool {
+			return nexCmdEcho(e) == want
+		})
 		waitUntil(20, nexMacroSettled(6))
+		waitUntil(nexMacroHoldFrames, func(e *emulator) bool {
+			return nexCmdEcho(e) == want
+		})
 	}
+	// One last check before ENTER: if the line is not what was asked for,
+	// say so rather than running a mangled command.
+	waitUntil(1, func(e *emulator) bool {
+		if got := nexCmdEcho(e); got != line {
+			slog.Warn("nexload macro: command line does not match what was typed",
+				"want", line, "got", got,
+				"note", "a keystroke was dropped while NextZXOS was busy; NEXLOAD will fail")
+		}
+		return true
+	})
+
 	hold([][2]int{{6, 0x01}}, 6) // ENTER -> run NEXLOAD
 	wait(1500)                   // let the OS load and start the game
 

@@ -60,6 +60,11 @@ const (
 	// nexKeyPresses is how many times one character is offered to a busy OS
 	// before the typist gives up and fails.
 	nexKeyPresses = 16
+	// nexEchoSettleFrames is how long a press is given to show up on the OS's
+	// copy of the line before it counts as dropped. It has to exceed the
+	// longest the editor can be busy between accepting a key and echoing it,
+	// or the typist duplicates characters; see nexTypeChar.
+	nexEchoSettleFrames = 40
 )
 
 // nexSettle runs frames until the guest has completed scans keyboard scans,
@@ -134,11 +139,21 @@ func nexTypeChar(emu *emulator, prefix string, c rune) error {
 	}
 	for i := 0; i < nexKeyPresses; i++ {
 		nexTapKey(emu, keys)
+		// Give a keystroke that is still in flight time to be consumed
+		// before deciding it was dropped. Sampling the echo immediately
+		// after the release is what made this race: if the OS was mid-SD
+		// work and picked the key up a few frames later, the line still
+		// read prefix here, the loop pressed again, and the OS then took
+		// both — leaving prefix+c+c, which is the unrecoverable branch
+		// below. Waiting for the echo means a late keystroke lands as a
+		// success rather than provoking a duplicate.
+		nexWaitEcho(emu, want, nexEchoSettleFrames)
 		switch got := nexCmdEcho(emu); got {
 		case want:
 			return nil
 		case prefix:
-			// The OS was busy and dropped it — offer it again.
+			// Genuinely dropped: the OS had the whole settle window and
+			// the line never changed. Offer it again.
 		default:
 			return fmt.Errorf("command line corrupted typing %q: it reads %q, want %q", c, got, want)
 		}
@@ -168,10 +183,23 @@ func nexSubmitLine(emu *emulator) error {
 	line := nexCmdEcho(emu)
 	for attempt := 0; attempt < 2; attempt++ {
 		nexTapKey(emu, [][2]int{{6, 0x01}}) // ENTER
-		quiet := 0
+		quiet, running := 0, 0
 		for i := 0; i < 300; i++ {
 			if nexCmdEcho(emu) != line {
 				return nil
+			}
+			// A launched game is the third signal, and the one that makes
+			// a second ENTER safe to withhold. Some titles leave bank 7
+			// undisturbed AND poll the keyboard every frame, so neither
+			// of the other two ever fires; without this the retry pressed
+			// ENTER straight into the running game, which can start, skip
+			// or exit it, corrupting the very verdict being measured.
+			if emu.cpu.PC != nextMenuLoopPC {
+				if running++; running >= nexLaunchFrames {
+					return nil
+				}
+			} else {
+				running = 0
 			}
 			before := emu.ula.FEReadCount()
 			nexRunFrames(emu, 1)
@@ -182,6 +210,13 @@ func nexSubmitLine(emu *emulator) error {
 			} else {
 				quiet = 0
 			}
+		}
+		// Only offer ENTER again if the machine is demonstrably still
+		// sitting at the prompt. Retrying blind is how a keystroke ends
+		// up inside a game.
+		if emu.cpu.PC != nextMenuLoopPC {
+			return fmt.Errorf("NextZXOS did not take the command line %q, and the machine has left "+
+				"the prompt (PC=%#04x) — not pressing ENTER again into whatever is running", line, emu.cpu.PC)
 		}
 	}
 	return fmt.Errorf("NextZXOS did not take the command line %q on ENTER", line)
@@ -239,6 +274,26 @@ func nexWatchLaunch(emu *emulator, frames int) bool {
 func nexOpenCommandLine(emu *emulator) error {
 	nexTapKey(emu, [][2]int{{0, 0x01}, {4, 0x10}}) // cursor DOWN -> Command Line
 	nexTapKey(emu, [][2]int{{6, 0x01}})            // ENTER -> the command prompt
+
+	// "bank 7 reads empty" is a weak signal for "the prompt is open": it can
+	// already be true the instant ENTER is pressed, and nexWaitEcho checks
+	// before running a frame, so the wait could be a no-op and the first
+	// characters would be typed at the MENU — surfacing much later as a
+	// corrupted command line blamed on the title.
+	//
+	// Give the OS unambiguous time to act on the selection first. This is
+	// weaker than proving the transition and is deliberately so; both
+	// stronger options were tried and are worse:
+	//   - typing a probe character and deleting it proves the line echoes,
+	//     but shifts every later keystroke by two taps, and TX-1696 times
+	//     out back to the OS on its own schedule, so the probe changed that
+	//     title's verdict. A test may not perturb its subject.
+	//   - watching for the CPU to leave and re-enter the key-wait loop does
+	//     not work, because the command prompt idles in that same loop and
+	//     the work is already done by the time the watcher starts.
+	// If this ever does fire wrongly, nexTypeChar catches it immediately:
+	// typing at the menu produces no echo, and it fails naming the prompt.
+	nexRunFrames(emu, 60)
 	if !nexWaitEcho(emu, "", 600) {
 		return fmt.Errorf("the NextZXOS command prompt did not open: bank 7 reads %q", nexCmdEcho(emu))
 	}
@@ -326,6 +381,15 @@ func TestNexloadOSGamesIfPresent(t *testing.T) {
 
 			img := emu.renderFrame()
 			nonBlank := !uniformImage(img)
+			verdictPC := emu.cpu.PC
+			// launched only says the CPU was busy for a while, which
+			// NEXLOAD's own work satisfies on its way to failing. Ask the
+			// harder question too: is the machine still running the game at
+			// the end of the window, or did it hand back to NextZXOS? The SD
+			// suite asserts both, and without the second one a game that
+			// loads and immediately dies passes here.
+			backAtOS := nexAtOSKeyWait(emu)
+
 			if dir := os.Getenv("NEX_RENDER_OUT_DIR"); dir != "" {
 				var buf bytes.Buffer
 				if writeScreenshotPNG(emu, &buf) == nil {
@@ -333,12 +397,16 @@ func TestNexloadOSGamesIfPresent(t *testing.T) {
 				}
 			}
 			if !launched {
-				t.Errorf("%s: NEXLOAD never handed the machine over (PC=%#04x) — game did not launch", c.name, emu.cpu.PC)
+				t.Errorf("%s: NEXLOAD never handed the machine over (PC=%#04x) — game did not launch", c.name, verdictPC)
+			}
+			if backAtOS {
+				t.Errorf("%s: back at the NextZXOS key-wait at the end of the window (PC=%#04x) — "+
+					"the game launched and then gave the machine back", c.name, verdictPC)
 			}
 			if !nonBlank {
 				t.Errorf("%s: screen blank after NEXLOAD — game did not render", c.name)
 			}
-			t.Logf("%s: launched via NEXLOAD, PC=%#04x nonblank=%v", c.name, emu.cpu.PC, nonBlank)
+			t.Logf("%s: launched via NEXLOAD, PC=%#04x nonblank=%v", c.name, verdictPC, nonBlank)
 		})
 	}
 }
