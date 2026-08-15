@@ -6,6 +6,39 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`pkg/screendiff`**, the verdict logic for differential screen comparison:
+  which of two machines' screens agree, and when a comparison must be refused
+  instead. It was previously inside a gitignored developer tool, where its
+  tests could not run in CI. The taxonomy is mostly refusal, and a guard that
+  can never fire is indistinguishable from one that never needed to, so it now
+  lives where `go test ./...` reaches it.
+
+### Fixed
+
+- **Four ways the `PHASE` verdict could report agreement it had not earned.**
+  `PHASE` rescues a pair the pointwise comparison rejected, by asking whether
+  either machine's screen appears anywhere in the other's sampled sequence, so
+  a false rescue does not produce a wrong number but a wrong conclusion. All
+  four had one cause: the cross-match searched raw screens with none of the
+  guards protecting the direct comparison.
+  - A flat screen anywhere in either 13-screen sequence matched perfectly and
+    meant nothing, which a title that clears the display between attract pages
+    produces every time.
+  - So did a capture that failed, because a zero-length overlap scores 0%.
+  - The rescue outranked `INERT`, reporting agreement about a probe key that
+    neither machine answered.
+  - It reached into the `match (minor)` and `PARTIAL` bands, relabelling a
+    pair 0.6% apart as `PHASE` at 0.0% and discarding the real figure.
+- **The reference's tape-block and reset flags were read 36 s later than
+  ours**, after the cycle sampling rather than at the anchor, so a multiload
+  title re-entering its loader inside that window inflated one side's count
+  alone and voided the comparison as `SPLIT`.
+- **`TestNexloadSDGames` now fails a title that launches and renders nothing**
+  rather than only logging it. "All 12 launch and render" was true, but a
+  regression to a blank screen across the whole corpus would have exited zero.
+
 ## [v1.9.1]
 
 A patch release. One user-visible fix, in the Windows console; the rest is a

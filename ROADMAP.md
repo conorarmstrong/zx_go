@@ -178,22 +178,38 @@ remaining gap.
   voids most of these as ANIMATED rather than calling them divergences, and the
   reliable move is to read the PNGs `-keep` writes.
 
-  **Phase-tolerant matching is built** (`_tools/refdiff`): each side samples
-  `cycleSamples = 12` screens `cycleStepT` apart after the compared one,
-  spanning 36 s, and `bestCrossMatch` asks whether either machine's screen
-  appears anywhere in the other's sequence. A hit within `phaseMatchPct = 0.5`
-  reports the verdict `PHASE` instead of `DIVERGES`.
+  **Phase-tolerant matching is built, and it now lives in `pkg/screendiff`.**
+  Each side samples `CycleSamples = 12` screens `CycleStepT` apart after the
+  compared one, spanning 36 s, and `BestCrossMatch` asks whether either
+  machine's screen appears anywhere in the other's sequence. A hit within
+  `PhaseMatchPct = 0.5` reports `PHASE` instead of `DIVERGES`.
 
-  It is unit-tested as of 2026-08-15 (`_tools/refdiff/phase_test.go`, five
-  mutations verified), and the tests that carry the weight are the negative
-  ones: the search is 169 pairings, so the guard against inventing a rescue
-  from unrelated screens matters more than the rescue itself. The ordering is
-  pinned deliberately: `PHASE` outranks `ANIMATED`, because an attract cycle is
-  moving by definition and requiring stillness would void every case the
-  verdict exists for, but it never outranks `RESET`, `LOADING`, `CUSTOM`,
-  `SPLIT` or `BLANK`. Two blank screens cross-match perfectly and mean nothing.
+  It sits in a tracked package rather than in `_tools/refdiff` (local-only) for
+  one reason: that directory is gitignored, so tests written there are
+  invisible to CI by construction, and the verdict taxonomy is mostly refusal.
+  A guard that can never fire looks exactly like a guard that never needed to
+  fire. The driver still produces the screens; the package decides what they
+  mean, and `go test ./...` now covers it.
+
+  **A review on 2026-08-16 found four ways the rescue could fire wrongly, all
+  now fixed and pinned.** The cause was shared: `BestCrossMatch` searched raw
+  screens with none of the guards protecting the pointwise comparison. A flat
+  screen anywhere in either 13-screen sequence cross-matched perfectly; so did
+  a failed capture, because `Diff` scores a zero-length overlap as 0%. The
+  rescue also outranked `INERT`, reporting agreement about a probe key neither
+  machine answered, and reached up into the `match (minor)` and `PARTIAL`
+  bands, relabelling a pair 0.6% apart as `PHASE` at 0.0%.
+
+  The ordering is now: `RESET`, `LOADING`, `CUSTOM`, `SPLIT`, `BLANK` and
+  `INERT` all outrank the rescue; the rescue outranks `ANIMATED`, because an
+  attract cycle is moving by definition and requiring stillness would void
+  every case the verdict exists for; and it fires only inside the divergence
+  band, so it can never replace a verdict that already reports agreement.
 
   **Not yet validated end to end**, which needs a reference-emulator run.
+  `-keep` now writes the two screens a `PHASE` verdict was actually decided on,
+  which that run will need: the percentage says how far apart two screens are
+  and never what either one shows.
 
   Two counts still disagree for a structural reason rather than a fault: ours
   is blocks the guest read, the reference's is entries into the ROM loader, and

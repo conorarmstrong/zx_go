@@ -20,9 +20,15 @@ import (
 // program exercising them.
 //
 // The SD content is gitignored, so the test skips when it is absent and CI
-// stays green. It is a measurement harness: it records a verdict per title and
-// only fails when a game returns to the menu, which means NEXLOAD itself did
-// not launch it.
+// stays green. It records a verdict per title and fails on any of the three
+// ways a title can not work: it never launched, it launched and handed the
+// machine back, or it kept the machine and drew nothing.
+//
+// That last one was logged and not asserted for a while, which made a green
+// run a weaker statement than it looked. "All 12 launch and render" was true
+// only because someone read the verdicts; a regression to Blank across the
+// whole corpus would have exited zero. A claim worth recording is worth
+// enforcing.
 func TestNexloadSDGames(t *testing.T) {
 	const sdRoot = "../../roms/next/sd"
 	gamesDir := filepath.Join(sdRoot, "games", "Next")
@@ -119,6 +125,14 @@ func TestNexloadSDGames(t *testing.T) {
 			if backAtOS {
 				t.Errorf("%s: back at the NextZXOS key-wait at the end of the window (PC=%#04x) — "+
 					"the game launched and then gave the machine back", name, verdictPC)
+			}
+			// A title that launched, kept the machine and painted a uniform
+			// screen has not rendered. Only assertable once the two failures
+			// above are ruled out, since both of those produce a blank frame
+			// of their own and would report twice for one fault.
+			if launched && !backAtOS && !nonBlank {
+				t.Errorf("%s: launched and kept the machine but drew a uniform screen (PC=%#04x) — "+
+					"a title that renders nothing is not a working title", name, verdictPC)
 			}
 		})
 	}
