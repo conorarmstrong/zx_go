@@ -6,6 +6,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.9.1]
+
+A patch release. One user-visible fix, in the Windows console; the rest is a
+correction pass over what the project claims about itself — the compatibility
+manifest, and the roadmap entries that had drifted out of step with the code.
+
 ### Fixed
 
 - **ANSI escape sequences printed literally in the Windows console.** The

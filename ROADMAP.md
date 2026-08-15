@@ -232,10 +232,23 @@ remaining gap.
 that can host a title calling the OS at runtime. **All 12 launch and render**,
 re-confirmed at v1.9.0 on 2026-08-15.
 
-`SpecNext_Games/` is a **download staging area, not a backlog**. Everything in
-it is already installed under `roms/next/sd/games/Next/` and already counted in
-the figures above, so a title sitting there unscreened is not evidence of
-unscreened work. Check the SD card before concluding otherwise.
+`SpecNext_Games/` (local-only) is a download staging area, and it holds two
+different things. Its four **downloaded** titles — DougieDo, EternalBattle,
+BasInvaders, BlokBoy — are already installed under `roms/next/sd/games/Next/`
+and are already counted in the figures above, so finding them there is not
+evidence of unscreened work.
+
+Its `next_native_games.txt` is not that. It catalogues **108 Next titles by
+URL**, of which only a handful are on the SD card, so **roughly 100 titles are
+undownloaded and unscreened**. That is the largest single block of open
+compatibility work in this document. Fetching them is a bulk pull from a
+third-party site and needs the maintainer's say-so, which is why it is recorded
+here rather than started.
+
+An earlier revision of this paragraph said everything in the directory was
+already installed and told the reader not to look further. That was wrong, and
+wrong in the expensive direction: it suppressed those ~100 titles behind a
+claim that sounded like a resolution.
 
 **Every Next game on the SD card is now accounted for**: every title directory
 holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
@@ -248,9 +261,10 @@ opens `C:/common/...` by absolute path. That is unrelated to the working
 directory and is not an emulator fault.
 
 That is what items 2 and 4 were waiting on, and the answer it gives is
-"no evidence either is needed": fourteen Next programs run without the zxnDMA
-interrupt/match logic or exact Copper MOVE timing being modelled. Neither is
-now blocked; both are simply unmotivated.
+"no evidence either is needed": eighteen Next programs run without the zxnDMA
+interrupt/match logic or exact Copper MOVE timing being modelled — the 12
+`.nex`, the 5 NextBASIC programs and NEXTipede. Neither is now blocked; both
+are simply unmotivated.
 
 ### 2. [correctness] zxnDMA interrupt / match logic and bus arbitration
 
