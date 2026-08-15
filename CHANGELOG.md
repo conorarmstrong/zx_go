@@ -8,6 +8,18 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **ANSI escape sequences printed literally in the Windows console.** The
+  startup banner and every log line arrived as `<-[38;5;196m` and similar.
+  `term.IsTerminal` accepts a Windows console handle, because GetConsoleMode
+  succeeds on one, but nothing ever set
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, so the console printed the escapes
+  rather than interpreting them. Colour now requires the console to accept
+  ANSI as well as be a terminal, and falls back to plain text when it will
+  not, so the banner stays readable either way (`pkg/zxlog/color.go`). Found
+  by a Windows 11 ARM64 test run, but not ARM-specific: it affected any
+  legacy Windows console on any architecture. Redirected output was never
+  affected, which is why no log capture ever showed it.
+
 - **READ A TRACK did not report ND for an ID that is not on the track.** The
   uPD765A datasheet is explicit: "the FDC compares the ID information read from
   each sector with the value stored in the IDR and sets the ND flag of Status

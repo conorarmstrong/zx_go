@@ -243,13 +243,51 @@ The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering �
 and none of them needs this. That is the evidence the item was waiting for, and
 it argues for leaving it alone until a title actually demands it.
 
-### 3. [product] Windows ARM64 has never been run
+### 3. [product] Windows ARM64: the core is proven, the GUI is not
 
-Since v1.8.1 it builds with llvm-mingw and publishes an artifact, so the
-toolchain problem is solved. Nobody has launched the binary. Compiling
-does not prove the OpenGL path works on Windows-on-ARM, which is why the
-release matrix still marks it `experimental` and `README.md` carries the
-caveat. One run on real hardware settles it.
+**Run 2026-08-14 against v1.8.23 on Windows 11 Pro ARM64 (Build 28000).**
+Two of the three checks pass outright; the third could not be reached.
+
+**The emulator core is proven on ARM64.** A headless run
+(`--headless --frames 500 --save-screen`) matched a linux-amd64 reference on
+every deterministic value: final PC 5631, 3 972 119 instructions, 419
+interrupt fires, and a byte-identical screen PNG (SHA-256
+`e0a590c3…a108a04`). The binary also loads and reports its version cleanly, so
+the llvm-mingw packaging is sound and the toolchain question is closed.
+
+**Read that result with one caveat.** The guest was QEMU TCG on an x86 host,
+not a Snapdragon. TCG executes real AArch64 semantics, so the arm64 compiler
+output genuinely ran, and the headless path is single-threaded, so its
+determinism holds in full. What TCG does **not** reproduce is ARM's weak
+memory model, so a data race between the emulation goroutine and the GUI
+would be invisible there and could still appear on real hardware.
+
+**Step 3 never produced a window**, because that guest has no GPU (ramfb
+framebuffer only). So there is no picture to judge, correct or otherwise, and
+the resize check was never reached. **The `experimental` marker stays.**
+
+**The durable finding is a Fyne build constraint, verified in the module
+cache** (see "Do not re-derive" below): a Windows ARM64 Fyne binary always
+requests OpenGL ES 2.0 over WGL and cannot be built any other way.
+
+- [ ] **Launch the binary once on a physical Windows-on-ARM device.** If a
+  window appears, check the picture against the 48K boot screen and resize
+  once. That is the whole remaining test. If it fails with
+  `WGL: Failed to create OpenGL ES context`, the diagnosis is already
+  complete and the fix is the upstream Fyne hint plus a bundled ANGLE.
+- [ ] **Raise the `ContextCreationAPI` hint upstream with Fyne.** One line in
+  `internal/driver/glfw/glfw_es.go`; needs the maintainers, not us.
+- [~] **The process hangs when window creation fails.** It stays resident with
+  no window and no console prompt, because Fyne's run loop blocks with no
+  window to service. Not fixable from our side without a watchdog, which
+  would be a hack; it belongs in the same upstream report.
+- [x] ~~ANSI escapes printed literally in the Windows console~~ — ours, and
+  fixed. `term.IsTerminal` accepts a console handle because GetConsoleMode
+  succeeds, but nothing enabled `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, so the
+  banner arrived as `<-[38;5;196m`. Colour now depends on the console
+  accepting ANSI as well as being a terminal, and falls back to plain text
+  (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
+  console on any architecture.
 
 ### 4. [research] Copper cycle accuracy
 
@@ -318,6 +356,25 @@ Solved problems whose answers were expensive to find.
   the reference emulator wiring a single drive. **Before blaming a disk
   format, run the image on a reference** — `ZX_GO_FDC_TRACE=1` then shows
   which command is answered wrongly.
+- **A Windows ARM64 Fyne binary always asks for OpenGL ES, and cannot be
+  built to ask for anything else.** Verified in fyne v2.6.3 in the module
+  cache. `internal/painter/gl/gl_es.go` is selected by
+  `(gles || arm || arm64) && !android && !ios && !mobile && !darwin && !wasm`,
+  and `gl_core.go` carries an explicit `!arm64`, so **no build tag can select
+  desktop GL on arm64**. `internal/driver/glfw/glfw_es.go:8` then asks GLFW
+  for `ClientAPI = OpenGLESAPI` at version 2.0. The constraint keys on
+  architecture rather than platform, which is right for ARM SBCs and mobile
+  and wrong for Windows-on-ARM: there it means requesting a GLES context
+  through **WGL**, which needs the display driver to expose
+  `WGL_EXT_create_context_es2_profile`. On Windows, GLES normally arrives via
+  ANGLE's EGL instead.
+  **Ruled out by test: bundling ANGLE next to the executable does not help.**
+  With `libEGL.dll` in the same directory the error still named WGL, because
+  GLFW never consults EGL unless asked. It needs
+  `glfw.WindowHint(glfw.ContextCreationAPI, glfw.EGLContextAPI)`, which
+  `glfw_es.go` never sets. Both symbols exist in the binding we already
+  depend on (`go-gl/glfw/v3.3`, `window.go:89` and `:132`), so the fix is one
+  line upstream in Fyne and nothing in zx_go.
 - **The bootable SD image is FAT32.** An older FAT16 builder never booted.
 - **The 128K BASIC launch bug is closed** (Multiface-3 `$7F3F`/`$1F3F`
   paging readback, Layer 2 `$123B` readback, zero-filled cold RAM). Do not

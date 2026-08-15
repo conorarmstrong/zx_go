@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/conorarmstrong/zx_go/pkg/version"
-	"golang.org/x/term"
 )
 
 // ANSI colors. Empty strings when colors are disabled.
@@ -83,7 +82,7 @@ var (
 // scoped logger can derive one via logger.With(...).
 func Setup(level slog.Level) *slog.Logger {
 	w := os.Stderr
-	useColor := term.IsTerminal(int(w.Fd()))
+	useColor := colorEnabled(w.Fd())
 	h := newHandler(w, level, useColor)
 	logger := slog.New(h)
 	slog.SetDefault(logger)
@@ -108,20 +107,30 @@ func (b stdLogBridge) Write(p []byte) (int, error) {
 }
 
 // Banner prints the ZX_Go startup banner to stderr in Spectrum
-// rainbow stripes. No-op when stderr is not a TTY.
+// rainbow stripes. No-op when stderr is not a TTY. A console that
+// cannot interpret ANSI still gets the banner, in plain text.
 func Banner() {
-	w := os.Stderr
-	if !term.IsTerminal(int(w.Fd())) {
+	fd := os.Stderr.Fd()
+	if !isTerminal(fd) {
 		return
 	}
-	renderBanner(w)
+	p := off
+	if colorEnabled(fd) {
+		p = on
+	}
+	renderBannerWith(os.Stderr, p)
 }
 
 // renderBanner writes the rainbow startup banner to w. Split out
 // from Banner so the rendering can be exercised without a TTY (the
 // os.Stderr TTY gate makes Banner itself a no-op under `go test`).
 func renderBanner(w io.Writer) {
-	p := on
+	renderBannerWith(w, on)
+}
+
+// renderBannerWith writes the startup banner to w using palette p,
+// which is `off` when the console cannot render escape sequences.
+func renderBannerWith(w io.Writer, p palette) {
 	// 5-line ASCII art for "ZX_Go" with Spectrum rainbow stripes
 	// on each row. Each stripe row uses a different palette colour
 	// so the banner shimmers like a power-on screen.

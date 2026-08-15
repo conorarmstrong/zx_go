@@ -127,3 +127,8 @@ cmd/zx_go/oracle_test.go
 # shipped test suite).
 cmd/zx_go/tzxload_test.go
 pkg/testharness/testdata/local_titles.tsv
+
+# Local title corpora used for screening. User-supplied game images, never
+# redistributable and far too large for the repository.
+ZX Spectrum - Super Collection*/
+SpecNext_Games/

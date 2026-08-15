@@ -203,7 +203,7 @@ Grab the latest from the [Releases](https://github.com/conorarmstrong/zx_go/rele
 
 On macOS/Linux: `tar xzf zx_go-macos-arm64.tar.gz && ./zx_go-macos-arm64`. On Windows: unzip and double-click the `.exe`.
 
-The Windows ARM64 build is marked experimental: it compiles and publishes, but its OpenGL path has not been exercised on real Windows-on-ARM hardware. Reports either way are welcome.
+The Windows ARM64 build is marked experimental. The emulator core is proven there: a headless run under an ARM64 Windows 11 guest matched an x64 reference exactly, down to the instruction count and a byte-identical screen. What is still untested is the window. On arm64 our GUI toolkit always requests an OpenGL ES 2.0 context through WGL, and whether a Qualcomm display driver grants that is the open question. If it does not, you will see `WGL: Failed to create OpenGL ES context` and no window; see [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) for the full diagnosis. Reports either way are welcome, and the headless mode (`--headless`) works regardless.
 
 The classic ROMs (48K → +3, plus the DISCiPLE / Multiface / Interface 1 peripheral ROMs) are **embedded in the binary** — nothing to install for those modes.
 
