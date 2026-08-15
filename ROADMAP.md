@@ -178,9 +178,22 @@ remaining gap.
   voids most of these as ANIMATED rather than calling them divergences, and the
   reliable move is to read the PNGs `-keep` writes.
 
-  What would actually fix it is comparing a *sequence* of samples and asking
-  whether the reference's screen appears anywhere in ours — phase-tolerant
-  matching. Not built; noted so it is not rediscovered.
+  **Phase-tolerant matching is built** (`_tools/refdiff`): each side samples
+  `cycleSamples = 12` screens `cycleStepT` apart after the compared one,
+  spanning 36 s, and `bestCrossMatch` asks whether either machine's screen
+  appears anywhere in the other's sequence. A hit within `phaseMatchPct = 0.5`
+  reports the verdict `PHASE` instead of `DIVERGES`.
+
+  It is unit-tested as of 2026-08-15 (`_tools/refdiff/phase_test.go`, five
+  mutations verified), and the tests that carry the weight are the negative
+  ones: the search is 169 pairings, so the guard against inventing a rescue
+  from unrelated screens matters more than the rescue itself. The ordering is
+  pinned deliberately: `PHASE` outranks `ANIMATED`, because an attract cycle is
+  moving by definition and requiring stillness would void every case the
+  verdict exists for, but it never outranks `RESET`, `LOADING`, `CUSTOM`,
+  `SPLIT` or `BLANK`. Two blank screens cross-match perfectly and mean nothing.
+
+  **Not yet validated end to end**, which needs a reference-emulator run.
 
   Two counts still disagree for a structural reason rather than a fault: ours
   is blocks the guest read, the reference's is entries into the ROM loader, and
@@ -216,7 +229,13 @@ remaining gap.
 
 **The Next half now exists.** `TestNexloadSDGames` (cmd/zx_go) drives every
 `.nex` on the SD card through the genuine NextZXOS NEXLOAD path — the only one
-that can host a title calling the OS at runtime. **All 12 launch and render.**
+that can host a title calling the OS at runtime. **All 12 launch and render**,
+re-confirmed at v1.9.0 on 2026-08-15.
+
+`SpecNext_Games/` is a **download staging area, not a backlog**. Everything in
+it is already installed under `roms/next/sd/games/Next/` and already counted in
+the figures above, so a title sitting there unscreened is not evidence of
+unscreened work. Check the SD card before concluding otherwise.
 
 **Every Next game on the SD card is now accounted for**: every title directory
 holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
