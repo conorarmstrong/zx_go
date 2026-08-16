@@ -40,8 +40,10 @@ import (
 //     over sprites 0..127, so there is no anchor to carry between lines.
 //   - The NR$19 clip-window write index — which of x1/x2/y1/y2 the next write
 //     lands in. It is not the engine's: it lives in the clipWindow helper in
-//     pkg/next/wire.go, which pushes finished coordinate sets down through
-//     SetClip, so the engine never sees a partial one. That helper is
+//     pkg/next/wire.go, which pushes coordinates down through SetClip on
+//     EVERY write, not on a completed set, so the engine DOES see partial
+//     coordinate sets mid-sequence — the clipped extent is simply whatever
+//     has been written so far. That helper is
 //     pkg/next's ClipWindows, which captures the index — and the other three
 //     layers' NR$18/$1A/$1B state — under "next.clipwindows".
 //

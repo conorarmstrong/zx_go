@@ -30,7 +30,7 @@ go build ./...
 
 The binary launches with the bundled 48K ROM. Switch models via the
 `Machine` menu. Drop a `.tap`, `.tzx`, `.z80`, `.sna`, `.szx`, `.rzx`,
-`.opd`, `.nex`, `.p` or `.o` onto the window, or use `File → Open File…`,
+`.p` or `.o` onto the window, or use `File → Open File…`,
 which routes on the extension. Disks, microdrive cartridges and IF2 ROMs
 (`.dsk`, `.mgt`, `.trd`, `.mdr`, `.rom`) are inserted from their own
 File-menu items instead.

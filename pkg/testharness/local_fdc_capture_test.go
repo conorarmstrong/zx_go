@@ -289,9 +289,30 @@ func TestLocalPlus3LoadResumesFromAMidLoadCapture(t *testing.T) {
 					// the same wrong place twice, a lost restore does.
 					again := rig.replay(t, captured)
 					if len(differingDevices(replayed, again)) > 0 {
-						t.Skipf("this title replays differently every time, which is weak sectors "+
-							"rather than a lost restore — every read of a weak byte is fresh "+
-							"randomness. It cannot be used as evidence either way.%s", unprovenTail)
+						// Two replays of one capture disagreeing points at
+						// weak sectors, because a lost restore is
+						// deterministic and lands in the same wrong place
+						// every time.
+						//
+						// That reasoning is sound and it is NOT enough to
+						// skip on. Any other source of nondeterminism reaches
+						// this branch too, and an adversarial review found it
+						// firing on genuine capture defects — a silent skip
+						// turned a real failure into a pass. So the default is
+						// now to FAIL, and a title actually known to carry
+						// weak sectors must be named explicitly.
+						if os.Getenv("ZX_GO_FDC_WEAK_SECTORS") != tc.name {
+							t.Fatalf("resuming this load produced a different machine on each "+
+								"replay (%v). That is usually weak sectors, but it is also what a "+
+								"capture defect looks like when the missing state feeds "+
+								"nondeterminism, so it is NOT treated as an excuse. If this title "+
+								"genuinely has weak sectors, re-run with "+
+								"ZX_GO_FDC_WEAK_SECTORS=%q to record that judgement explicitly.%s",
+								differingDevices(replayed, again), tc.name, unprovenTail)
+						}
+						t.Skipf("%s is recorded as a weak-sector title via "+
+							"ZX_GO_FDC_WEAK_SECTORS, so its replay difference is not evidence "+
+							"either way.%s", tc.name, unprovenTail)
 					}
 					t.Fatalf("resuming a real load from a capture taken mid-command (MSR %02X) ran "+
 						"into a different machine: %v differ after the same %d frames. The capture "+

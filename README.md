@@ -135,7 +135,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 | Audio capture | `.wav` | — | ✓ | Record emulator output |
 | Screenshot | `.png` | — | ✓ | Any model / Next video mode |
 
-`File → Open File…` (and dropping a file on the window) routes by extension: `.tap` `.tzx` `.z80` `.sna` `.szx` `.rzx` `.opd` `.nex` `.p` `.81` `.o` `.80` all load this way. The disk, microdrive and cartridge formats — `.dsk` `.mgt` `.trd` `.mdr` `.rom` — go through their own File-menu items, because inserting one is a per-drive choice rather than a load.
+`File → Open File…` (and dropping a file on the window) routes by extension. Verified against `loadFileByPath` in `cmd/zx_go/main.go`, it handles exactly `.tap` `.tzx` `.z80` `.sna` `.szx` `.p` `.81` `.o` `.80`. Everything else — the disk, microdrive and cartridge formats, and also `.rzx`, `.opd` and `.nex` — has its own File-menu item, because inserting or recording is a per-device choice rather than a load.
 
 ---
 

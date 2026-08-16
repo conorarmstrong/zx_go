@@ -6,6 +6,18 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.10.0]
+
+A minor release: the machine can now be rewound and re-executed, and the
+documentation was audited against the code rather than trusted.
+
+Two things are worth reading before the list. Every capture in the tree is
+mutation-verified — each field restore was deleted in turn and the tests had to
+fail for a real assertion — because an audit found 39 of 144 restores could be
+removed with everything still green. And 180 documented claims were checked
+against the code, of which about 60 were false; the corrections are throughout
+this entry rather than gathered in one place.
+
 ### Added
 
 - **Reverse debugging, on both surfaces.** Step and run backwards through
@@ -111,10 +123,15 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outlives the port write that set it, and captures are taken at instruction
   boundaries. Removed, with `TestFormatFailNeverOutlivesTheCommandThatSetsIt`
   as the defence: removing a captured field is a claim needing the same rigour
-  as adding one. It was the one survivor of an audit of all 278 field restores
-  in the tree, which `_tools/mutaudit/fullaudit.sh` (local-only) reported at
-  277/277 killed afterwards, against a green baseline and with no invalid
-  results.
+  as adding one. It was the one survivor of an audit of 278 field restores, which
+  `_tools/mutaudit/fullaudit.sh` (local-only) reported at 277/277 killed
+  afterwards, against a green baseline and with no invalid results.
+
+  A review caught that "all" overstated it: the sweep globbed `pkg/*/state.go`
+  and `pkg/next/*/state.go`, which misses `pkg/ula/tapestate.go` and
+  `pkg/next/state.go` — the tape and clip-window devices added in the same
+  release. Both were audited separately and are 8/8 and 10/10, so the coverage
+  is real; the claim was narrower than it read. The glob now matches them.
 - **Four ways the `PHASE` verdict could report agreement it had not earned.**
   `PHASE` rescues a pair the pointwise comparison rejected, by asking whether
   either machine's screen appears anywhere in the other's sampled sequence, so

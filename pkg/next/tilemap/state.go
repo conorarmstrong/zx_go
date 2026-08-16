@@ -25,8 +25,10 @@ import (
 //     16 KB banks into every rewind point.
 //   - The NR$1B clip-window write index — which of x1/x2/y1/y2 the next write
 //     lands in — is not the layer's. It lives in the clipWindow helper inside
-//     pkg/next/wire.go, which pushes finished coordinate sets down through
-//     SetClip; the layer never sees a partial one. That helper is pkg/next's
+//     pkg/next/wire.go, which pushes coordinates down through SetClip on
+//     EVERY write, not on a completed set, so the layer DOES see partial
+//     coordinate sets mid-sequence — the clipped extent is simply whatever
+//     has been written so far. That helper is pkg/next's
 //     ClipWindows, which captures the index — and the other three layers'
 //     NR$18/$19/$1A state — under "next.clipwindows".
 //   - NR$4C, the tilemap transparency index, is the compositor's: it decides
