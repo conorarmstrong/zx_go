@@ -47,7 +47,21 @@ type ayState struct {
 }
 
 // StateID identifies the chip in a captured machine state.
-func (a *AY) StateID() string { return "ay" }
+//
+// A machine has more than one AY: the Next's TurboSound Engine holds three and
+// a classic ULA has its own. A constant here would make registering them a
+// panic rather than a capture, so the identifier is per instance. The default
+// suits the single classic chip; the Engine names its own.
+func (a *AY) StateID() string {
+	if a.stateID == "" {
+		return "ay"
+	}
+	return a.stateID
+}
+
+// SetStateID gives this chip a distinct identifier, for machines holding more
+// than one.
+func (a *AY) SetStateID(id string) { a.stateID = id }
 
 // SaveState captures the complete generator state.
 func (a *AY) SaveState() []byte {
@@ -77,21 +91,39 @@ func (a *AY) SaveState() []byte {
 
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
-		// Encoding a struct of fixed-size values cannot fail for any reason
-		// the caller could act on, and returning an error here would push a
-		// dead branch into every caller.
-		panic("ay: encoding state: " + err.Error())
+		// Encoding fixed-size values cannot fail in practice, but this runs
+		// from the CPU pre-fetch hook that drives capture, and that path
+		// deliberately skips a failed capture rather than stopping the
+		// machine. Panicking here would take the emulator down mid-frame for
+		// something the caller already knows how to survive. A nil blob is
+		// rejected by LoadState, so a bad capture surfaces as a failed
+		// restore instead of a crash.
+		return nil
 	}
 	return buf.Bytes()
 }
 
 // LoadState restores a state captured by SaveState.
 func (a *AY) LoadState(b []byte) error {
+	if len(b) == 0 {
+		return fmt.Errorf("ay: empty state (the capture failed)")
+	}
 	var s ayState
 	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
 		return fmt.Errorf("ay: decoding state: %w", err)
 	}
 
+	a.apply(s)
+	return nil
+}
+
+// apply writes a decoded state into the chip. Split out so the TurboSound
+// engine can decode all three chips before applying any of them: a malformed
+// blob must not leave one generator rewound and another running on.
+//
+// Takes the chip lock itself, because the engine applies three chips from its
+// own goroutine and must not have to know about this one's locking.
+func (a *AY) apply(s ayState) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.regs = s.Regs
@@ -113,5 +145,4 @@ func (a *AY) LoadState(b []byte) error {
 	a.envHold = s.EnvHold
 	a.envAttack = s.EnvAttack
 	a.clockAccum = s.ClockAccum
-	return nil
 }

@@ -175,3 +175,67 @@ func (broken) SaveState() []byte { return []byte{1} }
 func (broken) LoadState([]byte) error {
 	return errBroken
 }
+
+// The package doc calls a half-restored machine "the worst outcome available
+// here": it runs, and the caller believes the rewind worked. check() validates
+// the device SET before anything is applied, but it cannot know whether each
+// blob will decode, so a device rejecting its state mid-loop left every
+// earlier device already restored.
+//
+// The earlier test asserted only that an error came back, which is exactly the
+// weaker claim the doc warns against.
+func TestAFailedRestoreLeavesEveryDeviceUntouched(t *testing.T) {
+	good := &fake{id: "aaa", state: []byte{1}}
+	r := New()
+	r.Register(good, &broken{}) // "fdc" sorts after "aaa", so good is applied first
+	snap := r.Capture()
+
+	good.state = []byte{9}
+
+	if err := r.Restore(snap); err == nil {
+		t.Fatal("a device that refuses its state must fail the restore")
+	}
+
+	// The property is the device's observable STATE, not how many times
+	// LoadState was called. Rolling back necessarily calls it again, so a
+	// call-count assertion would only be satisfiable by a design that can
+	// validate every blob without touching a device, which the Device
+	// interface deliberately does not offer.
+	if !bytes.Equal(good.state, []byte{9}) {
+		t.Errorf("device %q holds %v after a failed restore, want its pre-restore value [9]: "+
+			"the machine was left half-rewound", good.id, good.state)
+	}
+}
+
+// And the rollback has to be real rather than incidental: a device restored
+// before the failure must come back to its pre-restore value, not to the value
+// the snapshot carried.
+func TestARolledBackDeviceDoesNotKeepTheSnapshotValue(t *testing.T) {
+	good := &fake{id: "aaa", state: []byte{1}}
+	r := New()
+	r.Register(good, &broken{})
+	snap := r.Capture() // captures aaa = [1]
+
+	good.state = []byte{9}
+	_ = r.Restore(snap)
+
+	if bytes.Equal(good.state, []byte{1}) {
+		t.Error("device kept the snapshot value [1] after a failed restore: " +
+			"the failure was reported but the machine still moved")
+	}
+}
+
+// Size is documented as what bounds a rewind ring, so it has to agree with
+// what Bytes actually emits. Counting only the payload undercounts every
+// capture by the framing, and a ring sized against a memory budget would
+// exceed it.
+func TestSizeAgreesWithTheEncodedLength(t *testing.T) {
+	r := New()
+	r.Register(&fake{id: "cpu", state: make([]byte, 100)}, &fake{id: "ay", state: make([]byte, 7)})
+	s := r.Capture()
+
+	if got, want := s.Size(), len(s.Bytes()); got != want {
+		t.Errorf("Size() = %d but the encoding is %d bytes: a ring sized from Size() would "+
+			"hold %d bytes more than its budget per capture", got, want, want-got)
+	}
+}

@@ -77,10 +77,15 @@ func (s State) Bytes() []byte {
 }
 
 // Size is the total bytes held, which is what bounds a rewind ring.
+//
+// It counts the framing as well as the payload, matching what Bytes actually
+// emits. Counting only the blobs would undercount every capture by eight bytes
+// plus the device name per device, so a ring sized from this against a memory
+// budget would quietly exceed it.
 func (s State) Size() int {
 	n := 0
 	for _, e := range s.entries {
-		n += len(e.blob)
+		n += 8 + len(e.id) + len(e.blob)
 	}
 	return n
 }
@@ -144,19 +149,45 @@ func (r *Registry) Capture() State {
 	return st
 }
 
-// Restore returns every device to the captured state.
+// Restore returns every device to the captured state, all or nothing.
 //
-// The device set is checked in full before anything is applied, so a mismatch
-// leaves the machine untouched rather than half-rewound. A half-rewound
-// machine is the worst outcome available here: it runs, and the caller
-// believes the rewind worked.
+// A half-rewound machine is the worst outcome available here: it runs, and the
+// caller believes the rewind worked. Two things stand between us and one.
+//
+// The device set is checked in full before anything is applied, which catches
+// a state describing a different machine. That check cannot tell whether each
+// blob will actually decode, though, so a device rejecting its state part way
+// through the loop would leave every earlier device already restored. So the
+// current state is captured first and rolled back on failure.
+//
+// The rollback can itself fail, and that case is reported rather than hidden:
+// at that point the machine is genuinely inconsistent and the caller needs to
+// know it cannot keep running.
 func (r *Registry) Restore(s State) error {
 	if err := r.check(s); err != nil {
 		return err
 	}
-	for _, e := range s.entries {
+
+	rollback := r.Capture()
+	for i, e := range s.entries {
 		if err := r.devices[e.id].LoadState(e.blob); err != nil {
+			if rbErr := r.rollback(rollback, i); rbErr != nil {
+				return fmt.Errorf("machinestate: device %q refused its state (%w), "+
+					"AND the machine could not be rolled back: %v", e.id, err, rbErr)
+			}
 			return fmt.Errorf("machinestate: device %q refused its state: %w", e.id, err)
+		}
+	}
+	return nil
+}
+
+// rollback restores the first n devices of a previously captured state, which
+// is exactly the set Restore had already applied when it failed.
+func (r *Registry) rollback(prev State, n int) error {
+	for i := 0; i < n && i < len(prev.entries); i++ {
+		e := prev.entries[i]
+		if err := r.devices[e.id].LoadState(e.blob); err != nil {
+			return fmt.Errorf("device %q: %w", e.id, err)
 		}
 	}
 	return nil

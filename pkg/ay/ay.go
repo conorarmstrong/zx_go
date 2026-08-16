@@ -91,6 +91,10 @@ var volTableAy = [16]byte{
 type AY struct {
 	mu sync.Mutex
 
+	// stateID distinguishes this chip in a captured machine state. Empty
+	// means the default; see StateID in state.go.
+	stateID string
+
 	// 16 hardware registers
 	regs [NumRegisters]byte
 
