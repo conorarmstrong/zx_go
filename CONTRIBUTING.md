@@ -167,6 +167,27 @@ should land all the test, doc, and code changes for that fix.
 **No co-authored-by trailers.** This repo doesn't attribute commits
 to AI tooling.
 
+### Ignoring files
+
+`.gitignore` is tracked, so it is published. Naming a directory in it tells
+everyone reading the repository what is on your disk — this repo shipped the
+titles of a local game collection that way for a while before anyone noticed.
+
+So there are two places, and the split is by audience:
+
+- **`.gitignore`** — things every clone must ignore, because they protect the
+  repository rather than you. `/roms/next/` (licensed NextZXOS ROMs that must
+  never be committed to an MIT tree), `/_tools/`, `games/`, build output.
+- **`.git/info/exclude`** — anything specific to your machine. Same syntax,
+  lives inside `.git/`, never pushed. Your media collections, scratch files,
+  debug screenshots.
+
+If in doubt: would a stranger cloning this repo have that path? If not, it goes
+in `.git/info/exclude`.
+
+Note that moving an entry between the two does not remove it from history. Check
+before committing, not after.
+
 ## Adding a ULA / hardware test
 
 The harness lives in `pkg/testharness`. Most existing tests follow
