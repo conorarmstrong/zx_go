@@ -110,7 +110,6 @@ type fdcState struct {
 	FormatNumSec  byte
 	FormatFiller  byte
 	FormatCHRN    []byte
-	FormatFail    bool
 
 	HeadPos    [4]int
 	PCN        [4]byte
@@ -134,6 +133,20 @@ type trackState struct {
 	Clocks []byte
 	Weak   []byte
 }
+
+// formatFail is deliberately NOT captured. It is cleared on entry to
+// execWriteIDByte, set while the track builder runs, read once to choose
+// ST1/IC, and cleared again before that function returns, so it never outlives
+// the single port write that delivers the final CHRN byte. Captures are taken
+// at instruction boundaries, so every reachable capture point sees false and
+// restoring it is a no-op.
+//
+// An independent mutation audit is what found it: it was the one field whose
+// restore could be deleted with every test still passing, and no fixture could
+// have moved it. What the guest can actually observe about a failed format is
+// ST1.ND in the result phase, and resultBuf IS captured.
+// TestFormatFailNeverOutlivesTheCommandThatSetsIt defends the removal, and
+// fails if a future change lets the flag survive a command.
 
 // StateID identifies the controller in a captured machine state.
 func (p *Plus3FDC) StateID() string { return "plus3fdc" }
@@ -184,7 +197,6 @@ func (f *UPD765) saveState() []byte {
 		FormatNumSec:  f.formatNumSec,
 		FormatFiller:  f.formatFiller,
 		FormatCHRN:    append([]byte(nil), f.formatCHRN...),
-		FormatFail:    f.formatFail,
 
 		HeadPos:    f.headPos,
 		PCN:        f.pcn,
@@ -263,7 +275,6 @@ func (f *UPD765) loadState(b []byte) error {
 	f.formatNumSec = s.FormatNumSec
 	f.formatFiller = s.FormatFiller
 	f.formatCHRN = s.FormatCHRN
-	f.formatFail = s.FormatFail
 
 	f.headPos = s.HeadPos
 	f.pcn = s.PCN

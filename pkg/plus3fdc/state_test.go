@@ -956,3 +956,54 @@ func stagingEqual(a, b trackState) bool {
 		a.BPT == b.BPT && bytes.Equal(a.Data, b.Data) &&
 		bytes.Equal(a.Clocks, b.Clocks) && bytes.Equal(a.Weak, b.Weak)
 }
+
+// formatFail is the one field in this capture that no fixture can move, and an
+// independent mutation audit caught it surviving deletion after this package
+// was reported at 100%.
+//
+// It is not a fixture problem. execWriteIDByte clears it on entry
+// (upd765.go:1366), sets it while building the track, reads it once to choose
+// ST1/IC, and clears it again before returning (upd765.go:1425). It never
+// outlives the single port write that drives the final CHRN byte, and captures
+// are taken at instruction boundaries, so every reachable capture point sees
+// false.
+//
+// That makes capturing it dead weight: the value is constant, and restoring it
+// is a no-op. Removing it from the capture is the honest fix, but removing a
+// field is a claim that needs defending, so this test IS the defence. If a
+// future change lets formatFail outlive a command, this fails and the field has
+// to go back into the capture.
+func TestFormatFailNeverOutlivesTheCommandThatSetsIt(t *testing.T) {
+	// A format that FAILS is the case that sets it. Drive one and confirm the
+	// flag is already clear by the time the result phase is readable.
+	p := primedMidFormat(t)
+	_ = driveFormatForward(t, p)
+
+	if p.fdc.formatFail {
+		t.Error("formatFail outlived a completed format: it is observable machine state " +
+			"after all, and must be restored by LoadState")
+	}
+
+	// And after a format engineered to overflow the track builder, which is the
+	// path that SETS it. 32 sectors of N=2 cannot fit a track, so the builder
+	// runs out of room part way through.
+	q := New()
+	q.fdc.AttachDisk(0, loadTestDisk(t))
+	tp := newTape(t, q)
+	tp.seek(1)
+	tp.cmd(0x4D, 0x00, 0x02, 32, 0x54, 0xAA) // 32 sectors of 512 bytes: will not fit
+	for r := byte(1); r <= 32; r++ {
+		tp.cmd(1, 0, r, 2)
+	}
+	// Inspect the result phase BEFORE draining it: tp.out is the whole port
+	// transcript, not the result bytes.
+	if q.fdc.formatFail {
+		t.Error("formatFail outlived a FAILED format, which is the path that sets it")
+	}
+	// The failure must still be visible where it belongs: in the result bytes,
+	// which ARE captured. Losing the flag loses nothing the guest can see.
+	res := q.fdc.resultBuf
+	if len(res) < 2 || res[1]&st1ND == 0 {
+		t.Errorf("a failed format must report ST1.ND in the result phase, got % 02X", res)
+	}
+}
