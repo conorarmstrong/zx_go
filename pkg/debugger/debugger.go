@@ -145,6 +145,32 @@ type Debugger struct {
 	irqLine  *canvas.Text
 	haltLine *canvas.Text
 
+	// Panel headers, retained so reverse mode can relabel them. A user
+	// who scrolls past the banner still has to be able to tell, from
+	// the panel itself, that it is showing a recording.
+	regHeader  *canvas.Text
+	dasmHeader *canvas.Text
+	hexHeader  *canvas.Text
+	// revBanner is the top-of-window warning that the panels are
+	// showing a recorded instant rather than the live machine.
+	revBanner *canvas.Text
+
+	// histRing is the SHARED M1-fetch ring — the same *History the
+	// History tab, the heatmap and the telnet `history` command read.
+	// Reverse mode walks it and owns no buffer of its own, so what can
+	// be stepped back through is exactly what those surfaces list.
+	histRing *History
+
+	// rev is the reverse-debugging cursor, non-nil ONLY while the
+	// panels are showing the past. Every panel's "am I looking at
+	// history?" is that one nil check, so there is no second flag to
+	// fall out of step with it.
+	rev *ReverseCursor
+
+	// revW is the reverse-debugging control panel, backed by the
+	// Debugger itself.
+	revW *ReverseWidget
+
 	// Lists for scrollable, tappable content
 	dasmList  *widget.List
 	dasmCache []DisassembledLine
@@ -293,6 +319,12 @@ func (d *Debugger) SetHistory(h *History) {
 	if d.heatmapW != nil {
 		d.heatmapW.SetHistory(h)
 	}
+	// Reverse mode walks this same ring. Rewiring it invalidates any
+	// cursor into the old one, so the panels go back to the live
+	// machine rather than keep showing instants from a buffer nothing
+	// is writing to any more.
+	d.histRing = h
+	d.rev = nil
 }
 
 // SetBankAccessor wires the visual bank-inspector widget to a
@@ -372,6 +404,10 @@ func (d *Debugger) Show() {
 func (d *Debugger) Refresh() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// Chrome first: the panels below decide what to render from the
+	// cursor, and the headers have to agree with them on every tick,
+	// not only on the tick the user pressed a button.
+	d.refreshReverseChrome()
 	d.refreshRegisters()
 	d.refreshDisassembly()
 	d.refreshHex()
@@ -599,6 +635,13 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.haltLine = mkText(colHalted)
 	d.statusTxt = mkText(colPaused)
 
+	// Panel headers are retained rather than inlined so reverse mode can
+	// relabel them (see refreshReverseChrome).
+	d.regHeader = headerText(hdrRegistersLive, colRegName)
+	d.dasmHeader = headerText(hdrDasmLive, colMnem)
+	d.hexHeader = headerText(hdrMemoryLive, colAddr)
+	d.revBanner = mkText(colPast)
+
 	// Register panel
 	regBox := container.NewVBox()
 	for i := range d.regLines {
@@ -612,7 +655,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	regScroll := container.NewVScroll(regBox)
 	regScroll.SetMinSize(fyne.NewSize(150, 0))
 	regPanel := panelBG(container.NewBorder(
-		container.NewVBox(headerText("  REGISTERS", colRegName), widget.NewSeparator()),
+		container.NewVBox(d.regHeader, widget.NewSeparator()),
 		nil, nil, nil, regScroll,
 	))
 
@@ -628,46 +671,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			t := o.(*canvas.Text)
-			if id >= len(d.dasmCache) {
-				t.Text = ""
-				t.Refresh()
-				return
-			}
-			line := d.dasmCache[id]
-			isPC := line.Addr == d.cpu.PC
-			_, isBP := d.bps.Lookup(line.Addr)
-
-			prefix := "  "
-			if isPC && isBP {
-				prefix = "*>"
-			} else if isPC {
-				prefix = "> "
-			} else if isBP {
-				prefix = "* "
-			}
-
-			hexStr := ""
-			for _, b := range line.Bytes {
-				hexStr += fmt.Sprintf("%02X ", b)
-			}
-			for len(hexStr) < 12 {
-				hexStr += "   "
-			}
-			op := line.Mnem
-			if line.Operand != "" {
-				op += " " + line.Operand
-			}
-			t.Text = fmt.Sprintf("%s%04X  %s%s", prefix, line.Addr, hexStr, op)
-
-			if isPC && isBP {
-				t.Color = colBPHit
-			} else if isPC {
-				t.Color = colPC
-			} else if isBP {
-				t.Color = colBP
-			} else {
-				t.Color = colMnem
-			}
+			t.Text, t.Color = d.dasmRowText(int(id))
 			t.Refresh()
 		},
 	)
@@ -691,7 +695,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	}
 
 	dasmPanel := panelBG(container.NewBorder(
-		container.NewVBox(headerText("  DISASSEMBLY  (tap to toggle breakpoint)", colMnem), widget.NewSeparator()),
+		container.NewVBox(d.dasmHeader, widget.NewSeparator()),
 		nil, nil, nil, d.dasmList,
 	))
 
@@ -709,34 +713,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			t := o.(*canvas.Text)
-			addr := uint16(id) * 16
-			var sb strings.Builder
-			fmt.Fprintf(&sb, "%04X  ", addr)
-			ascii := ""
-			hasPC := false
-			for col := 0; col < 16; col++ {
-				a := addr + uint16(col)
-				b := d.mem.Read(a)
-				if a == d.cpu.PC {
-					hasPC = true
-				}
-				fmt.Fprintf(&sb, "%02X ", b)
-				if col == 7 {
-					sb.WriteByte(' ')
-				}
-				if b >= 0x20 && b < 0x7F {
-					ascii += string(rune(b))
-				} else {
-					ascii += "."
-				}
-			}
-			sb.WriteString(" |" + ascii + "|")
-			t.Text = sb.String()
-			if hasPC {
-				t.Color = colPC
-			} else {
-				t.Color = colHex
-			}
+			t.Text, t.Color = d.hexRowText(int(id))
 			t.Refresh()
 		},
 	)
@@ -773,7 +750,7 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 
 	hexPanel := panelBG(container.NewBorder(
 		container.NewVBox(
-			container.NewHBox(headerText("  MEMORY", colAddr), widget.NewLabel("  Addr:"), hexAddrSized, baseSized),
+			container.NewHBox(d.hexHeader, widget.NewLabel("  Addr:"), hexAddrSized, baseSized),
 			widget.NewSeparator(),
 		), nil, nil, nil, d.hexList,
 	))
@@ -815,6 +792,10 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 
 	// Time-travel widget — wired by SetTimeTravel.
 	d.ttW = NewTimeTravelWidget(nil)
+
+	// Reverse-debugging controls. The Debugger is its own backend: the
+	// cursor it drives is the one every panel renders from.
+	d.revW = NewReverseWidget(d)
 
 	// NextReg arbitrary read/write — SetNextRegAccessor later.
 	d.nextRegW = NewNextRegWidget(nil)
@@ -881,6 +862,10 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 			container.NewVBox(headerText("  TIME TRAVEL", colRegName), widget.NewSeparator()),
 			nil, nil, nil, d.ttW.Root(),
 		))),
+		container.NewTabItemWithIcon("Reverse", theme.MediaFastRewindIcon(), panelBG(container.NewBorder(
+			container.NewVBox(headerText("  REVERSE DEBUGGING", colRegName), widget.NewSeparator()),
+			nil, nil, nil, d.revW.Root(),
+		))),
 		container.NewTabItemWithIcon("Palette", theme.ColorPaletteIcon(),
 			panelBG(d.paletteView.Root())),
 		container.NewTabItemWithIcon("Sprites", theme.GridIcon(),
@@ -913,8 +898,11 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	mainSplit := container.NewVSplit(topRow, bottomRow)
 	mainSplit.SetOffset(0.52)
 
+	// The reverse banner sits between the toolbar and the panes: empty
+	// while the live machine is on screen, and directly above the panels
+	// it is warning about when it is not.
 	return container.NewBorder(
-		container.NewVBox(d.buildControls(), widget.NewSeparator()),
+		container.NewVBox(d.buildControls(), d.revBanner, widget.NewSeparator()),
 		container.NewVBox(widget.NewSeparator(), panelBG(d.statusTxt)),
 		nil, nil, mainSplit,
 	)
@@ -974,12 +962,14 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 		d.Refresh()
 	})
 	stepBtn := widget.NewButtonWithIcon("Step", theme.MediaSkipNextIcon(), func() {
+		d.leaveReverseForLiveAction()
 		if d.onStep != nil {
 			d.onStep()
 		}
 		d.Refresh()
 	})
 	stepOverBtn := widget.NewButtonWithIcon("Step Over", theme.MediaFastForwardIcon(), func() {
+		d.leaveReverseForLiveAction()
 		switch {
 		case d.onStepOver != nil:
 			d.onStepOver()
@@ -989,11 +979,13 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 		d.Refresh()
 	})
 	runBtn := widget.NewButtonWithIcon("Run", theme.MediaPlayIcon(), func() {
+		d.leaveReverseForLiveAction()
 		if d.onRun != nil {
 			d.onRun()
 		}
 	})
 	frameBtn := widget.NewButton("Step Frame", func() {
+		d.leaveReverseForLiveAction()
 		if d.onPause != nil {
 			d.onPause()
 		}
@@ -1006,15 +998,38 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 		d.hexList.ScrollTo(widget.ListItemID(int(d.hexAddr) / 16))
 		d.Refresh()
 	})
-	editBtn := widget.NewButton("Edit Regs...", func() { d.showEditDialog() })
-	writeBtn := widget.NewButton("Write Mem...", func() { d.showWriteDialog() })
+	// Both dialogs read and write the LIVE machine, so they must not open
+	// over a register dump from an instruction that is already over.
+	editBtn := widget.NewButton("Edit Regs...", func() {
+		d.leaveReverseForLiveAction()
+		d.showEditDialog()
+	})
+	writeBtn := widget.NewButton("Write Mem...", func() {
+		d.leaveReverseForLiveAction()
+		d.showWriteDialog()
+	})
 	clearBPBtn := widget.NewButton("Clear BPs", func() {
 		d.bps.Clear()
 		d.Refresh()
 	})
 
+	// Reverse controls. Stepping backwards is the action a user repeats,
+	// so it lives on the toolbar beside Step; the Reverse tab carries the
+	// rest, including run-back-to-a-condition.
+	revBackBtn := widget.NewButtonWithIcon("Step Back", theme.MediaFastRewindIcon(), func() {
+		d.reportReverse(d.ReverseStepBack())
+	})
+	revFwdBtn := widget.NewButton("Fwd", func() {
+		d.reportReverse(d.ReverseStepForward())
+	})
+	revPresentBtn := widget.NewButton("To Present", func() {
+		d.ExitReverse()
+	})
+
 	return container.NewHBox(
 		pauseBtn, stepBtn, stepOverBtn, frameBtn, runBtn,
+		widget.NewSeparator(),
+		revBackBtn, revFwdBtn, revPresentBtn,
 		widget.NewSeparator(),
 		pcBtn, editBtn, writeBtn,
 		widget.NewSeparator(),
@@ -1025,6 +1040,14 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 // --- Refresh ---
 
 func (d *Debugger) refreshRegisters() {
+	// While the cursor is in the past this panel renders the recording,
+	// not the CPU. The live values below would otherwise be read as the
+	// state at the instruction on screen, which they are not.
+	if e, ok := d.ReverseEntry(); ok {
+		d.refreshReverseRegisters(e)
+		return
+	}
+
 	set := func(i int, s string) {
 		d.regLines[i].Text = s
 		d.regLines[i].Refresh()
@@ -1088,23 +1111,129 @@ func (d *Debugger) refreshRegisters() {
 	d.haltLine.Refresh()
 }
 
+// dasmRowText renders one disassembly row: the text and the colour it is
+// drawn in. Split out of the list's update callback so the marker logic can be
+// tested without a shown window (the same reason BreakpointsWidget has
+// rowText), and because reverse mode has to mark the RECORDED PC rather than
+// the live one.
+func (d *Debugger) dasmRowText(id int) (string, color.Color) {
+	if id < 0 || id >= len(d.dasmCache) {
+		return "", colMnem
+	}
+	line := d.dasmCache[id]
+	isPC := line.Addr == d.displayPC()
+	_, isBP := d.bps.Lookup(line.Addr)
+
+	prefix := "  "
+	if isPC && isBP {
+		prefix = "*>"
+	} else if isPC {
+		prefix = "> "
+	} else if isBP {
+		prefix = "* "
+	}
+
+	hexStr := ""
+	for _, b := range line.Bytes {
+		hexStr += fmt.Sprintf("%02X ", b)
+	}
+	for len(hexStr) < 12 {
+		hexStr += "   "
+	}
+	op := line.Mnem
+	if line.Operand != "" {
+		op += " " + line.Operand
+	}
+	text := fmt.Sprintf("%s%04X  %s%s", prefix, line.Addr, hexStr, op)
+
+	switch {
+	case isPC && isBP:
+		return text, colBPHit
+	case isPC:
+		return text, colPC
+	case isBP:
+		return text, colBP
+	}
+	return text, colMnem
+}
+
+// hexRowText renders one memory row: the text and its colour.
+//
+// While the cursor is in the past the bytes are NOT shown. Memory is not
+// recorded per instruction, so the only bytes available are the ones in memory
+// now, and printing those beside a historical register dump presents two
+// different instants as one. The row keeps its address and says the bytes are
+// unavailable instead.
+func (d *Debugger) hexRowText(id int) (string, color.Color) {
+	addr := uint16(id) * 16
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%04X  ", addr)
+
+	if d.InReverse() {
+		for col := 0; col < 16; col++ {
+			sb.WriteString(hist8(0, false) + " ")
+			if col == 7 {
+				sb.WriteByte(' ')
+			}
+		}
+		sb.WriteString(" |memory not recorded|")
+		return sb.String(), colUnavail
+	}
+
+	ascii := ""
+	hasPC := false
+	for col := 0; col < 16; col++ {
+		a := addr + uint16(col)
+		b := d.mem.Read(a)
+		if a == d.cpu.PC {
+			hasPC = true
+		}
+		fmt.Fprintf(&sb, "%02X ", b)
+		if col == 7 {
+			sb.WriteByte(' ')
+		}
+		if b >= 0x20 && b < 0x7F {
+			ascii += string(rune(b))
+		} else {
+			ascii += "."
+		}
+	}
+	sb.WriteString(" |" + ascii + "|")
+	if hasPC {
+		return sb.String(), colPC
+	}
+	return sb.String(), colHex
+}
+
 func (d *Debugger) refreshDisassembly() {
 	// Always re-disassemble from live memory: PC is the common case
 	// that moves, but a paused-debugger memory write (Write Mem
 	// dialog, a poke via the bank inspector, self-modifying code)
 	// can change the bytes at the current PC without moving it, and
 	// the view must not show stale mnemonics.
-	d.dasmCache = Disassemble(d.mem.Read, d.cpu.PC, dasmRows)
+	//
+	// In reverse mode the ADDRESS comes from the recording and the
+	// BYTES still come from memory as it is now, because the recording
+	// holds no memory. That mixture is the best available and would be
+	// misleading unannounced, so the panel header says so.
+	d.dasmCache = Disassemble(d.mem.Read, d.displayPC(), dasmRows)
 	d.dasmList.Refresh()
 	// Scroll to show PC at top
 	d.dasmList.ScrollToTop()
 }
 
 func (d *Debugger) refreshHex() {
+	if d.hexList == nil {
+		return
+	}
 	d.hexList.Refresh()
 }
 
 func (d *Debugger) refreshStatus() {
+	if e, ok := d.ReverseEntry(); ok {
+		d.refreshReverseStatus(e)
+		return
+	}
 	paused := d.isPaused != nil && d.isPaused()
 	state := "RUNNING"
 	col := colRunning

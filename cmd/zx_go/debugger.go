@@ -236,6 +236,13 @@ type remoteDebugger struct {
 	// there's no hot-path cost).
 	history *debugger.History
 
+	// reverse is the cursor into the history ring while the debugger is
+	// walking backwards (`step-back` and friends). nil means "at the
+	// present": reads go to the live machine. Guarded by d.mu, which
+	// handleCommand holds for the whole of every command. Dropped
+	// whenever the machine runs forward — see commandsInvalidatingReverse.
+	reverse *debugger.ReverseCursor
+
 	// regWatches is the set of register-change watchpoints. Empty
 	// by default; populated via the `watch-reg` command. Evaluated
 	// on every M1 fetch by the BreakpointCheck hot path (guarded by
@@ -904,6 +911,15 @@ var commandsNeedingPause = map[string]bool{
 	"nmi":                  true,
 	"tt-snap":              true,
 	"tt-rewind":            true,
+	// Reverse debugging reads the M1 ring, whose contents shift under a
+	// running CPU: the cursor's distance from the newest entry would name
+	// a different instruction by the time the response is written.
+	// to-present is absent deliberately — it only drops debugger-local
+	// state and has no reason to stop a running machine.
+	"step-back":      true,
+	"step-forward":   true,
+	"run-back":       true,
+	"reverse-status": true,
 }
 
 func (d *remoteDebugger) handleCommand(line string) string {
@@ -923,9 +939,15 @@ func (d *remoteDebugger) handleCommand(line string) string {
 			return "ERR pause-ack timeout (CPU may be in a tight HALT or non-cooperative loop)"
 		}
 	}
+	// Letting the machine move forward invalidates a reverse cursor: the
+	// ring is overwritten underneath it. Dropped before the command runs,
+	// so its own output is read live.
+	if commandsInvalidatingReverse[cmd] {
+		d.reverse = nil
+	}
 	switch cmd {
 	case "help", "?":
-		return "OK pause set-pause-timeout break-on-sd continue step step-over get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
+		return "OK pause set-pause-timeout break-on-sd continue step step-over step-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
 	case "set-pause-timeout":
 		// Query form (no arg) reports the current value; otherwise set
 		// the pause-ack wait to N seconds. Used to await a `continue`
@@ -1030,7 +1052,22 @@ func (d *remoteDebugger) handleCommand(line string) string {
 			return "OK stepped"
 		}
 		return fmt.Sprintf("OK stepped %d", n)
+	case "step-back":
+		return d.cmdStepBack(args)
+	case "step-forward":
+		return d.cmdStepForward(args)
+	case "run-back":
+		return d.cmdRunBack(args)
+	case "to-present":
+		return d.cmdToPresent()
+	case "reverse-status":
+		return d.cmdReverseStatus()
 	case "get-registers", "regs":
+		// In reverse mode the dump is the recorded instant under the
+		// cursor, tagged so it cannot be misread as the live machine.
+		if s, ok := d.reverseRegisters(); ok {
+			return s
+		}
 		return "OK " + d.fmtRegisters()
 	case "get-stack", "stack":
 		return "OK " + d.fmtStackWalk()
@@ -1536,6 +1573,13 @@ func (d *remoteDebugger) cmdHistory(_ []string) string {
 	if d.history == nil {
 		return "ERR history disabled (relaunch with --debugger-history=N)"
 	}
+	// In reverse mode the ring stats come with the cursor's position and
+	// the instant under it, tagged so the reading is unambiguous.
+	if e, ok := d.reverseInstant(); ok {
+		return fmt.Sprintf("OK %s entries=%d capacity=%d cursor: %s",
+			d.reverseTag(), d.history.Len(), d.history.Capacity(),
+			fmtHistoryInstant(e, d.history.Wide()))
+	}
 	return fmt.Sprintf("OK entries=%d capacity=%d",
 		d.history.Len(), d.history.Capacity())
 }
@@ -1788,6 +1832,15 @@ func (d *remoteDebugger) cmdBacktrace(args []string) string {
 
 func (d *remoteDebugger) cmdDisasm(args []string) string {
 	addr := d.emu.cpu.PC
+	head := "OK"
+	// In reverse mode the default window follows the cursor, not the live
+	// PC. The BYTES are still read from memory as it is now — memory is
+	// not recorded per instruction — so the response says so rather than
+	// letting a historical PC imply a historical instruction stream.
+	if e, ok := d.reverseInstant(); ok {
+		addr = e.PC
+		head = fmt.Sprintf("OK %s (memory is read live, not recorded)", d.reverseTag())
+	}
 	count := 6
 	if len(args) >= 1 {
 		v, err := parseHex(args[0])
@@ -1807,7 +1860,7 @@ func (d *remoteDebugger) cmdDisasm(args []string) string {
 	read := func(a uint16) byte { return d.emu.mem.Read(a) }
 	lines := debugger.Disassemble(read, addr, count)
 	var b strings.Builder
-	b.WriteString("OK")
+	b.WriteString(head)
 	for _, l := range lines {
 		b.WriteString("\r\n  ")
 		b.WriteString(l.String())

@@ -426,6 +426,22 @@ Trailing whitespace is trimmed. Numbers larger than 16-bit error out.
 | `help` | `?` | Print the command list. |
 | `quit` | `exit` | Close this TCP connection. Other connections and the emulator stay running. |
 
+#### Reverse debugging
+
+Needs `--debugger-history=N`; add `--debugger-history-wide` to run backwards to a BC/DE/HL/IX/IY condition. See [Reverse debugging (the M1 history ring)](#reverse-debugging-the-m1-history-ring) for what the recording can and cannot answer.
+
+| Command | Aliases | Purpose | Response shape |
+| --- | --- | --- | --- |
+| `step-back [N]` | — | Move the cursor N instructions into the past (default 1). Running out of recorded history is an ERROR, not a clamp — the response names the reason and where the cursor actually came to rest, because a partial move announced as a success would leave you reading an instant you did not ask for. | `OK [REVERSE -N] insn=N $XXXX SP=$XXXX AF=$XXXX …` |
+| `step-forward [N]` | — | Move the cursor N instructions towards the present. Arriving at the present leaves reverse mode; stepping past it is an error, not a resume — use `continue` to run the machine. | `OK at the present (live machine); reverse mode off` |
+| `run-back EXPR` | — | Search backwards for the most recent EARLIER instant satisfying EXPR (breakpoint-condition grammar; the expression may be quoted). The search starts one instruction before the cursor, so a condition that is already true does not match immediately. A condition reading memory — or a register the ring never recorded — is **refused**, not evaluated against a zero. | `OK [REVERSE -N] insn=N …` / `ERR run-back: condition reads state that is not recorded per instruction …` |
+| `to-present` | — | Leave reverse mode and hand reads back to the live machine. | `OK left reverse mode (was -N); reads are live again` |
+| `reverse-status` | — | Whether reverse mode is active, how far back the cursor sits, how far back it could go, and the instant under it. | `OK reverse on [REVERSE -N]; ring entries=N capacity=N wide=BOOL oldest-reachable=-N; cursor: …` |
+
+While the cursor is away from the present, `get-registers`, `history` and `disassemble` read the instant UNDER THE CURSOR rather than the live CPU, and every such response is tagged `[REVERSE -N]`. `disassemble` follows the recorded PC but decodes memory as it is NOW — memory is not recorded per instruction, and the response says so.
+
+Any command that lets the machine move forward (`continue`, `step`, `step-over`, `forward`, `cold-reset`, `tt-rewind`) drops the cursor first: the ring is overwritten underneath it, so its distance from the newest entry stops naming the instruction you were reading.
+
 #### Inspection
 
 | Command | Aliases | Purpose | Response shape |
@@ -726,8 +742,11 @@ The implicit-pause set is:
 get-registers, regs, get-stack, stack, backtrace, bt, history,
 hist, prev, p, get-memory, mem, hexdump, read-memory, peek,
 write-memory, poke, disassemble, disasm, d, get-mmu, get-divmmc,
-nextreg-read, nr-r, bank-peek, bank-poke, load-bin, compare-foreign
+nextreg-read, nr-r, bank-peek, bank-poke, load-bin, compare-foreign,
+step-back, step-forward, run-back, reverse-status
 ```
+
+(`to-present` is deliberately absent: it only drops debugger-local state, so it has no reason to stop a running machine.)
 
 After an implicit pause, the CPU stays paused. Use `continue` to resume.
 

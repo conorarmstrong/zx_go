@@ -43,8 +43,13 @@ type FDC struct {
 	// Active Type II/III data transfer.
 	buf     []byte
 	bufPos  int
-	writing bool         // true while a Write Sector transfer is in flight
-	commit  func([]byte) // called with the completed write buffer
+	writing bool // true while a Write Sector transfer is in flight
+	// Where an in-flight write is headed, latched when the command was issued:
+	// the WD1793 finds the sector once, at the start, so a mid-transfer change
+	// to the drive/side/sector registers cannot redirect bytes already flowing.
+	// Kept as plain values rather than a completion closure because a closure
+	// is the one thing a state capture cannot encode.
+	wrDrive, wrCyl, wrSide, wrSec int
 }
 
 // NewFDC returns an idle controller with no disks mounted.
@@ -58,7 +63,6 @@ func (f *FDC) Reset() {
 	f.buf = nil
 	f.bufPos = 0
 	f.writing = false
-	f.commit = nil
 	f.cmdType1 = false
 	f.intrq = false
 }
@@ -223,8 +227,20 @@ func (f *FDC) writeSector() {
 	f.buf = make([]byte, SectorSize)
 	f.bufPos = 0
 	f.writing = true
-	f.commit = func(b []byte) { _ = disk.WriteSector(cyl, side, sec, b) }
+	f.wrDrive, f.wrCyl, f.wrSide, f.wrSec = f.drive, cyl, side, sec
 	f.statusReg = statusBusy | statusDRQ
+}
+
+// commitWrite lands a completed write transfer on the sector the command was
+// addressed to. The disk is looked up now instead of being latched with the
+// address, so a disk ejected mid-transfer takes no write; on real hardware
+// pulling the disk part-way through leaves the sector damaged in a way no
+// image format records, and dropping the write is the only unambiguous choice
+// available.
+func (f *FDC) commitWrite() {
+	if disk := f.disks[f.wrDrive]; disk != nil {
+		_ = disk.WriteSector(f.wrCyl, f.wrSide, f.wrSec, f.buf)
+	}
 }
 
 func (f *FDC) readAddress() {
@@ -256,7 +272,6 @@ func (f *FDC) forceInterrupt(byte) {
 	f.buf = nil
 	f.bufPos = 0
 	f.writing = false
-	f.commit = nil
 	if busy {
 		// Terminate the running command: clear Busy (and the data-request line
 		// that belonged to a Type II/III transfer); leave the rest unchanged.
@@ -304,9 +319,7 @@ func (f *FDC) WriteData(v byte) {
 	f.buf[f.bufPos] = v
 	f.bufPos++
 	if f.bufPos >= len(f.buf) {
-		if f.commit != nil {
-			f.commit(f.buf)
-		}
+		f.commitWrite()
 		f.endTypeII(0)
 	} else {
 		f.statusReg = statusBusy | statusDRQ
