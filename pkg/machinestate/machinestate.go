@@ -212,7 +212,14 @@ func (r *Registry) Restore(s State) error {
 	rollback := r.Capture()
 	for i, e := range s.entries {
 		if err := r.devices[e.id].LoadState(e.blob); err != nil {
-			if rbErr := r.rollback(rollback, i); rbErr != nil {
+			// i+1, not i: the device that FAILED is unwound too. A device is
+			// entitled to mutate itself before discovering the state is bad,
+			// and one that does would otherwise keep its half-applied bytes
+			// while every device around it was restored. Our own devices all
+			// decode before applying and cannot do this; the registry does not
+			// get to assume that of every device that will ever implement the
+			// interface.
+			if rbErr := r.rollback(rollback, i+1); rbErr != nil {
 				return fmt.Errorf("machinestate: device %q refused its state (%w), "+
 					"AND the machine could not be rolled back: %v", e.id, err, rbErr)
 			}

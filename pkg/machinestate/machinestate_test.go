@@ -239,3 +239,78 @@ func TestSizeAgreesWithTheEncodedLength(t *testing.T) {
 			"hold %d bytes more than its budget per capture", got, want, want-got)
 	}
 }
+
+// halfApplier fails its load, but only AFTER mutating itself. That is the case
+// the rollback did not cover: Restore unwound the devices applied BEFORE the
+// failure and left the failing device holding whatever it had written before
+// it gave up.
+//
+// Our own devices all decode fully before applying, so none of them can do
+// this. The registry cannot assume that of every device that will ever
+// implement the interface, and the cost of covering it is one more entry in a
+// loop that only runs on the failure path.
+type halfApplier struct {
+	state []byte
+	loads int
+}
+
+func (h *halfApplier) StateID() string   { return "zzz-half" } // sorts last
+func (h *halfApplier) SaveState() []byte { return append([]byte(nil), h.state...) }
+func (h *halfApplier) LoadState(b []byte) error {
+	h.loads++
+	if h.loads == 1 {
+		h.state = []byte{0xBA, 0xD1} // mutates first...
+		return errBroken             // ...then fails
+	}
+	// A later call carries the rollback blob, which is well-formed, so it
+	// succeeds. A device that failed EVERY load could not be unwound by
+	// anything and the registry reports that case separately.
+	h.state = append([]byte(nil), b...)
+	return nil
+}
+
+func TestAFailedRestoreAlsoUnwindsTheDeviceThatFailed(t *testing.T) {
+	good := &fake{id: "aaa", state: []byte{1}}
+	bad := &halfApplier{state: []byte{7}}
+	r := New()
+	r.Register(good, bad)
+	snap := r.Capture() // aaa=[1], zzz-half=[7]
+
+	good.state = []byte{9}
+	bad.state = []byte{8}
+
+	if err := r.Restore(snap); err == nil {
+		t.Fatal("a device that refuses its state must fail the restore")
+	}
+	if !bytes.Equal(good.state, []byte{9}) {
+		t.Errorf("earlier device = %v, want its pre-restore [9]", good.state)
+	}
+	if bytes.Equal(bad.state, []byte{0xBA, 0xD1}) {
+		t.Error("the failing device kept the half-applied bytes it wrote before erroring: " +
+			"a failed restore must unwind it too, not just the devices before it")
+	}
+	if !bytes.Equal(bad.state, []byte{8}) {
+		t.Errorf("failing device = %v, want its pre-restore [8]", bad.state)
+	}
+	if bad.loads < 2 {
+		t.Error("the failing device was never asked to unwind")
+	}
+}
+
+// The other half of the same story: a device that cannot be unwound at all
+// leaves the machine genuinely inconsistent, and that has to be reported
+// differently from a clean refusal. The caller can retry after the first; after
+// the second it cannot keep running.
+func TestAnUnwindableFailureIsReportedAsWorseThanARefusal(t *testing.T) {
+	r := New()
+	r.Register(&fake{id: "aaa", state: []byte{1}}, &broken{})
+	snap := r.Capture()
+
+	err := r.Restore(snap)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("could not be rolled back")) {
+		t.Errorf("a device that fails its own rollback must say the machine is inconsistent, got %q", err)
+	}
+}
