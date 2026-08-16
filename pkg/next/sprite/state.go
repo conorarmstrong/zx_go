@@ -41,9 +41,9 @@ import (
 //   - The NR$19 clip-window write index — which of x1/x2/y1/y2 the next write
 //     lands in. It is not the engine's: it lives in the clipWindow helper in
 //     pkg/next/wire.go, which pushes finished coordinate sets down through
-//     SetClip, so the engine never sees a partial one. NR$18/$1A/$1B carry the
-//     same state for the other three layers, and capturing it needs a Device on
-//     that helper.
+//     SetClip, so the engine never sees a partial one. That helper is
+//     pkg/next's ClipWindows, which captures the index — and the other three
+//     layers' NR$18/$1A/$1B state — under "next.clipwindows".
 //
 // attrExtended is captured and is currently redundant: WriteAttr can only have
 // it set while the byte cursor is parked at 4, and a write there advances to

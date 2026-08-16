@@ -38,12 +38,12 @@ checked, and where it falls short. Every figure below is in the repository.
 | **Z80 correctness** | Passes Frank Cringle's `zexdoc` **and** `zexall` exercisers — the documented *and* undocumented flag behaviour. The binaries are vendored; `go test ./pkg/z80` runs them. |
 | **Next hardware vs. the real FPGA** | A feature-by-feature [conformance matrix](VHDL_CONFORMANCE.md) against the `zxnext.vhd` core, with 32 entries recording what is validated, what is approximated, and why. |
 | **Rendering regressions** | 9 vendored programs, booted headless across 15 machine configurations and asserted **pixel-identical** to committed golden frames ([provenance and per-program results](pkg/testharness/testdata/corpus/CORPUS.md)). |
-| **Real software** | A [145-title compatibility manifest](docs/compatibility.md) covering tapes, snapshots, +3 disks and Next `.nex`, with the method and its limits stated per entry. |
-| **Spectrum Next games** | 9 of the 10 `.nex` games on a real NextZXOS SD card launch and render through the genuine NEXLOAD loader. |
-| **Breadth** | 2,942 test functions across 480 test files. |
+| **Real software** | A [158-title compatibility manifest](docs/compatibility.md) covering tapes, snapshots, +3 disks and Next `.nex`, with the method and its limits stated per entry. |
+| **Spectrum Next games** | All 12 `.nex` games on a real NextZXOS SD card launch and render through the genuine NEXLOAD loader (`TestNexloadSDGames`, which fails a title that renders nothing rather than only logging it). |
+| **Breadth** | 3,350 test functions across 536 test files. |
 
 **Where it falls short**, from that same manifest: 11 titles are known-broken,
-5 remain untested, and most entries are *Boots* — meaning the title's own code
+6 remain untested, and most entries are *Boots* — meaning the title's own code
 ran and drew its screen, not that it was played to completion. The Next's
 game compatibility is the youngest part of the project and is labelled as such
 throughout.
@@ -58,7 +58,7 @@ throughout.
 - 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Opus Discovery, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
 - 🔊 **Real sound** — ULA beeper, AY-3-8912 / Turbosound, SpecDrum & Covox DACs, the Next 4-channel DAC, measured AY volume curve.
 - 🐞 **Three debuggers, one live backend** — a visual GUI, a scriptable telnet server, and headless trace instrumentation, all sharing the same breakpoints, watchpoints, and time-travel ring.
-- ⏪ **Reverse debugging** — step and run *backwards* through executed instructions, with registers, shadow registers, flags, the stack window and the branch that led to each one. Memory is not recorded per instruction, so conditions that read it are refused rather than guessed; see [DEBUGGER.md](DEBUGGER.md#going-backwards).
+- ⏪ **Reverse debugging** — step and run *backwards* through executed instructions, in the GUI and over telnet, with registers, flags and the branch that led to each one (plus the shadow registers and a stack window on a wide history ring). Memory is not recorded per instruction, so conditions that read it are refused rather than guessed — and `replay-back` re-executes from a checkpoint when you need the memory too; see [DEBUGGER.md](DEBUGGER.md#going-backwards).
 
 ---
 
@@ -135,7 +135,7 @@ Classic timing is cycle-accurate with memory **and** port contention; the +3/+2A
 | Audio capture | `.wav` | — | ✓ | Record emulator output |
 | Screenshot | `.png` | — | ✓ | Any model / Next video mode |
 
-`File → Open File…` sniffs the file's magic and dispatches to the right loader — you rarely need the format-specific menu items.
+`File → Open File…` (and dropping a file on the window) routes by extension: `.tap` `.tzx` `.z80` `.sna` `.szx` `.rzx` `.opd` `.nex` `.p` `.81` `.o` `.80` all load this way. The disk, microdrive and cartridge formats — `.dsk` `.mgt` `.trd` `.mdr` `.rom` — go through their own File-menu items, because inserting one is a per-drive choice rather than a load.
 
 ---
 
@@ -218,10 +218,10 @@ cd zx_go
 go build -o bin/zx_go ./cmd/zx_go
 ./bin/zx_go
 
-# Run the tests (~2 min, 53 packages)
+# Run the tests (55 packages; the Cringle exercisers dominate, ~2 min of it)
 go test ./...
 
-# ~1 min: skips the Cringle zexdoc/zexall exercisers
+# Everything except the Cringle zexdoc/zexall exercisers — the inner loop
 go test -short ./...
 ```
 
@@ -255,10 +255,10 @@ zx_go ships **three** ways to inspect a running machine, all sharing **one live 
 
 ![Visual debugger](screenshot_debugger.png)
 
-- **Visual debugger** (`Emulator → Debugger`) — live registers, full Z80 + Z80N disassembly (click a line to toggle a breakpoint), 64 KB hex view, paging diagram, and tabbed tools: Next State, Bank Inspect, Backtrace, M1 history & heatmap, NextReg, conditional/bank-filtered breakpoints, register watchpoints, time-travel, and — on the Next — live Palette / Sprites / Layer 2 / Tilemap inspectors.
-- **Telnet debugger** — a ZRCP-style line server (`--debugger-port=N`) you drive from `nc` / `telnet` / scripts. Bank-aware breakpoints, watchpoints, tracepoints, heatmaps, time-travel, provenance.
+- **Visual debugger** (`Emulator → Debugger`) — live registers, full Z80 + Z80N disassembly (click a line to toggle a breakpoint), 64 KB hex view, paging diagram, and tabbed tools: Next State, Bank Inspect, Backtrace, M1 history & heatmap, NextReg, conditional/bank-filtered breakpoints, register watchpoints, time-travel, reverse debugging, and — on the Next — live Palette / Sprites / Layer 2 / Tilemap inspectors.
+- **Telnet debugger** — a ZRCP-style line server (`--debugger-port=N`) you drive from `nc` / `telnet` / scripts. Bank-aware breakpoints, watchpoints, tracepoints, heatmaps, time-travel, reverse debugging, provenance.
 
-There are two distinct ways to move into the past and they answer different questions: **reverse debugging** walks the instruction history backwards one instruction at a time but cannot show memory, while **snapshot rewind** resumes the machine from a checkpoint but does not restore the sound chip, disk controller or tape position. [DEBUGGER.md](DEBUGGER.md#going-backwards) covers both, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) records the current limits of rewind.
+There are three distinct ways to move into the past and they answer different questions: **reverse debugging** walks the instruction history backwards one instruction at a time but cannot show memory; **snapshot rewind** resumes the whole machine from a checkpoint, but lands on the checkpoint rather than on an instruction; and **replay step-back** reaches any instruction inside the checkpoint ring, memory included, by re-executing forward from a checkpoint. [DEBUGGER.md](DEBUGGER.md#going-backwards) covers all three, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) records the current limits of rewind — a +D or Opus Discovery controller is still not captured.
 - **Headless instrumentation** — `--headless` with trace channels, periodic state snapshots, memory-write watchpoints, bank-switch / SD logging, PC triggers, and a loop/stall detector.
 
 A few examples:
@@ -322,7 +322,8 @@ pkg/
                   layer2, palette, sprite, copper, dma, dac, rtc,
                   uart, nex, compositor, install
   debugger/       Visual debugger backend
-  testharness/    Headless scripted emulator (64 integration tests)
+  testharness/    Headless scripted emulator (113 integration tests)
+  machinestate/  screendiff/   Whole-machine state capture; screen-comparison verdicts
   roms/  config/  trace/  zxlog/  version/   ROMs, settings, tracing, logging, version
 docs/             Per-subsystem documentation
 LICENSES/         GPLv3 text + NOTICE for the embedded tbblue_loader.rom

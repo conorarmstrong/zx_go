@@ -52,7 +52,7 @@ redistribution in 2008 — so nothing needs installing (see
   line-accurately (mid-frame `BORDER` raster splits are honoured). Like the
   Spectrum, the BASIC default is a white border on white paper (so it's not
   obvious until a program sets `BORDER`).
-- **Reset:** **Machine → Reboot** cold-restarts the SAM to its copyright screen.
+- **Reset:** **Emulator → Reboot** cold-restarts the SAM to its copyright screen.
 
 ## Current limitations / in progress
 

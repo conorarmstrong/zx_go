@@ -94,8 +94,9 @@ func TestStateRegistryDeviceSetNext(t *testing.T) {
 	emu := quietEmulator(t, roms.ModelNext)
 	want := []string{
 		"ay.turbosound", "cpu", "keyboard", "memory",
-		"next.copper", "next.dac", "next.divmmc", "next.dma", "next.layer2",
-		"next.nextregs", "next.palette", "next.sprite", "next.tilemap",
+		"next.clipwindows", "next.copper", "next.dac", "next.divmmc", "next.dma",
+		"next.layer2", "next.nextregs", "next.palette", "next.reset",
+		"next.sprite", "next.tilemap",
 		"ula",
 	}
 	got := registeredDevices(emu)

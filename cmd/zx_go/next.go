@@ -1124,7 +1124,7 @@ func wireNextSubsystems(e *emulator) error {
 			return fmt.Errorf("next: FPGA bootrom load: %w", err)
 		}
 	}
-	next.Wire(next.WireOpts{
+	clipWindows, resetControl := next.Wire(next.WireOpts{
 		Dispatcher:  disp,
 		Memory:      mem,
 		CPU:         cpu,
@@ -1754,6 +1754,8 @@ sdReady:
 	e.nextAY = ayEngine
 	e.nextDMA = dmaEngine
 	e.nextDivMMC = pager
+	e.nextClipWindows = clipWindows
+	e.nextReset = resetControl
 
 	// Warm-boot: skip the cold-boot path entirely and load a captured
 	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG
@@ -1877,6 +1879,8 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextAY = nil
 	e.nextDMA = nil
 	e.nextDivMMC = nil
+	e.nextClipWindows = nil
+	e.nextReset = nil
 }
 
 // parseRAMWriteTraceSpec parses ZX_GO_RAM_WRITE_TRACE. Formats:

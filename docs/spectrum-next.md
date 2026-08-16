@@ -81,9 +81,9 @@ subsystems cleanly.
 | Tilemap (Layer 3) | ✅ tile + 1bpp text modes; per-tile mirror / rotate, pixel scroll, clip window |
 | Sprites (128) | ✅ position, pattern, palette, scale (1/2/4/8×), mirror, rotate, 8bpp, anchor groups (composite + unified), and the `$303B` status port (collision + max-per-line, clear-on-read) |
 | ULA scroll (NextReg 0x26 / 0x27) | ✅ horizontal (whole-character + sub-character pixel shift) and vertical (with the FPGA's 192-line fold). NR$68 bit 2 half-pixel is stored but needs a 2x-wide ULA render to show |
-| Compositor (NextReg 0x15) | ✅ all eight priority modes (SLU / LSU / SUL / LUS / USL / ULS + the two additive blend orderings), the per-pixel SUL "below" stencil + Layer 2 priority bit, and NR$14 / NR$4A transparency. The blend modes use NR$68's reset blend selection; NR$68 itself is not yet wired |
+| Compositor (NextReg 0x15) | ✅ all eight priority modes (SLU / LSU / SUL / LUS / USL / ULS + the two additive blend orderings), the per-pixel SUL "below" stencil + Layer 2 priority bit, and NR$14 / NR$4A transparency. The blend modes read NR$68's blend selection, which is wired (`cmd/zx_go/nr68.go`): bit 7 ULA output, bits 6:5 blend source, bit 2 half-pixel scroll and bit 0 the SLU stencil are all decoded and applied |
 | Copper coprocessor | ✅ instruction store / decode / per-line Step, driven by a per-T-state beam-position model so WAITs release on the correct scanline + hpos (full per-pixel hpos is the precision limit of a per-scanline renderer) |
-| zxnDMA (port 0x6B) | ⚠️ memory-to-memory + the variable-length Z80-DMA WR-group protocol work; per-byte prescaler timing and descriptor mode (port 0xDB) deferred |
+| zxnDMA (ports 0x6B / 0x0B) | ⚠️ the transfer engine is complete and spec-checked: memory↔memory and memory↔IO endpoints, the variable-length Z80-DMA WR-group protocol, per-byte prescaler and cycle-length timing (burst + prescaler transfers interleaved with the CPU), Continue / auto-restart and read-mask read-back. Not modelled: the interrupt / match logic and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`) |
 | RTC | ✅ host clock via the esxDOS M_GETDATE API **and** the i2c DS1307 bus on ports `$103B`/`$113B` (the NextZXOS date/time line renders) |
 | UART stub (NextReg 0xA8 / 0xA9) | ⚠️ AT / AT+ command set produces plausible responses; no real Wi-Fi, no socket emulation |
 | esxDOS file API | ✅ F_OPEN / F_CLOSE / F_READ / F_WRITE / F_SEEK / F_FSTAT / F_OPENDIR / F_READDIR / M_GETHANDLE / M_DRVAPI / M_GETDATE all wired and unit-tested via the RST 8 → dispatcher → host-directory mount path. Real-NextZXOS-program coverage is the next step (no contributor has scripted a NEXTBASIC program that exercises every call yet). |
@@ -108,21 +108,28 @@ history). Now working — items this doc previously listed as gaps:
   **zxnDMA** Z80-DMA protocol, **NR$14/$4A** transparency, and the
   classic/LoRes/Timex/ULAnext screen paths.
 
-Remaining work is **dev-tooling / research / boot-path polish** (the
-`[nice-to-have]` / `[v1.1]` backlog in `ROADMAP.md`), not hardware-emulation
-gaps. Niche timing personalities (e.g. Pentagon) and the F8 hardware-NMI
-menu are best-effort; file an issue if a specific title needs them.
+Remaining work is **game compatibility**, not hardware-emulation gaps: see the
+open items in `ROADMAP.md`, where the two catalogued hardware gaps (the zxnDMA
+interrupt/match logic and Copper `MOVE` landing mid-segment) are both recorded
+as unblocked and unmotivated — no screened title needs either. Niche timing
+personalities (e.g. Pentagon) and the F8 hardware-NMI menu are best-effort;
+file an issue if a specific title needs them.
 
 ## Loading a .NEX file
 
 ```
-File → Load… → pick any .NEX file
+File → Open File… → pick any .NEX file
 ```
 
-The emulator parses the header (rejects screens it doesn't yet support),
-loads RAM banks 0..7, sets SP and PC, paging-maps the entry bank at
-0xC000, and jumps. Single-bank simple games run; multi-bank-with-Layer-2
-demos partially render.
+In the GUI a `.nex` is launched the way the machine itself would launch it:
+the emulator validates the header, asks before copying the file onto the
+configured SD card (an SD card is required for this reason), and then drives
+NextZXOS's own `.nexload` dot command from the Command Line, so a title that
+calls the OS at runtime is hosted properly. Bank
+injection — parsing the header, copying every bank into RAM, setting SP/PC and
+paging the entry bank at `0xC000` — is what `Harness.LoadNEX` does for headless
+tests, and it cannot host an OS-calling title, which is why the compatibility
+figures are taken from the NEXLOAD path (`TestNexloadSDGames`).
 
 ## Testing
 

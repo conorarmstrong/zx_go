@@ -73,7 +73,8 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	// Spectrum Next bus. All nil off the Next, and cleared together by
 	// unwireNextSubsystems when the machine leaves it.
 	registerDevices(r, e.nextRegs, e.nextPalette, e.nextTilemap, e.nextCopper,
-		e.nextSprites, e.nextLayer2, e.nextDAC, e.nextDMA, e.nextDivMMC)
+		e.nextSprites, e.nextLayer2, e.nextDAC, e.nextDMA, e.nextDivMMC,
+		e.nextClipWindows, e.nextReset)
 
 	// NOTE: pkg/next/lores has a machinestate.Device but is deliberately absent
 	// here, because the emulator holds no LoRes instance to register — nothing

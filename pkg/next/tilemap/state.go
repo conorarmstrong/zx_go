@@ -26,9 +26,9 @@ import (
 //   - The NR$1B clip-window write index — which of x1/x2/y1/y2 the next write
 //     lands in — is not the layer's. It lives in the clipWindow helper inside
 //     pkg/next/wire.go, which pushes finished coordinate sets down through
-//     SetClip; the layer never sees a partial one. Capturing the index needs a
-//     Device on that helper, and NR$18/$19/$1A carry the same state for the
-//     other three layers.
+//     SetClip; the layer never sees a partial one. That helper is pkg/next's
+//     ClipWindows, which captures the index — and the other three layers'
+//     NR$18/$19/$1A state — under "next.clipwindows".
 //   - NR$4C, the tilemap transparency index, is the compositor's: it decides
 //     which rendered index reads as see-through, and pkg/next/compositor holds
 //     it (tilemapTrans). The layer emits palette indices and has no opinion.

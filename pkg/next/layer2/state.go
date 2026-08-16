@@ -40,9 +40,10 @@ import (
 //     devices the same field and let the restore order decide which value
 //     survives.
 //   - The NR$18 clip window and its 2-bit auto-incrementing write index live
-//     in the clipWindow value that pkg/next's WireClipWindows closes over.
-//     Nothing in this package can reach it, and it is not yet a
-//     machinestate.Device of its own — see the note in state_test.go.
+//     in pkg/next's ClipWindows, which captures all four windows under
+//     "next.clipwindows". Nothing in this package can reach them: unlike the
+//     tilemap and sprite windows, the Layer 2 coordinates are not pushed down
+//     into the layer at all.
 //
 // Layer 2 has no lock; like every other access to it (register writes,
 // RenderScanline), SaveState and LoadState belong on the emulation goroutine.

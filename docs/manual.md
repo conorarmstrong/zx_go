@@ -29,6 +29,7 @@ You can also pick a machine straight from the command line:
 | *(none)* | ZX Spectrum 48K |
 | `--next` | ZX Spectrum Next |
 | `--pentagon` | Pentagon 128 |
+| `--sam` | SAM Coupé |
 | `--zx81` | Sinclair ZX81 |
 | `--zx80` | Sinclair ZX80 |
 
@@ -49,6 +50,10 @@ To run without a window (for scripting/CI), add `--headless --frames N`.
 - **Spectrum Next** — the modern FPGA machine: Layer 2, hardware sprites,
   tilemap, copper, extra sound. Needs its ROMs and an SD card image first — see
   [§8 Spectrum Next](#8-spectrum-next).
+- **SAM Coupé** — MGT's 1989 Z80B machine, with its own ASIC, four screen
+  modes, SAA1099 sound and a WD1772 floppy. The MGT ROM 3.0 is bundled, so it
+  boots straight to SAM BASIC. Disks load from File → Load SAM Disk 1/2; see
+  [docs/sam-coupe.md](sam-coupe.md).
 - **Sinclair ZX81 / ZX80** — the 1981/1980 originals. The picture is generated
   by the CPU itself, so the display looks and behaves exactly as the real
   hardware did. See [§9 ZX80 / ZX81](#9-zx80--zx81).
@@ -68,7 +73,7 @@ window** — zx_go picks the right loader from the extension.
 | `.tap` / `.tzx` tape | File → Load Tape | Then `LOAD ""` (48K) or pick *Tape Loader* (128). Auto-starts most tapes. |
 | `.z80` / `.szx` / `.sna` snapshot | File → Load Snapshot | Restores a frozen machine instantly. |
 | `.rom` | File → Load ROM | Replace the system ROM (advanced). |
-| `.dck` / Interface 2 cartridge | File → Insert Interface 2 Cartridge | 16K ROM cartridges. |
+| `.rom` Interface 2 cartridge | File → Insert Interface 2 Cartridge | 16K ROM cartridges, 48K only. |
 | `.trd` TR-DOS disk | File → Load TR-DOS Disk A/B | Pentagon / 48K / 128K. Enter TR-DOS, then `CAT`/`LOAD`. See below. |
 | `.opd` Opus disk | File → Load Opus Disk 1/2 | 48K only. Type `RUN` to boot the disk, or `CAT 1` to list it. See below. |
 | `.dsk` / `.mgt` disk | File → Load Disk / DISCiPLE Disk | See [§6 Peripherals](#6-peripherals-disks-printers-mice). |
@@ -187,8 +192,8 @@ On **128K/+2/+3** you type keywords letter-by-letter (the later editor); on
 **48K** the single-key keyword entry applies. On the **ZX80/ZX81** each keyword
 sits on its native key — see [§9](#9-zx80--zx81).
 
-You can remap any key: **Help → Custom Keymap…** opens an editor and saves your
-layout. The complete default matrix, with every shifted symbol, is in
+You can remap any key: **Emulator → Custom Keymap…** opens an editor and saves
+your layout. The complete default matrix, with every shifted symbol, is in
 **[KEYBOARD_GUIDE.md](../KEYBOARD_GUIDE.md)**.
 
 ---
@@ -274,8 +279,11 @@ on `P` on the ZX81. Details and the per-machine keymap:
 
 **View** menu:
 
-- **Zoom** — 100% / 125% / 150% / 200% / 300%, or **Full Screen** (Esc exits).
-- **CRT scanline filter** — a subtle scanline/upscale effect for the retro look.
+- **Zoom** — 100% / 125% / 150% / 200% / 300% / 400%, or **Full Screen**
+  (Esc exits).
+- **Integer Scaling (Crisp Pixels)** — snap the picture to whole-pixel
+  multiples.
+- **Enable CRT Filter** — a subtle scanline/upscale effect for the retro look.
 
 **Save Screenshot…** (File) writes the current frame to a PNG.
 
@@ -290,7 +298,8 @@ on `P` on the ZX81. Details and the per-machine keymap:
   registers, time-travel, and much more — see [DEBUGGER.md](../DEBUGGER.md)).
 - **RZX** (File) — open and play back input recordings, or record your own;
   rollback to the last snapshot during playback.
-- **Help → ROM Info / Peripheral Status** — what's loaded and what's enabled.
+- **Emulator → ROM Info / Peripheral Status** — what's loaded and what's
+  enabled.
 - **Help → About zx_go** — version and credits.
 
 ---
@@ -318,7 +327,8 @@ on `P` on the ZX81. Details and the per-machine keymap:
 - **The Next won't boot / black screen** — you almost certainly need to install
   the Next ROMs and set an SD card first ([§8](#8-spectrum-next)).
 - **Wrong keys / can't find a symbol** — see
-  [KEYBOARD_GUIDE.md](../KEYBOARD_GUIDE.md), or remap via Help → Custom Keymap.
+  [KEYBOARD_GUIDE.md](../KEYBOARD_GUIDE.md), or remap via Emulator → Custom
+  Keymap.
 - **Quick save says it's unavailable** — that machine (ZX80/81 or Next) doesn't
   use the `.szx` quick-save slot; use a named snapshot or the machine's own
   facilities instead.

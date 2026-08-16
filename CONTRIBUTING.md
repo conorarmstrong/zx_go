@@ -29,27 +29,35 @@ go build ./...
 ```
 
 The binary launches with the bundled 48K ROM. Switch models via the
-`Machine` menu. Drop a `.tap`, `.tzx`, `.dsk`, `.z80`, `.sna`, `.szx`,
-`.rzx`, `.nex`, or `.mdr` onto the window or use `File → Load…`.
+`Machine` menu. Drop a `.tap`, `.tzx`, `.z80`, `.sna`, `.szx`, `.rzx`,
+`.opd`, `.nex`, `.p` or `.o` onto the window, or use `File → Open File…`,
+which routes on the extension. Disks, microdrive cartridges and IF2 ROMs
+(`.dsk`, `.mgt`, `.trd`, `.mdr`, `.rom`) are inserted from their own
+File-menu items instead.
 
 ## Dev loop
 
 ```
-go test -short ./...     # fast feedback — ~30s
-go test ./...            # full suite including conformance — ~3-4 min
-make race                # race detector — ~25 min, see below
+go test -short ./...     # full suite minus the Cringle exercisers
+go test ./...            # everything; the exercisers alone are ~2 min of it
+make race                # race detector, see below
 go vet ./...
 go build ./...
 ```
 
 Three test gating levels exist:
 1. **Default** (`go test`) — runs everything.
-2. **`-short`** — skips Cringle Z80 conformance, real-NextZXOS-ROM
-   boot, and a handful of other long integration tests. Use during
-   inner-loop iteration.
+2. **`-short`** — `TestZexdoc` and `TestZexall` are the **only** two
+   tests in the tree that honour `-short` (`pkg/z80/conformance_test.go`),
+   so this is the full suite minus the exercisers, and it is the
+   inner-loop command. Everything else that is expensive skips on its
+   own terms instead: a missing ROM, a missing SD card, a gitignored
+   corpus path.
 3. **`-run TestZex`** — Frank Cringle's zexdoc + zexall instruction
-   exerciser. ~85s combined. Runs in the dedicated `conformance` CI
-   job; required to pass before merge if you touched `pkg/z80`.
+   exerciser: one to two minutes combined (~2 min on an M-series Mac,
+   measured 2026-08-16). Runs in the dedicated
+   `Z80 conformance (zexdoc + zexall)` CI job; required to pass before
+   merge if you touched `pkg/z80`.
 
 Use `make race`, not a bare `go test -race ./...`. The race detector's
 ~10x cost puts packages past `go test`'s 10-minute **default per-package**
@@ -112,15 +120,24 @@ pkg/next/            — Spectrum Next subsystems
   pkg/next/compositor/ — Layer compositor
   pkg/next/dac/        — 4x DACs
   pkg/next/install/    — Next ROM blob install helpers
+pkg/betadisk/        — Beta Disk / TR-DOS (WD1793)
+pkg/opus/            — Opus Discovery (WD1770 + 6821 PIA)
+pkg/sam/             — SAM Coupé (ASIC, paging, WD1772)
+pkg/zx8x/            — ZX80 / ZX81 (CPU-generated display)
+pkg/saa1099/         — SAA1099 (SAM sound)
+pkg/audio/  pkg/audiodac/ — Audio device + SpecDrum / Covox / Next DACs
+pkg/machinestate/    — Whole-machine state capture registry (rewind/replay)
+pkg/screendiff/      — Screen-comparison verdicts for differential runs
+pkg/trace/  pkg/zxlog/  pkg/version/ — Tracing, logging, version
 pkg/config/          — Persisted user settings
 pkg/debugger/        — Debugger UI
 pkg/testharness/     — Headless emulator for integration tests
 pkg/roms/            — Embedded ROM bytes + ROM-manager
 docs/                — User-facing documentation
-fuse/                — Vendored FUSE 1.6.0 source for cross-reference
-                       (FUSE is the reference Z80/Spectrum emulator;
-                       we compare against it frequently)
 ```
+
+`go list ./...` is the authority on the full set; the tree above is a map,
+not an inventory.
 
 ## Conventions
 
@@ -190,10 +207,12 @@ NextReg dispatcher, palette, Layer 2, sprite engine, compositor,
 Copper, and DMA into the ULA so a test can configure them via
 register writes and assert on the rendered frame.
 
-If your test needs a real ROM (NextZXOS, +3 boot, etc.) that doesn't
-ship in the repo, gate it behind `testing.Short()` or a build tag and
-skip when the ROM is absent. `TestNextRealROMBoot` is the working
-example.
+If your test needs a real ROM (NextZXOS, +3 boot, etc.) or a title that
+doesn't ship in the repo, **skip on the asset being absent** rather than
+on `-short`: `t.Skip` with a line saying how to enable it, so CI stays
+green and a developer who has the asset gets the coverage.
+`TestNextRealROMBoot` is the working example — it calls
+`install.LoadROM` and skips on `install.ErrROMNotInstalled`.
 
 ## Adding a NextReg handler
 
@@ -227,11 +246,13 @@ matching test in the subsystem package and an integration test in
   command or repro steps, and whatever .tap / .z80 / .nex file
   triggers it (or a link to where it lives in the World of Spectrum
   archive).
-- **Hardware-accuracy bugs** ideally cite the FUSE source line they
-  diverge from (`fuse/fuse-1.6.0/...`).
-- **Feature requests** are welcome — but if it's for an unimplemented
-  peripheral (TR-DOS, TurboSound, etc.), check `ROADMAP.md` first to
-  see if it's already on the deferred list.
+- **Hardware-accuracy bugs** ideally cite the evidence they diverge
+  from: the FPGA core source (`zxnext.vhd`) for anything Next,
+  `VHDL_CONFORMANCE.md` for what is already checked against it, or a
+  datasheet / published hardware write-up for the classic line.
+- **Feature requests** are welcome — check `ROADMAP.md` first. Its
+  "Catalogued — deliberately not doing" section records what has been
+  considered and declined, with the reason.
 
 ## License
 

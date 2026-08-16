@@ -145,7 +145,11 @@ accurate but **not** cycle-exact.
 *classic* Spectrum drivers do model contention). This is the clearest single
 accuracy gap of MAME's Next driver.
 ¹⁴ zx_go's boot path was verified divergence-by-divergence against the FPGA
-core's behaviour; a GHDL gate-level testbench is deferred research.
+core's behaviour, and several subsystems are now checked against vectors
+captured from the core's own HDL under GHDL and committed to the repo:
+`pkg/z80/testdata/z80n_golden.txt` holds 8 567 full-ISA Z80N vectors
+(`TestZ80NMatchesCoreGolden`), with the same treatment for the sprite and
+copper renderers.
 ¹⁵ MAME's `tbblue` is a near-line-by-line translation of the official FPGA VHDL,
 which is why the community treats it as the accuracy reference.
 
@@ -246,14 +250,22 @@ sample-accurate rather than a per-frame snapshot.
 over one shared backend (breakpoints, watchpoints, time-travel, M1 trace ring).
 ²⁸ In CSpect, conditional breakpoints are typically evaluated by DeZog rather than
 natively.
-²⁹ zx_go now has both mechanisms, at different stages. **Reverse debugging**
-walks the M1 history ring backwards one instruction at a time, giving
-registers, shadow registers, flags, an eight-word stack window and the branch
-that led to each instruction; the cursor and its condition search are
-implemented and tested, and the telnet/GUI surfaces are still being wired.
-**Snapshot rewind** resumes from a checkpoint, but does not yet restore the
-AY, FDC, tape position or ULA frame phase, and lands on a checkpoint rather
-than an instruction.
+²⁹ zx_go has three mechanisms, all shipped, and the ⚠️ is about reach rather
+than about wiring. **Reverse debugging** walks the M1 history ring backwards
+one instruction at a time, giving registers, flags and the branch that led to
+each instruction — and, on a wide ring, the pair and shadow registers plus an
+eight-word stack window. It is driven from the telnet server (`step-back`,
+`step-forward`, `run-back`, `to-present`, `reverse-status`) and from the visual
+debugger's **Reverse** tab, over one shared cursor. **Snapshot rewind**
+resumes from a checkpoint and restores every device the machine carries — the
+CPU, the whole RAM pool, the ULA's frame phase, the AY's generators, the FDC,
+the tape position and the Next's blocks — but a +D or Opus Discovery interface
+has no capture yet, and it lands on a checkpoint rather than an instruction.
+**Replay step-back** (`replay-back`) closes that last gap by restoring the
+nearest checkpoint and re-executing forward to the exact instruction, so the
+instant it hands back has memory and every device in it; it refuses rather than
+guesses when the window cannot be reproduced. What still bounds all three is
+depth: the checkpoint ring holds 16 captures by default.
 
 ZEsarUX remains ahead overall here, and the shape of the gap is worth stating
 precisely rather than as a score. Its time machine is mature and its reverse
@@ -264,11 +276,12 @@ execution. zx_go's history has the same limitation for the same reason, and
 differs in what it does about it: an unanswerable condition is refused with an
 error rather than evaluated against a zero.
 
-The intended end state is replay-based reverse execution — restore the nearest
-checkpoint and re-execute forward to the exact instruction — which would give
-per-instruction stepping with full state, memory included, so nothing has to
-be disabled in reverse. That depends on the complete device capture tracked in
-`ROADMAP.md`, and is not claimed today.
+Replay-based reverse execution — restore the nearest checkpoint and re-execute
+forward to the exact instruction — is the answer to that limitation, and it now
+exists here as `replay-back`: per-instruction stepping with full state, memory
+included, so nothing has to be disabled in reverse. It rests on the complete
+device capture in `pkg/machinestate`, and reaches back only as far as the
+checkpoint ring holds.
 ³⁰ zx_go exposes a custom line-oriented telnet protocol; it is not DeZog/DZRP/
 ZRCP-compatible.
 ³¹ MAME's GDB stub is i386-only and cannot debug the Z80, so it is not usable for
@@ -310,7 +323,9 @@ contention modelling, and an open codebase, it already compares well.
 
 *Spotted an error or an out-of-date row? Please open an issue or PR.*
 
-³³ zx_go loads standard and EXTENDED DSK, including tracks packed denser
-than the nominal gap layout. Copy-protection track layouts, where declared
-sector sizes exceed a physical double-density track, are not modelled and are
-reported as such rather than silently mis-read.
+³³ zx_go loads standard and EXTENDED DSK, including tracks packed denser than
+the nominal gap layout and the copy-protection layouts whose declared sector
+sizes exceed a physical double-density track: a track is sized to what the
+image describes, and an over-large sector (a size code claiming 8192 bytes) is
+streamed across the index hole the way the real controller does. Of a
+250-image sample one still fails to parse, and that one is a truncated dump.

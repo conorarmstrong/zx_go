@@ -25,6 +25,7 @@ Both share the same CPU underneath, so anything you observe in one is observable
   - [Tools tabs](#tools-tabs)
   - [Edit Regs / Write Mem dialogs](#edit-regs--write-mem-dialogs)
   - [Breakpoint workflow](#breakpoint-workflow)
+- [Going backwards](#going-backwards) — reverse debugging, snapshot rewind, replay step-back
 - [Telnet debugger](#telnet-debugger)
   - [Starting the listener](#starting-the-listener)
   - [Connecting](#connecting)
@@ -168,7 +169,7 @@ Slots that are write-protected (ROM) are shown in a different colour from RAM sl
 
 ### Tools tabs
 
-The bottom-right area is an icon-led tab strip (Next State, Bank Inspect, Backtrace, History, NextReg, Breakpoints, Watchpoints, Heatmap, Time Travel, Palette, Sprites, Layer 2, Tilemap). The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent; the last four are **graphical** Next inspectors, live-rendered each tick:
+The bottom-right area is an icon-led tab strip (Next State, Bank Inspect, Backtrace, History, NextReg, Breakpoints, Watchpoints, Heatmap, Time Travel, Reverse, Palette, Sprites, Layer 2, Tilemap). The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent; the last four are **graphical** Next inspectors, live-rendered each tick:
 
 - **🎨 Palette** — the active 256-entry palette as a 16×16 colour-swatch grid (each cell the real expanded RGB of that entry).
 - **▦ Sprites** — every *visible* sprite's 16×16 pattern drawn as actual pixels through the sprite palette, tiled into a sheet, with a live count.
@@ -192,8 +193,20 @@ backend**, so state set on either appears (and acts) on the other:
   `tt-snap` / `tt-rewind` and the **Time Travel** tab (enable,
   snapshot-now, tap-a-row-to-rewind, clear) drive the same buffer.
   Read [Going backwards](#going-backwards) before relying on it: a
-  rewind restores the CPU and RAM, **not** the sound chip, the disk
-  controller or the tape position.
+  rewind restores every device the machine carries — the sound chip,
+  the disk controller and the tape position included — but a +D or
+  Opus Discovery interface has no capture, and a rewind lands on a
+  checkpoint rather than on an instruction.
+- **Reverse** — one shared cursor into the M1 ring. The tab's
+  Enter reverse / Step back / Step forward / Run back to… controls
+  are the GUI face of `step-back` / `step-forward` / `run-back` /
+  `to-present`. While the cursor is away from the present the
+  register, flag and stack panels read the instant under it, painted
+  in a distinct colour with `—` wherever the recording holds nothing,
+  a banner says how far back you are, and the panel headers say so
+  too: the memory view is labelled *not recorded per instruction*, and
+  the disassembly *at the recorded PC — bytes read from CURRENT
+  memory*.
 - **Heatmap** tab — hot-PC / call / ret / rst views over the same M1
   history ring as `hot` / `callgraph` / `retgraph` / `rstgraph`
   (recomputed on demand via its Refresh button).
@@ -252,7 +265,7 @@ Renders `debugger.Backtrace()`'s output. Set **Depth** and hit **Refresh** (the 
 
 Front-end for the M1-fetch ring buffer. **Prev N** shows the last N entries; **Full** dumps the whole ring. Each row has the global instruction counter, PC, SP, AF, IFF1, IM, Halted, and the active ROM bank.
 
-The ring is shared with the telnet `history` / `prev` commands. If you launched with `--debugger-history N`, both surfaces read from the same buffer; otherwise the visual debugger creates a default 4096-entry ring on first open.
+The ring is shared with the telnet `history` / `prev` commands. If you launched with `--debugger-history N`, both surfaces read from the same buffer; otherwise the visual debugger creates a default 4096-entry **wide** ring on first open, so the GUI always has the pair registers, the shadow set and the stack window available to reverse debugging.
 
 ## Going backwards
 
@@ -274,10 +287,15 @@ recorded instants, and while it is away from the present every view
 reads the instant under the cursor rather than the live CPU.
 
 **What it gives you, per instruction, as far back as the ring holds:**
-PC, SP, AF, the shadow registers, BC/DE/HL/IX/IY on a wide ring, IFF1 /
-IFF2 / IM / halted, the active ROM bank, an eight-word window on the
-stack, and the branch that led to each instruction (`from CALL nn`,
-`from RST`, sequential, and so on).
+PC, SP, AF, IFF1 / IFF2 / IM / halted, the active ROM bank, and the
+branch that led to each instruction (`from CALL nn`, `from RST`,
+sequential, and so on). On a **wide** ring — `--debugger-history-wide`,
+and what the GUI opens by default — each entry also carries BC / DE /
+HL / IX / IY, the shadow registers (`EXX` and `EX AF,AF'` make them
+part of the visible machine state) and an eight-word window on the
+stack, without which a backwards step through a `CALL` cannot show
+where control came from. A narrow ring records none of those three,
+and says so with `—` rather than a zero.
 
 **What it cannot give you is memory.** Memory is not recorded per
 instruction, because doing so would cost more than running the machine.
@@ -419,7 +437,7 @@ Optional:
 | --- | --- |
 | `--debugger-pause-at-start` | Halt the CPU at `PC=$0000` before the first instruction fetches. Useful if you want to set breakpoints before any code has executed. |
 | `--debugger-history=N` | Record the last N M1 fetches in a ring buffer accessible via the `history` / `prev` commands. Sensible range 1024..65536. 0 disables (and the pre-fetch hook isn't installed at all, so there's no runtime cost). |
-| `--debugger-history-wide` | Make every history entry carry `BC / DE / HL / IX / IY` as well as the base set. No-op unless `--debugger-history>0`. Cost: +10 bytes per entry. Needed for "what was IX at insn N" diagnostics where the answer doesn't live in the disassembly. |
+| `--debugger-history-wide` | Make every history entry carry `BC / DE / HL / IX / IY`, the shadow registers and an eight-word stack window as well as the base set. No-op unless `--debugger-history>0`. The entry struct is the same size either way — the flag decides what gets *filled*, and its cost is the eight extra memory reads per instruction the stack window needs. Required for "what was IX at insn N" diagnostics, and for running backwards to a register condition. |
 | `--symbol-map=PATH` | Load a `$XXXX NAME` symbol file; PC / call targets / stack words are annotated with the symbol when present. |
 
 You can combine `--debugger-port` with `--headless` (CI / scripted) or with the GUI (run the listener in parallel with the visual debugger). Both work.
@@ -633,7 +651,7 @@ at startup); lower `--time-travel-keep` if memory is tight.
 | `tt-status` | `tt` | List ring contents: insn count + PC + optional label + **bank/paging context** per entry (`rom=N slots=… dmmc:paged/automap/mapram`). The bank context is captured per entry so a trace can't mis-attribute a PC to the wrong ROM/bank. It is informational — what a rewind applies is the machine state itself. |
 | `tt-snap [LABEL]` | — | Force an immediate manual capture, optionally tagged. |
 | `tt-rewind INSN` | — | Restore the latest capture whose insn count ≤ INSN. The **whole machine** goes back — every registered device, memory included — so re-execution from the rewind point reproduces what it produced the first time. Lands on a capture, not on INSN itself; use `replay-back` for instruction granularity. |
-| `replay-back [N]` | — | Step the machine back N instructions (default 1) by restoring a capture and re-executing forward to the instruction asked for. See [Reverse debugging](#reverse-debugging) above. |
+| `replay-back [N]` | — | Step the machine back N instructions (default 1) by restoring a capture and re-executing forward to the instruction asked for. See [Replay step-back](#replay-step-back-replay-back) above. |
 | `tt-find-pc $XXXX` | — | List every captured snapshot whose saved PC equals `$XXXX`. Useful for "show me every visit to the failing PC". |
 | `tt-clear` | — | Drop all captured snapshots; leave auto-capture armed. |
 
@@ -692,8 +710,9 @@ sqlite3 /tmp/boot.db \
 ```
 
 Two trace DBs (e.g. ours vs a reference run) can be diffed with the
-`_tools/tracediff` helper, which prints the first aligned row where
-PC / bank / SP / registers differ — the first-divergence finder.
+`_tools/tracediff` helper (local-only: `_tools/` is gitignored), which prints
+the first aligned row where PC / bank / SP / registers differ — the
+first-divergence finder.
 
 #### Crash detection
 
@@ -794,17 +813,26 @@ this state?" to isolate WHICH of our differences is load-bearing.
 
 Commands that *read* CPU or memory state are dangerous to run on a running CPU — the read could land mid-instruction. The telnet debugger handles this by **implicitly pausing the CPU** before any read-state command, and waiting until the headless loop has acknowledged the pause before reading.
 
-The implicit-pause set is:
+The set is `commandsNeedingPause` in `cmd/zx_go/debugger.go`, which is the
+authority; it covers, with their aliases:
 
 ```
-get-registers, regs, get-stack, stack, backtrace, bt, history,
-hist, prev, p, get-memory, mem, hexdump, read-memory, peek,
-write-memory, poke, disassemble, disasm, d, get-mmu, get-divmmc,
-nextreg-read, nr-r, bank-peek, bank-poke, load-bin, compare-foreign,
-step-back, step-forward, run-back, reverse-status
+get-registers, get-stack, backtrace, history, prev, get-memory, hexdump,
+read-memory, write-memory, set-reg, cold-reset, disassemble, disasm-bank,
+get-mmu, get-divmmc, nextreg-read, nextreg-write, nr-panel, nr-snap, nr-diff,
+copper-disasm, layer-state, sprite-list, palette-dump, bank-peek, bank-poke,
+pool-scan, load-bin, compare-foreign, step-over, hot, callgraph, retgraph,
+rstgraph, why-pc, snapshot-on-bp, irq-stats, catch, crash-detect, nmi,
+watch-reg, list-watches, clear-watch, watch-mem, clear-watch-mem, watch-read,
+clear-watch-read, watch-port, watch-zero, tp, list-tp, clear-tp, nr-trace,
+trace-divmmc-ram, trace-writes, trace-nextreg-deltas, tt-snap, tt-rewind,
+replay-back, step-back, step-forward, run-back, reverse-status
 ```
 
-(`to-present` is deliberately absent: it only drops debugger-local state, so it has no reason to stop a running machine.)
+Two exclusions are deliberate. `to-present` only drops debugger-local state,
+so it has no reason to stop a running machine. The breakpoint and time-travel
+*configuration* commands (`set-breakpoint`, `tt-on`, …) either touch nothing
+the CPU is reading or manage the pause themselves.
 
 After an implicit pause, the CPU stays paused. Use `continue` to resume.
 
@@ -881,7 +909,7 @@ $3BE8   SOFT_RESET_TRAMPOLINE
 
 Pass it via `--symbol-map=PATH`. When loaded, `get-registers`, `get-stack`, `disassemble`, and `list-breakpoints` annotate addresses with their names.
 
-`_tools/nextzxos.sym` ships in the repo with the well-known boot-ROM entry points labelled.
+No symbol file ships with the repo: the boot-ROM entry points are ROM-specific, and the ROMs are licensed and user-installed. Build your own as you name addresses — `sym $ADDR NAME` adds one at runtime and `sym` lists the table, so a session's findings can be pasted straight into a file for the next run.
 
 ### Worked examples
 
@@ -890,7 +918,7 @@ Pass it via `--symbol-map=PATH`. When loaded, `get-registers`, `get-stack`, `dis
 ```bash
 ./bin/zx_go --next --headless --debugger-port=10000 \
             --debugger-pause-at-start \
-            --symbol-map=_tools/nextzxos.sym &
+            --symbol-map=/path/to/your.sym &
 nc localhost 10000
 ```
 
@@ -1001,7 +1029,7 @@ OK
 
 The SP transitions `$FFF9 → $FFFB → $FFFD → $FFFF` make the "three POPs + RET" sequence visible at a glance: the final RET at `$1FE3` pops the pre-reset stack frame all the way back to `$600A`. Without the history ring, reconstructing this took a manual env-var-driven trace + several emulator restarts last session — see `project_next_post_soft_reset.md` for the full investigation.
 
-Note: `history` records PC + key register state, NOT memory. True "rewind" (restore SRAM to a past moment) needs full memory snapshots which the snapshot machinery covers separately.
+Note: `history` records PC + key register state, NOT memory. Restoring memory to a past moment is the time-travel ring's job instead — `tt-rewind` for a checkpoint, `replay-back` for an exact instruction; see [Going backwards](#going-backwards).
 
 #### Inspect the call ancestry at a HALT
 
@@ -1013,7 +1041,7 @@ everything else is `speculative` (probably data left on the stack
 by a `PUSH` or just uninitialised RAM).
 
 ```
-> bp $6010 if iff1 == 0       (once conditional breakpoints land)
+> bp $6010 if iff1 == 0
 > continue
 *** breakpoint at $6010
 > backtrace 8
@@ -1305,7 +1333,7 @@ Top-of-stack `$082D` is what the most recent RET will pop. Trace backward from t
 
 ### "Catch the moment X register changes"
 
-The telnet protocol doesn't have a hardware watchpoint. Use the headless `--watch-writes` flag instead — see [Memory watchpoints in headless mode](#memory-watchpoints-in-headless-mode) below.
+`watch-reg REG [from VAL] [to VAL]` halts on the change — e.g. `watch-reg iff1 to 1`. For memory rather than registers the telnet debugger has `watch-mem` / `watch-read` (bank + offset range) and `watch-port`; see [Watchpoints](#watchpoints). The headless `--watch-writes` flag covers the same ground without a debugger session — see [Memory watchpoints in headless mode](#memory-watchpoints-in-headless-mode) below.
 
 ### "Compare CPU state across two runs"
 
@@ -1325,21 +1353,19 @@ The disassembly format is stable: 4-digit hex address, two spaces, hex bytes, tw
 
 ### "Find where two emulators first diverge"
 
-For boot-path-faithfulness investigations against a reference Z80 emulator, the bundled scripts in `_tools/zrcp/` are the workhorse:
+This is what the `step N`, `cold-reset` and `set-reg` commands documented above exist for: they let a script drive two emulators in step and compare them. The maintainer's own driver scripts live in `_tools/zrcp/`, which is **gitignored and not part of a clone** — they hardcode the path to a locally installed reference binary, so they are notes rather than something you can run. The method they implement is the part worth keeping:
 
-- **`cold_boot_lockstep.py`** — single-step both emulators, compare all CPU registers (PC/SP/AF/BC/DE/HL/IX/IY/I/IM) after each instruction. The undocumented F3/F5 bits are masked because they reflect a known emulator-spec divergence (FUSE-style vs reference) and don't typically alter behaviour. On the first divergence, prints both states and surrounding disassembly. Slow (one ZRCP roundtrip per step per emulator) but reliable; expect ~10 minutes for 100K-step divergence.
+- **Lockstep.** Single-step both emulators and compare all CPU registers (PC/SP/AF/BC/DE/HL/IX/IY/I/IM) after each instruction. Mask the undocumented F3/F5 bits — emulators disagree about them for reasons that rarely alter behaviour. On the first divergence, print both states and the surrounding disassembly. One roundtrip per step per emulator makes it slow: budget ~10 minutes to reach a 100K-step divergence.
 
-- **`cold_boot_bisect.py`** — exponential-growth + binary-search version: launch both emulators, advance N instructions (using the bulk `step N` / reference equivalent), compare. If matched, double N and restart. When divergence found, binary-search the bracket by relaunching both with smaller targets. Each restart ≈ 1.3 s; ~14 iterations to bracket a 64K-step divergence ≈ 18 s total. Much faster than lockstep for finding the approximate divergence step. Falls back on the reference emulator's quirks for fine-grain pinpointing (use lockstep inside the bracket for exact instruction).
-
-Both scripts use the `step N`, `cold-reset`, and `set-reg` commands documented above. Output goes to stdout; redirect to a file to save the trace.
+- **Bisect.** Exponential growth plus binary search: launch both, advance N instructions with the bulk `step N`, compare, double N and relaunch while they match; when they differ, binary-search the bracket. At roughly 1.3 s per restart, ~14 iterations bracket a 64K-step divergence in under half a minute. Bracket with this, then run lockstep inside the bracket for the exact instruction.
 
 Workflow:
-1. Launch the reference Z80 emulator with its remote-protocol port open (the bundled scripts hardcode the path to your installed reference binary — see comments at the top of each).
+1. Launch the reference emulator with its remote-protocol port open.
 2. Launch our emulator paused at PC=0 with `--debugger-pause-at-start --frames=0`.
-3. Run the bisect script first to locate the bracket in ~30 s.
-4. Run lockstep inside the bracket for exact pinpoint.
+3. Bisect to locate the bracket in ~30 s.
+4. Lockstep inside the bracket for the exact pinpoint.
 5. Inspect both emulators' state at the divergent instruction. Common causes: NextReg power-on default mismatch, port read returning different bytes, undocumented opcode flag-bit difference.
 
 ---
 
-For the full list of debug-instrumentation flags (`--snapshot-every`, `--watch-writes`, `--snapshot-on-pc`, `--loop-threshold`, `--trace=…`, etc.), see the "Headless mode and debug instrumentation" section in the main [README](README.md).
+For the full list of debug-instrumentation flags (`--snapshot-every`, `--watch-writes`, `--snapshot-on-pc`, `--loop-threshold`, `--trace=…`, etc.), run `./bin/zx_go --help`; the "Debugging & headless tooling" section of the main [README](README.md) has the worked examples.

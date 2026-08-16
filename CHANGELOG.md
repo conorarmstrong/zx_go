@@ -8,13 +8,22 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Reverse debugging.** Step and run backwards through executed
-  instructions. The M1 ring already recorded every instruction; what was
-  missing was the ability to walk it. `HistoryEntry` now also carries the
+- **Reverse debugging, on both surfaces.** Step and run backwards through
+  executed instructions. The M1 ring already recorded every instruction; what
+  was missing was the ability to walk it. `HistoryEntry` now also carries the
   shadow registers, which `EXX` and `EX AF,AF'` make part of the visible
   state, and an eight-word window on the stack, without which a backwards
-  step through a `CALL` cannot show where control came from. `ReverseCursor`
-  moves through the ring and searches backwards for a condition.
+  step through a `CALL` cannot show where control came from — both filled by
+  one shared producer, so an entry means the same thing whichever debugger
+  opened the ring. `ReverseCursor` moves through the ring and searches
+  backwards for a condition.
+
+  It reaches the user through the telnet commands `step-back`,
+  `step-forward`, `run-back`, `to-present` and `reverse-status`, and through
+  the visual debugger's **Reverse** tab; both drive one cursor, and while it
+  is away from the present every panel and every state-reading command
+  answers from the instant under it, tagged as history rather than as the
+  live machine.
 
   Anything the recording cannot answer is **refused, not guessed**. Memory is
   not recorded per instruction, so `run-back "read $5C78 == 0"` returns an
@@ -23,8 +32,19 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   being the breakpoint you wrote costs far more than an error message.
 
   Answerability is checked at every step of a backwards search rather than
-  probed once, because evaluation short circuits: `a == 0 && read $4000 == 1`
-  never reaches the memory read while `A` is non-zero.
+  probed once. Not because evaluation short-circuits — it does not:
+  `binOp.eval` computes both operands eagerly, so `a == 0 && read $4000 == 1`
+  reaches the memory read on the first instant whatever `A` holds. The check
+  is per step because it costs nothing there, and an earlier revision of this
+  entry justified it with the opposite of what the code does.
+- **`replay-back [N]`**, which moves the machine — not a cursor — back to an
+  instruction the checkpoint ring never captured, by restoring the newest
+  checkpoint at or before it and re-executing forward. The instant it hands
+  back was produced by running, so memory, the sound chip's counters and the
+  disk controller are what they were. Before answering it re-runs the window
+  to the present and compares the whole machine device by device, and refuses
+  when the two differ: a window replay cannot reproduce contains no instant
+  replay can be trusted to produce.
 - **`pkg/machinestate`**, the device registry a complete state capture is
   built on. It refuses a state whose device set does not match the machine in
   either direction, and validates before applying, so a failed restore leaves
@@ -37,6 +57,20 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   direction, none of them guest-readable. Restoring the registers alone gives
   a chip that runs and does not resume. Tested by replaying audio from a
   capture rather than by comparing fields.
+- **A `machinestate.Device` for every device a rewind has to return**: the
+  CPU, memory, the ULA, the keyboard, the DAC, the AY and the Next's
+  TurboSound engine, the +3 FDC, the Beta interface, Interface 1 (microdrive
+  head position included), the Multiface, the tape player's playback
+  position, and the Next's NextRegs, palette, tilemap, copper, sprites, Layer
+  2, DAC, DMA and divMMC. `(*emulator).stateRegistry` registers each one
+  exactly when the machine carries it, so a capture is refused rather than
+  applied to a machine that has since gained a controller. Still uncaptured,
+  and recorded in `KNOWN_ISSUES.md`: the +D and the Opus Discovery.
+- **A replay-equivalence oracle** (`cmd/zx_go/replay_oracle_test.go`). It
+  fingerprints outputs and memory in bulk rather than device state, so it
+  cannot pass by comparing a capture with itself, and it passes on the 48K,
+  128K, +2, +2A, +3 and the Next. A companion test leaves one device
+  un-rewound to prove the oracle still bites.
 - **`pkg/screendiff`**, the verdict logic for differential screen comparison:
   which of two machines' screens agree, and when a comparison must be refused
   instead. It was previously inside a gitignored developer tool, where its
@@ -46,6 +80,41 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The history ring advertised fields no producer ever filled.** The shadow
+  registers and the stack window were added to `HistoryEntry`, promised in
+  three documents and rendered by the reverse register view, and written by
+  nothing — so the view showed a confident zero as the machine's real state.
+  Both surfaces now fill them through one shared builder, which also closed a
+  divergence between them: the GUI producer omitted the ROM bank, so a trace
+  recorded with the GUI open reported bank 0 for its whole length. The stack
+  window stays wide-ring only, because eight extra memory reads on a path that
+  runs a million times a second is a cost a narrow ring did not ask for. And
+  `bank` is no longer refused going backwards: it is recorded in every entry,
+  and a refusal only means something while it is reserved for what genuinely
+  was not.
+- **The device registry would have panicked on first real use.** `AY.StateID`
+  returned the constant `"ay"`, but a Next carries four AY chips — three in
+  the TurboSound engine and the ULA's own — so the first `Register` call would
+  have hit "duplicate device identifier" and killed the emulator at startup.
+  The identifier is per instance now, and the engine is a device in its own
+  right, which also captures the two pieces of state no chip holds: which chip
+  `$FFFD` has selected, and the NextReg $06 reset-hold.
+- **A failed restore left the machine half-rewound.** `Registry.Restore`
+  validates the device set before applying anything, but cannot know whether
+  each blob will decode, so a device rejecting its state part way through left
+  every earlier device already restored — the outcome the package doc calls
+  the worst available. It captures a rollback first and unwinds on failure,
+  and reports separately when the rollback itself fails.
+- **`plus3fdc`'s `formatFail` was captured and could never be observed.** It
+  is cleared on entry to the write-ID path, set while the track builder runs,
+  read once, and cleared again before the same function returns — so it never
+  outlives the port write that set it, and captures are taken at instruction
+  boundaries. Removed, with `TestFormatFailNeverOutlivesTheCommandThatSetsIt`
+  as the defence: removing a captured field is a claim needing the same rigour
+  as adding one. It was the one survivor of an audit of all 278 field restores
+  in the tree, which `_tools/mutaudit/fullaudit.sh` (local-only) reported at
+  277/277 killed afterwards, against a green baseline and with no invalid
+  results.
 - **Four ways the `PHASE` verdict could report agreement it had not earned.**
   `PHASE` rescues a pair the pointwise comparison rejected, by asking whether
   either machine's screen appears anywhere in the other's sampled sequence, so

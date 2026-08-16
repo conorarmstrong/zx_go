@@ -5,9 +5,10 @@ everywhere — the only platform-specific detail is which physical key
 your keyboard puts the modifier on. `Cmd` on macOS, `Ctrl` and `Alt`
 elsewhere all behave the same way in the emulator.
 
-If you prefer to point and click, there's also a graphical Spectrum
-keyboard at the bottom of the emulator window — clicking a key sends
-the same matrix event as pressing it on your physical keyboard.
+There is no on-screen clickable keyboard: every key comes from your
+physical one, through the mappings below. If a symbol will not type on
+your layout, remap it — **Emulator → Custom Keymap…** edits the table
+and saves it to your config.
 
 ## Basic key mappings
 

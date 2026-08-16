@@ -51,7 +51,7 @@ sound, which narrows the debug area when a specific title misbehaves.
 | `TestSaveDSKRoundTrip` (plus3fdc) | +3 disk image parser / writer is symmetric. Doesn't prove arbitrary +3 disk titles boot. |
 | `TestNextRealROMBoot` (testharness) | NextZXOS boots through ~10K instructions without crashing. Doesn't prove it reaches the BASIC prompt or any specific Next title runs. |
 | `TestModelNextLayer2VisibleEndToEnd` (testharness) | The NextReg → palette → Layer 2 → compositor pipeline produces correct RGBA pixels. Doesn't prove arbitrary Layer 2 demos look right (timing, sprite layering, Copper sync). |
-| `TestLoadNEXAgainstRealSample` (testharness) | The .NEX V1.2 parser correctly reads banks 0–7 from a real distro file. Banks ≥8 are silently skipped — `.nex` files using extended banks won't load fully. |
+| `TestLoadNEXAgainstRealSample` (testharness) | The .NEX V1.2 parser reads a real distro file's banks and sets SP/PC from its header. The parser and `Harness.LoadNEX` cover all 112 banks (0–111); what is still a caveat is an *entry* bank ≥8, which classic 7FFD paging cannot map — such a title must page itself via NextReg $50–$57 before its entry point. |
 | `TestZexdoc`, `TestZexall` (z80) | Every documented Z80 instruction passes Cringle's exerciser; every undocumented behaviour (F3/F5, MEMPTR/WZ partial, DDCB register-copy) passes too. |
 
 If a title in a covered category fails, the bug is almost certainly
@@ -176,9 +176,10 @@ mark anything unverified as Untested.
 
 ## Verifying a title yourself
 
-The manifest is mostly "Untested" because verification needs the actual
-software, which is not redistributable and so is not vendored. Nothing here
-should be marked Works on the strength of unit tests alone.
+Six rows are still "Untested", and most of the rest stop at *Boots*, because
+verification needs the actual software, which is not redistributable and so is
+not vendored. Nothing here should be marked Works on the strength of unit tests
+alone.
 
 The quickest route is `pkg/testharness`, which boots a machine headless and
 renders a frame you can look at:
@@ -245,18 +246,20 @@ run by figuring out which class it belongs to:
 2. Does it use the AY sound chip? → Multi-AY tests cover register
    semantics; if your title uses AY through standard ports, the
    sound will play.
-3. Does it use IF1 / Microdrive? → `TestIF1CATWorks` covers the boot
+3. Does it use IF1 / Microdrive? → `TestIF1CATCommand` covers the boot
    path.
-4. Does it use DISCiPLE / +D? → `TestDISCiPLEBootsIntoGDOS` covers
-   the boot path.
-5. Does it use +3 disks? → `TestPlus3FDCDiskRoundtrip` covers disk
-   I/O.
+4. Does it use DISCiPLE / +D? → `TestDiscipleColdBootAndKeypress`
+   covers the boot path.
+5. Does it use +3 disks? → `TestSaveDSKRoundTrip` covers the image
+   container, and `TestScreenLocalTitles` screens real `.dsk` titles
+   end to end.
 6. Does it depend on cycle-exact contention (e.g. multicolour
    scanline tricks)? → Open in a hex editor, check whether it does
    raster waiting via T-state loops; if yes, expect potential
    wobble.
-7. Is it a Next .NEX file? → Banks 0-7 fully supported; 8-111
-   silently skipped today.
+7. Is it a Next .NEX file? → All 112 banks (0-111) load; only an
+   *entry* bank ≥8 is a caveat, since classic 7FFD paging cannot map
+   one.
 
 ## Spectrum Next SD games (NEXLOAD)
 
@@ -267,8 +270,10 @@ the only honest way to judge Next game compatibility — bank injection
 clobbers the OS's workspace banks and would report working games as
 broken.
 
-**9 of 10 launch and render.** Confirmed by eye for Halls of The Things
-(full menu) and Night-Knight (in-game, sprite and platform drawn).
+**All 12 `.nex` titles on the card launch and render** — re-run green
+2026-08-16, and the test now *fails* a title that launches and draws nothing
+rather than only logging it. Confirmed by eye for Halls of The Things (full
+menu) and Night-Knight (in-game, sprite and platform drawn).
 
 This is the Next half of the corpus. The classic titles screened
 elsewhere in this document say nothing about Next-only hardware.
@@ -341,8 +346,8 @@ every bitmap byte holds the same value carries no shape at all — uninitialised
 video memory renders as even vertical stripes and scores 18432 px in 2 colours,
 clearing both floors. Eight +3 disk rows were recorded as *Boots* on exactly
 that, five of them identical to the pixel. Screening now tests the bitmap for
-structure (`Screening.FlatBitmap`), which is the test `_tools/refdiff` has
-always used and which reported all eight as blank.
+structure (`Screening.FlatBitmap`), which is the test `_tools/refdiff`
+(local-only) has always used and which reported all eight as blank.
 
 **Known weakness: the +3 menu still measures as content.** It is drawn in
 the middle of the display, so it clears both the pixel and the canvas
@@ -379,15 +384,20 @@ question:
 **A short count is usually not a fault.** Most of these titles are
 multiloads: Lemmings decodes 2 blocks of 125 and puts up "PRESS SPACE TO
 BEGIN", because the other 121 are levels that load once you start. Read
-the screen before reading the count — `tapeprobe -shots` writes one per
-title, and `refdiff -keep` writes ours beside a reference's.
+the screen before reading the count — the maintainer's `_tools/tapeprobe
+-shots` writes one per title, and `_tools/refdiff -keep` writes ours beside a
+reference's. (`_tools/` is gitignored, so neither is in a clone.)
 
 The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
 build.
 
 **Of 113 titles screened, 108 rendered content (29 animating,
-65 answering a keypress) and 4 did not.**
+65 answering a keypress) and 4 did not.** *These four figures are a
+transcript of one screening run and do not add up — 108 + 4 leaves one
+title unaccounted for — and the run predates the flat-bitmap fix that
+moved eight rows to Known issue. Unverified as they stand: re-run
+`TestScreenLocalTitles` over the local corpus and restate them.*
 Every disk image now loads: of a 250-image sample only one still fails to
 parse, and that one is a truncated dump whose track data runs past the end
 of the file.

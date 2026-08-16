@@ -43,9 +43,22 @@ func loadLocalTitles(t *testing.T) []localTitle {
 	if os.Getenv("ZX_GO_SCREEN") == "" {
 		t.Skip("set ZX_GO_SCREEN=1 to screen local titles (slow; see the compatibility manifest)")
 	}
+	rows, present := readLocalTitles(t)
+	if !present {
+		t.Skip("no testdata/local_titles.tsv — screening of local commercial titles is opt-in")
+	}
+	return rows
+}
+
+// readLocalTitles parses the manifest, reporting separately whether it is there
+// at all so each caller can say what its own absence means. A malformed row is
+// still fatal: a list that exists and does not parse is a mistake to fix, not an
+// opt-out.
+func readLocalTitles(t *testing.T) ([]localTitle, bool) {
+	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", "local_titles.tsv"))
 	if err != nil {
-		t.Skip("no testdata/local_titles.tsv — screening of local commercial titles is opt-in")
+		return nil, false
 	}
 	defer func() { _ = f.Close() }()
 
@@ -73,7 +86,7 @@ func loadLocalTitles(t *testing.T) []localTitle {
 		}
 		out = append(out, localTitle{name: row[0], path: row[1], model: m, frames: n})
 	}
-	return out
+	return out, true
 }
 
 // TestScreenLocalTitles boots each listed title and reports a verdict.

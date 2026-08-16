@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-14 — v1.9.0)
+## CURRENT STATE (2026-08-16 — v1.9.1, plus unreleased work)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -39,7 +39,7 @@ converted into "arbitrary `.NEX` titles run".
 
 ### 1. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **158 title rows: 11 Works, 18 Works
+`docs/compatibility.md` now holds **158 title rows: 11 Works, 20 Works
 (caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6
 Untested.** It was 36 rows with 13 Untested before automated screening.
 
@@ -63,9 +63,9 @@ SPACE moves the PC off `$7670` at once.
 
 The lesson to keep: **when no reference will corroborate a title, disassemble
 the loop rather than keep hunting for a reference.** Two emulators refusing to
-start an image says nothing about ours. `_tools/loaderstop` does the whole
-sequence — sample the PC, dump the stack, disassemble the callers, press a key
-and report whether it moved.
+start an image says nothing about ours. `_tools/loaderstop` (local-only) does
+the whole sequence — sample the PC, dump the stack, disassemble the callers,
+press a key and report whether it moved.
 
 Tracing it also turned up a genuine datasheet violation on the way: READ A
 TRACK was not setting ND when the ID it is given is absent from the track, now
@@ -86,10 +86,12 @@ verdict means the guest's own code ran and drew its title or menu screen; it
 does **not** mean the title was played, because no input is sent. That is the
 remaining gap.
 
-- [x] ~~Resolve the 13 Untested entries~~ — 8 resolved. The other 5 record why
-  they could not be: no copy to hand (Jet Set Willy, The Hobbit, Baggers in
-  Space, Lemmings +3), or no +3 disk loader in the harness yet (Where Time
-  Stood Still +3).
+- [x] ~~Resolve the 13 Untested entries~~ — 8 resolved. Six rows still read
+  Untested and each records why: no copy to hand (Jet Set Willy, The Hobbit,
+  Baggers in Space, Lemmings +3), or no launchable program in the title's own
+  directory (Pogie, THEH — assets plus a 48K-sized `.snx`). Where Time Stood
+  Still +3, listed here as the sixth until 2026-08-14, is now a Known issue row
+  instead: it was screened, and both machines are blank on that image.
 - [x] ~~Drive input~~ — `Harness.ProbeInput` sends keys to a still screen and
   reports a material change, against a no-key control so self-animation is not
   credited to the keypress. 78 titles answer input.
@@ -288,9 +290,10 @@ are simply unmotivated.
 timing are complete and spec-checked. Not modelled: the interrupt/match logic
 and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`).
 
-The Next corpus now exists — 10 SD games driven through NEXLOAD, 9 rendering —
-and none of them needs this. That is the evidence the item was waiting for, and
-it argues for leaving it alone until a title actually demands it.
+The Next corpus now exists — all 12 SD `.nex` games driven through NEXLOAD, all
+12 rendering (`TestNexloadSDGames`, re-run green 2026-08-16) — and none of them
+needs this. That is the evidence the item was waiting for, and it argues for
+leaving it alone until a title actually demands it.
 
 ### 3. [product] Windows ARM64: the core is proven, the GUI is not
 
@@ -338,35 +341,37 @@ requests OpenGL ES 2.0 over WGL and cannot be built any other way.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 4. [product] Time travel: reverse debugging lands, replay step-back lands, one device short
+### 4. [product] Time travel: three mechanisms shipped, two devices short
 
-Two mechanisms, deliberately separate, at different stages.
+Three mechanisms, deliberately separate.
 
-**Reverse debugging is done** (`pkg/debugger/reverse.go`). A cursor walks the
-M1 ring backwards one instruction at a time, and every view reads the instant
-under it. Registers, shadow registers, flags, an eight-word stack window and
-the branch that led to each instruction, as far back as the ring holds.
-Conditions evaluate against a recorded instant through the same interface the
-live machine uses, so `run-back "a == 0"` works.
+**Reverse debugging is done and wired to both surfaces**
+(`pkg/debugger/reverse.go`, `pkg/debugger/reverse_ui.go`,
+`cmd/zx_go/reverse_cmd.go`). A cursor walks the M1 ring backwards one
+instruction at a time, and every view reads the instant under it. Registers,
+flags and the branch that led to each instruction always; on a wide ring the
+pair registers, the shadow registers and an eight-word stack window too, as far
+back as the ring holds. Conditions evaluate against a recorded instant through
+the same interface the live machine uses, so `run-back "a == 0"` works. The
+telnet commands are `step-back`, `step-forward`, `run-back`, `to-present` and
+`reverse-status`; the GUI's **Reverse** tab drives the same cursor, and the
+visual debugger opens a wide ring by default so its panels have the shadow set
+and the stack window to show.
 
 The invariant to keep: **anything the recording cannot answer is refused, not
 guessed.** Memory is not recorded per instruction, so a memory condition has
 no value to test going backwards, and a narrow ring never recorded BC. Both
 return an error. Do not "improve" this into evaluating against zero: a
 breakpoint that silently stops being the one the user wrote sends people
-hunting bugs that are not there.
-
-- [ ] **Wire it to the surfaces.** The cursor logic is tested; the telnet
-  commands (`step-back`, `run-back`, `to-present`) and the GUI reverse mode
-  are not written yet. The GUI is the larger half: every panel that currently
-  reads the live CPU must read the cursor's instant instead.
+hunting bugs that are not there. Note the reason answerability is re-checked at
+every step of a backwards search is NOT short-circuit evaluation — `binOp.eval`
+computes both operands eagerly — it is that the check costs nothing.
 
 **Snapshot rewind now restores the machine.** The time-travel ring captures
 through the registry, so a rewind returns every registered device rather than
-the CPU and the visible 64 K. What it still does not return is the tape
-position, the +D and the Opus Discovery, none of which have a `Device`; a
-rewind mid-load still does not resume. The ring holds 16 captures by default,
-so the reachable window is short.
+the CPU and the visible 64 K. What it still does not return is the +D and the
+Opus Discovery, neither of which has a `Device`. The ring holds 16 captures by
+default, so the reachable window is short.
 
 `pkg/machinestate` is the registry the complete capture is built on: named
 devices, a device-set check in both directions before anything is applied, and
@@ -378,9 +383,13 @@ canonical ordering so two captures of an unchanged machine compare equal.
   only checks the fields someone remembered to add. Worth knowing: the LFSR
   mutation initially passed, because the fixture wrote `0x38` to the mixer and
   those bits are active low, so it had disabled noise on every channel.
-- [x] ~~The remaining devices~~ — ULA, memory, `plus3fdc`, `betadisk`, keyboard,
-  `if1`, `multiface`, the DAC and the whole Next set are captured. **Not** the
-  tape, the +D or the Opus Discovery; those three are what is left.
+- [x] ~~The remaining devices~~ — the CPU, ULA, memory, `plus3fdc`, `betadisk`,
+  keyboard, `if1`, `multiface`, the DAC, the tape player (`pkg/ula/tapestate.go`
+  — position, not the tape image) and the whole Next set are captured;
+  `(*emulator).stateRegistry` is the list, and it registers each device
+  exactly when the machine really carries it. **Not** the +D or the Opus
+  Discovery; those two are what is left. `pkg/next/lores` has a `Device` that
+  nothing can register, because no code owns a LoRes instance.
 - [x] ~~The replay-equivalence oracle~~ — `cmd/zx_go/replay_oracle_test.go`.
   Fingerprints outputs and memory in bulk rather than device state, so it
   cannot pass by comparing the capture with itself, and a companion test
@@ -407,8 +416,8 @@ segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
 so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 (`pkg/next/copper/copper.go:19`).
 
-The 10 Next games now screened render correctly without it, so there is still
-no observed case where it matters. Leave it until one appears.
+The 12 Next `.nex` games now screened render correctly without it, so there is
+still no observed case where it matters. Leave it until one appears.
 
 ---
 
@@ -503,7 +512,7 @@ Solved problems whose answers were expensive to find.
   `roms/next/sd` at runtime. Case-only 8.3 aliases matter: the firmware
   resolves `menu.ini` by short name.
 - **`ZX_GO_RTC_FIXED=<RFC3339>` freezes the guest clock**
-  (`cmd/zx_go/next.go:835`). Required for deterministic menu-interaction
+  (`cmd/zx_go/next.go:843`). Required for deterministic menu-interaction
   tests — a wall-clock RTC makes the menu's clock-tick phase
   nondeterministic.
 - **Never write to the real install directory from tests.** Use

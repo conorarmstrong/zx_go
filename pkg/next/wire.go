@@ -867,14 +867,21 @@ type WireOpts struct {
 //
 // Wire also installs the memory.SpeedMultiplier hook so RAM
 // contention scales with the CPU's current speed.
-func Wire(opts WireOpts) {
+//
+// The two returned values are the machinestate devices for the register state
+// this package's own handlers hold rather than forward to a subsystem: the
+// NR$18-$1C clip windows and the NR$02 reset control. Everything else Wire
+// installs writes through to a device that captures itself, so these are the
+// only two a caller has to hold on to. Callers that do not capture state can
+// ignore them.
+func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 	WireMMU(opts.Dispatcher, opts.Memory)
 	WireROMBank(opts.Dispatcher, opts.Memory)
 	WireAltROM(opts.Dispatcher, opts.Memory)
 	WireMachineType(opts.Dispatcher, opts.Memory)
 	WireConfigModeRAMPage(opts.Dispatcher, opts.Memory)
 	spiReset, _ := opts.DivMMCPager.(SPIResetter)
-	WireReset(opts.Dispatcher, opts.Memory, opts.CPU, spiReset)
+	resetControl := WireReset(opts.Dispatcher, opts.Memory, opts.CPU, spiReset)
 	WireCPUSpeed(opts.Dispatcher, opts.CPU)
 	WireLineInterrupt(opts.Dispatcher, opts.CPU)
 	WireContentionDisable(opts.Dispatcher, opts.Memory)
@@ -927,9 +934,10 @@ func Wire(opts WireOpts) {
 		WireTilemap(opts.Dispatcher, opts.Tilemap, opts.Palette)
 	}
 	WirePeripheralMasks(opts.Dispatcher)
-	WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites)
+	clipWindows := WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites)
 	opts.Memory.SpeedMultiplier = opts.CPU.SpeedMultiplier
 	applyTBBLUEFWBootDefaults(opts.Dispatcher)
+	return clipWindows, resetControl
 }
 
 // clipWindow models a Spectrum Next clip-window register (NR$18 Layer2,
@@ -956,15 +964,38 @@ func (c *clipWindow) reset() {
 	c.idx = 0
 }
 
+// ClipWindows is the four clip-window registers NR$18-$1B as one device: the
+// coordinates and, just as importantly, the four 2-bit write indices read back
+// at NR$1C.
+//
+// It is a struct rather than four values inside WireClipWindows' closure
+// because state a closure owns is reachable from nothing: the tilemap and the
+// sprite engine capture the coordinates pushed down to them, but Layer 2's
+// window, the ULA's window and every one of the four indices existed only
+// here, so a rewind taken part-way through a coordinate sequence resumed with
+// the wrong index and put the guest's next write in the wrong coordinate.
+type ClipWindows struct {
+	l2  clipWindow
+	spr clipWindow
+	ula clipWindow
+	tm  clipWindow
+}
+
 // WireClipWindows installs the faithful clip-window behaviour for NR$18-$1B
 // plus the NR$1C index reset/read-back, replacing the old single-byte
 // approximation. Reset defaults per zxnext.vhd 4959-4982: Layer2/sprite/ULA
 // = {00,FF,00,BF}; tilemap = {00,9F,00,FF}.
-func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *sprite.Engine) {
-	l2 := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
-	spr := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
-	ula := &clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}}
-	tm := &clipWindow{def: [4]byte{0x00, 0x9F, 0x00, 0xFF}}
+//
+// The returned *ClipWindows is the machinestate.Device for the state these
+// handlers own; callers that do not capture state can ignore it.
+func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *sprite.Engine) *ClipWindows {
+	cw := &ClipWindows{
+		l2:  clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}},
+		spr: clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}},
+		ula: clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}},
+		tm:  clipWindow{def: [4]byte{0x00, 0x9F, 0x00, 0xFF}},
+	}
+	l2, spr, ula, tm := &cw.l2, &cw.spr, &cw.ula, &cw.tm
 	all := []*clipWindow{l2, spr, ula, tm}
 	for _, c := range all {
 		c.reset()
@@ -1021,6 +1052,7 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *
 			c.reset()
 		}
 	})
+	return cw
 }
 
 // WirePeripheralMasks installs OnWrite handlers for NR$81, $85, $89,
@@ -1471,6 +1503,21 @@ func WireAltROM(d *nextregs.Dispatcher, mem *memory.Memory) {
 	})
 }
 
+// ResetControl is the NR$02 state the FPGA keeps behind the register: the
+// 3-bit reset-type shift history (zxnext.vhd:1306, :1736) and the latched
+// NMI-source bits that compose the read-back.
+//
+// It is a struct rather than two values inside WireReset's closure because
+// software sees only bits 1:0 of the history (vhd:5891), so bit 2 — the bit
+// that decides what the NEXT soft reset shifts into view — cannot be
+// reconstructed from the stored register byte any capture of the NextReg file
+// holds. Without a Device of its own, the first soft reset after a rewind
+// shifted from whatever history the machine had run on to.
+type ResetControl struct {
+	resetType byte // 3-bit shift history; reads expose bits 1:0
+	nmiSource byte // read-back source latch: bit 3 multiface, bit 2 divMMC
+}
+
 // WireReset wires NextReg $02 (Reset). Per the SpecNext wiki at
 // https://wiki.specnext.dev/Next_Reset_Register the register acts
 // as a "sticky" reset-reason indicator on read and a reset-trigger
@@ -1513,7 +1560,11 @@ func WireAltROM(d *nextregs.Dispatcher, mem *memory.Memory) {
 // divmmcSPI, if non-nil, has its SPI chip-select deasserted on every
 // reset (hard or soft) — modelling the FPGA's port_e7_reg reset. Pass
 // nil on classic-model / SD-less / test paths.
-func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcSPI SPIResetter) {
+//
+// The returned *ResetControl is the machinestate.Device for the reset-type
+// history and the NMI-source latch these handlers own; callers that do not
+// capture state can ignore it.
+func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcSPI SPIResetter) *ResetControl {
 	// DIAGNOSTIC (not a fix): ZX_GO_SUPPRESS_RESET_PC="$XXXX" suppresses the
 	// actual reset effect for soft-resets whose trigger PC matches, while
 	// still latching NR$02. Used to test whether the recurring NextZXOS
@@ -1543,16 +1594,15 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	// Seed: with the FPGA bootrom armed, the bootrom itself issues
 	// the first soft reset (start at power-on "100"); the direct-boot
 	// path skips the bootrom, so seed "010" = that one soft applied.
-	var resetType byte = 0b010
+	rc := &ResetControl{resetType: 0b010}
 	if mem.FPGABootROMActive() {
-		resetType = 0b100
+		rc.resetType = 0b100
 	}
-	// nr02NMISource latches the NMI-source read-back bits (bit 4 = i/o
+	// rc.nmiSource latches the NMI-source read-back bits (bit 4 = i/o
 	// trap, bit 3 = multiface, bit 2 = divmmc; nextreg.txt:41-43). A
 	// write that sets bit 3/2 fires the NMI and latches the source bit;
 	// a write with the bit clear clears it ("write zero to clear").
-	var nr02NMISource byte
-	d.Store(0x02, resetType&0x03)
+	d.Store(0x02, rc.resetType&0x03)
 	d.SetOnWrite(0x02, func(disp *nextregs.Dispatcher, val byte) {
 		triggerPC := cpu.PC // capture before any reset zeroes it
 		// Capture the bytes the CPU sees at the trigger PC BEFORE the reset
@@ -1597,14 +1647,14 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		// NMI master is already active — so only arm/fire when the MF
 		// isn't already paged in.
 		if val&0x08 != 0 && !mem.MultifaceActive() { // bit 3 = Generate multiface NMI
-			nr02NMISource |= 0x08
+			rc.nmiSource |= 0x08
 			mem.SetMultifaceActive(true) // page MF ROM in so the NMI vectors into it
 			cpu.PendingNMI.Store(true)
 		} else if val&0x08 == 0 {
-			nr02NMISource &^= 0x08
+			rc.nmiSource &^= 0x08
 		}
 		if val&0x04 != 0 { // bit 2 = Generate divmmc NMI
-			nr02NMISource |= 0x04
+			rc.nmiSource |= 0x04
 			cpu.PendingNMI.Store(true)
 			// Latch button_nmi so the $0066 NMI-vector automap engages for
 			// the divMMC NMI (divmmc.vhd:110-120). Only the divMMC NMI does
@@ -1613,29 +1663,29 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 				q.AssertNMIButton()
 			}
 		} else {
-			nr02NMISource &^= 0x04
+			rc.nmiSource &^= 0x04
 		}
 		// reset_type shift-history per zxnext.vhd:1736. A hard reset
 		// re-runs the fabric's power-on init → back to "100".
-		prevRT := resetType
+		prevRT := rc.resetType
 		if hardFire {
-			resetType = 0b100
+			rc.resetType = 0b100
 		} else if softFire {
-			b2 := resetType >> 2 & 1
+			b2 := rc.resetType >> 2 & 1
 			b10 := byte(0)
-			if resetType&0x03 != 0 {
+			if rc.resetType&0x03 != 0 {
 				b10 = 1
 			}
-			resetType = b2<<1 | b10
+			rc.resetType = b2<<1 | b10
 		}
 		if os.Getenv("ZX_GO_NR02_TRACE") != "" && (softFire || hardFire) {
 			fmt.Printf("NR02 write val=%02X softFire=%v hardFire=%v resetType %03b->%03b (reads %02X) pc=$%04X\n",
-				val, softFire, hardFire, prevRT, resetType, resetType&0x03, triggerPC)
+				val, softFire, hardFire, prevRT, rc.resetType, rc.resetType&0x03, triggerPC)
 		}
 		// Read composition (vhd:5891): bus_reset(b7, latched from this
 		// write's bit 7 per vhd:5119) + iotrap(b4, not modelled, reads 0)
-		// + mf_nmi(b3)/divmmc_nmi(b2) from nr02NMISource + reset_type(1:0).
-		disp.Store(0x02, val&0x80|nr02NMISource|resetType&0x03)
+		// + mf_nmi(b3)/divmmc_nmi(b2) from rc.nmiSource + reset_type(1:0).
+		disp.Store(0x02, val&0x80|rc.nmiSource|rc.resetType&0x03)
 		if suppressOn && softFire && !hardFire && triggerPC == suppressPC {
 			// Diagnostic: latch NR$02 but skip the actual reset, to see if the
 			// boot proceeds without this soft-reset.
@@ -1746,6 +1796,7 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 				"sp", fmt.Sprintf("$%04X", sp), "stack", fmt.Sprintf("% 02X", stk[:]))
 		}
 	})
+	return rc
 }
 
 // Other subsystems (CPU speed at NextReg 0x07, palette at 0x40–0x44,

@@ -263,6 +263,13 @@ type emulator struct {
 	nextAY     *ay.Engine
 	nextDMA    *dma.DMA
 	nextDivMMC *divmmc.Pager
+	// nextClipWindows (NR$18-$1C) and nextReset (NR$02) are the register
+	// state pkg/next's own handlers hold: clip coordinates with their write
+	// indices, and the 3-bit reset-type history software can only see two
+	// bits of. Nothing else in the machine can reach either, so these refs
+	// are the only way the state registry captures them.
+	nextClipWindows *next.ClipWindows
+	nextReset       *next.ResetControl
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS
@@ -3000,6 +3007,7 @@ func main() {
 		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
 		emu.nextSprites, emu.nextLayer2 = fresh.nextSprites, fresh.nextLayer2
 		emu.nextAY, emu.nextDMA, emu.nextDivMMC = fresh.nextAY, fresh.nextDMA, fresh.nextDivMMC
+		emu.nextClipWindows, emu.nextReset = fresh.nextClipWindows, fresh.nextReset
 		currentModel = newModel
 		saveConfig()
 		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(newModel)))
