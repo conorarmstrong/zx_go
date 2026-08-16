@@ -293,3 +293,25 @@ func TestDiskLoadedMeansTheScreenLeftTheLoaderMenu(t *testing.T) {
 		t.Error("a blanked screen has left the menu")
 	}
 }
+
+// DiskLoaded is described as the only guard between a comparison and two
+// machines that both sat on the ROM menu, but it had none of the
+// missing-capture guards the rest of this package enforces. A menu screen that
+// was never captured read as "the screen left the menu", which is the opposite
+// of what a failed capture means.
+func TestDiskLoadedRefusesToDecideOnACaptureThatFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		menu, after []byte
+	}{
+		{"the menu was never captured", nil, scr(0)},
+		{"the menu capture was short", make([]byte, 100), scr(0)},
+		{"the later screen was never captured", scr(64), nil},
+		{"neither was captured", nil, nil},
+	} {
+		if DiskLoaded(tc.menu, tc.after) {
+			t.Errorf("%s: reported loaded, but a missing capture is data we do not have, "+
+				"not evidence the screen moved", tc.name)
+		}
+	}
+}

@@ -219,6 +219,11 @@ func Judge(ours, ref Run, custom, probed bool) (Verdict, float64) {
 		}
 		return Diverges, pct
 	case ours.Moved || ref.Moved:
+		// Duplicated deliberately rather than hoisted: inside the divergence
+		// band the rescue must be tried BEFORE motion voids the comparison,
+		// because an attract cycle is moving by definition. Outside it, motion
+		// voids first. Hoisting one check above the band would change which of
+		// those two wins.
 		return Animated, pct
 	case pct == 0:
 		return Identical, pct
@@ -298,4 +303,15 @@ func Blank(scr []byte) bool {
 // The disk path has no loader event stream to go quiet, so this is how "did it
 // load" is answered there. It is the only guard standing between a comparison
 // and two machines that both sat on the ROM menu.
-func DiskLoaded(menu, before []byte) bool { return !bytes.Equal(menu, before) }
+//
+// A capture that failed answers nothing. Comparing a missing menu against a
+// real screen finds them unequal and would report a load, which is the
+// opposite of what missing data means: the same rule comparable() enforces for
+// the cross-match search, applied to the one guard that decides whether a disk
+// side got anywhere at all.
+func DiskLoaded(menu, before []byte) bool {
+	if len(menu) < ScreenLen || len(before) < ScreenLen {
+		return false
+	}
+	return !bytes.Equal(menu, before)
+}

@@ -126,3 +126,30 @@ func TestConditionsEvaluateAgainstARecordedInstant(t *testing.T) {
 		t.Error("a memory condition must be reported as unanswerable in reverse")
 	}
 }
+
+// The ROM bank IS recorded in every entry, and the live machine answers "bank",
+// so refusing it going backwards spends the refusal on state that was captured.
+// The refusal has to stay reserved for what genuinely was not recorded, or it
+// stops meaning anything.
+func TestHistoryStateAnswersTheRecordedROMBank(t *testing.T) {
+	s := NewHistoryState(HistoryEntry{PC: 0x8000, ROMBnk: 3})
+
+	got, ok := s.Reg("bank")
+	if !ok {
+		t.Fatal("bank is recorded in every entry and must be answerable going backwards")
+	}
+	if got != 3 {
+		t.Errorf("Reg(\"bank\") = %d, want 3", got)
+	}
+	if s.Unanswerable() {
+		t.Error("answering a recorded field must not mark the evaluation unanswerable")
+	}
+}
+
+// A narrow ring records the bank too, so it is answerable there as well.
+func TestANarrowRingStillAnswersTheROMBank(t *testing.T) {
+	s := NewHistoryStateNarrow(HistoryEntry{ROMBnk: 2})
+	if got, ok := s.Reg("bank"); !ok || got != 2 {
+		t.Errorf("narrow Reg(\"bank\") = %d, ok=%v, want 2, true", got, ok)
+	}
+}

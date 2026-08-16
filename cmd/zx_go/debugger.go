@@ -394,28 +394,11 @@ func newRemoteDebugger(emu *emulator, port int, pauseAtStart bool, historySize i
 		// no allocations per push, no map lookups, single mutex.
 		emu.cpu.AddPreFetchHook("debugger-history", func(pc uint16) {
 			c := emu.cpu
-			e := debugger.HistoryEntry{
-				PC:         pc,
-				SP:         c.SP,
-				A:          c.A,
-				F:          c.F,
-				IFFIM:      debugger.PackIFFIM(c.IFF1, c.IFF2, c.Halted, int(c.IM)),
-				Insns:      c.InstructionCount(),
-				ROMBnk:     byte(d.currentROMBank()),
-				Source:     debugger.PCSource(c.BranchSource),
-				SourceFrom: c.BranchFrom,
-			}
+			e := d.buildHistoryEntry(pc, wide)
 			// Consume the branch latch so the NEXT M1 sees
 			// sequential if no branch fires.
 			c.BranchSource = 0
 			c.BranchFrom = 0
-			if wide {
-				e.BC = c.BC()
-				e.DE = c.DE()
-				e.HL = c.HL()
-				e.IX = c.IX
-				e.IY = c.IY
-			}
 			d.history.Push(e)
 		})
 	}
@@ -582,9 +565,7 @@ func (d *remoteDebugger) acceptLoop() {
 // currentROMBank returns the bank index (0-3) currently mapped
 // at $0000-$3FFF. Used for bank-filtered breakpoints.
 func (d *remoteDebugger) currentROMBank() int {
-	mem := d.emu.mem
-	port7FFD, port1FFD, _ := mem.GetPortState()
-	return int((port7FFD>>4)&1) | int((port1FFD>>1)&2)
+	return int(emuROMBank(d.emu))
 }
 
 // WaitIfPaused blocks the calling goroutine (the headless loop)

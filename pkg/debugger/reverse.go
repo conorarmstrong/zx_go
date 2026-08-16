@@ -141,14 +141,22 @@ func (c *ReverseCursor) RunBack(cond Condition) error {
 		return ErrNoHistory
 	}
 
-	// Answerability is checked at every step rather than probed once up
-	// front. The condition is the same each time, but evaluation short
-	// circuits: "a == 0 && read $4000 == 1" never reaches the memory read on
-	// an instant where A is non-zero. A single probe would therefore clear a
-	// condition that becomes unanswerable further back, and the scan would
-	// quietly return a match decided on an invented zero.
-	for back := c.back + 1; back <= c.h.Len()-1; back++ {
-		e, ok := c.h.At(c.h.Len() - 1 - back)
+	// The length is read ONCE. It was previously re-read in the loop bound and
+	// again inside At, so the bound and the index came from two observations
+	// of a ring that is still being written, and the scan could skip or
+	// revisit entries. Nothing enforces the "freeze the machine first"
+	// precondition, so this cannot rely on it.
+	//
+	// Answerability is then checked at every step rather than probed once.
+	// Note this is NOT because evaluation short circuits: binOp.eval computes
+	// both operands eagerly (condition.go), so a memory read is reached on the
+	// first instant regardless of the other operand. An earlier version of
+	// this comment claimed the opposite and was wrong. Checking per step is
+	// still correct, and costs nothing, because which registers a narrow ring
+	// can answer does not vary between entries either.
+	n := c.h.Len()
+	for back := c.back + 1; back <= n-1; back++ {
+		e, ok := c.h.At(n - 1 - back)
 		if !ok {
 			break
 		}

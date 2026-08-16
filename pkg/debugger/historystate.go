@@ -92,8 +92,12 @@ func (s *HistoryState) Reg(name string) (int64, bool) {
 		return b2i(s.e.Halted()), true
 	case "im":
 		return int64(s.e.IM()), true
-	case "insns":
-		return int64(s.e.Insns), true
+	case "bank":
+		// Recorded in every entry, narrow rings included, so refusing it
+		// would spend the refusal on state that WAS captured. The refusal
+		// only means anything while it is reserved for what genuinely was
+		// not recorded.
+		return int64(s.e.ROMBnk), true
 	}
 
 	// Everything below was only recorded by a wide ring.

@@ -4447,14 +4447,10 @@ func main() {
 					emu.debugHistory = debugger.NewHistoryWide(4096)
 					emu.cpu.AddPreFetchHook("visual-debugger-history", func(pc uint16) {
 						c := emu.cpu
-						emu.debugHistory.Push(debugger.HistoryEntry{
-							PC: pc, SP: c.SP, A: c.A, F: c.F,
-							IFFIM: debugger.PackIFFIM(c.IFF1, c.IFF2, c.Halted, int(c.IM)),
-							Insns: c.InstructionCount(),
-							BC:    c.BC(), DE: c.DE(), HL: c.HL(),
-							IX: c.IX, IY: c.IY,
-							Source: debugger.PCSource(c.BranchSource), SourceFrom: c.BranchFrom,
-						})
+						// Same builder as the telnet surface: both write
+						// into this one ring, so an entry must not mean
+						// different things depending on who opened it.
+						emu.debugHistory.Push(buildGUIHistoryEntry(emu, pc, true))
 						c.BranchSource = 0
 						c.BranchFrom = 0
 					})
