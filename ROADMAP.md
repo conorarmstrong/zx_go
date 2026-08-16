@@ -338,7 +338,67 @@ requests OpenGL ES 2.0 over WGL and cannot be built any other way.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 4. [research] Copper cycle accuracy
+### 4. [product] Time travel: reverse debugging lands, rewind is half done
+
+Two mechanisms, deliberately separate, at different stages.
+
+**Reverse debugging is done** (`pkg/debugger/reverse.go`). A cursor walks the
+M1 ring backwards one instruction at a time, and every view reads the instant
+under it. Registers, shadow registers, flags, an eight-word stack window and
+the branch that led to each instruction, as far back as the ring holds.
+Conditions evaluate against a recorded instant through the same interface the
+live machine uses, so `run-back "a == 0"` works.
+
+The invariant to keep: **anything the recording cannot answer is refused, not
+guessed.** Memory is not recorded per instruction, so a memory condition has
+no value to test going backwards, and a narrow ring never recorded BC. Both
+return an error. Do not "improve" this into evaluating against zero: a
+breakpoint that silently stops being the one the user wrote sends people
+hunting bugs that are not there.
+
+- [ ] **Wire it to the surfaces.** The cursor logic is tested; the telnet
+  commands (`step-back`, `run-back`, `to-present`) and the GUI reverse mode
+  are not written yet. The GUI is the larger half: every panel that currently
+  reads the live CPU must read the cursor's instant instead.
+
+**Snapshot rewind is the half-done one.** It restores the CPU, visible 64 K,
+paging ports and border, plus the full Next state. It does not restore the AY,
+the ULA's frame position, the FDC, the tape position, IF1 or the Multiface, so
+a rewind mid-load or mid-note does not resume. It also lands on a checkpoint
+rather than an instruction, and the ring holds 16 by default.
+
+`pkg/machinestate` is the registry the complete capture is built on: named
+devices, a device-set check in both directions before anything is applied, and
+canonical ordering so two captures of an unchanged machine compare equal.
+
+- [x] ~~Registry~~ — done, with the refusal semantics tested.
+- [x] ~~AY~~ — full generator state, mutation-verified. The test replays audio
+  from a capture rather than comparing fields, because a field-by-field test
+  only checks the fields someone remembered to add. Worth knowing: the LFSR
+  mutation initially passed, because the fixture wrote `0x38` to the mixer and
+  those bits are active low, so it had disabled noise on every channel.
+- [ ] **The remaining devices**, roughly in order of how visible their absence
+  is: ULA (about 25 state fields; the flash counter, frame position and
+  tape-in phase are the awkward ones), memory, tape position, `plus3fdc`,
+  `betadisk`, keyboard, `if1`, `multiface`, the DAC, then the Next set.
+- [ ] **The replay-equivalence oracle.** Capture at A, run to B and fingerprint
+  everything observable, restore A, replay to B, assert identical. This is what
+  finds the device someone forgot, rather than trusting a hand-written list.
+  Build it before believing the device work is finished.
+- [ ] **Replay-based step-back**, which falls out once the above two are done:
+  restore the nearest checkpoint, re-execute forward to the exact instruction.
+  That gives per-instruction reverse with *full* state including memory, at
+  which point reverse debugging's memory limitation disappears rather than
+  being documented. Cheap at runtime: at most one checkpoint interval of
+  replay per step.
+- [ ] **A determinism audit** is the hidden prerequisite for replay. Any
+  `time.Now()` in the emulation path, audio callback, map iteration in
+  per-instruction code, or race around the core mutex breaks it. The
+  cross-architecture result (3 972 119 instructions byte-identical between
+  linux-amd64 and Windows ARM64) is strong evidence this is mostly clean, and
+  "mostly" is not what replay needs.
+
+### 5. [research] Copper cycle accuracy
 
 **Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
 segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,

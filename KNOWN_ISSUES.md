@@ -80,6 +80,41 @@ Both symbols exist in the GLFW binding already depended on
 GLES onto Direct3D, which Windows on ARM does have. This is a change to the
 GUI toolkit rather than to zx_go, so it needs raising upstream.
 
+### Snapshot rewind does not restore the sound chip, the disk controller or the tape
+
+**Affects:** the **Time Travel** tab and the `tt-rewind` command, all
+versions to date. It does **not** affect reverse debugging, which is a
+separate mechanism described in `DEBUGGER.md`.
+
+**What you see.** Rewind puts the CPU back and the machine carries on, but
+anything that was mid-flight in a peripheral does not. Rewinding during a tape
+load, a disk operation, or while the AY is playing leaves those devices where
+they were rather than where they had been. Sound is where it is most obvious:
+the note continues from its current phase rather than resuming.
+
+**Cause.** A capture covers the CPU, the visible 64 K, the paging ports and the
+border, plus on the Next the full 2 MB pool, MMU8 slots, divMMC RAM and
+NextRegs. It does not cover the AY's tone dividers, noise LFSR or envelope
+position; the ULA's position within the frame; the FDC; the tape position;
+Interface 1; or the Multiface. None of that state is guest-readable, so no
+snapshot *format* carries it either, which is why the limitation is easy to
+miss.
+
+**Two further limits of the same feature**, both by design rather than defect:
+rewind lands on the nearest capture at or before the target, not on an exact
+instruction; and the ring holds 16 captures by default, so the reachable window
+is short.
+
+**Status.** Being fixed. `pkg/machinestate` is the device registry the complete
+capture is built on, and the AY is done: its full generator state now
+round-trips, verified by replaying audio from a capture rather than by
+comparing fields. The remaining devices are listed in `ROADMAP.md`.
+
+**What to use instead, today.** For stepping backwards through execution, use
+reverse debugging rather than rewind. It works per instruction and is not
+affected by any of the above, though it cannot show memory. `DEBUGGER.md`
+explains which of the two answers which question.
+
 ### The process does not exit when window creation fails
 
 **Affects:** any platform where the GUI cannot obtain an OpenGL context, which

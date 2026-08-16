@@ -8,6 +8,35 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Reverse debugging.** Step and run backwards through executed
+  instructions. The M1 ring already recorded every instruction; what was
+  missing was the ability to walk it. `HistoryEntry` now also carries the
+  shadow registers, which `EXX` and `EX AF,AF'` make part of the visible
+  state, and an eight-word window on the stack, without which a backwards
+  step through a `CALL` cannot show where control came from. `ReverseCursor`
+  moves through the ring and searches backwards for a condition.
+
+  Anything the recording cannot answer is **refused, not guessed**. Memory is
+  not recorded per instruction, so `run-back "read $5C78 == 0"` returns an
+  error rather than testing the condition against a zero; the same applies to
+  a register a narrow ring never recorded. A breakpoint that quietly stops
+  being the breakpoint you wrote costs far more than an error message.
+
+  Answerability is checked at every step of a backwards search rather than
+  probed once, because evaluation short circuits: `a == 0 && read $4000 == 1`
+  never reaches the memory read while `A` is non-zero.
+- **`pkg/machinestate`**, the device registry a complete state capture is
+  built on. It refuses a state whose device set does not match the machine in
+  either direction, and validates before applying, so a failed restore leaves
+  the machine untouched rather than half-rewound. Captures are canonically
+  ordered, which is what lets a test assert that replaying from a point
+  reproduced the same machine.
+- **Complete AY state capture.** The 16 registers are what the guest writes
+  and what every snapshot format stores, but the next sample comes from the
+  tone dividers, the 17-bit noise LFSR and the envelope's position and
+  direction, none of them guest-readable. Restoring the registers alone gives
+  a chip that runs and does not resume. Tested by replaying audio from a
+  capture rather than by comparing fields.
 - **`pkg/screendiff`**, the verdict logic for differential screen comparison:
   which of two machines' screens agree, and when a comparison must be refused
   instead. It was previously inside a gitignored developer tool, where its

@@ -246,9 +246,29 @@ sample-accurate rather than a per-frame snapshot.
 over one shared backend (breakpoints, watchpoints, time-travel, M1 trace ring).
 ²⁸ In CSpect, conditional breakpoints are typically evaluated by DeZog rather than
 natively.
-²⁹ zx_go offers a snapshot ring with rewind (not continuous reverse execution).
-ZEsarUX's "time machine" is the most complete reverse-debugging implementation
-here.
+²⁹ zx_go now has both mechanisms, at different stages. **Reverse debugging**
+walks the M1 history ring backwards one instruction at a time, giving
+registers, shadow registers, flags, an eight-word stack window and the branch
+that led to each instruction; the cursor and its condition search are
+implemented and tested, and the telnet/GUI surfaces are still being wired.
+**Snapshot rewind** resumes from a checkpoint, but does not yet restore the
+AY, FDC, tape position or ULA frame phase, and lands on a checkpoint rather
+than an instruction.
+
+ZEsarUX remains ahead overall here, and the shape of the gap is worth stating
+precisely rather than as a score. Its time machine is mature and its reverse
+debugging is shipped and wired into DeZog. Its per-instruction history records
+registers and stack contents, not memory, so memory-reading breakpoints,
+watchpoints and assertions are documented as not evaluated during reverse
+execution. zx_go's history has the same limitation for the same reason, and
+differs in what it does about it: an unanswerable condition is refused with an
+error rather than evaluated against a zero.
+
+The intended end state is replay-based reverse execution — restore the nearest
+checkpoint and re-execute forward to the exact instruction — which would give
+per-instruction stepping with full state, memory included, so nothing has to
+be disabled in reverse. That depends on the complete device capture tracked in
+`ROADMAP.md`, and is not claimed today.
 ³⁰ zx_go exposes a custom line-oriented telnet protocol; it is not DeZog/DZRP/
 ZRCP-compatible.
 ³¹ MAME's GDB stub is i386-only and cannot debug the Z80, so it is not usable for

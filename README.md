@@ -58,6 +58,7 @@ throughout.
 - 🎛️ **Period-accurate peripherals** — +3 FDC, Beta Disk, Opus Discovery, Interface 1 & 2, DISCiPLE, Multiface 1/128/3, Kempston mouse, ZX Printer, every joystick scheme.
 - 🔊 **Real sound** — ULA beeper, AY-3-8912 / Turbosound, SpecDrum & Covox DACs, the Next 4-channel DAC, measured AY volume curve.
 - 🐞 **Three debuggers, one live backend** — a visual GUI, a scriptable telnet server, and headless trace instrumentation, all sharing the same breakpoints, watchpoints, and time-travel ring.
+- ⏪ **Reverse debugging** — step and run *backwards* through executed instructions, with registers, shadow registers, flags, the stack window and the branch that led to each one. Memory is not recorded per instruction, so conditions that read it are refused rather than guessed; see [DEBUGGER.md](DEBUGGER.md#going-backwards).
 
 ---
 
@@ -256,6 +257,8 @@ zx_go ships **three** ways to inspect a running machine, all sharing **one live 
 
 - **Visual debugger** (`Emulator → Debugger`) — live registers, full Z80 + Z80N disassembly (click a line to toggle a breakpoint), 64 KB hex view, paging diagram, and tabbed tools: Next State, Bank Inspect, Backtrace, M1 history & heatmap, NextReg, conditional/bank-filtered breakpoints, register watchpoints, time-travel, and — on the Next — live Palette / Sprites / Layer 2 / Tilemap inspectors.
 - **Telnet debugger** — a ZRCP-style line server (`--debugger-port=N`) you drive from `nc` / `telnet` / scripts. Bank-aware breakpoints, watchpoints, tracepoints, heatmaps, time-travel, provenance.
+
+There are two distinct ways to move into the past and they answer different questions: **reverse debugging** walks the instruction history backwards one instruction at a time but cannot show memory, while **snapshot rewind** resumes the machine from a checkpoint but does not restore the sound chip, disk controller or tape position. [DEBUGGER.md](DEBUGGER.md#going-backwards) covers both, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) records the current limits of rewind.
 - **Headless instrumentation** — `--headless` with trace channels, periodic state snapshots, memory-write watchpoints, bank-switch / SD logging, PC triggers, and a loop/stall detector.
 
 A few examples:

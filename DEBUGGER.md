@@ -168,7 +168,7 @@ Slots that are write-protected (ROM) are shown in a different colour from RAM sl
 
 ### Tools tabs
 
-The bottom-right area is an icon-led tab strip (Next State, Bank Inspect, Backtrace, History, NextReg, Breakpoints, Watchpoints, Heatmap, Time Travel, Palette, Sprites, Layer 2, Tilemap). The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent; the last four are **graphical** Next inspectors (live-rendered each tick) that match the visual viewers in GUI emulators like jnext:
+The bottom-right area is an icon-led tab strip (Next State, Bank Inspect, Backtrace, History, NextReg, Breakpoints, Watchpoints, Heatmap, Time Travel, Palette, Sprites, Layer 2, Tilemap). The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent; the last four are **graphical** Next inspectors, live-rendered each tick:
 
 - **🎨 Palette** — the active 256-entry palette as a 16×16 colour-swatch grid (each cell the real expanded RGB of that entry).
 - **▦ Sprites** — every *visible* sprite's 16×16 pattern drawn as actual pixels through the sprite palette, tiled into a sheet, with a live count.
@@ -191,6 +191,9 @@ backend**, so state set on either appears (and acts) on the other:
 - **Time Travel** — one emulator-owned snapshot ring. `tt-on` /
   `tt-snap` / `tt-rewind` and the **Time Travel** tab (enable,
   snapshot-now, tap-a-row-to-rewind, clear) drive the same buffer.
+  Read [Going backwards](#going-backwards) before relying on it: a
+  rewind restores the CPU and RAM, **not** the sound chip, the disk
+  controller or the tape position.
 - **Heatmap** tab — hot-PC / call / ret / rst views over the same M1
   history ring as `hot` / `callgraph` / `retgraph` / `rstgraph`
   (recomputed on demand via its Refresh button).
@@ -250,6 +253,65 @@ Renders `debugger.Backtrace()`'s output. Set **Depth** and hit **Refresh** (the 
 Front-end for the M1-fetch ring buffer. **Prev N** shows the last N entries; **Full** dumps the whole ring. Each row has the global instruction counter, PC, SP, AF, IFF1, IM, Halted, and the active ROM bank.
 
 The ring is shared with the telnet `history` / `prev` commands. If you launched with `--debugger-history N`, both surfaces read from the same buffer; otherwise the visual debugger creates a default 4096-entry ring on first open.
+
+## Going backwards
+
+There are **two** separate ways to move into the past, and they answer
+different questions. Reaching for the wrong one is the main way to be
+disappointed by either.
+
+### Reverse debugging (the M1 history ring)
+
+Walks backwards one instruction at a time through the ring described
+above. The machine does not run backwards: a cursor moves through
+recorded instants, and while it is away from the present every view
+reads the instant under the cursor rather than the live CPU.
+
+**What it gives you, per instruction, as far back as the ring holds:**
+PC, SP, AF, the shadow registers, BC/DE/HL/IX/IY on a wide ring, IFF1 /
+IFF2 / IM / halted, the active ROM bank, an eight-word window on the
+stack, and the branch that led to each instruction (`from CALL nn`,
+`from RST`, sequential, and so on).
+
+**What it cannot give you is memory.** Memory is not recorded per
+instruction, because doing so would cost more than running the machine.
+That has one consequence worth stating plainly, because it is the part
+that surprises people:
+
+> A condition that reads memory has **no answer** going backwards, and
+> is **refused** rather than evaluated. `run-back "read $5C78 == 0"`
+> returns an error. It does not silently test the condition against a
+> zero.
+
+The same applies to a register the ring did not record: a narrow ring
+carries no BC, so `run-back "b == 0"` is refused on one. Start the ring
+wide if you intend to run backwards to a register condition.
+
+Refusing is a deliberate choice. The alternative is a breakpoint that
+quietly stops being the breakpoint you wrote, firing (or not) on a value
+that was never read, which costs far more time than an error message.
+
+### Snapshot rewind (the time-travel ring)
+
+Jumps to a captured checkpoint and resumes the machine from it. This is
+a different mechanism with different limits.
+
+**It restores:** the CPU, the visible 64 K of RAM, the paging ports and
+the border. On the Next it additionally restores the full 2 MB pool, the
+MMU8 slots, divMMC RAM and the NextRegs.
+
+**It does not restore:** the AY, the ULA's position within the frame,
+the FDC, the tape position, Interface 1 or the Multiface. Rewinding
+during a load, a disk operation, or anything making sound will put the
+CPU back and leave those devices where they were.
+
+**Granularity** is the checkpoint interval, not the instruction: you
+land on the nearest capture at or before your target. **Depth** is the
+ring size, 16 captures by default, so the reachable window is well under
+a second of Z80 time at the low end of the suggested interval.
+
+Both limits are being worked on; see `KNOWN_ISSUES.md` for the current
+state and `ROADMAP.md` for the plan.
 
 #### NextReg
 
