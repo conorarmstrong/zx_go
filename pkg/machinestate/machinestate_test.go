@@ -1,0 +1,177 @@
+package machinestate
+
+import (
+	"bytes"
+	"errors"
+	"testing"
+)
+
+var errBroken = errors.New("cannot load")
+
+// The registry's whole job is to make "did we capture everything" a question
+// with an answer. A rewind that restores the CPU and the RAM and forgets the
+// sound chip does not fail loudly: it produces a machine that runs, and then
+// diverges quietly from the one you rewound. So the tests here are about the
+// properties that make an omission detectable rather than about plumbing.
+
+// fake is a device whose state is a single mutable byte slice, which is enough
+// to exercise capture, restore and ordering.
+type fake struct {
+	id    string
+	state []byte
+	loads int
+}
+
+func (f *fake) StateID() string { return f.id }
+
+func (f *fake) SaveState() []byte {
+	out := make([]byte, len(f.state))
+	copy(out, f.state)
+	return out
+}
+
+func (f *fake) LoadState(b []byte) error {
+	f.loads++
+	f.state = make([]byte, len(b))
+	copy(f.state, b)
+	return nil
+}
+
+func TestCaptureThenRestoreReturnsEveryDeviceToItsEarlierState(t *testing.T) {
+	a := &fake{id: "cpu", state: []byte{1, 2, 3}}
+	b := &fake{id: "ay", state: []byte{9}}
+	r := New()
+	r.Register(a, b)
+
+	snap := r.Capture()
+
+	a.state = []byte{7, 7, 7}
+	b.state = []byte{0}
+
+	if err := r.Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !bytes.Equal(a.state, []byte{1, 2, 3}) {
+		t.Errorf("cpu state = %v, want the captured [1 2 3]", a.state)
+	}
+	if !bytes.Equal(b.state, []byte{9}) {
+		t.Errorf("ay state = %v, want the captured [9]", b.state)
+	}
+}
+
+// A capture has to be a copy, not a view. A device that keeps mutating after
+// the snapshot was taken would otherwise rewrite its own history, and the
+// rewind would restore the present.
+func TestACaptureIsIndependentOfLaterDeviceMutation(t *testing.T) {
+	d := &fake{id: "ram", state: []byte{1, 2, 3}}
+	r := New()
+	r.Register(d)
+
+	snap := r.Capture()
+	d.state[0] = 99 // mutate in place, the way a RAM bank would
+
+	if err := r.Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if d.state[0] != 1 {
+		t.Errorf("restored byte = %d, want 1: the capture aliased live device memory", d.state[0])
+	}
+}
+
+// Two captures of an unchanged machine must be byte-identical, because that is
+// what lets a test compare machine states directly. Map iteration order would
+// destroy this, so the encoding is ordered by StateID.
+func TestCaptureIsDeterministicRegardlessOfRegistrationOrder(t *testing.T) {
+	mk := func(order ...string) State {
+		r := New()
+		for _, id := range order {
+			r.Register(&fake{id: id, state: []byte(id)})
+		}
+		return r.Capture()
+	}
+
+	first := mk("ay", "cpu", "ula")
+	second := mk("ula", "ay", "cpu")
+
+	if !bytes.Equal(first.Bytes(), second.Bytes()) {
+		t.Error("the same devices registered in a different order produced different bytes; " +
+			"a state blob that depends on registration order cannot be compared between runs")
+	}
+}
+
+// The failure this whole design exists to prevent: a device that is part of the
+// machine but was never registered. Restoring a snapshot taken before it
+// existed must say so rather than silently leave it at its current value.
+func TestRestoreRefusesASnapshotThatIsMissingARegisteredDevice(t *testing.T) {
+	r := New()
+	r.Register(&fake{id: "cpu", state: []byte{1}})
+	snap := r.Capture()
+
+	// The AY joins the machine after the snapshot was taken.
+	ay := &fake{id: "ay", state: []byte{5}}
+	r.Register(ay)
+
+	err := r.Restore(snap)
+	if err == nil {
+		t.Fatal("restoring a snapshot with no state for a registered device must fail, " +
+			"not leave that device holding present-day values")
+	}
+	if ay.loads != 0 {
+		t.Error("a rejected restore must not partially apply")
+	}
+}
+
+// The mirror image: a snapshot carrying a device the machine no longer has.
+// Silently ignoring it would hide a genuine configuration change, such as a
+// disk interface being detached between capture and rewind.
+func TestRestoreRefusesASnapshotCarryingAnUnknownDevice(t *testing.T) {
+	full := New()
+	full.Register(&fake{id: "cpu", state: []byte{1}}, &fake{id: "fdc", state: []byte{2}})
+	snap := full.Capture()
+
+	fewer := New()
+	fewer.Register(&fake{id: "cpu", state: []byte{1}})
+
+	if err := fewer.Restore(snap); err == nil {
+		t.Fatal("restoring a snapshot that carries an unregistered device must fail")
+	}
+}
+
+// Registering the same identifier twice means two devices would overwrite each
+// other's state, and the rewind would restore one of them at random.
+func TestRegisterRejectsADuplicateIdentifier(t *testing.T) {
+	r := New()
+	r.Register(&fake{id: "ay", state: []byte{1}})
+
+	defer func() {
+		if recover() == nil {
+			t.Error("registering a duplicate StateID must panic at wiring time, " +
+				"not silently drop one device's state at rewind time")
+		}
+	}()
+	r.Register(&fake{id: "ay", state: []byte{2}})
+}
+
+// A device that fails to load leaves the machine half-restored, which is worse
+// than not restoring at all: the caller believes the rewind worked.
+func TestRestoreReportsADeviceThatRefusesItsState(t *testing.T) {
+	r := New()
+	r.Register(&fake{id: "cpu", state: []byte{1}}, &broken{})
+	snap := r.Capture()
+
+	err := r.Restore(snap)
+	if err == nil {
+		t.Fatal("a device that fails to load its state must surface as an error")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("fdc")) {
+		t.Errorf("the error must name the device that failed, got %q", err)
+	}
+}
+
+type broken struct{}
+
+func (broken) StateID() string   { return "fdc" }
+func (broken) SaveState() []byte { return []byte{1} }
+func (broken) LoadState([]byte) error {
+	return errBroken
+}
