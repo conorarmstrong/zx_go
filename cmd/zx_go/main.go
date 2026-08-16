@@ -29,6 +29,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/audiodac"
+	"github.com/conorarmstrong/zx_go/pkg/ay"
 	"github.com/conorarmstrong/zx_go/pkg/betadisk"
 	"github.com/conorarmstrong/zx_go/pkg/config"
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
@@ -39,6 +40,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
+	"github.com/conorarmstrong/zx_go/pkg/next/dma"
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
@@ -254,6 +256,13 @@ type emulator struct {
 	nextCopper  *copper.Copper
 	nextSprites *sprite.Engine
 	nextLayer2  *layer2.Layer2
+	// nextAY is the three-chip TurboSound engine, nextDMA the zxnDMA
+	// controller and nextDivMMC the divMMC pager. They are wired into the
+	// ULA / CPU rather than read back from it, so these refs are how the
+	// machine-state registry reaches them.
+	nextAY     *ay.Engine
+	nextDMA    *dma.DMA
+	nextDivMMC *divmmc.Pager
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS
@@ -2990,6 +2999,7 @@ func main() {
 		emu.nextEsxdos, emu.nextDAC, emu.nextRegs = fresh.nextEsxdos, fresh.nextDAC, fresh.nextRegs
 		emu.nextPalette, emu.nextTilemap, emu.nextCopper = fresh.nextPalette, fresh.nextTilemap, fresh.nextCopper
 		emu.nextSprites, emu.nextLayer2 = fresh.nextSprites, fresh.nextLayer2
+		emu.nextAY, emu.nextDMA, emu.nextDivMMC = fresh.nextAY, fresh.nextDMA, fresh.nextDivMMC
 		currentModel = newModel
 		saveConfig()
 		w.SetTitle(fmt.Sprintf("ZX Spectrum Emulator %s - %s", version.Version, roms.GetModelName(newModel)))

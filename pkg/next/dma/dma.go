@@ -156,10 +156,39 @@ type DMA struct {
 	// is not a second transfer. This flag reproduces that.
 	inTransfer bool
 
-	// pending holds the setters for the follow bytes the most recent
-	// base byte announced; each subsequent WriteCommand consumes one.
-	pending []func(byte)
+	// pending holds the follow bytes the most recent base byte announced;
+	// each subsequent WriteCommand consumes one.
+	pending []pendingOp
 }
+
+// pendingOp names one follow byte the command stream has announced but not yet
+// delivered.
+//
+// The queue holds these codes rather than the setter closures it once held
+// because it is live chip state that has to survive a state capture: one OUT
+// delivers one byte, so a capture lands between a base byte and the bytes it
+// announced as often as not, and a controller restored without the queue reads
+// the next address byte as a base byte and silently reprograms itself.
+type pendingOp byte
+
+const (
+	opIgnore           pendingOp = iota // announced, accepted, discarded
+	opPortALow                          // WR0 port A start address, low byte
+	opPortAHigh                         // WR0 port A start address, high byte
+	opBlockLenLow                       // WR0 block length, low byte
+	opBlockLenHigh                      // WR0 block length, high byte
+	opPortBLow                          // WR4 port B start address, low byte
+	opPortBHigh                         // WR4 port B start address, high byte
+	opATiming                           // WR1 port A variable-timing byte
+	opBTiming                           // WR2 port B variable-timing byte
+	opPrescaler                         // zxnDMA fixed-time prescaler byte
+	opInterruptControl                  // WR4 interrupt-control byte
+	opReadMask                          // WR6 $BB read-mask byte
+)
+
+// opLast bounds the valid codes, so a decoded state carrying a code this build
+// does not know is refused rather than dispatched nowhere.
+const opLast = opReadMask
 
 // Transfer modes (WR4 D6:D5).
 const (
@@ -197,17 +226,53 @@ func (d *DMA) WriteCommand(val byte) {
 		dmaLog(val)
 	}
 	if len(d.pending) > 0 {
-		f := d.pending[0]
+		op := d.pending[0]
 		d.pending = d.pending[1:]
-		f(val)
+		d.applyPending(op, val)
 		return
 	}
 	d.decodeBase(val)
 }
 
-func setLow(p *uint16) func(byte)  { return func(v byte) { *p = (*p &^ 0x00FF) | uint16(v) } }
-func setHigh(p *uint16) func(byte) { return func(v byte) { *p = (*p &^ 0xFF00) | uint16(v)<<8 } }
-func ignore() func(byte)           { return func(byte) {} }
+// applyPending consumes one announced follow byte. A timing or interrupt-control
+// byte can itself announce further bytes, which it appends to the queue the
+// caller has already popped from.
+func (d *DMA) applyPending(op pendingOp, val byte) {
+	switch op {
+	case opPortALow:
+		d.portAStart = (d.portAStart &^ 0x00FF) | uint16(val)
+	case opPortAHigh:
+		d.portAStart = (d.portAStart &^ 0xFF00) | uint16(val)<<8
+	case opBlockLenLow:
+		d.blockLen = (d.blockLen &^ 0x00FF) | uint16(val)
+	case opBlockLenHigh:
+		d.blockLen = (d.blockLen &^ 0xFF00) | uint16(val)<<8
+	case opPortBLow:
+		d.portBStart = (d.portBStart &^ 0x00FF) | uint16(val)
+	case opPortBHigh:
+		d.portBStart = (d.portBStart &^ 0xFF00) | uint16(val)<<8
+	case opATiming: // port A's cycle length; port A has no prescaler
+		d.aCycleLen = cycleLen(val)
+	case opBTiming: // port B's cycle length, and D5 = the prescaler byte follows
+		d.bCycleLen = cycleLen(val)
+		if val&0x20 != 0 {
+			d.pending = append(d.pending, opPrescaler)
+		}
+	case opPrescaler:
+		d.prescaler = val
+	case opInterruptControl: // D3 / D4 announce pulse offset and vector
+		if val&0x08 != 0 {
+			d.pending = append(d.pending, opIgnore)
+		}
+		if val&0x10 != 0 {
+			d.pending = append(d.pending, opIgnore)
+		}
+	case opReadMask:
+		d.readMask = val & 0x7F
+		d.readReg = d.firstReadReg()
+	default: // opIgnore — an announced byte we accept and discard
+	}
+}
 
 // addrMode decodes a WR1/WR2 byte's address-mode bits (D5 D4): bit 5 set
 // = fixed; else bit 4 set = increment; else decrement.
@@ -229,43 +294,43 @@ func (d *DMA) decodeBase(val byte) {
 		switch {
 		case val&0x03 != 0: // WR0 — transfer setup
 			d.aToB = val&0x04 != 0
-			var p []func(byte)
+			var p []pendingOp
 			if val&0x08 != 0 {
-				p = append(p, setLow(&d.portAStart))
+				p = append(p, opPortALow)
 			}
 			if val&0x10 != 0 {
-				p = append(p, setHigh(&d.portAStart))
+				p = append(p, opPortAHigh)
 			}
 			if val&0x20 != 0 {
-				p = append(p, setLow(&d.blockLen))
+				p = append(p, opBlockLenLow)
 			}
 			if val&0x40 != 0 {
-				p = append(p, setHigh(&d.blockLen))
+				p = append(p, opBlockLenHigh)
 			}
 			d.pending = p
 		case val&0x07 == 0x04: // WR1 — port A config
 			d.aMode = addrMode(val)
 			d.aIsIO = val&0x08 != 0
 			if val&0x40 != 0 { // variable-timing byte follows
-				d.pending = []func(byte){d.aTimingByte()}
+				d.pending = []pendingOp{opATiming}
 			}
 		case val&0x07 == 0x00: // WR2 — port B config
 			d.bMode = addrMode(val)
 			d.bIsIO = val&0x08 != 0
 			if val&0x40 != 0 {
-				d.pending = []func(byte){d.bTimingByte()}
+				d.pending = []pendingOp{opBTiming}
 			}
 		}
 		return
 	}
 	switch val & 0x03 {
 	case 0x00: // WR3 — match/mask (accepted; follow bytes skipped)
-		var p []func(byte)
+		var p []pendingOp
 		if val&0x08 != 0 {
-			p = append(p, ignore())
+			p = append(p, opIgnore)
 		}
 		if val&0x10 != 0 {
-			p = append(p, ignore())
+			p = append(p, opIgnore)
 		}
 		d.pending = p
 	case 0x01: // WR4 — port B address + transfer mode
@@ -275,15 +340,15 @@ func (d *DMA) decodeBase(val byte) {
 		default: // 01 continuous; 00/11 "do not use" behave continuous
 			d.mode = modeContinuous
 		}
-		var p []func(byte)
+		var p []pendingOp
 		if val&0x04 != 0 {
-			p = append(p, setLow(&d.portBStart))
+			p = append(p, opPortBLow)
 		}
 		if val&0x08 != 0 {
-			p = append(p, setHigh(&d.portBStart))
+			p = append(p, opPortBHigh)
 		}
 		if val&0x10 != 0 { // interrupt-control byte (with its own follows)
-			p = append(p, d.interruptControl())
+			p = append(p, opInterruptControl)
 		}
 		d.pending = p
 	case 0x02: // WR5 — ready/wait/auto-restart (no follow bytes)
@@ -303,36 +368,6 @@ func cycleLen(v byte) byte {
 		return 3
 	default:
 		return 2
-	}
-}
-
-// aTimingByte consumes the WR1 (port A) variable-timing byte, latching port A's
-// cycle length. Port A has no prescaler.
-func (d *DMA) aTimingByte() func(byte) {
-	return func(v byte) { d.aCycleLen = cycleLen(v) }
-}
-
-// bTimingByte consumes the WR2 (port B) variable-timing byte, latching port B's
-// cycle length; if its D5 is set, the zxnDMA fixed-time prescaler byte follows.
-func (d *DMA) bTimingByte() func(byte) {
-	return func(v byte) {
-		d.bCycleLen = cycleLen(v)
-		if v&0x20 != 0 {
-			d.pending = append(d.pending, func(p byte) { d.prescaler = p })
-		}
-	}
-}
-
-// interruptControl consumes a WR4 interrupt-control byte and its
-// optional pulse-offset / vector follow bytes (D3 / D4).
-func (d *DMA) interruptControl() func(byte) {
-	return func(v byte) {
-		if v&0x08 != 0 {
-			d.pending = append(d.pending, ignore()) // pulse offset
-		}
-		if v&0x10 != 0 {
-			d.pending = append(d.pending, ignore()) // interrupt vector
-		}
 	}
 }
 
@@ -359,10 +394,7 @@ func (d *DMA) command(val byte) {
 			d.Trigger()
 		}
 	case 0xBB: // READ MASK FOLLOWS — next byte sets the read mask
-		d.pending = []func(byte){func(m byte) {
-			d.readMask = m & 0x7F
-			d.readReg = d.firstReadReg()
-		}}
+		d.pending = []pendingOp{opReadMask}
 	case 0xA7: // INITIATE READ SEQUENCE — reset the read cursor
 		d.readReg = d.firstReadReg()
 	case 0xBF: // READ STATUS BYTE (dma.vhd:687): the next port read returns

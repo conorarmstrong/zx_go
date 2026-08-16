@@ -1751,6 +1751,9 @@ sdReady:
 	e.nextCopper = cop
 	e.nextSprites = sprites
 	e.nextLayer2 = l2
+	e.nextAY = ayEngine
+	e.nextDMA = dmaEngine
+	e.nextDivMMC = pager
 
 	// Warm-boot: skip the cold-boot path entirely and load a captured
 	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG
@@ -1860,11 +1863,20 @@ func unwireNextSubsystems(e *emulator) {
 		}
 	}
 
+	// Every Next ref goes, not just the ones the debugger reads: they are the
+	// machine's device list as well, and one left behind describes a Next
+	// block on a machine that no longer has a Next bus.
 	e.nextEsxdos = nil
 	e.nextDAC = nil
 	e.nextRegs = nil
 	e.nextPalette = nil
 	e.nextTilemap = nil
+	e.nextCopper = nil
+	e.nextSprites = nil
+	e.nextLayer2 = nil
+	e.nextAY = nil
+	e.nextDMA = nil
+	e.nextDivMMC = nil
 }
 
 // parseRAMWriteTraceSpec parses ZX_GO_RAM_WRITE_TRACE. Formats:

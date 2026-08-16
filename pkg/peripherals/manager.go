@@ -64,6 +64,21 @@ func NewPeripheralManager(mem *memory.Memory, romPath string) *PeripheralManager
 	return pm
 }
 
+// Plus3FDC returns the disk controller when the current model has one
+// fitted (+3 / +2A), and nil otherwise.
+//
+// The controller object is built once and kept for every model (see
+// NewPeripheralManager), because its ports are inert elsewhere — but that
+// makes the object a poor answer to "does this machine have an FDC". This
+// gates on the same modelHasFDC the port routing uses, so a caller asking
+// which devices the machine actually has gets the bus's answer.
+func (pm *PeripheralManager) Plus3FDC() *plus3fdc.Plus3FDC {
+	if !pm.modelHasFDC() {
+		return nil
+	}
+	return pm.plus3fdc
+}
+
 // LoadPlus3Disk parses a DSK image and attaches it to the given drive of
 // the +3 FDC (0 = A, 1 = B).
 func (pm *PeripheralManager) LoadPlus3Disk(drive int, path string) error {
