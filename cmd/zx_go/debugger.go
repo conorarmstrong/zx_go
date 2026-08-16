@@ -901,6 +901,10 @@ var commandsNeedingPause = map[string]bool{
 	"step-forward":   true,
 	"run-back":       true,
 	"reverse-status": true,
+	// replay-back restores a checkpoint and re-executes the CPU. Doing that
+	// while the emulation goroutine is mid-frame would have two writers on the
+	// register file and the RAM pool.
+	"replay-back": true,
 }
 
 func (d *remoteDebugger) handleCommand(line string) string {
@@ -928,7 +932,9 @@ func (d *remoteDebugger) handleCommand(line string) string {
 	}
 	switch cmd {
 	case "help", "?":
-		return "OK pause set-pause-timeout break-on-sd continue step step-over step-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
+		return "OK [step-back walks the recorded M1 ring: instant, registers only, NO memory. " +
+			"replay-back re-executes from a tt-on checkpoint: the whole machine, memory included.] " +
+			"pause set-pause-timeout break-on-sd continue step step-over step-back replay-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
 	case "set-pause-timeout":
 		// Query form (no arg) reports the current value; otherwise set
 		// the pause-ack wait to N seconds. Used to await a `continue`
@@ -1035,6 +1041,8 @@ func (d *remoteDebugger) handleCommand(line string) string {
 		return fmt.Sprintf("OK stepped %d", n)
 	case "step-back":
 		return d.cmdStepBack(args)
+	case "replay-back":
+		return d.cmdReplayBack(args)
 	case "step-forward":
 		return d.cmdStepForward(args)
 	case "run-back":

@@ -32,6 +32,24 @@ func newTestRomDir(t *testing.T) string {
 	return dir
 }
 
+// nextTestROMs lays down the minimal ROM blobs memory.New(ModelNext)
+// needs, so a Next-flavoured test is self-contained (no dependency on
+// the repo's roms/ tree or its relative path).
+func nextTestROMs(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, f := range []string{
+		"48.rom", "128-0.rom", "128-1.rom",
+		"plus2-0.rom", "plus2-1.rom",
+		"plus3-0.rom", "plus3-1.rom", "plus3-2.rom", "plus3-3.rom",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f), make([]byte, 0x4000), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func newBanksFor(t *testing.T, model roms.SpectrumModel) *emuBanks {
 	t.Helper()
 	dir := newTestRomDir(t)

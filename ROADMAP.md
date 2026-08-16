@@ -338,7 +338,7 @@ requests OpenGL ES 2.0 over WGL and cannot be built any other way.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 4. [product] Time travel: reverse debugging lands, rewind is half done
+### 4. [product] Time travel: reverse debugging lands, replay step-back lands, one device short
 
 Two mechanisms, deliberately separate, at different stages.
 
@@ -361,11 +361,12 @@ hunting bugs that are not there.
   are not written yet. The GUI is the larger half: every panel that currently
   reads the live CPU must read the cursor's instant instead.
 
-**Snapshot rewind is the half-done one.** It restores the CPU, visible 64 K,
-paging ports and border, plus the full Next state. It does not restore the AY,
-the ULA's frame position, the FDC, the tape position, IF1 or the Multiface, so
-a rewind mid-load or mid-note does not resume. It also lands on a checkpoint
-rather than an instruction, and the ring holds 16 by default.
+**Snapshot rewind now restores the machine.** The time-travel ring captures
+through the registry, so a rewind returns every registered device rather than
+the CPU and the visible 64 K. What it still does not return is the tape
+position, the +D and the Opus Discovery, none of which have a `Device`; a
+rewind mid-load still does not resume. The ring holds 16 captures by default,
+so the reachable window is short.
 
 `pkg/machinestate` is the registry the complete capture is built on: named
 devices, a device-set check in both directions before anything is applied, and
@@ -377,26 +378,27 @@ canonical ordering so two captures of an unchanged machine compare equal.
   only checks the fields someone remembered to add. Worth knowing: the LFSR
   mutation initially passed, because the fixture wrote `0x38` to the mixer and
   those bits are active low, so it had disabled noise on every channel.
-- [ ] **The remaining devices**, roughly in order of how visible their absence
-  is: ULA (about 25 state fields; the flash counter, frame position and
-  tape-in phase are the awkward ones), memory, tape position, `plus3fdc`,
-  `betadisk`, keyboard, `if1`, `multiface`, the DAC, then the Next set.
-- [ ] **The replay-equivalence oracle.** Capture at A, run to B and fingerprint
-  everything observable, restore A, replay to B, assert identical. This is what
-  finds the device someone forgot, rather than trusting a hand-written list.
-  Build it before believing the device work is finished.
-- [ ] **Replay-based step-back**, which falls out once the above two are done:
-  restore the nearest checkpoint, re-execute forward to the exact instruction.
-  That gives per-instruction reverse with *full* state including memory, at
-  which point reverse debugging's memory limitation disappears rather than
-  being documented. Cheap at runtime: at most one checkpoint interval of
-  replay per step.
-- [ ] **A determinism audit** is the hidden prerequisite for replay. Any
-  `time.Now()` in the emulation path, audio callback, map iteration in
-  per-instruction code, or race around the core mutex breaks it. The
-  cross-architecture result (3 972 119 instructions byte-identical between
-  linux-amd64 and Windows ARM64) is strong evidence this is mostly clean, and
-  "mostly" is not what replay needs.
+- [x] ~~The remaining devices~~ — ULA, memory, `plus3fdc`, `betadisk`, keyboard,
+  `if1`, `multiface`, the DAC and the whole Next set are captured. **Not** the
+  tape, the +D or the Opus Discovery; those three are what is left.
+- [x] ~~The replay-equivalence oracle~~ — `cmd/zx_go/replay_oracle_test.go`.
+  Fingerprints outputs and memory in bulk rather than device state, so it
+  cannot pass by comparing the capture with itself, and a companion test
+  leaves one device un-rewound to prove the oracle still bites.
+- [x] ~~Replay-based step-back~~ — `replay-back [N]` (`cmd/zx_go/replayback.go`).
+  Restores the newest checkpoint at or before the target and re-executes to it,
+  landing by step count from the checkpoint rather than by instruction counter:
+  the counter tallies M1 fetches, so a prefixed instruction moves it by more
+  than one and a halted CPU not at all. Before handing an instant back it
+  re-runs the window to the present and compares the whole machine, so a window
+  it cannot reproduce is refused rather than answered.
+- [x] ~~A determinism audit~~ — the step path is deterministic; replay of a
+  step-driven span reproduces the machine byte for byte on 48K, 128K, +2, +2A,
+  +3 and the Next. Two things are NOT reproducible and are refused rather than
+  guessed at: a span the frame loop ran through `ExecuteFrame` (it rebases the
+  T-state counter every frame and schedules the frame INT differently from the
+  single-step path), and any change made from outside the CPU during the window
+  (`write-memory`, a key press, a disk arriving).
 
 ### 5. [research] Copper cycle accuracy
 

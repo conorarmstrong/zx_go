@@ -160,12 +160,13 @@ func runHeadless(f *cliFlags) {
 			emu.timeTravel = tt
 			slog.Info("time-travel enabled",
 				"every", f.timeTravel, "keep", f.timeTravelKeep)
-			// On the Next each snapshot also captures the full machine
-			// state (~2 MB pool + divMMC RAM + NextRegs), so the ring's
-			// memory footprint is far larger than on classic models.
-			// Surface it so a long --time-travel-keep doesn't surprise.
+			// Every entry is a complete machine state, which is what lets
+			// replay-back re-execute from one. On the Next that is the
+			// whole ~2 MB pool plus divMMC RAM and the NextRegs, so the
+			// ring costs far more there than on classic models. Surface
+			// it so a long --time-travel-keep doesn't surprise.
 			if model == roms.ModelNext {
-				slog.Info("time-travel Next full-state capture active (Phase 2b)",
+				slog.Info("time-travel: each entry is the whole machine",
 					"approx_ring_mb", (f.timeTravelKeep*2200)/1024,
 					"hint", "lower --time-travel-keep if memory is tight")
 			}

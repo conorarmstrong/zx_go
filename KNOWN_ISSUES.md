@@ -80,40 +80,36 @@ Both symbols exist in the GLFW binding already depended on
 GLES onto Direct3D, which Windows on ARM does have. This is a change to the
 GUI toolkit rather than to zx_go, so it needs raising upstream.
 
-### Snapshot rewind does not restore the sound chip, the disk controller or the tape
+### Snapshot rewind does not restore the tape position
 
-**Affects:** the **Time Travel** tab and the `tt-rewind` command, all
-versions to date. It does **not** affect reverse debugging, which is a
+**Affects:** the **Time Travel** tab, the `tt-rewind` and `replay-back`
+commands, all versions. It does **not** affect reverse debugging, which is a
 separate mechanism described in `DEBUGGER.md`.
 
-**What you see.** Rewind puts the CPU back and the machine carries on, but
-anything that was mid-flight in a peripheral does not. Rewinding during a tape
-load, a disk operation, or while the AY is playing leaves those devices where
-they were rather than where they had been. Sound is where it is most obvious:
-the note continues from its current phase rather than resuming.
+**What you see.** Rewinding during a tape load puts the machine back and leaves
+the tape where it was, so the load resumes from the wrong place in the stream.
 
-**Cause.** A capture covers the CPU, the visible 64 K, the paging ports and the
-border, plus on the Next the full 2 MB pool, MMU8 slots, divMMC RAM and
-NextRegs. It does not cover the AY's tone dividers, noise LFSR or envelope
-position; the ULA's position within the frame; the FDC; the tape position;
-Interface 1; or the Multiface. None of that state is guest-readable, so no
-snapshot *format* carries it either, which is why the limitation is easy to
-miss.
+**Cause.** A capture is built from the devices registered in
+`(*emulator).stateRegistry`, and the tape player is not one of them — it has no
+`machinestate.Device`. Everything else the rewind used to leave behind is now
+captured: the CPU, the whole RAM pool and the paging window, the ULA (frame
+position and flash phase included), the AY's tone dividers, noise LFSR and
+envelope position, the keyboard, the +3 FDC, the Beta interface, Interface 1,
+the Multiface, the DAC, and the Next's own blocks. The +D and the Opus
+Discovery are in the same position as the tape: neither has a `Device`, so
+neither is captured.
 
-**Two further limits of the same feature**, both by design rather than defect:
-rewind lands on the nearest capture at or before the target, not on an exact
-instruction; and the ring holds 16 captures by default, so the reachable window
-is short.
+**Two further limits, one of which has gone.** Rewind still lands on the
+nearest capture at or before the target rather than on an exact instruction —
+but `replay-back` now reaches any instruction inside the ring by re-executing
+from a capture, with the whole machine. The ring still holds 16 captures by
+default, so the reachable window is short.
 
-**Status.** Being fixed. `pkg/machinestate` is the device registry the complete
-capture is built on, and the AY is done: its full generator state now
-round-trips, verified by replaying audio from a capture rather than by
-comparing fields. The remaining devices are listed in `ROADMAP.md`.
-
-**What to use instead, today.** For stepping backwards through execution, use
-reverse debugging rather than rewind. It works per instruction and is not
-affected by any of the above, though it cannot show memory. `DEBUGGER.md`
-explains which of the two answers which question.
+**How you find out.** `replay-back` re-runs the window to the present and
+compares the machine it produced against the machine that was there before
+handing back an instant, so a load in flight over the window is refused rather
+than replayed wrongly. `tt-rewind` does not check, because it is not
+re-executing anything.
 
 ### The process does not exit when window creation fails
 

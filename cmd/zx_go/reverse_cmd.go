@@ -40,8 +40,9 @@ var commandsInvalidatingReverse = map[string]bool{
 	"step": true, "s": true,
 	"step-over": true, "n": true, "next": true,
 	"forward": true, "f": true,
-	"cold-reset": true,
-	"tt-rewind":  true,
+	"cold-reset":  true,
+	"tt-rewind":   true,
+	"replay-back": true,
 }
 
 // reverseCursor returns the live cursor, creating one at the newest

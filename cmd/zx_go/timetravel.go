@@ -6,34 +6,40 @@ import (
 	"sync"
 
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
-	"github.com/conorarmstrong/zx_go/pkg/snapshot"
+	"github.com/conorarmstrong/zx_go/pkg/machinestate"
 )
 
-// ttEntry is one slot in the time-travel ring. The Snapshot covers
-// CPU + visible 8 RAM pages + 7FFD/1FFD ports + border colour. On
-// the Next this captures the CPU-visible 64 K accurately but does
-// NOT cover the upper RAM banks (8..111), divMMC RAM, NextRegs, or
-// MMU8 slot table — adding those is Phase 2 work tracked separately.
+// ttEntry is one slot in the time-travel ring.
+//
+// state is a complete machine state taken through the machinestate registry:
+// every device the model carries, checked in both directions when it goes
+// back. It replaced a partial capture — CPU registers, the eight visible RAM
+// pages, the paging ports and the border — which is what forced reverse
+// execution to say "no memory": rewinding to one of those left the sound chip,
+// the keyboard, the disk controller and every unmapped bank in the present,
+// and on a 128K it paged $7FFD to zero on the way back. Nothing can be
+// re-executed forward from a checkpoint like that, which is the whole point of
+// keeping one.
 type ttEntry struct {
-	insn  uint64
-	pc    uint16
-	label string // optional user-supplied tag (empty for auto-captures)
-	snap  *snapshot.Snapshot
+	insn uint64
+	// tstates is where the checkpoint sits on the machine's clock. The
+	// instruction count alone does not order two instants: it tallies M1
+	// fetches, and a halted CPU ticks T-states without retiring one, so
+	// two checkpoints either side of a HALT can carry the same count.
+	// replay-back needs a real ordering to tell a checkpoint in the past
+	// from one the machine has already stepped back past.
+	tstates uint64
+	pc      uint16
+	label   string // optional user-supplied tag (empty for auto-captures)
+	state   machinestate.State
 	// bankCtx is a compact record of the paging context at capture
-	// time (ROM bank, MMU8 slots, divMMC paged/automap/mapram). It is
-	// NOT restored by tt-rewind (Phase 1 still rolls back only the
-	// lower-64K + regs) — its purpose is to make `tt-status` traces
-	// immune to bank-aliasing: every captured PC shows which bank it
-	// actually executed in, so a $10FB/$14AB-style address can't be
-	// mis-attributed to the wrong ROM. Phase 2a (todo). Empty on
-	// classic models / when state is unavailable.
+	// time (ROM bank, MMU8 slots, divMMC paged/automap/mapram). The
+	// state above is what a rewind applies; this is a human-readable
+	// echo of it, so `tt-status` traces are immune to bank-aliasing:
+	// every captured PC shows which bank it actually executed in, so a
+	// $10FB/$14AB-style address can't be mis-attributed to the wrong
+	// ROM. Empty on machines whose state is unavailable.
 	bankCtx string
-	// nextFull is the complete Next machine state (full 2MB pool, MMU8
-	// slots, divMMC RAM, NextRegs, paging ports) captured alongside the
-	// Phase-1 snapshot. nil on classic models. When present, tt-rewind
-	// restores it so forward re-execution from a Next rewind point is
-	// faithful — Phase 2b. (Phase 1's snap only covers the lower 64K.)
-	nextFull *nextFullState
 }
 
 // captureBankContext builds the compact paging-context string stored
@@ -72,17 +78,6 @@ func captureBankContext(emu *emulator) string {
 	return ctx
 }
 
-// timeTravelBuffer is a bounded in-memory ring of periodic emulator
-// snapshots. Auto-capture is triggered from a pre-fetch hook: every
-// `everyInsns` Z80 instructions executed, the buffer takes a new
-// full-state snapshot and evicts the oldest entry when the ring
-// reaches `maxEntries`.
-//
-// Captures store the FULL CPU register set plus the 8 visible RAM
-// pages — enough to rewind boot-time state on classic models and
-// the lower-64 K window on the Next. The MMU8 slot table, upper
-// banks, and NextRegs are NOT yet captured; this is a known Phase 1
-// limitation called out in the documentation.
 // ttController adapts the emulator-owned time-travel buffer to the
 // debugger.TimeTravelController interface the GUI Time-Travel tab
 // drives. It creates/destroys the buffer (and its CPU pre-fetch
@@ -148,6 +143,20 @@ func (c ttController) Rows() []debugger.TTRow {
 	return out
 }
 
+// timeTravelBuffer is a bounded in-memory ring of complete machine
+// states. Auto-capture is triggered from a pre-fetch hook: every
+// `everyInsns` Z80 instructions executed, the buffer captures the
+// whole machine and evicts the oldest entry when the ring reaches
+// `maxEntries`.
+//
+// Each entry is a machinestate capture — every device the model
+// carries, and nothing left in the present. That is what makes the
+// ring a replay source rather than only a rewind target: execution
+// re-run from one of these produces what it produced the first time,
+// which is how replay-back reaches an instruction the ring never
+// captured (see replayback.go). It is also the memory cost: an entry
+// holds the machine's whole RAM pool, so `tt-on EVERY KEEP` on a Next
+// reserves KEEP × ~2 MB.
 type timeTravelBuffer struct {
 	mu sync.Mutex
 
@@ -169,6 +178,15 @@ type timeTravelBuffer struct {
 	// than skipping the first everyInsns × maxEntries insns of
 	// post-reset execution.
 	lastSeenInsns uint64
+
+	// replaying suppresses capture while a replay walk re-executes
+	// instructions the machine has already run. The pre-fetch hook is
+	// still installed during a walk, so without this the ring would
+	// fill with checkpoints of a second pass over the same instants and
+	// evict the older ones the walk is standing on. Written and read
+	// under coreMu — the walk holds it for its whole length, and the
+	// hook only ever runs from inside a frame, which also holds it.
+	replaying bool
 }
 
 // newTimeTravelBuffer constructs the ring. Returns nil if
@@ -191,6 +209,9 @@ func newTimeTravelBuffer(emu *emulator, everyInsns, maxEntries int) *timeTravelB
 // Step is the pre-fetch hook callback. Cheap fast-path: a single
 // uint64 read + compare. Capture is rare.
 func (t *timeTravelBuffer) Step(_ uint16) {
+	if t.replaying {
+		return
+	}
 	insns := t.emu.cpu.InstructionCount()
 	if insns < t.lastSeenInsns {
 		// Counter rewound — cold-reset or RZX-playback start.
@@ -206,21 +227,27 @@ func (t *timeTravelBuffer) Step(_ uint16) {
 	t.nextCapture = insns + uint64(t.everyInsns)
 }
 
-// capture takes a snapshot of current emulator state and pushes it
-// into the ring. Called from the pre-fetch hook (label="") and
-// from the user-driven `tt-snap NAME` command (label=NAME).
+// capture takes a complete machine state and pushes it into the ring.
+// Called from the pre-fetch hook (label="") and from the user-driven
+// `tt-snap NAME` command (label=NAME).
+//
+// A machine with no registered devices — the SAM Coupé, which runs on
+// pkg/sam's own core — is skipped rather than stored as an empty
+// checkpoint. An empty state restores cleanly and rewinds nothing, so
+// keeping one would make tt-rewind and replay-back report success on a
+// machine they had not moved.
 func (t *timeTravelBuffer) capture(label string, insn uint64) {
-	snap, err := createSnapshotFromEmulator(t.emu)
-	if err != nil {
+	reg := t.emu.stateRegistry()
+	if reg.Len() == 0 {
 		return
 	}
 	e := ttEntry{
-		insn:     insn,
-		pc:       t.emu.cpu.PC,
-		label:    label,
-		snap:     snap,
-		bankCtx:  captureBankContext(t.emu),
-		nextFull: captureNextStateFromEmu(t.emu),
+		insn:    insn,
+		tstates: t.emu.cpu.Tstates(),
+		pc:      t.emu.cpu.PC,
+		label:   label,
+		state:   reg.Capture(),
+		bankCtx: captureBankContext(t.emu),
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -279,21 +306,25 @@ func (t *timeTravelBuffer) FindPC(pc uint16) []ttEntry {
 	return out
 }
 
-// Restore applies the given snapshot back to the emulator. Pause
-// management lives inside applySnapshotToEmulator. On the Next, the
-// full machine state (whole pool + MMU8 + divMMC RAM + NextRegs +
-// paging) is restored after the Phase-1 lower-64K snapshot so that
-// forward re-execution from the rewind point is faithful (Phase 2b).
+// Restore returns the machine to the checkpoint, all devices or none.
+//
+// coreMu is held for the apply because a restore rewrites the CPU
+// registers, the whole RAM pool and every device on the bus, all of
+// which the emulation goroutine reads every frame. The instruction and
+// T-state counters come back with the CPU's own state, so the rewound
+// machine is on the checkpoint's timeline without anyone setting the
+// counter by hand.
 func (t *timeTravelBuffer) Restore(e *ttEntry) error {
-	if err := applySnapshotToEmulator(t.emu, e.snap); err != nil {
-		return err
-	}
-	restoreNextStateToEmu(t.emu, e.nextFull)
-	// Rewind the instruction counter to the snapshot's timeline so
-	// insn-gated tools (tt-find-pc, trace windows, diagnostics) see
-	// a consistent history after the rewind.
-	t.emu.cpu.SetInstructionCount(e.insn)
-	return nil
+	t.emu.coreMu.Lock()
+	defer t.emu.coreMu.Unlock()
+	return t.restoreLocked(e)
+}
+
+// restoreLocked is Restore's body. The caller must hold coreMu — the
+// replay walk does, for the whole walk, so the machine cannot be
+// stepped by the emulation goroutine part way through one.
+func (t *timeTravelBuffer) restoreLocked(e *ttEntry) error {
+	return t.emu.stateRegistry().Restore(e.state)
 }
 
 // Clear empties the ring (frees the snapshot memory). Used by

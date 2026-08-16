@@ -256,9 +256,15 @@ The ring is shared with the telnet `history` / `prev` commands. If you launched 
 
 ## Going backwards
 
-There are **two** separate ways to move into the past, and they answer
+There are **three** separate ways to move into the past, and they answer
 different questions. Reaching for the wrong one is the main way to be
-disappointed by either.
+disappointed by any of them.
+
+| | Reaches back | Granularity | Gives you |
+| --- | --- | --- | --- |
+| `step-back` (M1 ring) | as far as the ring was sized for | one instruction | registers, **no memory** |
+| `tt-rewind` (checkpoints) | as far as the oldest checkpoint | the capture interval | the whole machine |
+| `replay-back` (replay) | as far as the oldest checkpoint | one instruction | the whole machine |
 
 ### Reverse debugging (the M1 history ring)
 
@@ -296,22 +302,70 @@ that was never read, which costs far more time than an error message.
 Jumps to a captured checkpoint and resumes the machine from it. This is
 a different mechanism with different limits.
 
-**It restores:** the CPU, the visible 64 K of RAM, the paging ports and
-the border. On the Next it additionally restores the full 2 MB pool, the
-MMU8 slots, divMMC RAM and the NextRegs.
+**It restores the whole machine:** every device the model carries —
+the CPU (registers, the interrupt flip-flops, the T-state and
+instruction counters), the entire RAM pool rather than the visible
+window, the page maps and the paging ports, the ULA with its position
+in the frame and its flash cycle, the AY (or the Next's TurboSound
+engine) including the tone, noise and envelope counters no register
+file holds, the keyboard, the +3 FDC, the Beta disk interface, the
+Multiface, Interface 1, and on the Next the NextRegs, palettes, Layer
+2, the tilemap, the copper, the sprites, the DMA and the divMMC. The
+device set is checked in both directions on the way back, so a
+checkpoint taken before a disk was inserted is refused rather than
+applied to everything except the controller.
 
-**It does not restore:** the AY, the ULA's position within the frame,
-the FDC, the tape position, Interface 1 or the Multiface. Rewinding
-during a load, a disk operation, or anything making sound will put the
-CPU back and leave those devices where they were.
+That completeness is what makes the checkpoints replayable, which is
+what `replay-back` below is built on.
 
 **Granularity** is the checkpoint interval, not the instruction: you
 land on the nearest capture at or before your target. **Depth** is the
 ring size, 16 captures by default, so the reachable window is well under
-a second of Z80 time at the low end of the suggested interval.
+a second of Z80 time at the low end of the suggested interval. Each
+entry holds the machine's whole RAM pool, so a deep ring on a Next costs
+`KEEP × ~2 MB`.
 
-Both limits are being worked on; see `KNOWN_ISSUES.md` for the current
-state and `ROADMAP.md` for the plan.
+### Replay step-back (`replay-back`)
+
+Reaches an instruction the ring never captured, with the whole machine,
+by restoring the newest checkpoint at or before it and **re-executing
+forward** to it. The instant you land on was produced the way the
+present was — by running — so memory, the sound chip's counters and the
+disk controller are all what they were, not what they are now.
+
+Needs `tt-on` (or `--time-travel=N`), and reaches back only as far as the
+oldest checkpoint. The cost per step back is one walk of the checkpoint
+interval, so a smaller `EVERY` makes it quicker and a larger one makes
+the ring reach further.
+
+**What it refuses, and why it has to.** Replay drives the CPU with the
+same single-step path the debugger's own `step` uses. Before handing
+back an instant, it re-runs the window all the way to the present and
+compares the machine it produced against the machine that was there,
+device by device. If they differ, the step back is refused and the
+present is put back, because a window replay cannot reproduce contains
+no instant replay can be trusted to produce. Two things cause that:
+
+> **The frame loop's bulk driver.** `continue` runs whole frames through
+> `ExecuteFrame`, which rebases the T-state counter at every frame end
+> and asserts the frame interrupt on its own schedule. A span run that
+> way is a different timeline, and replay says so instead of guessing.
+>
+> **Anything that changed the machine from outside the CPU** during the
+> window — a `write-memory`, a key press, a disk arriving. It did not
+> come from the checkpoint and does not happen again on the way back.
+
+Both are honest limits of "re-execute and see", not defects to work
+around: the alternative is a machine at the right instruction with one
+byte from a different history, which is the hardest kind of wrong to
+notice.
+
+One interaction worth knowing: the instructions are genuinely executed
+again, so they are recorded in the M1 ring again. The ring stays
+consistent with the machine — its newest entry is the instruction you
+landed on — but a walk over a long checkpoint interval writes a second
+copy of that window into it, which shortens how far `step-back` can then
+reach. A smaller `EVERY` avoids it.
 
 #### NextReg
 
@@ -437,10 +491,11 @@ Needs `--debugger-history=N`; add `--debugger-history-wide` to run backwards to 
 | `run-back EXPR` | — | Search backwards for the most recent EARLIER instant satisfying EXPR (breakpoint-condition grammar; the expression may be quoted). The search starts one instruction before the cursor, so a condition that is already true does not match immediately. A condition reading memory — or a register the ring never recorded — is **refused**, not evaluated against a zero. | `OK [REVERSE -N] insn=N …` / `ERR run-back: condition reads state that is not recorded per instruction …` |
 | `to-present` | — | Leave reverse mode and hand reads back to the live machine. | `OK left reverse mode (was -N); reads are live again` |
 | `reverse-status` | — | Whether reverse mode is active, how far back the cursor sits, how far back it could go, and the instant under it. | `OK reverse on [REVERSE -N]; ring entries=N capacity=N wide=BOOL oldest-reachable=-N; cursor: …` |
+| `replay-back [N]` | — | **Actually move the machine** N instructions into the past (default 1), by restoring the newest time-travel checkpoint at or before it and re-executing forward. Gives the whole machine, **memory included** — unlike `step-back`, which reads a recording of the registers. Needs `tt-on`. Landing anywhere other than the instruction asked for, or on a machine the same walk cannot reproduce, is an ERROR and the present is put back. See [Replay step-back](#replay-step-back-replay-back). | `OK replayed back N instruction(s): insn=N $XXXX (the whole machine, memory included …)` |
 
 While the cursor is away from the present, `get-registers`, `history` and `disassemble` read the instant UNDER THE CURSOR rather than the live CPU, and every such response is tagged `[REVERSE -N]`. `disassemble` follows the recorded PC but decodes memory as it is NOW — memory is not recorded per instruction, and the response says so.
 
-Any command that lets the machine move forward (`continue`, `step`, `step-over`, `forward`, `cold-reset`, `tt-rewind`) drops the cursor first: the ring is overwritten underneath it, so its distance from the newest entry stops naming the instruction you were reading.
+Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, `cold-reset`, `tt-rewind`, `replay-back`) drops the cursor first: the ring is overwritten underneath it, so its distance from the newest entry stops naming the instruction you were reading.
 
 #### Inspection
 
@@ -545,37 +600,40 @@ Any command that lets the machine move forward (`continue`, `step`, `step-over`,
 
 #### Time-travel buffer
 
-An in-memory rolling ring of full-state emulator snapshots. The
-buffer auto-captures every N Z80 instructions while the CPU runs;
-the user can then `tt-rewind` to restore state to any captured
-moment, or `tt-find-pc` to locate every snapshot that passed
-through a given PC. Backed by the same snapshot machinery that
-powers `snapshot-on-bp` (CPU + visible 8 RAM pages + 7FFD/1FFD +
-border colour).
+An in-memory rolling ring of complete machine states. The buffer
+auto-captures every N Z80 instructions while the CPU runs; the user can
+then `tt-rewind` to restore any captured moment, `replay-back` to reach
+an instruction *between* two captures, or `tt-find-pc` to locate every
+capture that passed through a given PC.
 
-**Capture scope.** On classic models the Phase-1 snapshot (CPU +
-visible 64 K + border + 7FFD/1FFD) is loss-free. On the **Next**, each
-snapshot *additionally* captures the complete machine state (Phase 2b):
-the full 2 MB RAM pool (all 128 × 16 K banks, not just the visible 8),
-the MMU8 slot table (NR$50-$57), the divMMC RAM (16 × 8 K), the entire
-256-byte NextReg file, and the paging ports. `tt-rewind` restores all of
-it, so **forward re-execution from a Next rewind point is faithful** —
-upper-bank state (Layer 2 framebuffer, divMMC channel/descriptor
-scratch, alt-ROM windows) is fully recoverable.
+**Capture scope** is every device the model carries, taken through the
+machinestate registry: the CPU (including the interrupt flip-flops and
+the T-state and instruction counters), the whole RAM pool rather than
+the visible eight banks, the page maps and the paging ports, the ULA,
+the AY or the Next's TurboSound engine, the keyboard, the +3 FDC, the
+Beta interface, the Multiface, Interface 1, and on the Next the
+NextRegs, palettes, Layer 2, tilemap, copper, sprites, DMA and divMMC.
+Nothing is left holding present-day values, which is what makes
+re-execution from a capture reproduce what it produced the first time
+— the property `replay-back` rests on, and the one the replay-oracle
+tests measure.
 
-Cost: on the Next each snapshot is ~2 MB, so the ring is ~`KEEP × 2 MB`
-(logged at startup); lower `--time-travel-keep` if memory is tight.
-Phase 2a additionally records per-snapshot bank/paging context for
-`tt-status` (see below). A future Phase 2c may add changed-bank deltas
-to shrink the ring.
+A capture is refused on restore if the machine's device set has changed
+since (a disk mounted, a Multiface attached): rewinding everything
+except the new controller would leave it mid-command.
+
+Cost: an entry holds the whole pool, so the ring is roughly
+`KEEP × 128 KB` on classic models and `KEEP × 2 MB` on the Next (logged
+at startup); lower `--time-travel-keep` if memory is tight.
 
 | Command | Aliases | Purpose |
 | --- | --- | --- |
-| `tt-on [EVERY [KEEP]]` | — | Install the buffer. `EVERY` is the instruction interval between auto-captures (default 50000); `KEEP` is the ring depth (default 16). Memory budget ≈ `KEEP × 128 KB` on classic models, ≈ `KEEP × 2 MB` on the Next (full-state capture, Phase 2b). The pre-fetch hook fires inline with the CPU; cost per fetch is one uint64 compare. |
+| `tt-on [EVERY [KEEP]]` | — | Install the buffer. `EVERY` is the instruction interval between auto-captures (default 50000); `KEEP` is the ring depth (default 16). Memory budget ≈ `KEEP × 128 KB` on classic models, ≈ `KEEP × 2 MB` on the Next. `EVERY` is also the distance `replay-back` may have to re-execute per step, so lower it if you intend to step backwards a lot. The pre-fetch hook fires inline with the CPU; cost per fetch is one uint64 compare. |
 | `tt-off` | — | Remove the hook and drop the ring. |
-| `tt-status` | `tt` | List ring contents: insn count + PC + optional label + **bank/paging context** per entry (`rom=N slots=… dmmc:paged/automap/mapram`). The bank context (Phase 2a) is captured per snapshot so a trace can't mis-attribute a PC to the wrong ROM/bank. (The context is informational; the actual state restore is handled by the full Phase-2b capture below.) |
+| `tt-status` | `tt` | List ring contents: insn count + PC + optional label + **bank/paging context** per entry (`rom=N slots=… dmmc:paged/automap/mapram`). The bank context is captured per entry so a trace can't mis-attribute a PC to the wrong ROM/bank. It is informational — what a rewind applies is the machine state itself. |
 | `tt-snap [LABEL]` | — | Force an immediate manual capture, optionally tagged. |
-| `tt-rewind INSN` | — | Restore the latest snapshot whose insn count ≤ INSN. The CPU register set + visible 64 K + border are rolled back; **on the Next the full 2 MB pool + MMU8 slots + divMMC RAM + NextRegs + paging are restored too** (Phase 2b), so re-execution from the rewind point matches. |
+| `tt-rewind INSN` | — | Restore the latest capture whose insn count ≤ INSN. The **whole machine** goes back — every registered device, memory included — so re-execution from the rewind point reproduces what it produced the first time. Lands on a capture, not on INSN itself; use `replay-back` for instruction granularity. |
+| `replay-back [N]` | — | Step the machine back N instructions (default 1) by restoring a capture and re-executing forward to the instruction asked for. See [Reverse debugging](#reverse-debugging) above. |
 | `tt-find-pc $XXXX` | — | List every captured snapshot whose saved PC equals `$XXXX`. Useful for "show me every visit to the failing PC". |
 | `tt-clear` | — | Drop all captured snapshots; leave auto-capture armed. |
 
@@ -1145,8 +1203,10 @@ OK rewound to insn=50000 PC=$1B40
 | `--time-travel-keep=K` | Ring depth (oldest evicted). Default 16. |
 
 See the runtime [Time-travel buffer](#time-travel-buffer) section
-for the live command reference, scope limitations, and example
-workflow.
+for the live command reference, capture scope, and example workflow.
+
+`--time-travel` is also what `replay-back` needs: with no captures there
+is nothing to re-execute from.
 
 ### `--crash-detect` and related flags
 
