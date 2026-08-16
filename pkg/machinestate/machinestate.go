@@ -20,6 +20,47 @@
 // The second property is the one that matters most. It turns "did we capture
 // everything" from a question answered by reading code into one answered by
 // running the machine twice.
+//
+// # Writing a capture test
+//
+// Read this before adding a Device. Every one of these was learned by getting
+// it wrong first, and each cost real time.
+//
+// Assert on the CAPTURE, not on behaviour. Drive the device so every captured
+// field changes, restore, re-capture, and compare the two blobs. Behavioural
+// assertions only observe fields that reach behaviour: 11 of the AY's 19
+// fields did not, and its register-select latch cannot reach the audio at all,
+// so no amount of comparing samples would ever have covered it.
+//
+// A mutation score is bounded above by what the fixture moves. Deleting a
+// field restore proves nothing if the fixture never made that field differ
+// between capture and restore, because the deleted line had nothing to do. So
+// a score is only meaningful reported next to the fields the fixture actually
+// moves: 20/20 over a fixture that moves twelve fields is a WEAKER claim than
+// 12/12 over one that moves all twenty, and the bare number cannot tell them
+// apart. Write a guard test that asserts the drive sequence changes every
+// captured field, and the score becomes trustworthy.
+//
+// Watch the parity. An even number of toggles returns a flag to where it
+// started, so an enable flipped twice, or a double-buffer swapped four times,
+// hides a lost restore completely. Prefer odd counts, and make the guard fail
+// if anyone retunes the schedule into an even parity later.
+//
+// Watch for convergence. A field that moves and then comes back is as
+// invisible as one that never moved: a press-and-release keypress re-converges
+// the state before the comparison, and so does any register the guest resets
+// on its way past.
+//
+// Some fields are mutually exclusive and need separate fixtures. The AY's
+// envPrimed is set by a shape write and cleared by the first envelope tick,
+// while envHolding needs a completed envelope, so one drive sequence cannot
+// move both and each needs its own round trip.
+//
+// Finally: when a differential check does not fail where you expect, suspect
+// the harness before the code. A build error and an already-red baseline both
+// exit non-zero exactly like a real failure, and both score a mutation as
+// "caught" when it proved nothing. Assert the baseline is green, and match
+// failures against the specific assertion you expect rather than an exit code.
 package machinestate
 
 import (
