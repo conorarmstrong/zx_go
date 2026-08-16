@@ -62,20 +62,11 @@ games/
 /.claude/
 /skills-lock.json
 
-# Stray screenshots user dropped in repo root (debugging captures)
-/dubug.png
-/fail.png
-A.png
-B.png
-C.png
 
 # Local-only investigation lab; not part of the shipping codebase.
 /docs/internal/hardware-audit/
 roms/next/sd.img
 
-# accidental-artifact guards (D31en cleanup)
-/zxnext
-/snap/
 
 # Developer-tooling documentation (catalogues the local-only _tools/;
 # names reference emulators). Local-only, not part of the public repo.
@@ -128,7 +119,11 @@ cmd/zx_go/oracle_test.go
 cmd/zx_go/tzxload_test.go
 pkg/testharness/testdata/local_titles.tsv
 
-# Local title corpora used for screening. User-supplied game images, never
-# redistributable and far too large for the repository.
-ZX Spectrum - Super Collection*/
-SpecNext_Games/
+# Local media collections and personal scratch files are NOT listed here.
+#
+# A tracked .gitignore is published, so naming a directory in it tells everyone
+# reading the repository what is on the author's disk. Anything machine-specific
+# belongs in .git/info/exclude, which uses the same syntax and is never pushed.
+#
+# Put game/media collections under games/ (ignored above), or add your own paths
+# to .git/info/exclude.
