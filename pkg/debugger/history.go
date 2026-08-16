@@ -35,7 +35,35 @@ type HistoryEntry struct {
 	// previous instruction fell through.
 	Source     PCSource
 	SourceFrom uint16 // PC of the instruction that caused the branch
+
+	// Shadow registers. EXX and EX AF,AF' make these part of the
+	// visible machine state, so reverse debugging cannot show a
+	// faithful register view without them. Populated alongside the
+	// wide fields.
+	AltAF uint16
+	AltBC uint16
+	AltDE uint16
+	AltHL uint16
+
+	// Stack is a window on the top StackWindow words at SP, newest
+	// first, so a backwards step through a CALL/RET sequence can
+	// show what was pushed. The return address lives here, not in
+	// a register, so without it a reverse walk through a call
+	// cannot explain where control came from.
+	//
+	// A fixed array rather than a slice: Push runs on the M1 path
+	// roughly a million times a second and is documented as
+	// allocation-free, which a per-entry slice would end.
+	Stack [StackWindow]uint16
 }
+
+// StackWindow is how many words above SP each history entry keeps.
+//
+// Eight covers the nesting depth a backwards step needs to explain
+// a call chain, at 16 bytes an entry. Deeper would be more useful
+// in rare cases and costs memory on every instruction recorded, so
+// the ring depth is the knob to reach for instead.
+const StackWindow = 8
 
 // PCSource classifies a PC transition's cause for history display.
 type PCSource byte
@@ -150,6 +178,42 @@ func (h *History) Push(e HistoryEntry) {
 		}
 	}
 	h.mu.Unlock()
+}
+
+// At returns the entry at position i, counting 0 from the OLDEST
+// entry the ring still holds, and reports whether it exists.
+//
+// "Still holds" is the load-bearing part. Once the ring has
+// wrapped, the oldest entry ever pushed has been overwritten, and
+// index 0 is the oldest survivor. A reverse cursor that indexed
+// from the oldest entry ever pushed would walk into slots that now
+// contain much newer instructions, and would show them as the
+// distant past.
+//
+// This exists so a reverse cursor can move one step without
+// copying the ring, which Last would do on every keypress.
+func (h *History) At(i int) (HistoryEntry, bool) {
+	if len(h.ring) == 0 || i < 0 {
+		return HistoryEntry{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	n := h.count
+	if h.full {
+		n = len(h.ring)
+	}
+	if i >= n {
+		return HistoryEntry{}, false
+	}
+
+	// oldest is head when wrapped (head points at the slot about to
+	// be overwritten, which is the oldest), and 0 otherwise.
+	oldest := 0
+	if h.full {
+		oldest = h.head
+	}
+	return h.ring[(oldest+i)%len(h.ring)], true
 }
 
 // Last returns the last n entries in chronological order (oldest
