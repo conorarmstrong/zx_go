@@ -2,6 +2,7 @@ package dac
 
 import (
 	"bytes"
+	"encoding/gob"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
@@ -124,6 +125,11 @@ func primed() *Bank {
 // writing channels. Every captured field differs afterwards, and every channel
 // differs by enough that dropping any single one of them shifts the
 // four-channel mean past its divide-by-four.
+//
+// That "every captured field differs" is what every mutation score in this file
+// rests on, so it is asserted rather than trusted: retune a value here to match
+// what primed() left behind and TestTheDriveSequenceChangesEveryCapturedField
+// names the field that stopped being covered.
 func perturb(b *Bank) {
 	b.WritePort(0x1F, 0x03) // A
 	b.WritePort(0x0F, 0x40) // B
@@ -255,4 +261,107 @@ func pcm(s []int16) []byte {
 		out = append(out, byte(uint16(v)>>8), byte(uint16(v)))
 	}
 	return out
+}
+
+// The replay-audio property above covers every restore in this device today —
+// a mutation audit deleting each one in turn found all of them caught. What it
+// does not do is keep covering them.
+//
+// Every one of those kills is bounded by what primed() and perturb() happen to
+// make differ, and nothing asserts that they differ. Changing one byte of
+// perturb() so channel B lands back on the value primed() left it at makes the
+// whole suite pass, and channel B's restore can then be deleted with the suite
+// still passing: the coverage is gone and nothing says so. The two tests below
+// close that hole. The first asserts on the CAPTURE rather than on the audio,
+// so it observes fields whether or not they reach a sample; the second asserts
+// the drive sequence still moves every one of them, which is what makes the
+// first one's score mean anything.
+
+// TestEveryCapturedFieldSurvivesARoundTrip captures, drives the bank on with
+// perturb (the same thing a session does between taking a capture and rewinding
+// to it), restores, and re-captures. A field that is captured but not restored
+// makes the second blob differ from the first.
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	b := primed()
+	want := b.SaveState()
+
+	perturb(b)
+	if bytes.Equal(b.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := b.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := b.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. Levels is deliberately checked one
+// channel at a time: it is a single gob field but four independent restores,
+// and comparing the array whole would report it as covered when only one
+// channel had moved — which is how three of the four could quietly stop being
+// covered at all.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	b := primed()
+	before := decodeStateForTest(t, b.SaveState())
+	perturb(b)
+	after := decodeStateForTest(t, b.SaveState())
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Levels[A]", before.Levels[ChannelA] == after.Levels[ChannelA]},
+		{"Levels[B]", before.Levels[ChannelB] == after.Levels[ChannelB]},
+		{"Levels[C]", before.Levels[ChannelC] == after.Levels[ChannelC]},
+		{"Levels[D]", before.Levels[ChannelD] == after.Levels[ChannelD]},
+		{"StartLevel", before.StartLevel == after.StartLevel},
+		// The pending-event buffer is three restores, not one: the truncation
+		// that clears what is already there, and the two halves of each event.
+		// A restore that dropped only the level would leave every offset right.
+		{"len(Events)", len(before.Events) == len(after.Events)},
+		{"Events[].TStateOffset", sameOffsets(before.Events, after.Events)},
+		{"Events[].Level", sameLevels(before.Events, after.Events)},
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+func sameOffsets(a, b []eventState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].TStateOffset != b[i].TStateOffset {
+			return false
+		}
+	}
+	return true
+}
+
+func sameLevels(a, b []eventState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Level != b[i].Level {
+			return false
+		}
+	}
+	return true
+}
+
+func decodeStateForTest(t *testing.T, b []byte) bankState {
+	t.Helper()
+	var s bankState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }

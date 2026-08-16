@@ -2,6 +2,7 @@ package plus3fdc
 
 import (
 	"bytes"
+	"encoding/gob"
 	"testing"
 )
 
@@ -651,4 +652,307 @@ func itoa(v int) string {
 func hexByte(b byte) string {
 	const digits = "0123456789ABCDEF"
 	return string([]byte{digits[b>>4], digits[b&0x0F]})
+}
+
+// --- round trip on the capture itself ---------------------------------------
+
+// The replay properties above have a blind spot, and a mutation audit found
+// it: four of the controller's field restores could be deleted with every one
+// of those tests still passing.
+//
+// Two causes, and both matter. Some fields cannot reach the guest at all from
+// where a capture can stop. readDataCRC is decided on the last byte of a
+// sector and read out in the same call, so by the time the CPU can take a
+// capture the flag only describes a transfer that has already finished, and
+// every path that reads it again writes it first. Others do reach the guest,
+// but the fixture never made them differ between capture and restore, so
+// deleting the restore left them already correct: seekResult's latched ST0 is
+// a pure function of the drive index and whether that drive is ready, so a
+// fixture that seeks the same drives in the script it seeked in the prime
+// re-derives the same four bytes; and the tail of resultBuf that a partly
+// drained result phase still owes the CPU stays untouched by the one- and
+// two-byte results the script left behind it.
+//
+// The fix is the one the AY needed: stop asserting on what the guest saw and
+// assert on the capture. Drive the controller so EVERY captured field differs,
+// restore, and re-capture. A field that is captured and not restored shows up
+// as a different blob, whether or not any port could ever have shown it.
+
+// primedEveryField stops the controller with every captured field holding a
+// value the drive sequence below will move.
+//
+// The shape is: a working disk in each drive, three seeks latched, a deleted
+// sector made and then re-read as a Speedlock retry so the mangled bytes leave
+// a failed data CRC behind, a failed scan, a READ DIAGNOSTIC for an ID that is
+// not on the track, and finally a FORMAT stopped part way through its CHRN
+// stream. That last one is what makes the capture sit in execution phase with
+// a staging track, three sector descriptions and no transfer in flight.
+func primedEveryField(t *testing.T) *Plus3FDC {
+	t.Helper()
+	p := New()
+	p.fdc.AttachDisk(0, loadTestDisk(t))
+	p.fdc.AttachDisk(1, loadTestDisk(t))
+	p.SetSpeedlockEnabled(true)
+	tp := newTape(t, p)
+
+	// Three seeks latched, unit 3 deliberately never seeked: seekResult[d] can
+	// only ever hold zero or one ST0 value per drive, so leaving one drive
+	// untouched here is the only way the drive sequence can move that array.
+	tp.cmd(0x07, 0x00)       // RECALIBRATE drive 0
+	tp.cmd(0x0F, 0x01, 0x09) // SEEK unit 1 → cylinder 9
+	tp.cmd(0x0F, 0x02, 0x05) // SEEK unit 2 → cylinder 5
+	tp.cmd(0x08)             // sense unit 0 only, so seekDone stays uneven
+	tp.drain()
+
+	// A deleted sector 2 on cylinder 0, which is the sector Speedlock's check
+	// reads and therefore the only one the retry detector arms on.
+	tp.cmd(0x49, 0x00, 0, 0, 2, 2, 2, 0x2A, 0xFF)
+	tp.send(0, 512, writePattern)
+	tp.drain()
+
+	// A scan whose first byte is wrong, so the verdict is "not satisfied".
+	tp.cmd(0x45, 0x00, 0, 0, 1, 2, 1, 0x2A, 0xFF)
+	tp.send(0, 512, scanPattern)
+	tp.drain()
+	tp.cmd(0x51, 0x00, 0, 0, 1, 2, 1, 0x2A, 0xFF)
+	tp.status()
+	tp.cmd(scanPattern(0) + 1)
+	tp.send(1, 511, scanPattern)
+	tp.drain()
+
+	// R=0x55 is on no sector of this track, which is the ND answer.
+	tp.cmd(0x42, 0x00, 0, 0, 0x55, 2, 2, 0x2A, 0xFF)
+	tp.drain()
+
+	// READ DELETED DATA with SK over the deleted sector, issued twice. The
+	// second is the retry: Speedlock mangling XORs bytes and folds them into
+	// the running CRC a second time, so the sector ends with a data CRC error
+	// the controller latches. That is the only capture point at which
+	// readDataCRC is true.
+	del2 := []byte{0x6C, 0x00, 0, 0, 2, 2, 2, 0x2A, 0xFF}
+	tp.cmd(del2...)
+	tp.drain()
+	tp.cmd(del2...)
+	tp.drain()
+
+	// FORMAT cylinder 0, N=2, five sectors, filler 0xAA — three of the five
+	// CHRN quads sent, so the staging track and the accumulator are both live.
+	tp.cmd(0x4D, 0x00, 0x02, 0x05, 0x54, 0xAA)
+	for r := byte(1); r <= 3; r++ {
+		tp.cmd(0, 0, r, 2)
+	}
+	return p
+}
+
+// driveEverything moves every field the capture carries.
+//
+// Each step is here because one field needs it, and the guard test below
+// fails if any of them stops working. The ordering is the load-bearing part:
+// the read flags are all latched when a read command starts, so whichever read
+// runs last decides six of them at once, and the values have to be picked so
+// that read disagrees with the primed one on every single flag. That is why
+// the last read is a plain READ DATA (SK clear, wanting a normal mark) of a
+// deleted sector on a cylinder it did not ask for: the primed capture got
+// there with READ DELETED DATA and SK set, over a sector on the cylinder it
+// did ask for.
+func driveEverything(t *testing.T, p *Plus3FDC) {
+	t.Helper()
+	tp := newTape(t, p)
+
+	for r := byte(4); r <= 5; r++ { // finish the format and take its result
+		tp.cmd(0, 0, r, 2)
+	}
+	tp.drain()
+
+	for i := 0; i < 3; i++ { // clear the three latched seeks
+		tp.cmd(0x08)
+		tp.drain()
+	}
+	tp.cmd(0x0F, 0x03, 0x07) // SEEK unit 3 → 7: the drive the prime never moved
+	tp.cmd(0x0F, 0x01, 0x03) // SEEK unit 1 → 3, which is where the format goes
+
+	// A second format, on the other drive and the other head, with a different
+	// geometry and filler, run to completion so nothing is left staging. N=1
+	// also gives the read below a 256-byte sector, which is what makes the
+	// transfer offset differ from the primed 512.
+	tp.cmd(0x4D, 0x05, 0x01, 0x03, 0x54, 0x5A)
+	for r := byte(1); r <= 3; r++ {
+		tp.cmd(3, 1, r, 1)
+	}
+	tp.drain()
+
+	tp.cmd(0x49, 0x05, 3, 1, 1, 1, 1, 0x2A, 0xFF) // deleted mark on sector 1
+	tp.send(0, 256, writePattern)
+	tp.drain()
+
+	// A scan that does match, so the verdict lands the other way round.
+	tp.cmd(0x45, 0x05, 3, 1, 2, 1, 2, 0x2A, 0xFF)
+	tp.send(0, 256, scanPattern)
+	tp.drain()
+	tp.cmd(0x51, 0x05, 3, 1, 2, 1, 2, 0x2A, 0xFF)
+	tp.send(0, 256, scanPattern)
+	tp.drain()
+
+	// A READ DIAGNOSTIC for an ID that IS on the track, so ND ends up clear.
+	tp.cmd(0x42, 0x05, 3, 1, 1, 1, 1, 0x2A, 0xFF)
+	tp.drain()
+
+	// The read that decides six flags at once: plain READ DATA, SK clear,
+	// over the deleted sector, asking for cylinder 9 while the head is on 3.
+	// It is also not the Speedlock pattern, so the retry counter and the last
+	// sector ID both fall back to zero.
+	tp.cmd(0x46, 0x05, 9, 1, 1, 1, 1, 0x2A, 0xFF)
+	tp.drain()
+
+	// Stop one byte into a two-byte result, so the phase, the result length
+	// and the index into it are all different from the captured ones and the
+	// buffer still owes the CPU a byte.
+	tp.cmd(0x08)
+	tp.readN(1)
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	p := primedEveryField(t)
+	want := p.SaveState()
+
+	driveEverything(t, p)
+	if bytes.Equal(p.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := p.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := p.SaveState(); !bytes.Equal(got, want) {
+		t.Errorf("re-capturing after a restore did not reproduce the captured state: "+
+			"some field is captured but not restored%s", firstDiff(want, got))
+	}
+}
+
+// The guard the test above depends on. A score is bounded by what the fixture
+// moves, so if a later change retunes the drive sequence and a field stops
+// differing, the round trip silently stops covering it — which is exactly how
+// four restores survived deletion before this existed.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	p := primedEveryField(t)
+	before := decodeStateForTest(t, p.SaveState())
+	driveEverything(t, p)
+	after := decodeStateForTest(t, p.SaveState())
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Phase", before.Phase == after.Phase},
+		{"Cmd", before.Cmd == after.Cmd},
+		{"CmdBuf", before.CmdBuf == after.CmdBuf},
+		{"CmdLen", before.CmdLen == after.CmdLen},
+		{"ResultBuf", before.ResultBuf == after.ResultBuf},
+		{"ResultLen", before.ResultLen == after.ResultLen},
+		{"ResultIdx", before.ResultIdx == after.ResultIdx},
+		{"IOPos", before.IOPos == after.IOPos},
+		{"IOEnd", before.IOEnd == after.IOEnd},
+		{"IOCRC", before.IOCRC == after.IOCRC},
+		{"IODataOffset", before.IODataOffset == after.IODataOffset},
+		{"ReadCM", before.ReadCM == after.ReadCM},
+		{"ReadDataCRC", before.ReadDataCRC == after.ReadDataCRC},
+		{"ReadWrongCyl", before.ReadWrongCyl == after.ReadWrongCyl},
+		{"ReadDiagNoID", before.ReadDiagNoID == after.ReadDiagNoID},
+		{"ReadWantDeleted", before.ReadWantDeleted == after.ReadWantDeleted},
+		{"ReadSK", before.ReadSK == after.ReadSK},
+		{"ScanMatch", before.ScanMatch == after.ScanMatch},
+		{"LastSectorID", before.LastSectorID == after.LastSectorID},
+		{"SpeedlockCounter", before.SpeedlockCounter == after.SpeedlockCounter},
+		{"FormatActive", before.FormatActive == after.FormatActive},
+		{"FormatStaging", stagingEqual(before.FormatStaging, after.FormatStaging)},
+		{"FormatCyl", before.FormatCyl == after.FormatCyl},
+		{"FormatHead", before.FormatHead == after.FormatHead},
+		{"FormatN", before.FormatN == after.FormatN},
+		{"FormatNumSec", before.FormatNumSec == after.FormatNumSec},
+		{"FormatFiller", before.FormatFiller == after.FormatFiller},
+		{"FormatCHRN", bytes.Equal(before.FormatCHRN, after.FormatCHRN)},
+		{"HeadPos", before.HeadPos == after.HeadPos},
+		{"PCN", before.PCN == after.PCN},
+		{"SeekDone", before.SeekDone == after.SeekDone},
+		{"SeekResult", before.SeekResult == after.SeekResult},
+		{"US", before.US == after.US},
+		{"HD", before.HD == after.HD},
+		// IOActive is deliberately absent: a transfer and a format cannot both
+		// be in flight, and this capture is taken mid-format.
+		// TestARoundTripBetweenATransferAndAFormat moves it, in both
+		// directions, because each direction clears a different pointer.
+		//
+		// FormatFail is deliberately absent too, and unlike every other field
+		// here that is not something a better fixture could fix. It is set and
+		// cleared inside one call to execWriteIDByte — the last CHRN byte
+		// builds the track, reports ST1.ND if the layout did not fit, and
+		// clears the flag again before the call returns — and that call holds
+		// the controller's mutex throughout. No capture, from the CPU or from
+		// the UI thread, can be taken while it is true. It is a local variable
+		// living in a struct field, and it is captured only because the
+		// capture is a complete one; nothing can move it.
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+// A transfer and a format are the controller's two mutually exclusive
+// execution phases, and each holds a live pointer that no encoding carries:
+// ioTrack for the transfer, formatStaging and formatDisk for the format. Both
+// are re-resolved on restore from the flag that says whether they were live,
+// which means a restore has to CLEAR the one the captured state did not have.
+// Neither direction can be shown by a fixture that only ever runs one way, so
+// this runs both.
+func TestARoundTripBetweenATransferAndAFormat(t *testing.T) {
+	p := primedMidFormat(t)
+	midFormat := p.SaveState()
+
+	tp := newTape(t, p)
+	for r := byte(4); r <= 5; r++ { // finish the format
+		tp.cmd(1, 0, r, 2)
+	}
+	tp.drain()
+	tp.cmd(0x46, 0x00, 1, 0, 1, 2, 3, 0x2A, 0xFF) // and stop inside a read
+	tp.readN(100)
+	midTransfer := p.SaveState()
+
+	// A capture with no transfer in flight, restored over one that has a
+	// track under the head, must leave nothing behind.
+	if err := p.LoadState(midFormat); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := p.SaveState(); !bytes.Equal(got, midFormat) {
+		t.Errorf("restoring a mid-format capture over a live transfer left the transfer "+
+			"in place%s", firstDiff(midFormat, got))
+	}
+
+	// And the other way: a capture with no format in flight, restored over a
+	// staging track and the disk it was going to be written to.
+	if err := p.LoadState(midTransfer); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := p.SaveState(); !bytes.Equal(got, midTransfer) {
+		t.Errorf("restoring a mid-transfer capture over a live format left the format "+
+			"in place%s", firstDiff(midTransfer, got))
+	}
+}
+
+func decodeStateForTest(t *testing.T, b []byte) fdcState {
+	t.Helper()
+	var s fdcState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// stagingEqual compares two flattened FORMAT staging tracks. trackState holds
+// slices, so it is not comparable with ==.
+func stagingEqual(a, b trackState) bool {
+	return a.C == b.C && a.H == b.H && a.N == b.N && a.Filler == b.Filler &&
+		a.BPT == b.BPT && bytes.Equal(a.Data, b.Data) &&
+		bytes.Equal(a.Clocks, b.Clocks) && bytes.Equal(a.Weak, b.Weak)
 }

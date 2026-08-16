@@ -17,16 +17,39 @@ import (
 // require the two outputs to be identical. A field-by-field test only checks
 // the fields someone remembered to add.
 
+// replaySteps is how far every test below drives the layer. It is ONE constant
+// on purpose, because the length is not arbitrary: each effect in the drive is
+// RELATIVE, so whether a field ends up moved depends on how many times the
+// schedule hits it, and only some lengths move all seven.
+//
+// The double buffer is the sharp one. A flip SWAPS the bank pair, so an EVEN
+// number of flips returns both banks to exactly where they started and a lost
+// ActiveBank/ShadowBank restore has nothing left to do. This is not
+// hypothetical: when the replay property and its guard held two separate
+// literals, retuning only the replay to 24 (four flips, and two enable
+// toggles) left the guard passing green on its untouched 20 while deleting
+// either bank restore sailed through. A single constant is what stops the
+// property and the guard that gives it teeth from drifting apart.
+//
+// At 20 the schedule moves all seven: three bank flips, one enable toggle, two
+// steps of the three-step resolution cycle, two palette-offset increments, and
+// scroll pairs that have advanced 100 and 60. TestTheDriveSequenceLeaves-
+// EveryCapturedFieldChanged re-checks that from the layer itself, so retuning
+// this number into an even parity fails there rather than silently narrowing
+// what the replay can see.
+const replaySteps = 20
+
 // drive runs n scanlines of the per-line effect a Layer 2 demo does — parallax
 // scroll on every line, a double-buffer flip, a palette-offset cycle, a
 // resolution change and an enable toggle — and returns everything an observer
 // of the layer can see: the pixels rendered and the scroll writes reported.
 //
-// Every write is RELATIVE to the value already in the register, and the
-// schedule leaves each one different from where it started (an odd number of
-// bank flips, one enable toggle, two of the three-step resolution cycle). That
-// is what gives the replay teeth: a field the restore forgot is still holding
-// its drifted value, so the very next line renders differently.
+// Every write is RELATIVE to the value already in the register, and at
+// replaySteps the schedule leaves each one different from where it started (an
+// odd number of bank flips, one enable toggle, two of the three-step
+// resolution cycle). That is what gives the replay teeth: a field the restore
+// forgot is still holding its drifted value, so the very next line renders
+// differently.
 func drive(l *Layer2, n int) []byte {
 	var out []byte
 	l.SetScrollObserver(func(w ScrollWrite) {
@@ -90,12 +113,12 @@ func TestReplayingFromCapturedStateReproducesTheSameFrames(t *testing.T) {
 	l := primed()
 
 	st := l.SaveState()
-	first := drive(l, 20)
+	first := drive(l, replaySteps)
 
 	if err := l.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	second := drive(l, 20)
+	second := drive(l, replaySteps)
 
 	if !bytes.Equal(first, second) {
 		t.Error("Layer 2 rendered differently on replay from the same captured state: " +
@@ -106,6 +129,11 @@ func TestReplayingFromCapturedStateReproducesTheSameFrames(t *testing.T) {
 // The negative that gives the test above its teeth. If the drive sequence did
 // not actually move the layer off the state it was captured in, every field
 // would round-trip for free and the replay would pass while capturing nothing.
+//
+// This is where an even-parity retune of replaySteps is caught. The bank
+// checks below are the parity assertion: the flip only ever SWAPS the pair, so
+// the banks come out changed exactly when the schedule performed an odd number
+// of flips over a pair that differed to begin with.
 func TestTheDriveSequenceLeavesEveryCapturedFieldChanged(t *testing.T) {
 	l := primed()
 	before := struct {
@@ -114,13 +142,25 @@ func TestTheDriveSequenceLeavesEveryCapturedFieldChanged(t *testing.T) {
 		on                           bool
 	}{l.ActiveBank(), l.ShadowBank(), l.Resolution(), l.PaletteOffset(), l.ScrollY(), l.ScrollX(), l.Enabled()}
 
-	drive(l, 20)
+	// The other half of the parity argument: swapping two equal banks is a
+	// no-op at any parity, so the pair has to differ before the odd count
+	// means anything.
+	if before.active == before.shadow {
+		t.Fatalf("both buffers hold bank %d at capture: the flip is a no-op, so neither "+
+			"bank restore could be detected however many times the drive flips", before.active)
+	}
+
+	drive(l, replaySteps)
 
 	if l.ActiveBank() == before.active {
-		t.Error("active bank unchanged by the drive: a lost ActiveBank restore could not be detected")
+		t.Errorf("active bank still %d after %d steps: the drive flipped the double buffer an "+
+			"EVEN number of times, which swaps the pair back, so a lost ActiveBank restore "+
+			"could not be detected", before.active, replaySteps)
 	}
 	if l.ShadowBank() == before.shadow {
-		t.Error("shadow bank unchanged by the drive: a lost ShadowBank restore could not be detected")
+		t.Errorf("shadow bank still %d after %d steps: the drive flipped the double buffer an "+
+			"EVEN number of times, so a lost ShadowBank restore could not be detected",
+			before.shadow, replaySteps)
 	}
 	if l.Resolution() == before.res {
 		t.Error("resolution unchanged by the drive")
@@ -172,7 +212,7 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	st := l.SaveState()
 	keep := append([]byte(nil), st...)
 
-	drive(l, 20)
+	drive(l, replaySteps)
 	if l.SaveState() == nil {
 		t.Fatal("SaveState returned nil")
 	}
@@ -183,7 +223,7 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	if err := l.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	want := drive(l, 20)
+	want := drive(l, replaySteps)
 
 	// Scribble the caller's buffer: a layer that retained it would now be
 	// restoring from rubbish.
@@ -193,7 +233,7 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	for i := range st {
 		st[i] = 0xFF
 	}
-	if got := drive(l, 20); !bytes.Equal(got, want) {
+	if got := drive(l, replaySteps); !bytes.Equal(got, want) {
 		t.Error("the layer kept a reference to the caller's state buffer")
 	}
 }
@@ -218,7 +258,7 @@ func TestLoadStateRejectsRubbishWithoutHalfApplying(t *testing.T) {
 		t.Error("an empty state blob must be reported")
 	}
 
-	if !bytes.Equal(drive(l, 20), drive(ref, 20)) {
+	if !bytes.Equal(drive(l, replaySteps), drive(ref, replaySteps)) {
 		t.Error("a rejected state blob still changed the layer")
 	}
 }

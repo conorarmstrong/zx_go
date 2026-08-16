@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -332,6 +333,209 @@ func TestLoadStateRejectsMalformedStateWithoutApplyingIt(t *testing.T) {
 					"applied part of it")
 			}
 		})
+	}
+}
+
+// The replay-traffic property above only observes a field when the drive
+// happens to make it differ between the capture and the restore: a field left
+// where it already was is already correct after a deleted restore, so the trace
+// cannot tell a restored field from a forgotten one. A mutation audit found
+// that hole in the ROM restore — every fixture above holds the image at 8 KB,
+// so the branch that reallocates a resized image could be deleted with the
+// whole suite still green.
+//
+// So the binding tests below stop asserting on behaviour and assert on the
+// capture itself: drive the pager so every captured field changes, restore, and
+// re-capture. If any field is not restored, the second blob differs from the
+// first. That observes all seventeen fields rather than the subset the bus
+// happens to expose, and the guard that follows keeps the claim honest by
+// failing if any field stops being moved.
+
+// decodeStateForTest reads a capture back as the struct it was made from, so a
+// test can say which fields moved rather than only whether the blob changed.
+func decodeStateForTest(t *testing.T, b []byte) pagerState {
+	t.Helper()
+	var s pagerState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// fieldsMoved names the captured fields two captures disagree on.
+//
+// It walks pagerState by reflection rather than by a hand-written list, so a
+// field added to the capture and forgotten here does not quietly go uncovered:
+// it shows up as a field no drive sequence moves, and the guard fails.
+func fieldsMoved(t *testing.T, before, after []byte) map[string]bool {
+	t.Helper()
+	b := reflect.ValueOf(decodeStateForTest(t, before))
+	a := reflect.ValueOf(decodeStateForTest(t, after))
+	moved := map[string]bool{}
+	for i := 0; i < b.NumField(); i++ {
+		if !reflect.DeepEqual(b.Field(i).Interface(), a.Field(i).Interface()) {
+			moved[b.Type().Field(i).Name] = true
+		}
+	}
+	return moved
+}
+
+// stateCapturePoints are the fixtures the round trip and the guard share.
+//
+// Two are needed because the automap's arm and its held latch are mutually
+// exclusive by construction, not by accident: Step only arms a delayed entry
+// point while `!pagedIn && !pendingPageIn`, and pageOut clears pagedIn, rom3,
+// pendingPageIn and pendingRom3 together. So no single pager can be captured
+// with the overlay held AND an arm outstanding, and the fields each capture
+// point can move are complementary.
+var stateCapturePoints = []struct {
+	name  string
+	build func() *Pager
+	// cannotMove are the fields this capture point leaves where the drive
+	// sequence also leaves them, with the reason. Every one of them is moved
+	// by the other capture point.
+	cannotMove map[string]string
+}{
+	{
+		name:  "armed",
+		build: statePrimed,
+		cannotMove: map[string]string{
+			"PagedIn": "the arm has not taken effect yet, so the overlay is out here, " +
+				"and the drive ends with automap off, which also leaves it out",
+			"Rom3": "rom3 is only assigned when a page-in takes effect; this capture is " +
+				"one M1 short of that, and the drive's last page-in is the divMMC-ROM variant",
+		},
+	},
+	{
+		name:  "mapped",
+		build: statePrimedMapped,
+		cannotMove: map[string]string{
+			"PendingPageIn": "an arm cannot outlive the page-in that consumed it, and Step " +
+				"refuses to arm again while the overlay is held, so it is false here and " +
+				"false after the drive",
+		},
+	},
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	for _, tc := range stateCapturePoints {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.build()
+			want := p.SaveState()
+
+			stateDrive(p)
+			if bytes.Equal(p.SaveState(), want) {
+				t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+			}
+
+			if err := p.LoadState(want); err != nil {
+				t.Fatalf("LoadState: %v", err)
+			}
+			if got := p.SaveState(); !bytes.Equal(got, want) {
+				t.Error("re-capturing after a restore did not reproduce the captured state: " +
+					"some field is captured but not restored")
+			}
+		})
+	}
+}
+
+// The guard the round trip depends on. If a later change retunes the drive
+// sequence so a field stops differing, the round trip silently stops covering
+// it, and the score stays at 100% while measuring less.
+//
+// It is stricter than a per-field list of "must move": every field must move
+// under every capture point unless that point names it, with a reason, in
+// cannotMove — and a named field that starts moving again fails too, so an
+// exemption cannot outlive the constraint that justified it.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	covered := map[string]bool{}
+
+	for _, tc := range stateCapturePoints {
+		p := tc.build()
+		before := p.SaveState()
+		stateDrive(p)
+		moved := fieldsMoved(t, before, p.SaveState())
+
+		for name, why := range tc.cannotMove {
+			if moved[name] {
+				t.Errorf("%s: %s now moves, so it no longer needs its exemption (%q) — "+
+					"delete the exemption so the coverage claim stays honest", tc.name, name, why)
+			}
+		}
+		for _, name := range stateFieldNames() {
+			if moved[name] {
+				covered[name] = true
+				continue
+			}
+			if _, exempt := tc.cannotMove[name]; !exempt {
+				t.Errorf("%s: %s is unchanged by the drive sequence, so a lost restore of it "+
+					"would go undetected", tc.name, name)
+			}
+		}
+	}
+
+	for _, name := range stateFieldNames() {
+		if !covered[name] {
+			t.Errorf("%s is moved by no capture point, so nothing here would catch a lost "+
+				"restore of it", name)
+		}
+	}
+}
+
+// stateFieldNames is every field a capture carries, read off the wire struct so
+// adding a field to the capture without covering it fails the guard.
+func stateFieldNames() []string {
+	t := reflect.TypeOf(pagerState{})
+	out := make([]string, t.NumField())
+	for i := range out {
+		out[i] = t.Field(i).Name
+	}
+	return out
+}
+
+// stateROMAbsent is the capture point for the other half of the ROM restore:
+// the one where the image changes LENGTH.
+//
+// New(nil) is the install-time path — no enNxtmmc.rom in roms/next/, so the
+// pager starts with no ROM image at all and boot.bin streams it off the SD card
+// through WriteROMByte, which grows the buffer to 8 KB on the first write. Every
+// other fixture here holds the length at 8 KB throughout and so only ever
+// exercises the copy-in-place branch; a capture taken before the stream has to
+// shrink the image back on restore, which is the branch that replaces the slice.
+func stateROMAbsent() *Pager {
+	p := New(nil)
+	p.SetAutomap(true)
+	p.Step(0x0100)
+	return p
+}
+
+func TestARoundTripFromACaptureTakenBeforeTheROMArrived(t *testing.T) {
+	p := stateROMAbsent()
+	want := p.SaveState()
+	if n := len(decodeStateForTest(t, want).ROM); n != 0 {
+		t.Fatalf("the fixture captured a %d-byte ROM image, so it does not start from "+
+			"the no-image state this test exists for", n)
+	}
+
+	// boot.bin streaming enNxtmmc.rom in, which allocates the image.
+	for i, b := range []byte{0x18, 0x2A, 0xC9, 0xF3} {
+		p.WriteROMByte(i, b)
+	}
+	if n := len(decodeStateForTest(t, p.SaveState()).ROM); n != ROMSize {
+		t.Fatalf("streaming the ROM in left a %d-byte image, want %d: the restore branch "+
+			"that reallocates the image is not being exercised", n, ROMSize)
+	}
+
+	if err := p.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := p.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after restoring a capture taken before the ROM arrived did " +
+			"not reproduce it: the pager kept an image the captured machine did not have")
+	}
+	if got := p.ReadROMByte(0x00); got != 0xFF {
+		t.Errorf("divMMC ROM $0000 = %#02x after restoring a capture with no image, want "+
+			"%#02x (an absent image reads as floating high)", got, 0xFF)
 	}
 }
 

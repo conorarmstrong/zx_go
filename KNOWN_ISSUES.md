@@ -80,34 +80,33 @@ Both symbols exist in the GLFW binding already depended on
 GLES onto Direct3D, which Windows on ARM does have. This is a change to the
 GUI toolkit rather than to zx_go, so it needs raising upstream.
 
-### Snapshot rewind does not restore the tape position
+### Snapshot rewind does not restore a +D or Opus Discovery disk interface
 
 **Affects:** the **Time Travel** tab, the `tt-rewind` and `replay-back`
 commands, all versions. It does **not** affect reverse debugging, which is a
 separate mechanism described in `DEBUGGER.md`.
 
-**What you see.** Rewinding during a tape load puts the machine back and leaves
-the tape where it was, so the load resumes from the wrong place in the stream.
+**What you see.** Rewinding while a +D or Opus Discovery disk operation is in
+flight puts the machine back and leaves the controller where it was, so the
+operation resumes against a controller mid-command.
 
 **Cause.** A capture is built from the devices registered in
-`(*emulator).stateRegistry`, and the tape player is not one of them — it has no
-`machinestate.Device`. Everything else the rewind used to leave behind is now
-captured: the CPU, the whole RAM pool and the paging window, the ULA (frame
-position and flash phase included), the AY's tone dividers, noise LFSR and
+`(*emulator).stateRegistry`, and neither interface is one of them: neither has
+a `machinestate.Device`. Everything else is captured: the CPU, the whole RAM
+pool and the paging window, the ULA (frame position and flash phase included),
+the tape player's playback position, the AY's tone dividers, noise LFSR and
 envelope position, the keyboard, the +3 FDC, the Beta interface, Interface 1,
-the Multiface, the DAC, and the Next's own blocks. The +D and the Opus
-Discovery are in the same position as the tape: neither has a `Device`, so
-neither is captured.
+the Multiface, the DAC, and the Next's own blocks.
 
 **Two further limits, one of which has gone.** Rewind still lands on the
-nearest capture at or before the target rather than on an exact instruction —
+nearest capture at or before the target rather than on an exact instruction,
 but `replay-back` now reaches any instruction inside the ring by re-executing
 from a capture, with the whole machine. The ring still holds 16 captures by
 default, so the reachable window is short.
 
 **How you find out.** `replay-back` re-runs the window to the present and
 compares the machine it produced against the machine that was there before
-handing back an instant, so a load in flight over the window is refused rather
+handing back an instant, so work in flight over the window is refused rather
 than replayed wrongly. `tt-rewind` does not check, because it is not
 re-executing anything.
 
@@ -131,6 +130,28 @@ the hint above.
 ---
 
 ## Recently fixed
+
+### Snapshot rewind did not restore the tape position
+
+**Fixed.** Rewinding during a tape load put the machine back and left the tape
+where it was, so the load resumed from the wrong place in the stream and came
+back as `R Tape loading error`.
+
+The tape player had no `machinestate.Device`, so it was not in the capture. It
+has one now (`pkg/ula/tapestate.go`), carrying the playback position and
+everything that decides the next edge: the block index, the position in that
+block's pulse train, the T-state clock and the moment the last edge fired, the
+EAR level, whether the block's bytes are already off the tape, whether the tape
+is playing, and any open TZX loop.
+
+The tape **image** is deliberately not captured. It is media, the contents of a
+file the user mounted, and a rewind does not unmount or reload it, exactly as
+rewinding does not change which cassette is in the deck. Leaving it out also
+keeps a capture at a few hundred bytes instead of the size of the whole tape.
+
+The player is registered only when a tape is actually mounted, so a capture
+taken with an empty deck does not claim to carry a tape position, and is
+refused if it is applied to a machine that has since had a tape put in.
 
 ### ANSI escape sequences printed literally in the Windows console
 

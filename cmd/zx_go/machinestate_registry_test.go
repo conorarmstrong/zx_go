@@ -52,6 +52,11 @@ func hasDevice(names []string, want string) bool {
 // Asserting the exact set (not "contains") is the point: it fails both when a
 // device this model does not have creeps in and when one it does have is
 // dropped.
+//
+// No model lists a tape here, and that is the rule rather than an omission:
+// these machines are freshly built with an empty deck, and a capture taken with
+// no tape in it must not claim to carry a tape position. See
+// TestStateRegistryLazyTapePlayer.
 func TestStateRegistryDeviceSetPerModel(t *testing.T) {
 	for _, tc := range []struct {
 		model roms.SpectrumModel
@@ -196,6 +201,38 @@ func TestStateRegistryLazyBetaDisk(t *testing.T) {
 	}
 }
 
+// The tape player is the same lazy shape as the Beta: there is no player until
+// a tape is mounted, so it must be absent from the registry until then — and a
+// capture taken with an empty deck must be REFUSED once a tape is in, not
+// quietly applied to everything else. That capture has nothing to say about a
+// load in progress, and restoring it would put the machine back around a tape
+// still sitting wherever it had run to.
+func TestStateRegistryLazyTapePlayer(t *testing.T) {
+	emu := quietEmulator(t, roms.Model48K)
+
+	beforeReg := emu.stateRegistry()
+	if hasDevice(beforeReg.Capture().Devices(), "tape") {
+		t.Fatal("tape registered with an empty deck")
+	}
+	preTape := beforeReg.Capture()
+
+	if err := loadTapeFile(emu, writeTempTAP(t, 0xFF, []byte{1, 2, 3, 4})); err != nil {
+		t.Fatalf("loadTapeFile: %v", err)
+	}
+
+	afterReg := emu.stateRegistry()
+	if !hasDevice(afterReg.Capture().Devices(), "tape") {
+		t.Error("a tape is mounted but the player is not registered")
+	}
+	err := afterReg.Restore(preTape)
+	if err == nil {
+		t.Fatal("a capture taken before a tape was mounted was accepted afterwards")
+	}
+	if !strings.Contains(err.Error(), "tape") {
+		t.Errorf("error should name the device that has no state: %v", err)
+	}
+}
+
 // Register panics on a duplicate identifier, by design — two devices sharing a
 // name would overwrite each other's state. That makes the wiring itself the
 // thing under test: building the registry for every machine, with every
@@ -238,6 +275,11 @@ func attachEveryOptionalDevice(t *testing.T, e *emulator) {
 	if e.betaSupported() {
 		if _, err := e.ensureBeta(); err != nil {
 			t.Fatalf("ensureBeta: %v", err)
+		}
+	}
+	if e.ula != nil {
+		if err := loadTapeFile(e, writeTempTAP(t, 0xFF, []byte{1, 2, 3, 4})); err != nil {
+			t.Fatalf("loadTapeFile: %v", err)
 		}
 	}
 	if e.peripherals == nil {

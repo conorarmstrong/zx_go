@@ -3,6 +3,7 @@ package dma
 import (
 	"bytes"
 	"encoding/gob"
+	"reflect"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
@@ -354,6 +355,218 @@ func TestLoadStateRejectsRubbish(t *testing.T) {
 	}
 	if err := d.LoadState(nil); err == nil {
 		t.Error("an empty state blob must be reported: it means the capture failed")
+	}
+}
+
+// The replay property above has a blind spot, and a mutation audit found it: a
+// field restore can only be missed if the replay's observable — the IO write
+// log, the read-back bytes, the charged durations — depends on that field
+// AFTER the capture point. inTransfer never reaches any of them, so its restore
+// could be deleted with every test still green.
+//
+// The fix is the same one the AY needed: stop asserting on output and assert on
+// the capture. Drive the controller so EVERY captured field changes, restore,
+// and re-capture. A field that is captured but not restored then shows up as a
+// blob that does not match, whether or not it reaches an observable.
+
+// roundTripRig is newBurstRig caught one byte further on: mid-block, mid
+// read-back sequence, and now also mid-command, between a WR0 base byte and the
+// four bytes it announced. All three positions are invisible to the guest, and
+// the queue is the one a capture lands inside most often — one OUT delivers one
+// byte, and captures are taken between instructions.
+func roundTripRig() *burstRig {
+	r := newBurstRig()
+	r.d.WriteCommand(0x7D) // WR0: port A start and block length announced, none delivered
+	return r
+}
+
+// driveEverything changes every field a capture carries.
+//
+// Parity is the trap. Each of these moves once, not twice: the DMA-mode latch
+// is dropped and left dropped rather than re-raised, the transfer mode goes
+// burst to continuous and stays there, and the follow-byte queue refills with a
+// DIFFERENT pair of codes rather than the same four it started with. An even
+// number of changes would return the field to the captured value and hide a
+// lost restore completely.
+func driveEverything(r *burstRig) {
+	// The capture was taken owing four follow bytes, so the drive delivers
+	// them; the queue empties here and refills with other codes at the end.
+	feed(r.d, []byte{0x00, 0x50, 0x10, 0x00}) // port A = $5000, length $0010
+
+	// Drain the block still in flight. Every byte moves a pointer, the byte
+	// counter and the burst engine's due time, and the block's end latches
+	// end-of-block, clears the burst and reloads the start addresses under
+	// auto-restart.
+	r.advance(400)
+
+	// The guest now reaches the controller through the other access port, which
+	// re-latches the DMA mode (zxnext.vhd:1817 dma_mode <= port_0b_lsb) and so
+	// changes what the next LOAD seeds the byte counter with.
+	r.d.SetZ80Mode(false)
+
+	// Then it reprograms the controller end to end and runs one short block
+	// through the new configuration: every latched field, both cycle lengths,
+	// the prescaler, the transfer mode, the read mask and its cursor, the
+	// pointers, the counter and the charged duration all take new values.
+	feed(r.d, reprogram)
+
+	// ...and stops mid-command again, owing a different pair of follow bytes
+	// than the capture was owed. Ending on an empty queue would leave the
+	// restore of a non-empty one untested from the other direction.
+	r.d.WriteCommand(0x8D) // WR4: port B address low and high announced
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	r := roundTripRig()
+	want := r.d.SaveState()
+
+	driveEverything(r)
+	if bytes.Equal(r.d.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := r.d.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := r.d.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. Without it, a later change that retunes
+// the drive sequence so a field stops differing silently stops covering that
+// field, and the round-trip test goes on passing while proving less.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	r := roundTripRig()
+	before := decodeDMAState(t, r.d.SaveState())
+	driveEverything(r)
+	after := decodeDMAState(t, r.d.SaveState())
+
+	checks := []struct {
+		name string
+		same bool
+	}{
+		{"PortAStart", before.PortAStart == after.PortAStart},
+		{"PortBStart", before.PortBStart == after.PortBStart},
+		{"BlockLen", before.BlockLen == after.BlockLen},
+		{"AToB", before.AToB == after.AToB},
+		{"AMode", before.AMode == after.AMode},
+		{"BMode", before.BMode == after.BMode},
+		{"AIsIO", before.AIsIO == after.AIsIO},
+		{"BIsIO", before.BIsIO == after.BIsIO},
+		{"Loaded", before.Loaded == after.Loaded},
+		{"ZMode", before.ZMode == after.ZMode},
+		{"CurA", before.CurA == after.CurA},
+		{"CurB", before.CurB == after.CurB},
+		{"Counter", before.Counter == after.Counter},
+		{"ACycleLen", before.ACycleLen == after.ACycleLen},
+		{"BCycleLen", before.BCycleLen == after.BCycleLen},
+		{"Prescaler", before.Prescaler == after.Prescaler},
+		{"Mode", before.Mode == after.Mode},
+		{"AutoRestart", before.AutoRestart == after.AutoRestart},
+		{"EndOfBlock", before.EndOfBlock == after.EndOfBlock},
+		{"LastDuration", before.LastDuration == after.LastDuration},
+		{"ReadMask", before.ReadMask == after.ReadMask},
+		{"ReadReg", before.ReadReg == after.ReadReg},
+		{"ActiveBurst", before.ActiveBurst == after.ActiveBurst},
+		{"Remaining", before.Remaining == after.Remaining},
+		{"NextDue", before.NextDue == after.NextDue},
+		{"Pending", bytes.Equal(before.Pending, after.Pending)},
+		// InTransfer is deliberately absent, and it is the one field no drive
+		// sequence can put here: it is true only between the first and last
+		// byte of a block, and this rig is driven from outside the transfer, so
+		// both the capture and the driven state have it clear.
+		// TestARoundTripFromInsideATransfer covers it instead.
+	}
+	for _, f := range checks {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+
+	// The table above is a coverage claim, so it has to be complete. A field
+	// added to the capture and not to the table would be restored by code no
+	// test moves, and the round-trip test would go on passing while covering
+	// one field fewer — which is the exact way a mutation score decays
+	// unnoticed. Reflection makes the omission a failure instead of a silence.
+	named := map[string]bool{
+		"InTransfer": true, // covered by TestARoundTripFromInsideATransfer
+	}
+	for _, f := range checks {
+		named[f.name] = true
+	}
+	captured := reflect.TypeOf(dmaState{})
+	for i := 0; i < captured.NumField(); i++ {
+		if name := captured.Field(i).Name; !named[name] {
+			t.Errorf("dmaState.%s is captured but nothing asserts a drive sequence moves it, "+
+				"so a lost restore of it would go undetected", name)
+		}
+	}
+}
+
+func decodeDMAState(t *testing.T, b []byte) dmaState {
+	t.Helper()
+	var s dmaState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// inTransfer is the one field the drive sequence above cannot move, so it gets
+// its own round trip from the only place the controller is ever in that state:
+// inside the block, between the first byte and the last.
+//
+// That is not a contrived observation point. The DMA's IOBus is the ULA's port
+// dispatch, so an IO endpoint calls out of the transfer loop into the rest of
+// the machine, and the flag exists precisely because one of those calls can
+// come straight back in through the DMA's own command port. A capture taken
+// from that callback is a real capture of a real state — and it is the state
+// whose restore matters, because a controller restored with the flag clear
+// treats the very next ENABLE as a second, nested transfer.
+func TestARoundTripFromInsideATransfer(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 0x20; i++ {
+		mem[0x4000+i] = byte(i*7 + 1)
+	}
+	d := New(mem)
+
+	var inside []byte
+	moved := 0
+	d.SetIOBus(&hookBus{onWrite: func(uint16, byte) {
+		if moved++; moved == 3 { // part way through the block, not at either end
+			inside = d.SaveState()
+		}
+	}})
+
+	feed(d, []byte{
+		0xC3,                         // RESET
+		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+		0x54, 0x02, // WR1: port A memory, increment, + timing byte
+		0x68, 0x22, 0x40, // WR2: port B IO, fixed, + timing byte, + prescaler
+		0x8D, 0xDF, 0x00, // WR4: continuous, port B = $00DF
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+
+	if moved != 8 {
+		t.Fatalf("the fixture moved %d bytes, want 8: it never entered a transfer", moved)
+	}
+	if s := decodeDMAState(t, inside); !s.InTransfer {
+		t.Fatal("the capture was not taken from inside the transfer, so it covers nothing")
+	}
+	// The controller is now back at rest, so the flag differs between the
+	// captured state and the present one and a lost restore cannot hide.
+	if s := decodeDMAState(t, d.SaveState()); s.InTransfer {
+		t.Fatal("the transfer did not clear InTransfer, so a lost restore of it stays invisible")
+	}
+
+	if err := d.LoadState(inside); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := d.SaveState(); !bytes.Equal(got, inside) {
+		t.Error("re-capturing after restoring a mid-transfer state did not reproduce the capture")
 	}
 }
 

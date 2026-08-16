@@ -2,6 +2,7 @@ package nextregs
 
 import (
 	"bytes"
+	"encoding/gob"
 	"testing"
 )
 
@@ -239,6 +240,112 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	if got := d.Raw(0x40); got != 0x05 {
 		t.Errorf("auto-increment index = %#02x after restore, want %#02x", got, 0x05)
 	}
+}
+
+// The replay tests above assert on behaviour, and behaviour only observes the
+// fields that reach it. The two tests below assert on the CAPTURE instead:
+// drive the device so every captured field differs, restore, re-capture, and
+// compare the blobs. That observes a field whether or not any access path
+// exposes it, which is the only way a score means what it says.
+
+// driveEverything changes every field a capture carries. Parity and
+// convergence are the traps: a field that moves and comes back is as invisible
+// as one that never moved, so every count here is deliberately odd and every
+// value deliberately unlike the one primed() left behind.
+func driveEverything(d *Dispatcher) {
+	// Seven writes through the auto-incrementing register: an odd run, which
+	// leaves the index NR$40 at 0x0C rather than back at primed()'s 0x05, and
+	// rewrites seven bytes of the fixture's palette RAM that primed() left at
+	// zero.
+	for i := 0; i < 7; i++ {
+		d.WriteReg(0x41, byte(0x11+i))
+	}
+	// A register with no handler at all, so the plain-storage path is in the
+	// capture too and not only the handled one.
+	d.WriteReg(0x35, 0x77)
+	// Three writes through the pair, not one. One write completes the pair the
+	// capture was taken inside and flips the phase byte, but leaves 0x5A
+	// latched exactly where primed() put it; the second and third leave a
+	// different half latched and put the phase back on the opposite side.
+	d.Select(0x44)
+	d.WriteData(0x3C)
+	d.WriteData(0x6B)
+	d.WriteData(0x9D)
+	// ...and the selected latch ends on a register primed() never pointed it
+	// at, so a lost restore of it cannot be rescued by the captured and the
+	// driven state happening to coincide.
+	d.Select(0xA5)
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	var effects int
+	d := primed(&effects)
+	want := d.SaveState()
+
+	driveEverything(d)
+	if bytes.Equal(d.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := d.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := d.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. If a later change retunes the drive
+// sequence so a field stops differing between capture and restore, the round
+// trip silently stops covering it and still passes.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	var effects int
+	d := primed(&effects)
+	before := decodeStateForTest(t, d.SaveState())
+	driveEverything(d)
+	after := decodeStateForTest(t, d.SaveState())
+
+	if before.Regs == after.Regs {
+		t.Error("Regs is unchanged by the drive sequence, so a lost restore of it " +
+			"would go undetected")
+	}
+	if before.Selected == after.Selected {
+		t.Error("Selected is unchanged by the drive sequence, so a lost restore of it " +
+			"would go undetected")
+	}
+
+	// Regs is a single captured field standing for 256 independently written
+	// bytes, so "the array differs" is satisfied by one byte moving and would
+	// still read as full coverage. These are the bytes the sequence exists to
+	// move: the auto-increment index, the register the run commits through, a
+	// register with no handler at all, the palette RAM the run fills, and the
+	// two bytes that are the open pair's whole live state.
+	for _, f := range []struct {
+		what string
+		reg  byte
+	}{
+		{"the auto-increment index NR$40", 0x40},
+		{"the committed value NR$41", 0x41},
+		{"unhandled plain storage NR$35", 0x35},
+		{"the fixture's palette RAM", 0xD5},
+		{"the open pair's phase", 0xE0},
+		{"the open pair's latched first half", 0xE1},
+	} {
+		if before.Regs[f.reg] == after.Regs[f.reg] {
+			t.Errorf("%s (NR$%02X) is unchanged by the drive sequence: the round trip covers "+
+				"the register file only where the sequence moves it", f.what, f.reg)
+		}
+	}
+}
+
+func decodeStateForTest(t *testing.T, b []byte) nextRegsState {
+	t.Helper()
+	var s nextRegsState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }
 
 func TestStateIDIsStable(t *testing.T) {

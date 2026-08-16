@@ -23,6 +23,12 @@ import (
 // and the fixture is deliberately stopped MID-TRANSFER on both streams. A
 // field-by-field test only checks the fields someone remembered to add, and a
 // fixture captured at rest proves nothing about resuming.
+//
+// Replaying frames is not enough on its own, though: a field reaching the
+// picture only through another field that is restored beside it is invisible to
+// any frame comparison. TestEveryCapturedFieldSurvivesARoundTrip closes that by
+// asserting on the capture instead, and TestTheDriveSequenceChangesEveryCaptured-
+// Field is what keeps it honest.
 
 const stateTestWidth = 320
 
@@ -119,16 +125,22 @@ func drive(e *Engine) []byte {
 	return out
 }
 
-// scramble carries the engine somewhere else entirely, so that every captured
-// field differs from the live one at the moment of restore. Without it a field
-// left out of LoadState would keep whatever value it already had, and half the
-// capture would go untested.
-func scramble(e *Engine) {
+// driveEverything carries the engine somewhere else entirely, so that every
+// captured field differs from the live one at the moment of restore. Without it
+// a field left out of LoadState would keep whatever value it already had, and
+// its missing restore would have nothing to do: a mutation score is bounded
+// above by what the fixture moves, not by how many fields the capture lists.
+//
+// Every value below is chosen to differ from the one primed() left, and every
+// boolean is toggled an ODD number of times — an even count returns a flag to
+// where it started and hides a lost restore completely.
+// TestTheDriveSequenceChangesEveryCapturedField is what holds that true.
+func driveEverything(e *Engine) {
 	e.SetEnabled(false)
 	e.SetZeroOnTop(false)
 	e.SetOverBorder(false)
 	e.SetBorderClip(false)
-	e.SetClip(10, 20, 30, 40)
+	e.SetClip(10, 20, 30, 40) // none of the four match primed()'s 0/55/40/95
 	e.SetLineClockBudget(37)
 	for i := 0; i < MaxSprites; i++ {
 		e.Set(i, Attr{})
@@ -137,6 +149,11 @@ func scramble(e *Engine) {
 	for i := 0; i < 600; i++ {
 		e.WritePatternByte(0x5A)
 	}
+	// Both write cursors have to land somewhere the capture is not, and so does
+	// the byte cursor: a selected sprite of 9 restored over 9, or a cursor of 4
+	// restored over 4, proves nothing about the line that restores it. One
+	// attribute byte leaves the cursor at 1 with attrExtended false, against the
+	// captured 4/true.
 	e.SelectSprite(77)
 	e.WriteAttr(0x11)
 	e.ReadStatus() // clears both latches, so a restored latch has to come back
@@ -150,7 +167,7 @@ func TestReplayingFromCapturedStateReproducesTheSameFrames(t *testing.T) {
 	st := e.SaveState()
 	first := drive(e)
 
-	scramble(e)
+	driveEverything(e)
 	if err := e.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -236,14 +253,99 @@ func TestPrimedFixtureIsMidTransferAndActuallyDraws(t *testing.T) {
 	}
 }
 
-// attrExtended is the one captured field whose restore cannot be observed, and
-// this is why rather than an excuse for it: WriteAttr sets the flag only at
-// byte 3, and the only state it can be true in is the one where the cursor is
-// parked at 4 — where the next write auto-advances to the following sprite
-// whether the record was four bytes or five. So the flag is exactly
-// (attrCursor == 4), and a restore that dropped it would be corrected by the
-// cursor. It is still captured, because keeping the two in step is WriteAttr's
-// invariant to hold and not the capture's to assume; this test is what says so.
+// The replay-frames property above has a blind spot, and a mutation audit found
+// it: deleting the attrExtended restore left every test passing. The reason is
+// the one the comment below spells out — the flag reaches the picture only
+// through the cursor, which is restored beside it, so no rendered frame can ever
+// observe it. That is not a field to drop; it is a test written at the wrong
+// level.
+//
+// So the binding test is on the CAPTURE rather than on the output: drive the
+// engine so EVERY captured field changes, restore, and re-capture. A field that
+// is captured and not restored makes the second blob differ from the first,
+// whether or not it reaches a pixel.
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	e := primed()
+	want := e.SaveState()
+
+	driveEverything(e)
+	if bytes.Equal(e.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := e.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := e.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. A round-trip score is bounded by what the
+// drive sequence moves, so if a later change retunes it and a field stops
+// differing between capture and restore, the round trip silently stops covering
+// that field while still passing. This fails instead.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	e := primed()
+	before := decodeStateForTest(t, e.SaveState())
+	driveEverything(e)
+	after := decodeStateForTest(t, e.SaveState())
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Attrs", before.Attrs == after.Attrs},
+		{"Pattern", bytes.Equal(before.Pattern, after.Pattern)},
+		{"SelSprite", before.SelSprite == after.SelSprite},
+		{"SelPattAddr", before.SelPattAddr == after.SelPattAddr},
+		{"AttrCursor", before.AttrCursor == after.AttrCursor},
+		{"AttrExtended", before.AttrExtended == after.AttrExtended},
+		{"Enabled", before.Enabled == after.Enabled},
+		{"ZeroOnTop", before.ZeroOnTop == after.ZeroOnTop},
+		{"Collided", before.Collided == after.Collided},
+		{"Overtime", before.Overtime == after.Overtime},
+		{"ClocksPerLine", before.ClocksPerLine == after.ClocksPerLine},
+		{"ClipX1", before.ClipX1 == after.ClipX1},
+		{"ClipX2", before.ClipX2 == after.ClipX2},
+		{"ClipY1", before.ClipY1 == after.ClipY1},
+		{"ClipY2", before.ClipY2 == after.ClipY2},
+		{"OverBorder", before.OverBorder == after.OverBorder},
+		{"BorderClip", before.BorderClip == after.BorderClip},
+		// ClipSet is deliberately absent, and it is the one field no drive
+		// sequence can move from primed(): SetClip is the only path to it and it
+		// only ever raises the flag. Nothing in the hardware clears a clip window
+		// once written, so the false direction exists only through a rewind —
+		// which is exactly why it needs the separate fixture in
+		// TestRestoringAPreClipCaptureRemovesTheClipWindow, driven the other way
+		// round, from a capture taken before the guest's first NR$19 write.
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+func decodeStateForTest(t *testing.T, b []byte) spriteState {
+	t.Helper()
+	var s spriteState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// attrExtended is the one captured field whose restore cannot be observed in a
+// rendered frame, and this is why rather than an excuse for it: WriteAttr sets
+// the flag only at byte 3, and the only state it can be true in is the one where
+// the cursor is parked at 4 — where the next write auto-advances to the
+// following sprite whether the record was four bytes or five. So the flag is
+// exactly (attrCursor == 4), and a restore that dropped it would be corrected by
+// the cursor before anything drew. It is still captured, because keeping the two
+// in step is WriteAttr's invariant to hold and not the capture's to assume; this
+// test is what says so, and the round trip above is what covers the restore.
 func TestAttrExtendedIsExactlyACursorParkedAtFour(t *testing.T) {
 	e := New()
 	check := func(after string) {
@@ -280,7 +382,7 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	for i := 0; i < PatternRAMSize; i++ {
 		e.WritePatternByte(0xFF)
 	}
-	scramble(e)
+	driveEverything(e)
 
 	if err := e.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
@@ -312,12 +414,21 @@ func TestRestoringAPreClipCaptureRemovesTheClipWindow(t *testing.T) {
 	st := e.SaveState()
 
 	e.SetClip(0, 40, 0, 191) // the guest clips the layer at x 81
+	if !decodeStateForTest(t, e.SaveState()).ClipSet {
+		t.Fatal("the drive step did not set ClipSet, so a lost restore of it stays invisible")
+	}
 
 	if err := e.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
 	if _, _, _, _, set := e.Clip(); set {
 		t.Error("restoring a capture taken before any NR$19 write left the clip window in place")
+	}
+	// ...and the same claim in the capture domain, which is where ClipSet is
+	// covered: driveEverything cannot move it, because SetClip only ever raises
+	// it and nothing else touches it.
+	if got := e.SaveState(); !bytes.Equal(got, st) {
+		t.Error("re-capturing after restoring a pre-clip capture did not reproduce it")
 	}
 	got := make([]byte, stateTestWidth)
 	e.RenderScanline(64, got, stateTestWidth)

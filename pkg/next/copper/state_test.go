@@ -2,6 +2,7 @@ package copper
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"strings"
 	"testing"
@@ -263,6 +264,112 @@ func TestStateIDIsStable(t *testing.T) {
 	if got := New().StateID(); got != "next.copper" {
 		t.Errorf("StateID = %q, want %q: it is stored in state blobs and must not drift", got, "next.copper")
 	}
+}
+
+// The replay tests above assert on behaviour, and behaviour is a filter: it
+// only observes the fields that reach the transcript of NextReg writes. That
+// filter is wide here because the fresh-copper replays start from New(), where
+// every field differs from the capture — but it is a filter that a later change
+// to the fixture could narrow without anything going red. Park the copper's
+// program counter at 0 rather than 1, or capture at line 0, and the restore of
+// that field stops being observable while every test still passes.
+//
+// So the tests below stop asserting on output and assert on the capture itself:
+// drive the copper so EVERY captured field changes, restore, and re-capture. If
+// any field is not restored, the second blob differs from the first. That
+// observes all eight fields directly rather than the subset the write
+// transcript happens to expose.
+
+// driveEverything changes every field a capture carries, starting from primed().
+//
+// The pairing phase is the field to watch, and the reason the two WriteData
+// calls at the end come in a pair rather than singly. primed() is captured with
+// its high byte latched and hiSet true; a single write would latch a new high
+// byte and leave hiSet true as well, so the phase would converge back to where
+// it started and a lost restore of it would be invisible here. Completing the
+// pair moves the latched byte AND leaves the phase false, so both differ.
+//
+// Order matters for the rest. The mode write resets pc and stopped, so it has
+// to precede the step that parks them; the cursor work has to follow the step,
+// because SetWritePtrLow clears the very phase this is trying to move.
+func driveEverything(c *Copper) {
+	// A different list, ending in a HALT so the copper stops itself.
+	c.SetWritePtrLow(0)
+	for _, w := range []uint16{0x2A05, 0x2B06, 0xFFFF} {
+		c.WriteData(byte(w >> 8))
+		c.WriteData(byte(w))
+	}
+
+	// A different start mode, running from the top of the new list.
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+
+	// One step retires both MOVEs and then the HALT, so pc parks at 2 (primed()
+	// left it at 1), stopped goes true (primed() left it false), and the raster
+	// lands on a line other than the captured 40.
+	c.Step(97, 511, 8)
+
+	// Finally the cursor and the pairing phase: a different index, a different
+	// latched high byte, and the pair completed so the phase itself differs.
+	c.SetWritePtrLow(9)
+	c.WriteData(0x3C)
+	c.WriteData(0x4D)
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	c := primed()
+	want := c.SaveState()
+
+	driveEverything(c)
+	if bytes.Equal(c.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := c.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := c.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. If a later change retunes primed() or the
+// drive sequence so a field stops differing between them, the round trip
+// silently stops covering that field and the mutation score it earns becomes a
+// number about the fixture rather than about the capture.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	c := primed()
+	before := decodeStateForTest(t, c.SaveState())
+	driveEverything(c)
+	after := decodeStateForTest(t, c.SaveState())
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Program", before.Program == after.Program},
+		{"WritePtr", before.WritePtr == after.WritePtr},
+		{"Hi", before.Hi == after.Hi},
+		{"HiSet", before.HiSet == after.HiSet},
+		{"Mode", before.Mode == after.Mode},
+		{"Pc", before.Pc == after.Pc},
+		{"Stopped", before.Stopped == after.Stopped},
+		{"LastScanline", before.LastScanline == after.LastScanline},
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+func decodeStateForTest(t *testing.T, b []byte) copperState {
+	t.Helper()
+	var s copperState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }
 
 // A malformed blob must be reported and must change nothing. A copper left with

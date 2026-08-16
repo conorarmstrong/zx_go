@@ -61,6 +61,15 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	}
 	registerDevices(r, e.betaDisk)
 
+	// The tape player exists only once a tape is mounted, and GetTapePlayer
+	// returns nil until then — the same lazy shape as the Beta above, and for
+	// the same reason: a capture taken with no tape in the deck must not claim
+	// to carry a tape position, or restoring it would rewind the machine around
+	// a load it knows nothing about.
+	if e.ula != nil {
+		registerDevices(r, e.ula.GetTapePlayer())
+	}
+
 	// Spectrum Next bus. All nil off the Next, and cleared together by
 	// unwireNextSubsystems when the machine leaves it.
 	registerDevices(r, e.nextRegs, e.nextPalette, e.nextTilemap, e.nextCopper,

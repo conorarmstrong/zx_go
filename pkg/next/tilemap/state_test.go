@@ -3,26 +3,31 @@ package tilemap
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"hash/fnv"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
 )
 
 // The tilemap is a register mirror in front of a renderer: nothing in it
-// counts, latches or auto-increments, so its whole state is the twelve values
+// counts, latches or auto-increments, so its whole state is the eleven values
 // the NextReg dispatcher last wrote into it. That makes an omission cheap to
 // make and invisible to spot — leave the scroll or one clip edge out of the
 // capture and the layer still draws a plausible picture, just not the one the
 // machine was rewound to.
 //
-// So these tests are a replay property — capture, render frames, restore,
-// render the same frames, compare what the compositor saw — and never a
-// field-by-field comparison, which only checks the fields someone remembered to
-// add. The drive below deliberately leaves the layer somewhere else entirely
-// (see poisonTilemap) before the replay starts, so a field whose restore is
-// missing resumes from the wrong value instead of from a value that happened to
-// still be correct.
+// So these tests are first a replay property — capture, render frames, restore,
+// render the same frames, compare what the compositor saw — and then the same
+// drive asserted against the capture itself, because a replay can only observe
+// the fields it happens to make change the picture. Neither is a hand-written
+// field-by-field comparison, which would only check the fields someone
+// remembered to add. The drive below deliberately leaves the layer somewhere
+// else entirely (see poisonTilemap) before the replay starts, so a field whose
+// restore is missing resumes from the wrong value instead of from a value that
+// happened to still be correct.
 
 var _ machinestate.Device = (*Tilemap)(nil)
 
@@ -190,6 +195,100 @@ func finishFrameAndRunOn(tm *Tilemap, frames int) []byte {
 	_ = binary.Write(log, binary.BigEndian, h.Sum64())
 	log.Write(driveTilemapFrames(tm, frames))
 	return log.Bytes()
+}
+
+// The replay tests above assert on what the layer drew, which is the property a
+// rewind has to have. It is not on its own a complete audit: a field is only
+// observable there if the fixture happens to make it change the picture, and a
+// field that reaches no render — NR$6B bits 4 and 2 — cannot be observed there
+// at all. The AY's capture scored 8 of 19 on exactly that blind spot.
+//
+// So the capture is also asserted on directly: drive every field somewhere
+// else, restore, re-capture, and compare the two blobs. That observes all
+// eleven fields whether or not a render could.
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	tm := primedTilemap()
+	want := tm.SaveState()
+
+	driveTilemapFrames(tm, 5)
+	if bytes.Equal(tm.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := tm.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := tm.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard that makes the score above mean something. A mutation score is
+// bounded above by what the fixture moves: deleting a field's restore proves
+// nothing if the fixture left that field the same either side of the restore,
+// because the deleted line had nothing to do.
+//
+// Every drive here ends in poisonTilemap, so this is really the assertion that
+// primedTilemap and poisonTilemap disagree about every single field. Retune
+// either of them onto a shared value — the clip edges are the easy mistake,
+// since poison uses the FPGA reset window and a primed edge could drift onto
+// $9F or $FF — and the tests above silently stop covering that field.
+//
+// The comparison is by reflection rather than a hand-written list so that a
+// field added to the capture is covered here the moment it is added, instead of
+// waiting for someone to remember to extend the list.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	tm := primedTilemap()
+	before := decodeTilemapStateForTest(t, tm.SaveState())
+	driveTilemapFrames(tm, 5)
+	after := decodeTilemapStateForTest(t, tm.SaveState())
+
+	bv, av := reflect.ValueOf(before), reflect.ValueOf(after)
+	typ := bv.Type()
+	if typ.NumField() == 0 {
+		t.Fatal("the captured state has no fields, so this guard checks nothing")
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		if reflect.DeepEqual(bv.Field(i).Interface(), av.Field(i).Interface()) {
+			t.Errorf("%s is unchanged by the drive sequence (%v either side), so a lost "+
+				"restore of it would go undetected", typ.Field(i).Name, bv.Field(i).Interface())
+		}
+	}
+}
+
+// Both guards above are bounded by the fields the capture already has: eleven
+// restores and eleven kills say nothing about a twelfth field added to Tilemap
+// and never captured at all, which is the omission state.go's comment claims
+// these tests catch. This is what makes that claim true — the layer's own
+// fields, less the memory bus it does not own, must be exactly the captured set.
+func TestEveryFieldOfTheLayerIsCaptured(t *testing.T) {
+	captured := map[string]bool{
+		// mem is the RAM bus (pkg/memory); it captures itself under its own name
+		// in the machinestate registry, and holds no tilemap state of its own.
+		"mem": true,
+	}
+	st := reflect.TypeOf(tilemapState{})
+	for i := 0; i < st.NumField(); i++ {
+		captured[strings.ToLower(st.Field(i).Name)] = true
+	}
+
+	tt := reflect.TypeOf(Tilemap{})
+	for i := 0; i < tt.NumField(); i++ {
+		if name := tt.Field(i).Name; !captured[strings.ToLower(name)] {
+			t.Errorf("Tilemap.%s has no field of that name in tilemapState: a rewind would "+
+				"leave it holding present-day values", name)
+		}
+	}
+}
+
+func decodeTilemapStateForTest(t *testing.T, b []byte) tilemapState {
+	t.Helper()
+	var s tilemapState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }
 
 // The fixture guard. Every test above compares two renders, and two renders of

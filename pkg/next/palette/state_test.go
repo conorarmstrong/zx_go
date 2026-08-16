@@ -2,6 +2,7 @@ package palette
 
 import (
 	"bytes"
+	"encoding/gob"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
@@ -32,8 +33,16 @@ func primed() *Bank {
 	b := NewBank()
 
 	// Upload real content through the guest write path, so entries AND
-	// priorities hold values no default could reconstruct.
-	for _, slot := range []byte{PaletteULAFirst, PaletteLayer2Second, PaletteSpritesFirst, PaletteTilemapSecond} {
+	// priorities hold values no default could reconstruct. All eight tables,
+	// not a sample of four: a table still holding its construction zeros at
+	// capture time is a table a lost restore cannot be caught on, because the
+	// zeros it would be left holding are the zeros it was meant to be given.
+	for _, slot := range []byte{
+		PaletteULAFirst, PaletteULASecond,
+		PaletteLayer2First, PaletteLayer2Second,
+		PaletteSpritesFirst, PaletteSpritesSecond,
+		PaletteTilemapFirst, PaletteTilemapSecond,
+	} {
 		b.Select(slot)
 		b.SetIndex(0)
 		for i := 0; i < 256; i++ {
@@ -133,6 +142,24 @@ func drive(b *Bank) []byte {
 	b.Write8(0x88)
 	b.Write8(0x99)
 	rec("wrap")
+
+	// Every one of the eight tables, entries and priorities both. Up to here the
+	// script only writes into the two tables it happens to select, so a capture
+	// that restored those two and dropped the other six replays identically:
+	// the six it dropped were never made to differ between the capture and the
+	// restore, and a restore of them had nothing to do. Each slot gets a value
+	// no other slot gets, so no table can be vouched for by its neighbour, and
+	// an NR$44 pair as well, because Write8 carries the existing priority
+	// through and would leave all eight priority tables untouched.
+	for slot := byte(0); slot < 8; slot++ {
+		b.Select(slot)
+		b.SetIndex(0x3F)
+		b.Write8(0xA5 ^ slot)
+		b.SetIndex(0x11)
+		b.WriteNR44(0x6C + slot)
+		b.WriteNR44(0xC0 | slot) // priority 3, against the priority 1 primed() left
+	}
+	rec("all-tables")
 
 	// One more complete pair, so the script ENDS with the latch disarmed while
 	// the capture it replays from was taken with the latch armed. Leaving both
@@ -255,6 +282,63 @@ func TestLoadStateLeavesTheWriteObserverAttached(t *testing.T) {
 	if n != 1 {
 		t.Errorf("observer fired %d times after a restore, want 1: LoadState detached it", n)
 	}
+}
+
+// The guard the replay tests depend on. A restore is only proved by a fixture
+// that made the field differ between the capture and the point the restore is
+// applied, so every captured field must be changed by drive(). Without this,
+// deleting a restore of a field the script never moves leaves the field already
+// correct and the deletion goes undetected.
+//
+// The eight tables are checked one slot at a time rather than as one array,
+// because the array compares unequal the moment ANY slot moves: two driven
+// slots would vouch for six that the script never touched, and a capture that
+// dropped those six would replay identically.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	b := primed()
+	before := decodeStateForTest(t, b.SaveState())
+	drive(b)
+	after := decodeStateForTest(t, b.SaveState())
+
+	for slot := 0; slot < 8; slot++ {
+		if before.Entries[slot] == after.Entries[slot] {
+			t.Errorf("table %d's entries are unchanged by the drive sequence, so a lost "+
+				"restore of that table would go undetected", slot)
+		}
+		if before.Priorities[slot] == after.Priorities[slot] {
+			t.Errorf("table %d's priorities are unchanged by the drive sequence, so a lost "+
+				"restore of that table would go undetected", slot)
+		}
+	}
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Selected", before.Selected == after.Selected},
+		{"Index", before.Index == after.Index},
+		{"ActiveULA", before.ActiveULA == after.ActiveULA},
+		{"ActiveLayer2", before.ActiveLayer2 == after.ActiveLayer2},
+		{"ActiveSprites", before.ActiveSprites == after.ActiveSprites},
+		{"ActiveTilemap", before.ActiveTilemap == after.ActiveTilemap},
+		{"Pending9", before.Pending9 == after.Pending9},
+		{"Have9", before.Have9 == after.Have9},
+		{"AutoIncDisable", before.AutoIncDisable == after.AutoIncDisable},
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+func decodeStateForTest(t *testing.T, blob []byte) bankState {
+	t.Helper()
+	var s bankState
+	if err := gob.NewDecoder(bytes.NewReader(blob)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }
 
 func TestStateIDIsStable(t *testing.T) {

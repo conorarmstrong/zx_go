@@ -3,9 +3,11 @@ package ula
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"hash/fnv"
 	"image"
 	"image/color"
+	"reflect"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
@@ -479,6 +481,252 @@ func TestMicRoundTrips(t *testing.T) {
 	if !u.Mic {
 		t.Error("Mic did not survive the round trip")
 	}
+}
+
+// The replay tests above assert on what an outside observer SEES, and a
+// mutation audit measured the limit of that: with all of them passing, 16 of
+// the ULA's 31 field restores could be deleted and nothing went red. Two
+// causes, both worth naming.
+//
+// Some fields never reach an observer at all. The palette has no writer beyond
+// initPalette, so every replay renders it identically whatever the restore
+// did. The DC blocker's output clamp is set once in New. The Timex video-mode
+// latch only changes the picture for one of its eight values.
+//
+// The rest DO reach the picture, but the fixture never made them differ
+// between capture and restore, so the deleted line had nothing to do:
+// driveFrames re-wrote the border, the scroll and the Kempston bits at the top
+// of every frame, which converges the restored value onto the driven one
+// before anything looks at it.
+//
+// The fix is the one the AY needed: stop asserting on output and assert on the
+// capture. Drive the ULA so EVERY captured field changes, restore, re-capture,
+// and compare the blobs. That observes all 31 fields rather than the subset a
+// frame happens to expose.
+
+// beforeFirstRenderULA builds the fixture the blob round trip starts from: a
+// fully wired ULA — audio sink, Next register file, tape mounted and playing —
+// configured and stepped, but not yet composed.
+//
+// Capturing BEFORE the first Render is what lets ONE drive sequence move all
+// 31 fields. Two of them are one-way. Render sets hasRendered and nothing
+// clears it, and the first frame pushed through the DC blocker sets its seeded
+// flag which only a reset clears. Capture after a frame has been composed and
+// neither can ever differ from the driven state, so each would need a fixture
+// of its own; capture before one and both move for free.
+func beforeFirstRenderULA(t *testing.T) (*ULA, *uint64) {
+	t.Helper()
+	u, ts := newStateTestULA(t)
+	// Both of these are gates. With no audio sink the speaker and EAR
+	// transitions are never recorded and the DC blocker never runs, and the
+	// $123B latch does not exist until a Next register file is wired — so
+	// without them six fields sit still whatever the fixture does.
+	u.audio = &audio.AudioSystem{}
+	u.SetNextRegs(&fakeNextRegs{})
+
+	tp := NewTapePlayer()
+	if err := tp.LoadTAP(createTestTAP(t, t.TempDir())); err != nil {
+		t.Fatalf("LoadTAP: %v", err)
+	}
+	tp.Play()
+	*ts = 120
+	u.SetTapePlayer(tp) // re-syncs the tape clock to "now"
+
+	// Guest port writes. The speaker goes high, low, high: an odd number of
+	// edges, so the level itself moves and three events are left queued.
+	*ts = 900
+	u.WritePort(0x00FE, 0x1B) // border 3, MIC on, speaker high
+	*ts = 2400
+	u.WritePort(0x00FE, 0x0B) // speaker low
+	*ts = 5200
+	u.WritePort(0x00FE, 0x1B) // and high again
+	*ts = 6100
+	u.WritePort(0x00FF, 0x29) // Timex SCLD mode; low three bits != 6, so not hi-res
+	*ts = 6800
+	u.WritePort(0x123B, 0x12) // Layer 2 latch; bits 0 and 2 clear, so no L2 paging
+
+	u.SetULAScrollX(0x2B)
+	u.SetULAScrollY(0x51)
+	u.SetULAFineScrollX(true)
+	u.KempstonEnabled = true
+	u.SetKempstonButton(KempstonRight|KempstonUp, true)
+
+	// The palette has no writer beyond initPalette, so no port traffic can move
+	// it. It is device state a rewind still has to bring back, so the fixture
+	// moves it by hand for want of a setter.
+	u.palette[2] = color.RGBA{R: 0x11, G: 0x22, B: 0x33, A: 0xFF}
+	u.palette[9] = color.RGBA{R: 0x44, G: 0x55, B: 0x66, A: 0xFF}
+
+	// Reads at rising T-states: they move the port-$FE counter and advance the
+	// tape, whose EAR transitions are recorded as they pass. The run ends with
+	// the EAR line LOW so the drive sequence can end it high.
+	for at := uint64(8000); at < 40000; at += 971 {
+		*ts = at
+		_, _ = u.ReadPort(0x00FE)
+	}
+	readTapeUntil(u, ts, 41000, false)
+	return u, ts
+}
+
+// readTapeUntil samples port $FE at rising T-states until the EAR line reaches
+// want, and returns with it there.
+//
+// The EAR is the tape player's to drive, so this is how the fixture puts a
+// KNOWN level either side of the capture: assigning u.TapeIn by hand would
+// leave the recording path that fills tapeAudioEvents unexercised, and it is
+// that path — not the level — which decides what the frame's flush latches.
+func readTapeUntil(u *ULA, ts *uint64, from uint64, want bool) {
+	for at := from; at < 69000; at += 331 {
+		*ts = at
+		_, _ = u.ReadPort(0x00FE)
+		if u.TapeIn == want {
+			return
+		}
+	}
+}
+
+// driveEverything moves every one of the 31 fields a capture carries.
+//
+// The frame count is chosen for parity, not for length. The flash cycle
+// toggles every 16 composed frames, so 16 frames would flip the flag and land
+// the frame counter back on the zero it started from — half a move, and the
+// counter's restore would be invisible. 21 frames flips the flag once and
+// leaves the counter at 5.
+//
+// The configuration writes come LAST, after the final frame, for the reason
+// driveFrames gives: a value the capture holds must be one that painted, not
+// one overwritten before it could be seen.
+func driveEverything(u *ULA, ts *uint64) {
+	for f := 0; f < 21; f++ {
+		for i, at := range []uint64{4000, 21000, 39000, 58000} {
+			*ts = at
+			u.WritePort(0x00FE, byte((f+i*3)&0x07)|byte((i&1)<<4)|byte((i&2)<<2))
+		}
+		for at := uint64(9000); at < 62000; at += 1237 {
+			*ts = at
+			_, _ = u.ReadPort(0x00FE)
+			_, _ = u.ReadPort(0x001F)
+		}
+		// End the frame with the border on a known colour and the speaker and
+		// the EAR line both high, so the three "level at the frame boundary"
+		// fields the audio flush latches land somewhere the capture is not.
+		*ts = 63000
+		u.WritePort(0x00FE, 0x15) // border 5, speaker high, MIC low
+		readTapeUntil(u, ts, 64000, true)
+
+		*ts = uint64(f%4) + 1 // the CPU counter has wrapped — but never to zero
+		u.Render()
+	}
+
+	// ...and stop part way through a frame, which is where a rewind lands.
+	// These sit in the border, speaker and EAR event lists unpainted and
+	// unsynthesised, with the frame origin still at the last frame's wrap.
+	*ts = 1500
+	u.WritePort(0x00FE, 0x06) // border 6, speaker low, MIC low
+	*ts = 7300
+	u.WritePort(0x00FE, 0x02) // border 2
+	readTapeUntil(u, ts, 11000, true)
+
+	// The live configuration, changed after the frame it governed.
+	u.SetULAScrollX(0x77)
+	u.SetULAScrollY(0x14)
+	u.SetULAFineScrollX(false)
+	u.SetULAOutputDisabled(true)
+	u.SetKempstonButton(KempstonRight|KempstonUp, false)
+	u.SetKempstonButton(KempstonLeft|KempstonDown|KempstonFire, true)
+	u.KempstonEnabled = false
+	*ts = 20000
+	u.WritePort(0x00FF, 0x35) // a different Timex video mode
+	u.WritePort(0x123B, 0x2A) // a different Layer 2 latch
+	u.SetDCBlockEnabled(false)
+	u.SetFastLoad(true)
+	u.palette[2] = color.RGBA{R: 0x77, G: 0x88, B: 0x99, A: 0xFF}
+	u.palette[13] = color.RGBA{R: 0xAA, G: 0xBB, B: 0xCC, A: 0xFF}
+	// The DC blocker's output clamp has no writer at all beyond New, which
+	// leaves it at the speaker amplitude for the life of the machine. It is
+	// still filter state and still restored, so it is moved by hand — the only
+	// way it can be made to differ between capture and restore.
+	u.dc.limit = int32(beeperHigh) / 3
+}
+
+func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
+	u, ts := beforeFirstRenderULA(t)
+	want := u.SaveState()
+
+	driveEverything(u, ts)
+	if bytes.Equal(u.SaveState(), want) {
+		t.Fatal("the drive sequence changed nothing, so this test cannot detect a lost restore")
+	}
+
+	if err := u.LoadState(want); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := u.SaveState(); !bytes.Equal(got, want) {
+		t.Error("re-capturing after a restore did not reproduce the captured state: " +
+			"some field is captured but not restored")
+	}
+}
+
+// The guard the test above depends on. A score is bounded by what the fixture
+// moves, so without this a later change that retunes the drive sequence — one
+// more frame, a different border value — could silently stop covering a field
+// and the round trip would still pass.
+func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
+	u, ts := beforeFirstRenderULA(t)
+	before := decodeULAState(t, u.SaveState())
+	driveEverything(u, ts)
+	after := decodeULAState(t, u.SaveState())
+
+	for _, f := range []struct {
+		name string
+		same bool
+	}{
+		{"Flash", before.Flash == after.Flash},
+		{"FlashCount", before.FlashCount == after.FlashCount},
+		{"TimexVideoMode", before.TimexVideoMode == after.TimexVideoMode},
+		{"BorderColour", before.BorderColour == after.BorderColour},
+		{"FrameStartBorderColour", before.FrameStartBorderColour == after.FrameStartBorderColour},
+		{"BorderChanges", reflect.DeepEqual(before.BorderChanges, after.BorderChanges)},
+		{"Mic", before.Mic == after.Mic},
+		{"TapeIn", before.TapeIn == after.TapeIn},
+		{"LastTapeTstate", before.LastTapeTstate == after.LastTapeTstate},
+		{"TapeAudioEvents", reflect.DeepEqual(before.TapeAudioEvents, after.TapeAudioEvents)},
+		{"FrameStartTapeState", before.FrameStartTapeState == after.FrameStartTapeState},
+		{"Speaker", before.Speaker == after.Speaker},
+		{"FrameStartSpeakerState", before.FrameStartSpeakerState == after.FrameStartSpeakerState},
+		{"AudioEvents", reflect.DeepEqual(before.AudioEvents, after.AudioEvents)},
+		{"FrameStartTstate", before.FrameStartTstate == after.FrameStartTstate},
+		{"KempstonEnabled", before.KempstonEnabled == after.KempstonEnabled},
+		{"KempstonState", before.KempstonState == after.KempstonState},
+		{"ULAOutputDisabled", before.ULAOutputDisabled == after.ULAOutputDisabled},
+		{"ULAScrollX", before.ULAScrollX == after.ULAScrollX},
+		{"ULAScrollY", before.ULAScrollY == after.ULAScrollY},
+		{"ULAFineScrollX", before.ULAFineScrollX == after.ULAFineScrollX},
+		{"HasRendered", before.HasRendered == after.HasRendered},
+		{"DCPrevIn", before.DCPrevIn == after.DCPrevIn},
+		{"DCPrevOut", before.DCPrevOut == after.DCPrevOut},
+		{"DCLimit", before.DCLimit == after.DCLimit},
+		{"DCSeeded", before.DCSeeded == after.DCSeeded},
+		{"DCEnabled", before.DCEnabled == after.DCEnabled},
+		{"FastLoad", before.FastLoad == after.FastLoad},
+		{"FEReadCount", before.FEReadCount == after.FEReadCount},
+		{"Port123BVal", before.Port123BVal == after.Port123BVal},
+		{"Palette", before.Palette == after.Palette},
+	} {
+		if f.same {
+			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
+				"would go undetected", f.name)
+		}
+	}
+}
+
+func decodeULAState(t *testing.T, b []byte) ulaState {
+	t.Helper()
+	var s ulaState
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
 }
 
 // wideCompositor is a transparent Next render stack: it passes the ULA's own
