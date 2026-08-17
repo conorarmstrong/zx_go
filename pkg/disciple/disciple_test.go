@@ -670,3 +670,44 @@ func TestDisciple_PostFetchHook_NoOp(t *testing.T) {
 		t.Error("PostFetchHook should not change paging")
 	}
 }
+
+// A Write Track leaves `formatting` set, and no other command clears it, so a
+// plain Write Sector issued afterwards is committed through commitWriteTrack:
+// the 512 sector bytes are parsed as a format stream and the whole track is
+// rebuilt from them. The guest asked to write one sector and lost the track.
+func TestWriteSectorAfterAnAbandonedFormatIsNotCommittedAsAFormat(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portControl, 0x01) // drive 0, side 0
+
+	d.HandlePortWrite(portFDCCmdStatus, 0xF0) // Write Track: begins a format
+	for i := 0; i < 10; i++ {
+		d.HandlePortWrite(portFDCData, 0x4E)
+	}
+	d.HandlePortWrite(portFDCCmdStatus, 0xD0) // Force Interrupt: abandon it
+
+	before := len(d.disks[0].Track(0, 0).Bytes())
+
+	d.HandlePortWrite(portFDCSector, 1)
+	d.HandlePortWrite(portFDCCmdStatus, 0xA0) // plain Write Sector
+	for i := 0; i < 512; i++ {
+		d.HandlePortWrite(portFDCData, 0x5A)
+	}
+
+	tr := d.disks[0].Track(0, 0)
+	if tr == nil {
+		t.Fatal("the track was destroyed entirely")
+	}
+	if got := len(tr.Bytes()); got != before {
+		t.Errorf("track length %d after a sector write, was %d: the write was committed as a format",
+			got, before)
+	}
+	sec := tr.FindSector(1)
+	if sec == nil {
+		t.Fatal("sector 1 no longer exists: the sector write reformatted the track")
+	}
+	for i, b := range sec.Data {
+		if b != 0x5A {
+			t.Fatalf("byte %d of the written sector = %#02x, want %#02x", i, b, 0x5A)
+		}
+	}
+}

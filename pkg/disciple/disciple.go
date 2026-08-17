@@ -369,6 +369,14 @@ func (d *Disciple) advanceMultiSector() {
 
 func (d *Disciple) executeCommand(cmd byte) {
 	d.statusReg = 0
+	// The format flag describes the command in flight, and this is a new
+	// command, so it cannot still be in flight. Only Write Track sets the flag
+	// again, a few lines below. Without this the flag is sticky: nothing else
+	// clears it, so a Write Track abandoned by a Force Interrupt left every
+	// later Write Sector to be committed through commitWriteTrack, which parses
+	// the 512 sector bytes as a format stream and rebuilds the whole track from
+	// them. The guest asked to write one sector and lost the track.
+	d.formatting = false
 	// WD1772 datasheet "TYPE I COMMANDS": when a command is received and the MO
 	// signal is low, the chip forces Motor On (running the spin-up sequence
 	// unless the h flag disables it). MO stays asserted until the device has
