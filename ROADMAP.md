@@ -435,6 +435,41 @@ so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 The 12 Next `.nex` games now screened render correctly without it, so there is
 still no observed case where it matters. Leave it until one appears.
 
+### 6. [correctness] LoRes / Radastan is implemented but not wired to the screen
+
+**The layer is done; nothing calls it.** `pkg/next/lores` is a hardware-faithful
+port of `video/lores.vhd` with both modes (LoRes 128x96 8-bit, Radastan 128x96
+4-bit), verified against a captured FPGA golden in `fpga_golden_test.go`. It
+exports `Pixel` and `RenderScanline`. **No non-test code imports it.**
+
+`NR$6A` is decoded and stored (`pkg/next/wire.go:1131`, masked to `$3F`) and
+then never read by any render path. `pkg/ula` — which owns the live Next
+composite — contains no LoRes or Radastan handling at all. So a guest that
+selects the mode silently gets the ordinary ULA picture.
+
+Two things this is **not**. It is not the "speculative `state.go`" the registry
+note and `TestLoResIsAnOrphanPackageAndThereforeUnregistered` describe: those
+frame an unwired *video layer* as a capture-registry curiosity, which
+understates it. And it is not a hard problem, because the expensive half —
+the FPGA-faithful pixel derivation — already exists and is golden-tested. What
+is missing is a mode branch in the `pkg/ula` render selection, alongside the
+existing HiRes and Layer 2 paths.
+
+**Deliberately parked, on the same test as items 2 and 5.** No installed title
+needs it: of the 24 `.nex` files under `roms/next/sd`, not one sets the LoRes
+loading-screen flag (bit `$04` of header byte 10). Flags observed are `$00`,
+`$01` and `$81`.
+
+**Read that evidence narrowly.** It only reads the *load-time* flag. A title
+that switches to LoRes at runtime through `NR$6A`, without declaring a LoRes
+loading screen, would not appear in that count and would render wrongly with
+nothing to indicate it. If a Next title is ever screened as "boots but the
+picture is wrong", check `NR$6A` before anything else.
+
+- [ ] Wire `lores.RenderScanline` into the `pkg/ula` Next path, then register
+  the device and delete `TestLoResIsAnOrphanPackageAndThereforeUnregistered`,
+  which says to delete itself at exactly that moment.
+
 ---
 
 ## Catalogued — deliberately not doing

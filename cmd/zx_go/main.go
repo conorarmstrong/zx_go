@@ -1741,10 +1741,13 @@ func ensureFileExt(path, ext string) string {
 // PNG to w. Works for every machine type: emu.ula.Render() returns
 // the composited framebuffer — the classic ULA bitmap for 48K…+3,
 // and the full Spectrum Next composite (ULA + Layer 2 + sprites +
-// tilemap + LoRes through the active palette and SLU priority) for
+// tilemap through the active palette and SLU priority) for
 // ModelNext, at whatever resolution the active Next video mode
-// produces. The pixel data is copied before encode so the PNG write
-// can't race the emulator goroutine mutating the framebuffer.
+// produces. NOT LoRes/Radastan: NR$6A is decoded and stored but no
+// render path reads it, so that mode falls back to the ordinary ULA
+// picture. pkg/next/lores implements the layer and nothing calls it;
+// see ROADMAP. The pixel data is copied before encode so the PNG
+// write can't race the emulator goroutine mutating the framebuffer.
 func writeScreenshotPNG(emu *emulator, w io.Writer) error {
 	src := emu.lastFrame()
 	imgCopy := image.NewRGBA(src.Bounds())
