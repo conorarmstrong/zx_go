@@ -506,8 +506,16 @@ Solved problems whose answers were expensive to find.
   GLFW never consults EGL unless asked. It needs
   `glfw.WindowHint(glfw.ContextCreationAPI, glfw.EGLContextAPI)`, which
   `glfw_es.go` never sets. Both symbols exist in the binding we already
-  depend on (`go-gl/glfw/v3.3`, `window.go:89` and `:132`), so the fix is one
-  line upstream in Fyne and nothing in zx_go.
+  depend on (`go-gl/glfw/v3.3`, `window.go:89` and `:132`; also v3.4, which
+  Fyne's `develop` uses), so the fix is upstream in Fyne and nothing in zx_go.
+  **Filed 2026-08-17**: fyne-io/fyne#6483 and #6484.
+  **The fix is NOT "set the hint", which is how this entry once read.** Setting
+  `ContextCreationAPI` to EGL unconditionally is a bet that no Windows-on-ARM
+  driver exposes `WGL_EXT_create_context_es2_profile`, and a physical
+  Snapdragon may well do so; forcing EGL would then break a working device and
+  oblige every Fyne app to ship ANGLE. The PR retries through EGL only *after*
+  the native attempt has failed, so it cannot regress a driver that works. If
+  this ever needs re-deriving, re-derive the fallback, not the one-liner.
 - **The bootable SD image is FAT32.** An older FAT16 builder never booted.
 - **The 128K BASIC launch bug is closed** (Multiface-3 `$7F3F`/`$1F3F`
   paging readback, Layer 2 `$123B` readback, zero-filled cold RAM). Do not
