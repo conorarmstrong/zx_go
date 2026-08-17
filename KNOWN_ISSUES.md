@@ -37,7 +37,7 @@ not by platform. In fyne v2.6.3, `internal/painter/gl/gl_es.go` is chosen by
 (gles || arm || arm64) && !android && !ios && !mobile && !darwin && !wasm
 ```
 
-and `gl_core.go` carries an explicit `!arm64`, so **no build tag can select
+and `gl_core.go` carries an explicit `!arm && !arm64`, so **no build tag can select
 desktop OpenGL on arm64**. `internal/driver/glfw/glfw_es.go:8` then requests
 `ClientAPI = OpenGLESAPI` at version 2.0.
 

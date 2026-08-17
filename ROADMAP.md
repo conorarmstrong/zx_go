@@ -496,7 +496,7 @@ Solved problems whose answers were expensive to find.
   built to ask for anything else.** Verified in fyne v2.6.3 in the module
   cache. `internal/painter/gl/gl_es.go` is selected by
   `(gles || arm || arm64) && !android && !ios && !mobile && !darwin && !wasm`,
-  and `gl_core.go` carries an explicit `!arm64`, so **no build tag can select
+  and `gl_core.go` carries an explicit `!arm && !arm64`, so **no build tag can select
   desktop GL on arm64**. `internal/driver/glfw/glfw_es.go:8` then asks GLFW
   for `ClientAPI = OpenGLESAPI` at version 2.0. The constraint keys on
   architecture rather than platform, which is right for ARM SBCs and mobile
