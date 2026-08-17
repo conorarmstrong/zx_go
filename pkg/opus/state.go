@@ -99,6 +99,11 @@ type opusState struct {
 func (i *Interface) StateID() string { return "opus" }
 
 // SaveState captures the complete interface state.
+//
+// The state struct references the live buffers rather than copying them: gob
+// serialises them into the returned blob before this returns, so the copy
+// happens once instead of twice. pkg/next/divmmc does the same and for the same
+// reason -- this runs at a capture per rewind frame.
 func (i *Interface) SaveState() []byte {
 	f := &i.Dev.fdc
 	p := &i.Dev.pia
@@ -111,11 +116,7 @@ func (i *Interface) SaveState() []byte {
 
 			Drive: f.drive,
 
-			// The buffer is copied, not referenced: a sector read hands out a
-			// slice the image owns, so a capture that referenced it would
-			// change under the guest and a restore would let later writes reach
-			// back into the disk image.
-			Buf:          append([]byte(nil), f.buf...),
+			Buf:          f.buf,
 			Pos:          f.pos,
 			Write:        f.write,
 			TargetTrack:  f.target.track,
@@ -125,8 +126,8 @@ func (i *Interface) SaveState() []byte {
 			FmtPos:     f.fmtPos,
 			FmtSync:    f.fmtSync,
 			FmtField:   f.fmtField,
-			FmtID:      append([]byte(nil), f.fmtID...),
-			FmtData:    append([]byte(nil), f.fmtData...),
+			FmtID:      f.fmtID,
+			FmtData:    f.fmtData,
 			FmtNeed:    f.fmtNeed,
 			FmtHaveID:  f.fmtHaveID,
 
@@ -145,13 +146,16 @@ func (i *Interface) SaveState() []byte {
 			Armed:  i.pager.armed,
 			Arming: i.pager.arming,
 		},
-		RAM: append([]byte(nil), i.Dev.ram[:]...),
+		RAM: i.Dev.ram[:],
 	}
 	return encodeOpusState(s)
 }
 
 // LoadState restores a state captured by SaveState.
 func (i *Interface) LoadState(b []byte) error {
+	if len(b) == 0 {
+		return fmt.Errorf("opus: empty state (the capture failed)")
+	}
 	var s opusState
 	if err := decodeOpusState(b, &s); err != nil {
 		return err
@@ -209,9 +213,30 @@ func (s opusState) check() error {
 	if s.FDC.Drive < 0 || s.FDC.Drive >= 2 {
 		return fmt.Errorf("opus: state selects drive %d, which does not exist", s.FDC.Drive)
 	}
-	if s.FDC.Pos < 0 || s.FDC.Pos > len(s.FDC.Buf) {
+	// A live transfer never rests with the position AT the end: readData drops
+	// the buffer the moment it gets there. Accepting that from a blob puts the
+	// guest's next access one past the end of the slice, and neither readData
+	// nor writeData bounds-checks — they rely on this.
+	if s.FDC.Pos < 0 || s.FDC.Pos >= len(s.FDC.Buf) && len(s.FDC.Buf) > 0 {
 		return fmt.Errorf("opus: state is %d bytes into a %d-byte transfer",
 			s.FDC.Pos, len(s.FDC.Buf))
+	}
+	if len(s.FDC.Buf) == 0 && s.FDC.Pos != 0 {
+		return fmt.Errorf("opus: state is %d bytes into a transfer with no buffer", s.FDC.Pos)
+	}
+	// The format parser indexes the ID it is holding: fmtID[3] the instant a
+	// data address mark arrives, and fmtID[2] when the sector commits. Both
+	// read four bytes that a blob can claim to have without carrying.
+	if s.FDC.FmtField < fieldNone || s.FDC.FmtField > fieldData {
+		return fmt.Errorf("opus: state has the format parser in field %d, which does not exist",
+			s.FDC.FmtField)
+	}
+	if (s.FDC.FmtHaveID || s.FDC.FmtField == fieldData) && len(s.FDC.FmtID) != 4 {
+		return fmt.Errorf("opus: state holds a sector ID of %d bytes, want 4", len(s.FDC.FmtID))
+	}
+	if s.FDC.FmtField == fieldID && len(s.FDC.FmtID) > 4 {
+		return fmt.Errorf("opus: state is collecting a %d-byte sector ID, which cannot exceed 4",
+			len(s.FDC.FmtID))
 	}
 	if s.FDC.Remaining < 0 {
 		return fmt.Errorf("opus: state owes %d T-states before the next byte", s.FDC.Remaining)
@@ -225,11 +250,15 @@ func (s opusState) check() error {
 // encodeOpusState is the wire encoding.
 func encodeOpusState(s opusState) []byte {
 	var buf bytes.Buffer
+	buf.Grow(len(s.RAM) + len(s.FDC.Buf) + 512)
 	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
-		// Encoding a struct of fixed-size values and four byte slices cannot
-		// fail for any reason the caller could act on, and returning an error
-		// here would push a dead branch into every caller.
-		panic("opus: encoding state: " + err.Error())
+		// Encoding byte slices and scalars cannot fail in practice, but this
+		// runs from the CPU pre-fetch hook that drives capture, and that path
+		// deliberately skips a failed capture rather than stopping the machine.
+		// A nil blob is rejected by LoadState, so a bad capture surfaces as a
+		// failed restore instead of a crash mid-frame. pkg/next/divmmc sets the
+		// same contract; panicking here would invert it for this device only.
+		return nil
 	}
 	return buf.Bytes()
 }

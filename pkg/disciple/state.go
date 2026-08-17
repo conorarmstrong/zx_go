@@ -75,6 +75,12 @@ type discipleState struct {
 func (d *Disciple) StateID() string { return "disciple" }
 
 // SaveState captures the complete interface state.
+//
+// The state struct references the live transfer buffer and RAM rather than
+// copying them: gob serialises them into the returned blob before this returns,
+// so the copy happens once instead of twice. pkg/next/divmmc does the same and
+// for the same reason; at a capture per rewind frame the pre-copy was 8 KB of
+// garbage per frame from this device alone.
 func (d *Disciple) SaveState() []byte {
 	s := discipleState{
 		StatusReg: d.statusReg,
@@ -82,11 +88,7 @@ func (d *Disciple) SaveState() []byte {
 		SectorReg: d.sectorReg,
 		DataReg:   d.dataReg,
 
-		// The transfer buffer is copied, not referenced: a sector read hands
-		// out the disk's own backing array, so a capture that referenced it
-		// would change under the guest and, worse, a restore would let later
-		// writes reach back into the disk image.
-		XferBuf:    append([]byte(nil), d.xferBuf...),
+		XferBuf:    d.xferBuf,
 		XferPos:    d.xferPos,
 		XferLen:    d.xferLen,
 		XferWrite:  d.xferWrite,
@@ -111,13 +113,16 @@ func (d *Disciple) SaveState() []byte {
 		ROMPaged:  d.romPaged,
 		MemSwap:   d.memswap,
 
-		RAM: append([]byte(nil), d.ram...),
+		RAM: d.ram,
 	}
 	return encodeDiscipleState(s)
 }
 
 // LoadState restores a state captured by SaveState.
 func (d *Disciple) LoadState(b []byte) error {
+	if len(b) == 0 {
+		return fmt.Errorf("disciple: empty state (the capture failed)")
+	}
 	var s discipleState
 	if err := decodeDiscipleState(b, &s); err != nil {
 		return err
@@ -186,6 +191,14 @@ func (s discipleState) check(ramSize int) error {
 		return fmt.Errorf("disciple: state is %d bytes into a %d-byte buffer",
 			s.XferPos, len(s.XferBuf))
 	}
+	// Both can be inside the buffer and still describe a controller that cannot
+	// exist. Past the transfer LENGTH there is no way out: neither readData nor
+	// writeData advances once xferPos >= xferLen, so busy and DRQ never drop,
+	// INTRQ never fires, and GDOS's wait loop spins forever.
+	if s.XferPos > s.XferLen {
+		return fmt.Errorf("disciple: state is %d bytes into a transfer of %d",
+			s.XferPos, s.XferLen)
+	}
 	if len(s.RAM) != ramSize {
 		return fmt.Errorf("disciple: state carries %d bytes of interface RAM, want %d",
 			len(s.RAM), ramSize)
@@ -196,11 +209,15 @@ func (s discipleState) check(ramSize int) error {
 // encodeDiscipleState is the wire encoding.
 func encodeDiscipleState(s discipleState) []byte {
 	var buf bytes.Buffer
+	buf.Grow(len(s.RAM) + len(s.XferBuf) + 512)
 	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
-		// Encoding a struct of fixed-size values and two byte slices cannot
-		// fail for any reason the caller could act on, and returning an error
-		// here would push a dead branch into every caller.
-		panic("disciple: encoding state: " + err.Error())
+		// Encoding byte slices and scalars cannot fail in practice, but this
+		// runs from the CPU pre-fetch hook that drives capture, and that path
+		// deliberately skips a failed capture rather than stopping the machine.
+		// A nil blob is rejected by LoadState, so a bad capture surfaces as a
+		// failed restore instead of a crash mid-frame. pkg/next/divmmc sets the
+		// same contract; panicking here would invert it for this device only.
+		return nil
 	}
 	return buf.Bytes()
 }
