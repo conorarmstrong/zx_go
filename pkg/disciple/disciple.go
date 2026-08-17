@@ -369,14 +369,27 @@ func (d *Disciple) advanceMultiSector() {
 
 func (d *Disciple) executeCommand(cmd byte) {
 	d.statusReg = 0
-	// The format flag describes the command in flight, and this is a new
-	// command, so it cannot still be in flight. Only Write Track sets the flag
-	// again, a few lines below. Without this the flag is sticky: nothing else
-	// clears it, so a Write Track abandoned by a Force Interrupt left every
-	// later Write Sector to be committed through commitWriteTrack, which parses
-	// the 512 sector bytes as a format stream and rebuilds the whole track from
-	// them. The guest asked to write one sector and lost the track.
-	d.formatting = false
+	// A new command aborts whatever was in flight. The chip cannot run two at
+	// once, so every piece of transfer state belongs to the command that is
+	// ending here; the handlers below set up their own.
+	//
+	// Leaving any of it behind was destructive in both directions. The format
+	// flag alone being sticky meant a Write Track abandoned by a Force
+	// Interrupt left the next Write Sector to be committed through
+	// commitWriteTrack, which parses its 512 sector bytes as a format stream
+	// and rebuilds the track from them. Clearing only the flag was no better:
+	// the abandoned 6250-byte buffer stayed live with DRQ asserted, so the rest
+	// of the guest's format stream was committed as a sector write over a track
+	// the command had never aimed at. pkg/opus's controller has always done
+	// this correctly, and is the model here.
+	//
+	// wasBusy is read before the reset because Force Interrupt below needs to
+	// know whether it interrupted a running command: per the datasheet only an
+	// IDLE Force Interrupt switches the status back to the Type I meanings.
+	wasBusy := d.busy
+	d.xferBuf, d.xferPos, d.xferLen = nil, 0, 0
+	d.xferWrite, d.formatting = false, false
+	d.busy, d.drq = false, false
 	// WD1772 datasheet "TYPE I COMMANDS": when a command is received and the MO
 	// signal is low, the chip forces Motor On (running the spin-up sequence
 	// unless the h flag disables it). MO stays asserted until the device has
@@ -435,10 +448,6 @@ func (d *Disciple) executeCommand(cmd byte) {
 		// only the Busy bit resets — the rest of the status bits, and so the
 		// interrupted command's Type I/Type II-III bit meanings, are left alone.
 		// Only an IDLE Force Interrupt switches the status to Type I.
-		wasBusy := d.busy
-		d.busy = false
-		d.drq = false
-		d.xferBuf = nil
 		d.intrq = true
 		if !wasBusy {
 			d.lastCmdType1 = true

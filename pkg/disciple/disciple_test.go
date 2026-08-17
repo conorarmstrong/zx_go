@@ -711,3 +711,51 @@ func TestWriteSectorAfterAnAbandonedFormatIsNotCommittedAsAFormat(t *testing.T) 
 		}
 	}
 }
+
+// A new command aborts whatever the controller was doing. Without that, a
+// Write Track interrupted by any other command leaves its 6250-byte buffer
+// live with DRQ still asserted, and the guest's remaining format stream is
+// committed through whichever path the new command left selected — writing
+// thousands of bytes of gap filler over a track it was never aimed at.
+//
+// The WD1772 has no way to run two commands at once, and pkg/opus's controller
+// already models this correctly: writeCommand calls endTransfer and clears the
+// buffer, position, direction and DRQ wait on every command.
+func TestANewCommandAbortsAnInFlightFormat(t *testing.T) {
+	d := newTestDiscipleWithDisk(t)
+	d.HandlePortWrite(portControl, 0x01) // drive 0, side 0
+
+	before := append([]byte(nil), d.disks[0].Track(0, 78).Bytes()...)
+
+	d.HandlePortWrite(portFDCCmdStatus, 0xF0) // WRITE TRACK
+	for i := 0; i < 10; i++ {
+		d.HandlePortWrite(portFDCData, 0x4E) // 0x4E is also 78, the seek target below
+	}
+	d.HandlePortWrite(portFDCCmdStatus, 0x10) // SEEK: a different command entirely
+
+	if d.busy || d.drq || d.xferBuf != nil || d.formatting {
+		t.Errorf("the format is still live after another command: busy=%v drq=%v buf=%v formatting=%v",
+			d.busy, d.drq, d.xferBuf != nil, d.formatting)
+	}
+
+	// Whatever the guest streams next belongs to no command, so nothing may
+	// reach the disk.
+	for i := 10; i < writeTrackLen; i++ {
+		d.HandlePortWrite(portFDCData, 0x4E)
+	}
+
+	tr := d.disks[0].Track(0, 78)
+	if tr == nil {
+		t.Fatal("track 78 was destroyed by an aborted format")
+	}
+	changed := 0
+	for i, b := range tr.Bytes() {
+		if i < len(before) && b != before[i] {
+			changed++
+		}
+	}
+	if changed != 0 {
+		t.Errorf("%d of %d bytes of track 78 were overwritten by an aborted format",
+			changed, len(before))
+	}
+}
