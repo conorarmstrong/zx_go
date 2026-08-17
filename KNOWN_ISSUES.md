@@ -47,11 +47,19 @@ context through **WGL**, which requires the display driver to expose
 `WGL_EXT_create_context_es2_profile`. That is an uncommon path on Windows,
 where GLES normally arrives through ANGLE's EGL instead.
 
-**Status.** Open, and not yet observed on real hardware. The one test run so
-far was inside an emulated guest with no GPU, so it could not distinguish
-"this driver refuses GLES" from "there is no graphics stack here at all".
-Whether a Qualcomm driver grants the context is the entire open question, and
-one launch on a physical device answers it.
+**Status: blocked upstream. There is nothing to fix in zx_go.** The defect is
+in the GUI toolkit's build constraints, and it is reported at
+[fyne-io/fyne#6483](https://github.com/fyne-io/fyne/issues/6483) with a fix
+offered at [#6484](https://github.com/fyne-io/fyne/pull/6484). It stays open
+here until Fyne take a view. We are not carrying a local patch for it: a
+`replace` onto a forked toolkit, for a platform we cannot test, is exactly the
+kind of workaround this project rejects.
+
+Note the one thing that is **not** blocked by that. It has still never been
+observed on real hardware. Both reports are from virtual GPUs, so whether a
+Qualcomm driver grants the context is unanswered, and if it does then the GUI
+already works on a physical device and none of the above applies to it. One
+launch settles that, independently of anything Fyne decide.
 
 **What works regardless.** Headless mode does not touch the GUI toolkit or
 OpenGL at all, and is fully functional on Windows ARM64:
@@ -67,27 +75,21 @@ unless the application asks it to, and the toolkit sets only `ClientAPI` and
 the context version, never `ContextCreationAPI`. Do not spend time on DLL
 placement; it cannot work without the upstream change below.
 
-**The upstream fix is one line.** In `internal/driver/glfw/glfw_es.go`,
-alongside the hints already set:
+**The upstream fix, and the shape it must take.** GLFW will use EGL, and so
+load `libEGL.dll`, only if asked via `glfw.WindowHint(glfw.ContextCreationAPI,
+glfw.EGLContextAPI)`. Both symbols exist in the GLFW binding the toolkit
+already depends on (`go-gl/glfw/v3.3`, `window.go:89` and `:132`; also v3.4,
+which Fyne's `develop` uses), so no new dependency is involved. Once the hint
+can be reached, bundling ANGLE becomes a working answer, since ANGLE maps GLES
+onto Direct3D, which Windows on ARM does have.
 
-```go
-glfw.WindowHint(glfw.ContextCreationAPI, glfw.EGLContextAPI)
-```
-
-Both symbols exist in the GLFW binding already depended on
-(`go-gl/glfw/v3.3`, `window.go:89` and `:132`; also v3.4, which Fyne's
-`develop` now uses). With that hint set, GLFW loads `libEGL.dll` and bundling
-ANGLE becomes a working answer, since ANGLE maps GLES onto Direct3D, which
-Windows on ARM does have. This is a change to the GUI toolkit rather than to
-zx_go, so it needed raising upstream.
-
-**Raised, 2026-08-17.** [fyne-io/fyne#6483](https://github.com/fyne-io/fyne/issues/6483)
-reports it and [#6484](https://github.com/fyne-io/fyne/pull/6484) offers the
-fix. The PR retries through EGL only after the native attempt has failed,
-rather than setting the hint unconditionally, so it cannot regress a driver
-that works today. Until it is merged there is nothing to do from our side:
-`replace`-ing a forked toolkit for a platform we cannot test would be the
-kind of workaround this project rejects.
+**It is not simply "set that hint", which is how this section once read.**
+Setting it unconditionally bets that no Windows-on-ARM driver exposes
+`WGL_EXT_create_context_es2_profile`. A physical Snapdragon may well do so, and
+forcing EGL there would break a working device and oblige every Fyne
+application to ship ANGLE. The fix has to be a *fallback*, tried only after the
+native context API has already refused, so that it cannot regress anything.
+That is what #6484 does.
 
 ### Snapshot rewind does not restore a +D or Opus Discovery disk interface
 
