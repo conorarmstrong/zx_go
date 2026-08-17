@@ -75,10 +75,19 @@ glfw.WindowHint(glfw.ContextCreationAPI, glfw.EGLContextAPI)
 ```
 
 Both symbols exist in the GLFW binding already depended on
-(`go-gl/glfw/v3.3`, `window.go:89` and `:132`). With that hint set, GLFW loads
-`libEGL.dll` and bundling ANGLE becomes a working answer, since ANGLE maps
-GLES onto Direct3D, which Windows on ARM does have. This is a change to the
-GUI toolkit rather than to zx_go, so it needs raising upstream.
+(`go-gl/glfw/v3.3`, `window.go:89` and `:132`; also v3.4, which Fyne's
+`develop` now uses). With that hint set, GLFW loads `libEGL.dll` and bundling
+ANGLE becomes a working answer, since ANGLE maps GLES onto Direct3D, which
+Windows on ARM does have. This is a change to the GUI toolkit rather than to
+zx_go, so it needed raising upstream.
+
+**Raised, 2026-08-17.** [fyne-io/fyne#6483](https://github.com/fyne-io/fyne/issues/6483)
+reports it and [#6484](https://github.com/fyne-io/fyne/pull/6484) offers the
+fix. The PR retries through EGL only after the native attempt has failed,
+rather than setting the hint unconditionally, so it cannot regress a driver
+that works today. Until it is merged there is nothing to do from our side:
+`replace`-ing a forked toolkit for a platform we cannot test would be the
+kind of workaround this project rejects.
 
 ### Snapshot rewind does not restore a +D or Opus Discovery disk interface
 

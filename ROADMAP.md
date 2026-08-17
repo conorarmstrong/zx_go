@@ -327,12 +327,25 @@ requests OpenGL ES 2.0 over WGL and cannot be built any other way.
   once. That is the whole remaining test. If it fails with
   `WGL: Failed to create OpenGL ES context`, the diagnosis is already
   complete and the fix is the upstream Fyne hint plus a bundled ANGLE.
-- [ ] **Raise the `ContextCreationAPI` hint upstream with Fyne.** One line in
-  `internal/driver/glfw/glfw_es.go`; needs the maintainers, not us.
+- [~] **Raised upstream with Fyne, awaiting their decision.**
+  [fyne-io/fyne#6483](https://github.com/fyne-io/fyne/issues/6483) reports it,
+  [#6484](https://github.com/fyne-io/fyne/pull/6484) is the fix. The PR retries
+  through EGL only *after* the native context API has refused, rather than
+  requesting EGL up front: a physical Snapdragon may expose the WGL extension,
+  and forcing EGL would break that case and oblige every app to ship ANGLE.
+
+  It is the Windows instance of
+  [#4782](https://github.com/fyne-io/fyne/issues/4782), open since April 2024,
+  where a Fyne contributor reached the same diagnosis in one line and the
+  thread then turned into an argument about whether devcontainers are in
+  scope. That is the failure mode to watch for: ours is argued from a shipping
+  consumer platform plus a third-party report
+  ([netbirdio/netbird#4691](https://github.com/netbirdio/netbird/issues/4691))
+  precisely so it cannot be dismissed the same way.
 - [~] **The process hangs when window creation fails.** It stays resident with
   no window and no console prompt, because Fyne's run loop blocks with no
   window to service. Not fixable from our side without a watchdog, which
-  would be a hack; it belongs in the same upstream report.
+  would be a hack. Noted at the end of #6483; raise separately if they ask.
 - [x] ~~ANSI escapes printed literally in the Windows console~~ — ours, and
   fixed. `term.IsTerminal` accepts a console handle because GetConsoleMode
   succeeds, but nothing enabled `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, so the
