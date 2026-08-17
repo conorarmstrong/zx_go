@@ -57,9 +57,10 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	// Edge-connector and internal peripherals. Each accessor returns nil when
 	// the machine does not carry that device.
 	if e.peripherals != nil {
-		registerDevices(r, e.peripherals.Plus3FDC(), e.peripherals.GetMultiface(), e.peripherals.IF1())
+		registerDevices(r, e.peripherals.Plus3FDC(), e.peripherals.GetMultiface(), e.peripherals.IF1(),
+			e.peripherals.GetDisciple())
 	}
-	registerDevices(r, e.betaDisk)
+	registerDevices(r, e.betaDisk, e.opus)
 
 	// The tape player exists only once a tape is mounted, and GetTapePlayer
 	// returns nil until then — the same lazy shape as the Beta above, and for

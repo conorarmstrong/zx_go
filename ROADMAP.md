@@ -383,11 +383,12 @@ hunting bugs that are not there. Note the reason answerability is re-checked at
 every step of a backwards search is NOT short-circuit evaluation — `binOp.eval`
 computes both operands eagerly — it is that the check costs nothing.
 
-**Snapshot rewind now restores the machine.** The time-travel ring captures
-through the registry, so a rewind returns every registered device rather than
-the CPU and the visible 64 K. What it still does not return is the +D and the
-Opus Discovery, neither of which has a `Device`. The ring holds 16 captures by
-default, so the reachable window is short.
+**Snapshot rewind now restores the machine, and the device set is complete.**
+The time-travel ring captures through the registry, so a rewind returns every
+registered device rather than the CPU and the visible 64 K. Every disk
+interface the emulator offers is now captured, the +D and the Opus Discovery
+included. The ring still holds 16 captures by default, so the reachable window
+is short; `replay-back` is what reaches an exact instruction inside it.
 
 `pkg/machinestate` is the registry the complete capture is built on: named
 devices, a device-set check in both directions before anything is applied, and
@@ -400,12 +401,19 @@ canonical ordering so two captures of an unchanged machine compare equal.
   mutation initially passed, because the fixture wrote `0x38` to the mixer and
   those bits are active low, so it had disabled noise on every channel.
 - [x] ~~The remaining devices~~ — the CPU, ULA, memory, `plus3fdc`, `betadisk`,
-  keyboard, `if1`, `multiface`, the DAC, the tape player (`pkg/ula/tapestate.go`
-  — position, not the tape image) and the whole Next set are captured;
-  `(*emulator).stateRegistry` is the list, and it registers each device
-  exactly when the machine really carries it. **Not** the +D or the Opus
-  Discovery; those two are what is left. `pkg/next/lores` has a `Device` that
-  nothing can register, because no code owns a LoRes instance.
+  `disciple` (the +D), `opus`, keyboard, `if1`, `multiface`, the DAC, the tape
+  player (`pkg/ula/tapestate.go` — position, not the tape image) and the whole
+  Next set are captured; `(*emulator).stateRegistry` is the list, and it
+  registers each device exactly when the machine really carries it.
+  `pkg/next/lores` has a `Device` that nothing can register, because no code
+  owns a LoRes instance — see item 6, which is the real reason.
+
+  The +D and the Opus were the last two, and the audit that verified them found
+  a real controller bug rather than a capture gap: the +D's format flag was
+  sticky across commands, so a Write Track abandoned by a Force Interrupt left
+  the next Write Sector to be committed as a format. The tell was a mutation
+  surviving because nothing in the fixture could move the flag, and the reason
+  nothing could move it was the bug.
 - [x] ~~The replay-equivalence oracle~~ — `cmd/zx_go/replay_oracle_test.go`.
   Fingerprints outputs and memory in bulk rather than device state, so it
   cannot pass by comparing the capture with itself, and a companion test

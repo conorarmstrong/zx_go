@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conorarmstrong/zx_go/pkg/opus"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -363,4 +364,91 @@ func TestLoResIsAnOrphanPackageAndThereforeUnregistered(t *testing.T) {
 		t.Error("next.lores is now registered, so the emulator holds a LoRes instance: " +
 			"delete this test, it has served its purpose")
 	}
+}
+
+// The +D / DISCiPLE and the Opus Discovery were the last two disk interfaces
+// with no capture: a rewind put the machine back and left the controller where
+// it was, so an operation in flight resumed against a controller mid-command.
+// Both are lazily attached, so both follow the Beta's rule — absent until they
+// exist, and a capture taken beforehand refused afterwards rather than quietly
+// applied to everything else.
+func TestStateRegistryDiscipleAndOpus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     string
+		attach func(*testing.T, *emulator)
+	}{
+		{"disciple", "disciple", func(t *testing.T, e *emulator) {
+			if err := e.peripherals.EnableDisciple("roms"); err != nil {
+				t.Skipf("GDOS ROM unavailable: %v", err)
+			}
+		}},
+		{"opus", "opus", func(t *testing.T, e *emulator) {
+			if _, err := e.ensureOpus(); err != nil {
+				t.Skipf("Opus ROM unavailable: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			emu := quietEmulator(t, roms.Model48K)
+			if hasDevice(registeredDevices(emu), tc.id) {
+				t.Fatalf("%s registered before one was attached", tc.id)
+			}
+			before := emu.stateRegistry().Capture()
+
+			tc.attach(t, emu)
+
+			if got := registeredDevices(emu); !hasDevice(got, tc.id) {
+				t.Fatalf("%s attached but not registered: %v", tc.id, got)
+			}
+			err := emu.stateRegistry().Restore(before)
+			if err == nil {
+				t.Fatalf("a capture taken before the %s existed was accepted after it did", tc.id)
+			}
+			if !strings.Contains(err.Error(), tc.id) {
+				t.Errorf("error should name the device that has no state: %v", err)
+			}
+		})
+	}
+}
+
+// The whole point of the two captures above: a rewind has to put the disk
+// controller back with the rest of the machine. This drives each interface into
+// a state the guest can read, captures, moves it somewhere else, and restores.
+func TestRewindReturnsTheDiscipleAndOpusControllers(t *testing.T) {
+	t.Run("disciple", func(t *testing.T) {
+		emu := quietEmulator(t, roms.Model48K)
+		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
+			t.Skipf("GDOS ROM unavailable: %v", err)
+		}
+		d := emu.peripherals.GetDisciple()
+		d.HandlePortWrite(0x5B, 21) // track register
+		snap := emu.stateRegistry().Capture()
+
+		d.HandlePortWrite(0x5B, 3)
+		if err := emu.stateRegistry().Restore(snap); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		if got, _ := d.HandlePortRead(0x5B); got != 21 {
+			t.Errorf("track register = %d after rewind, want 21", got)
+		}
+	})
+
+	t.Run("opus", func(t *testing.T) {
+		emu := quietEmulator(t, roms.Model48K)
+		iface, err := emu.ensureOpus()
+		if err != nil {
+			t.Skipf("Opus ROM unavailable: %v", err)
+		}
+		iface.Write(opus.FDCBase+1, 19) // track register, memory-mapped
+		snap := emu.stateRegistry().Capture()
+
+		iface.Write(opus.FDCBase+1, 4)
+		if err := emu.stateRegistry().Restore(snap); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		if got, ok := iface.TryRead(opus.FDCBase + 1); !ok || got != 19 {
+			t.Errorf("track register = %d (ok=%v) after rewind, want 19", got, ok)
+		}
+	})
 }

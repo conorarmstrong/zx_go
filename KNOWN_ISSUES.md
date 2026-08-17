@@ -91,35 +91,22 @@ application to ship ANGLE. The fix has to be a *fallback*, tried only after the
 native context API has already refused, so that it cannot regress anything.
 That is what #6484 does.
 
-### Snapshot rewind does not restore a +D or Opus Discovery disk interface
+### Snapshot rewind lands on a capture, not on an exact instruction
 
-**Affects:** the **Time Travel** tab, the `tt-rewind` and `replay-back`
-commands, all versions. It does **not** affect reverse debugging, which is a
-separate mechanism described in `DEBUGGER.md`.
+**Affects:** the **Time Travel** tab and the `tt-rewind` command. It does
+**not** affect reverse debugging, which is a separate mechanism described in
+`DEBUGGER.md`.
 
-**What you see.** Rewinding while a +D or Opus Discovery disk operation is in
-flight puts the machine back and leaves the controller where it was, so the
-operation resumes against a controller mid-command.
+**What you see.** A rewind puts the machine back to the nearest capture at or
+before the target rather than to the instruction you asked for, and the ring
+holds 16 captures by default, so the reachable window is short.
 
-**Cause.** A capture is built from the devices registered in
-`(*emulator).stateRegistry`, and neither interface is one of them: neither has
-a `machinestate.Device`. Everything else is captured: the CPU, the whole RAM
-pool and the paging window, the ULA (frame position and flash phase included),
-the tape player's playback position, the AY's tone dividers, noise LFSR and
-envelope position, the keyboard, the +3 FDC, the Beta interface, Interface 1,
-the Multiface, the DAC, and the Next's own blocks.
-
-**Two further limits, one of which has gone.** Rewind still lands on the
-nearest capture at or before the target rather than on an exact instruction,
-but `replay-back` now reaches any instruction inside the ring by re-executing
-from a capture, with the whole machine. The ring still holds 16 captures by
-default, so the reachable window is short.
-
-**How you find out.** `replay-back` re-runs the window to the present and
-compares the machine it produced against the machine that was there before
-handing back an instant, so work in flight over the window is refused rather
-than replayed wrongly. `tt-rewind` does not check, because it is not
-re-executing anything.
+**What to use instead.** `replay-back` reaches any instruction inside the ring
+by restoring the newest capture at or before it and re-executing forward, with
+the whole machine. Before handing an instant back it re-runs the window to the
+present and compares the machine it produced against the machine that was
+there, so a window it cannot reproduce is refused rather than answered wrongly.
+`tt-rewind` does not check, because it is not re-executing anything.
 
 ### The process does not exit when window creation fails
 
@@ -141,6 +128,36 @@ the hint above.
 ---
 
 ## Recently fixed
+
+### Snapshot rewind did not restore a +D or Opus Discovery disk interface
+
+**Fixed.** Rewinding while a +D or Opus Discovery operation was in flight put
+the machine back and left the controller where it was, so the operation resumed
+against a controller mid-command. Neither interface had a
+`machinestate.Device`, so neither was in the capture at all.
+
+Both have one now (`pkg/disciple/state.go`, `pkg/opus/state.go`), and with them
+**every disk interface the emulator offers is captured**. What they carry is
+mostly state no port reports: the transfer buffer and its position, the sector
+a write was addressed to when the command started, the physical head position
+of each drive as distinct from the track register, the direction the last step
+went, and the whole WRITE TRACK parser mid-format.
+
+The Opus additionally carries its DRQ byte-clock, which matters more than it
+sounds. The Opus wires DRQ to the Z80's NMI and its ROM moves one byte per
+interrupt, so a capture that lost the pending byte-period would restore a
+transfer that never advances: BUSY stays asserted and the ROM's wait loop spins
+forever.
+
+Disks are deliberately not captured, on the same rule as the tape below: they
+are the medium. A rewind cannot un-write a floppy, and it must not un-eject or
+re-eject one either.
+
+Fixing this turned up a real controller bug on the way. The +D's format flag
+was sticky across commands, so a Write Track abandoned by a Force Interrupt
+left every later Write Sector to be committed as a format: its 512 sector bytes
+were parsed as a track image and the whole track rebuilt from them. That is
+fixed too.
 
 ### Snapshot rewind did not restore the tape position
 
