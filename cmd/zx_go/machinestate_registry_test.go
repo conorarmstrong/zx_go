@@ -378,14 +378,18 @@ func TestStateRegistryDiscipleAndOpus(t *testing.T) {
 		id     string
 		attach func(*testing.T, *emulator)
 	}{
+		// Both ROMs are embedded in pkg/roms/data, so these cannot fail for
+		// want of a file on the machine running the tests. Skipping on error
+		// would turn the one situation worth reporting -- ROM loading or the
+		// lazy-attach path broken -- into a green run.
 		{"disciple", "disciple", func(t *testing.T, e *emulator) {
 			if err := e.peripherals.EnableDisciple("roms"); err != nil {
-				t.Skipf("GDOS ROM unavailable: %v", err)
+				t.Fatalf("EnableDisciple: %v", err)
 			}
 		}},
 		{"opus", "opus", func(t *testing.T, e *emulator) {
 			if _, err := e.ensureOpus(); err != nil {
-				t.Skipf("Opus ROM unavailable: %v", err)
+				t.Fatalf("ensureOpus: %v", err)
 			}
 		}},
 	} {
@@ -419,7 +423,7 @@ func TestRewindReturnsTheDiscipleAndOpusControllers(t *testing.T) {
 	t.Run("disciple", func(t *testing.T) {
 		emu := quietEmulator(t, roms.Model48K)
 		if err := emu.peripherals.EnableDisciple("roms"); err != nil {
-			t.Skipf("GDOS ROM unavailable: %v", err)
+			t.Fatalf("EnableDisciple: %v", err)
 		}
 		d := emu.peripherals.GetDisciple()
 		d.HandlePortWrite(0x5B, 21) // track register
@@ -438,7 +442,7 @@ func TestRewindReturnsTheDiscipleAndOpusControllers(t *testing.T) {
 		emu := quietEmulator(t, roms.Model48K)
 		iface, err := emu.ensureOpus()
 		if err != nil {
-			t.Skipf("Opus ROM unavailable: %v", err)
+			t.Fatalf("ensureOpus: %v", err)
 		}
 		iface.Write(opus.FDCBase+1, 19) // track register, memory-mapped
 		snap := emu.stateRegistry().Capture()

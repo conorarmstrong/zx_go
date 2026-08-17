@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -615,6 +616,12 @@ func TestLoadStateRejectsOutOfRangeStateWithoutApplyingIt(t *testing.T) {
 		{"transfer position past the buffer", func(s *discipleState) { s.XferPos = len(s.XferBuf) + 1 }},
 		{"transfer length past the buffer", func(s *discipleState) { s.XferLen = len(s.XferBuf) + 1 }},
 		{"RAM the wrong size", func(s *discipleState) { s.RAM = []byte{1, 2, 3} }},
+		// Both are inside the buffer, so the individual bounds pass, but a
+		// position past the transfer LENGTH is unreachable in the live
+		// controller and wedges it: neither readData nor writeData advances
+		// once xferPos >= xferLen, so busy and DRQ never drop and GDOS's wait
+		// loop spins with no way out.
+		{"position past the transfer length", func(s *discipleState) { s.XferLen = s.XferPos - 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var s discipleState
@@ -647,4 +654,93 @@ func firstDiff(a, b []byte) int {
 		return min(len(a), len(b))
 	}
 	return -1
+}
+
+// decodeForTest exposes the wire struct so the guard below can walk it.
+func decodeForTest(t *testing.T, blob []byte) discipleState {
+	t.Helper()
+	var s discipleState
+	if err := decodeDiscipleState(blob, &s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// capturePoints are the fixtures the guard walks. Several are needed because
+// some fields are mutually exclusive by construction: a controller mid-read is
+// not mid-format, and a command that succeeded has cleared the sticky error
+// bits a failed one leaves.
+var capturePoints = []struct {
+	name  string
+	build func(*testing.T) *Disciple
+}{
+	{"mid multi-sector read", primedForReplay},
+	{"after a failed read", primedAfterAFailedRead},
+	{"mid format", func(t *testing.T) *Disciple {
+		d := newPatternDisciple(t)
+		d.HandlePortWrite(portControl, 0x01)
+		d.HandlePortWrite(portFDCCmdStatus, 0xF0)
+		for i := 0; i < 20; i++ {
+			d.HandlePortWrite(portFDCData, 0x4E)
+		}
+		return d
+	}},
+	// Two paging fixtures, not one: SetInhibit forces romPaged false, so a
+	// single fixture that pages in and then inhibits leaves romPaged exactly
+	// where it started and the guard cannot see it. That is the same
+	// convergence trap the guard exists to find, and it found this one.
+	{"paged in with memory swapped", func(t *testing.T) *Disciple {
+		d := newPatternDisciple(t)
+		d.PageIn()
+		d.HandlePortWrite(portBoot, 0)
+		return d
+	}},
+	{"inhibited and disabled", func(t *testing.T) *Disciple {
+		d := newPatternDisciple(t)
+		d.SetInhibit(true)
+		d.enabled = false
+		return d
+	}},
+	{"interface RAM written", func(t *testing.T) *Disciple {
+		d := newPatternDisciple(t)
+		for i := range d.GetRAM() {
+			d.GetRAM()[i] = byte(i*3 + 5)
+		}
+		return d
+	}},
+}
+
+// Every captured field must be moved by at least one fixture, or the round-trip
+// tests say nothing about it: a field no fixture moves round-trips whether or
+// not it is restored, which is exactly how a dropped restore hides.
+//
+// This walks the wire struct by reflection rather than by a hand-written list,
+// so a field added to the capture and forgotten here shows up as a field
+// nothing moves, and the guard fails. pkg/next/divmmc's fieldsMoved is the same
+// idea; without one of these, the claim in state.go that the tests catch an
+// unadded field is not true.
+func TestEveryCapturedFieldIsMovedBySomeFixture(t *testing.T) {
+	base := reflect.ValueOf(decodeForTest(t, newPatternDisciple(t).SaveState()))
+
+	moved := map[string]string{}
+	for _, cp := range capturePoints {
+		got := reflect.ValueOf(decodeForTest(t, cp.build(t).SaveState()))
+		for i := 0; i < base.NumField(); i++ {
+			name := base.Type().Field(i).Name
+			if _, done := moved[name]; done {
+				continue
+			}
+			if !reflect.DeepEqual(base.Field(i).Interface(), got.Field(i).Interface()) {
+				moved[name] = cp.name
+			}
+		}
+	}
+
+	for i := 0; i < base.NumField(); i++ {
+		name := base.Type().Field(i).Name
+		if _, ok := moved[name]; !ok {
+			t.Errorf("no fixture moves %s off its power-on value, so every round-trip test "+
+				"passes for it whether or not it is restored", name)
+		}
+	}
 }

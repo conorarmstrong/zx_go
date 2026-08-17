@@ -2,6 +2,7 @@ package opus
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 )
 
@@ -737,6 +738,21 @@ func TestLoadStateRejectsOutOfRangeStateWithoutApplyingIt(t *testing.T) {
 		{"buffer position past the buffer", func(s *opusState) { s.FDC.Pos = len(s.FDC.Buf) + 1 }},
 		{"SRAM the wrong size", func(s *opusState) { s.RAM = []byte{1, 2, 3} }},
 		{"negative byte-period remainder", func(s *opusState) { s.FDC.Remaining = -1 }},
+		// Pos == len(Buf) is not a position the live controller can hold: as
+		// soon as a transfer reaches its end readData drops the buffer. Accept
+		// it from a blob and the guest's next access indexes one past the end.
+		{"position exactly at the end of the buffer", func(s *opusState) { s.FDC.Pos = len(s.FDC.Buf) }},
+		// The format parser indexes fmtID[3] the moment a data address mark
+		// arrives, and fmtID[2] when the sector commits, so a have-ID flag that
+		// disagrees with the ID actually held is a panic waiting for the next
+		// byte the guest writes.
+		{"have-ID set with no ID collected", func(s *opusState) {
+			s.FDC.Formatting, s.FDC.FmtHaveID, s.FDC.FmtID = true, true, nil
+		}},
+		{"data field open with no ID collected", func(s *opusState) {
+			s.FDC.Formatting, s.FDC.FmtField, s.FDC.FmtID = true, 2, nil
+			s.FDC.FmtNeed = SectorSize
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var s opusState
@@ -770,4 +786,122 @@ func firstDiff(a, b []byte) int {
 		return min(len(a), len(b))
 	}
 	return -1
+}
+
+// decodeForTest exposes the wire struct so the guard below can walk it.
+func decodeForTest(t *testing.T, blob []byte) opusState {
+	t.Helper()
+	var s opusState
+	if err := decodeOpusState(blob, &s); err != nil {
+		t.Fatalf("decoding state: %v", err)
+	}
+	return s
+}
+
+// walkFields flattens the nested wire struct to dotted paths, so a field added
+// inside fdcState or piaState is walked as well as one added at the top.
+func walkFields(prefix string, v reflect.Value, out map[string]any) {
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i)
+		name := prefix + f.Name
+		if f.Type.Kind() == reflect.Struct {
+			walkFields(name+".", v.Field(i), out)
+			continue
+		}
+		out[name] = v.Field(i).Interface()
+	}
+}
+
+// capturePoints are the fixtures the guard walks. Several are needed because
+// some fields are mutually exclusive by construction: a controller mid-read is
+// not mid-format, and the format parser cannot be inside a data field and
+// part-way through a sync run at the same time.
+var capturePoints = []struct {
+	name  string
+	build func(*testing.T) *Interface
+}{
+	{"mid sector read, pager armed", func(t *testing.T) *Interface {
+		i, clk := newPatternOpus(t)
+		primedForReplay(t, i, clk)
+		return i
+	}},
+	{"mid sector write", func(t *testing.T) *Interface {
+		i, clk := newPatternOpus(t)
+		selectThrough(i, 0)
+		i.Write(FDCBase+1, 11)
+		i.Write(FDCBase+2, 4)
+		i.Write(FDCBase+0, 0xA0)
+		for n := 0; n < 20; n++ {
+			clk.t += BytePeriodTStates
+			i.Dev.TickTo(clk.t)
+			i.Write(FDCBase+3, byte(0xB0+n))
+		}
+		return i
+	}},
+	{"mid format data field", func(t *testing.T) *Interface {
+		i, clk := newPatternOpus(t)
+		selectThrough(i, 0)
+		i.Write(FDCBase+1, 5)
+		i.Write(FDCBase+0, 0xF0)
+		feedFormatUpToData(i, clk, 5, 6)
+		for n := 0; n < 30; n++ {
+			feedFmt(i, clk, byte(0x30+n))
+		}
+		return i
+	}},
+	{"part way through a format sync run", func(t *testing.T) *Interface {
+		i, clk := newPatternOpus(t)
+		selectThrough(i, 0)
+		i.Write(FDCBase+0, 0xF0)
+		for n := 0; n < 3; n++ {
+			feedFmt(i, clk, markSync)
+		}
+		return i
+	}},
+	{"paged out", func(t *testing.T) *Interface {
+		i, _ := newPatternOpus(t)
+		i.PreFetch(PageOut)
+		i.PreFetch(0x1234)
+		return i
+	}},
+	{"SRAM written", func(t *testing.T) *Interface {
+		i, _ := newPatternOpus(t)
+		for addr := uint16(RAMBase); addr <= RAMTop; addr++ {
+			i.Write(addr, byte(addr*5+3))
+		}
+		return i
+	}},
+}
+
+// Every captured field must be moved by at least one fixture, or the round-trip
+// tests say nothing about it: a field no fixture moves round-trips whether or
+// not it is restored, which is exactly how a dropped restore hides.
+//
+// Walked by reflection rather than by a hand-written list, so a field added to
+// the capture and forgotten here shows up as a field nothing moves.
+func TestEveryCapturedFieldIsMovedBySomeFixture(t *testing.T) {
+	fresh, _ := newPatternOpus(t)
+	base := map[string]any{}
+	walkFields("", reflect.ValueOf(decodeForTest(t, fresh.SaveState())), base)
+
+	moved := map[string]string{}
+	for _, cp := range capturePoints {
+		got := map[string]any{}
+		walkFields("", reflect.ValueOf(decodeForTest(t, cp.build(t).SaveState())), got)
+		for name, want := range base {
+			if _, done := moved[name]; done {
+				continue
+			}
+			if !reflect.DeepEqual(want, got[name]) {
+				moved[name] = cp.name
+			}
+		}
+	}
+
+	for name := range base {
+		if _, ok := moved[name]; !ok {
+			t.Errorf("no fixture moves %s off its power-on value, so every round-trip test "+
+				"passes for it whether or not it is restored", name)
+		}
+	}
 }
