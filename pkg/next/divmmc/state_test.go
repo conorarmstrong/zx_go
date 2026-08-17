@@ -549,3 +549,41 @@ func firstDiff(a, b []string) string {
 	}
 	return fmt.Sprintf("traces are %d and %d steps long", len(a), len(b))
 }
+
+// The reallocating restore branch has two directions, and only one of them was
+// covered. The test above goes from an 8 KB image back to none, where the copy
+// into the new slice moves zero bytes and so proves nothing about it. This goes
+// the other way: back to a capture that HAS an image, from a pager whose image
+// is a different length. If the contents are not copied, the pager comes back
+// with the right-sized ROM full of zeroes and the guest executes nothing.
+//
+// Reachable exactly as written: streaming a ROM in grows an absent image to
+// 8 KB, and restoring a capture taken before it arrived shrinks it again, so a
+// machine can genuinely arrive at this branch with a longer image to restore.
+func TestARoundTripBackToACaptureThatHasAROMImage(t *testing.T) {
+	p := New(makeROM())
+	withROM := p.SaveState()
+	if n := len(decodeStateForTest(t, withROM).ROM); n != ROMSize {
+		t.Fatalf("the fixture captured a %d-byte image, want %d", n, ROMSize)
+	}
+
+	// Shrink the live image by restoring a capture taken before one existed.
+	if err := p.LoadState(stateROMAbsent().SaveState()); err != nil {
+		t.Fatalf("LoadState (no image): %v", err)
+	}
+	if got := p.ReadROMByte(0x10); got != 0xFF {
+		t.Fatalf("the image did not shrink, so the branch under test is not reached: "+
+			"$0010 = %#02x", got)
+	}
+
+	if err := p.LoadState(withROM); err != nil {
+		t.Fatalf("LoadState (with image): %v", err)
+	}
+	want := makeROM()
+	for _, addr := range []int{0x0000, 0x0010, 0x1FFF} {
+		if got := p.ReadROMByte(addr); got != want[addr] {
+			t.Errorf("divMMC ROM $%04X = %#02x after restore, want %#02x: the reallocated "+
+				"image was never filled in", addr, got, want[addr])
+		}
+	}
+}
