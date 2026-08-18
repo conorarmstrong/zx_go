@@ -21,8 +21,10 @@ type nr68 struct {
 }
 
 // decodeNR68 splits the register into its fields (zxnext.vhd:5444-5450).
-// Bit 3 (ULA+ enable) is commented out in the core — the enable is driven
-// from port $FF3B instead — and bit 1 is reserved.
+// Bit 3 (ULA+ enable) has no field here because it has no storage here: the
+// core's nr_68_ulap_en is commented out (zxnext.vhd:5448) and an NR$68 write
+// drives port_ff3b_ulap_en instead (zxnext.vhd:4551), which is the same bit
+// port $FF3B writes. pkg/next.ULAPlus owns it. Bit 1 is reserved.
 func decodeNR68(v byte) nr68 {
 	return nr68{
 		ulaDisabled:        v&0x80 != 0,
@@ -37,6 +39,8 @@ func decodeNR68(v byte) nr68 {
 // zxnext.vhd:6093 the reserved bit 1 is a literal '0' rather than a stored
 // field, so it never reads back what was written.
 //
-// Bit 3 is reproduced as written rather than sourced from port $FF3B's ULA+
-// enable, which is not modelled.
+// Bit 3 is NOT shaped here. It reads back the live ULA+ enable, which is one
+// bit written from both this register and port $FF3B, so the read-back handler
+// pkg/next.WireULAPlus installs overlays it after this runs. Reproducing what
+// was written would report an enable the port may since have changed.
 func nr68ReadBack(written byte) byte { return written &^ 0x02 }

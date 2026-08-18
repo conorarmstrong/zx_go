@@ -1782,6 +1782,13 @@ sdReady:
 		e.ula.SetTimexModeObserver(func(byte) { loresState.Refresh() })
 	}
 
+	// ULA+. The layer's ulap_en_i is the enable ANDed with NOT ULAnext
+	// (zxnext.vhd:4246), which WireULAPlus owns; the ULA routes the two ports.
+	e.nextULAPlus = next.WireULAPlus(disp, loresCfg)
+	if e.ula != nil {
+		e.ula.SetNextULAPlus(e.nextULAPlus)
+	}
+
 	// Warm-boot: skip the cold-boot path entirely and load a captured
 	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG
 	// SHORTCUT that bypasses the real FPGA-bootrom → TBBLUE.FW →
@@ -1907,6 +1914,10 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextClipWindows = nil
 	e.nextLoRes = nil
 	e.nextLoResState = nil
+	e.nextULAPlus = nil
+	if e.ula != nil {
+		e.ula.SetNextULAPlus(nil)
+	}
 	e.nextReset = nil
 }
 

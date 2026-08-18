@@ -229,6 +229,13 @@ func (d *Dispatcher) OnWriteFn(reg byte) func(*Dispatcher, byte) {
 	return d.onWrite[reg]
 }
 
+// OnReadFn returns the OnRead handler installed for a register, or nil.
+// Subsystems that need to adjust one bit of a register another subsystem owns
+// chain to this rather than replacing it, the way OnWriteFn is used for writes.
+func (d *Dispatcher) OnReadFn(reg byte) func(*Dispatcher) byte {
+	return d.onRead[reg]
+}
+
 // SetOnRead installs a read-side computation for the given register.
 // The callback's return value is what reads of the register observe;
 // the backing storage is bypassed entirely. Pass nil to remove.

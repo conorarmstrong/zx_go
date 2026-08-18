@@ -278,6 +278,9 @@ type emulator struct {
 	// machine; nextLoResState holds the parts that are not layer registers.
 	nextLoRes      *lores.Config
 	nextLoResState *next.LoResState
+	// nextULAPlus is the ULA+ enable and the $BF3B select latch behind ports
+	// $BF3B / $FF3B. The LoRes layer needs the enable as ulap_en_i.
+	nextULAPlus *next.ULAPlus
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS

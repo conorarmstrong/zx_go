@@ -101,6 +101,9 @@ type ULA struct {
 	// timexModeObserver is notified on every port $FF write. nil off the Next.
 	timexModeObserver func(mode byte)
 
+	// nextULAPlus handles ports $BF3B / $FF3B. nil off the Next.
+	nextULAPlus NextULAPlus
+
 	// Port 0xFE state
 	BorderColour byte
 	Mic          bool
@@ -1037,6 +1040,18 @@ func (u *ULA) TimexScreenMode() byte { return u.timexVideoMode }
 // SetTimexModeObserver installs a callback fired on every port $FF write.
 func (u *ULA) SetTimexModeObserver(fn func(mode byte)) { u.timexModeObserver = fn }
 
+// NextULAPlus is the contract for the Spectrum Next's ULA+ register-select and
+// data ports. pkg/next.ULAPlus satisfies it; the interface lives here so this
+// package does not import pkg/next.
+type NextULAPlus interface {
+	WriteBF3B(v byte)
+	WriteFF3B(v byte)
+	ReadFF3B() (byte, bool)
+}
+
+// SetNextULAPlus attaches the ULA+ port handler. nil unhooks.
+func (u *ULA) SetNextULAPlus(p NextULAPlus) { u.nextULAPlus = p }
+
 // timexHiResColours decodes the hi-res ink/paper from port $FF bits 5:3. Hi-res
 // uses two bright, complementary colours: ink = colour code, paper = 7 - code
 // (so code 0 = black ink on white paper, the default text colours).
@@ -1316,6 +1331,15 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		return u.nextSprite.ReadStatus(), true
 	}
 
+	// Port $FF3B read: the ULA+ enable read-back. In mode group 00 the port
+	// serves palette data instead, which is not modelled here, so the handler
+	// declines and the read falls through (zxnext.vhd:4560-4568).
+	if u.nextULAPlus != nil && addr>>8 == 0xFF && addr&0xFF == 0x3B {
+		if v, ok := u.nextULAPlus.ReadFF3B(); ok {
+			return v, true
+		}
+	}
+
 	// Port $113B: i2c SDA line read-back (bit 0; upper bits float
 	// high — open-drain bus). Port $103B reads return the SCL latch
 	// the same way on real hardware but NextZXOS never reads it; we
@@ -1591,6 +1615,19 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	if u.betaClaims(addr) {
 		u.beta.WritePort(addr, val)
 		return
+	}
+
+	// Ports $BF3B / $FF3B: the ULA+ register-select and data ports
+	// (zxnext.vhd:2685-2686, full 16-bit decode $BFxx/$FFxx + $3B).
+	if u.nextULAPlus != nil && (addr&0xFF) == 0x3B {
+		switch addr >> 8 {
+		case 0xBF:
+			u.nextULAPlus.WriteBF3B(val)
+			return
+		case 0xFF:
+			u.nextULAPlus.WriteFF3B(val)
+			return
+		}
 	}
 
 	// Ports $103B / $113B: Spectrum Next i2c SCL / SDA write latches

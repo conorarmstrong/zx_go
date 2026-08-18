@@ -457,10 +457,16 @@ still missing is the last step: `pkg/ula`, which owns the live Next composite,
 contains no LoRes or Radastan handling, so a guest that selects the mode still
 gets the ordinary ULA picture.
 
-**One layer input has no source at all.** `lores.vhd`'s `ulap_en_i` selects the
-Radastan high nibble, and nothing in this tree tracks whether ULA+ is enabled,
-so `Config.ULAPlus` stays false and Radastan-with-ULA+ resolves into the wrong
-palette block. That has to be modelled before the mode is complete.
+**Every layer input is now connected.** The last one was `ulap_en_i`, which
+selects the Radastan high nibble. Nothing tracked ULA+ enable, so
+`Config.ULAPlus` was permanently false and Radastan-with-ULA+ resolved into the
+wrong palette block. `pkg/next/ulaplus.go` models it: one bit written from both
+NR$68 bit 3 and port $FF3B (mode group 01) into a single location, read back by
+both, ANDed with NOT ULAnext (NR$43 bit 0) before it reaches the layer.
+
+Note the scope: this is the ULA+ **enable**, not the ULA+ palette. The 64-entry
+palette still goes through the NextReg path, and `$FF3B` reads in mode group 00
+decline rather than serving palette data.
 
 This is not a hard problem: the expensive half, the FPGA-faithful pixel
 derivation, already exists and is golden-tested. What is missing is a mode
@@ -494,7 +500,8 @@ picture is wrong", check `NR$6A` before anything else.
   ula_pixel_1`, so LoRes replaces the ULA pixel per pixel where its clip
   admits, through the ULA palette — which is exactly `RenderScanline`'s
   documented pre-fill contract.
-- [ ] Find a source for ULA+ enable and connect `Config.ULAPlus`.
+- [ ] Model the ULA+ **palette** path ($BF3B mode group 00 + $FF3B data). The
+  enable is done; the palette writes still go only through NextReg.
 
 ---
 

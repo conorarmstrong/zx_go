@@ -547,3 +547,48 @@ func TestThePortFFDisplayFileReachesTheLoResLayer(t *testing.T) {
 		t.Error("the two halves were combined as OR rather than XOR")
 	}
 }
+
+// ULA+ was the last unconnected input to the LoRes layer: lores.vhd's
+// ulap_en_i picks the Radastan high nibble, and nothing in the tree tracked
+// whether ULA+ was on, so Config.ULAPlus was permanently false and
+// Radastan-with-ULA+ resolved into the wrong palette block.
+//
+// Driven through the real ports here rather than the model, because the wiring
+// between them is the part that was missing.
+func TestULAPlusEnableReachesTheLoResLayer(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
+	emu := quietEmulator(t, roms.ModelNext)
+
+	if emu.nextLoRes.ULAPlus {
+		t.Fatal("ULA+ reads as enabled at power-on")
+	}
+
+	// $BF3B selects mode group 01, $FF3B bit 0 is then the enable.
+	emu.ula.WritePort(0xBF3B, 0x40)
+	emu.ula.WritePort(0xFF3B, 0x01)
+	if !emu.nextLoRes.ULAPlus {
+		t.Error("a $BF3B/$FF3B enable did not reach the layer")
+	}
+
+	// NR$43 bit 0 is ULAnext, which takes priority (zxnext.vhd:4246).
+	emu.nextRegs.WriteReg(0x43, 0x01)
+	if emu.nextLoRes.ULAPlus {
+		t.Error("ULAnext did not gate the layer's ULA+ input")
+	}
+	emu.nextRegs.WriteReg(0x43, 0x00)
+
+	// The same bit is writable from NR$68 bit 3, and reads back there.
+	emu.nextRegs.WriteReg(0x68, 0x00)
+	if emu.nextLoRes.ULAPlus {
+		t.Error("clearing NR$68 bit 3 did not clear the enable the port had set")
+	}
+	emu.nextRegs.WriteReg(0x68, 0x08)
+	if !emu.nextLoRes.ULAPlus {
+		t.Error("NR$68 bit 3 did not set the enable")
+	}
+	if got, _ := emu.ula.ReadPort(0xFF3B); got&0x01 == 0 {
+		t.Errorf("$FF3B reads %#02x after NR$68 set the enable, want bit 0 set", got)
+	}
+}
