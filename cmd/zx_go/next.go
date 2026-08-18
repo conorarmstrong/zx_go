@@ -1785,6 +1785,9 @@ sdReady:
 	// ULA+. The layer's ulap_en_i is the enable ANDed with NOT ULAnext
 	// (zxnext.vhd:4246), which WireULAPlus owns; the ULA routes the two ports.
 	e.nextULAPlus = next.WireULAPlus(disp, loresCfg)
+	// The 64 ULA+ entries live at $C0..$FF of the ULA palette rather than in a
+	// palette of their own (zxnext.vhd:6958).
+	e.nextULAPlus.SetPalette(pal)
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(e.nextULAPlus)
 		// The layer replaces the ULA bitmap when NR$15 bit 7 is set; with it

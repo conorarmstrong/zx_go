@@ -7,14 +7,21 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/next/lores"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
+	"github.com/conorarmstrong/zx_go/pkg/next/palette"
 )
 
 // ULA+ enable, and the $BF3B register-select latch it is written through.
 //
-// This models the ENABLE, not the ULA+ palette. The 64-entry palette still
-// goes through the NextReg path; what was missing is the one bit that says
-// whether ULA+ is on, which the LoRes layer needs as ulap_en_i to pick the
-// Radastan high nibble.
+// Both halves are modelled: the enable, and the 64-entry palette behind mode
+// group 00.
+//
+// THE ULA+ PALETTE IS NOT A SEPARATE PALETTE. The Next routes a $FF3B colour
+// write into its own NextReg palette stream — the port write presents itself
+// as a write to NextReg $FF (zxnext.vhd:4744) with the byte repacked on the
+// way (:4745) — and the 64 ULA+ entries land at $C0..$FF of the ULA palette
+// (:6958). That is not an implementation detail to paper over: it is why
+// lores.vhd's Radastan ULA+ nibble is "11" & offset(1:0), which addresses
+// exactly that range.
 //
 // THE ENABLE HAS ONE STORAGE LOCATION, and that is the whole design here.
 // The FPGA writes port_ff3b_ulap_en from two unrelated places and reads it
@@ -40,18 +47,69 @@ type ULAPlus struct {
 	mode  byte // $BF3B bits 7:6
 	index byte // $BF3B bits 5:0, latched in mode group 00 only
 
+	pal     *palette.Bank
 	refresh func()
+}
+
+// SetPalette attaches the palette the ULA+ entries live in. Without it the
+// palette mode group declines, which is what it did before the path existed.
+func (u *ULAPlus) SetPalette(b *palette.Bank) { u.pal = b }
+
+// ulaPlusEntry resolves the palette and entry index a ULA+ colour addresses:
+// the ULA palette wsel bit 2 selects, at $C0 + the 6-bit index.
+//
+//	nr_palette_index_utm <= '0' & wsel(2) & "11" & ulap_index   zxnext.vhd:6958
+//
+// wsel is NR$43 bits 6:4, so its bit 2 is NR$43 bit 6.
+func (u *ULAPlus) ulaPlusEntry() (*palette.Palette, byte, bool) {
+	if u.pal == nil {
+		return nil, 0, false
+	}
+	which := palette.PaletteULAFirst
+	if u.d.Raw(0x43)&0x40 != 0 {
+		which = palette.PaletteULASecond
+	}
+	p := u.pal.Palette(int(which))
+	if p == nil {
+		return nil, 0, false
+	}
+	return p, 0xC0 | (u.index & 0x3F), true
+}
+
+// ulaPlusToNine converts a ULA+ colour byte to a 9-bit palette entry.
+//
+// The byte is GGGRRRBB. The FPGA repacks it to RRRGGGBB on its way into the
+// palette stream (zxnext.vhd:4745) and then expands it the way every 8-bit
+// palette write on this machine expands, with a ninth bit that is the OR of
+// the two blue bits (:4919).
+func ulaPlusToNine(v byte) uint16 {
+	g := (v >> 5) & 0x07
+	r := (v >> 2) & 0x07
+	b := v & 0x03
+	packed := r<<5 | g<<2 | b
+	nine := uint16(packed) << 1
+	if b != 0 {
+		nine |= 1
+	}
+	return nine
+}
+
+// nineToULAPlus is the inverse, matching the read mux
+// `dat(5:3) & dat(8:6) & dat(2:1)` (zxnext.vhd:4563). The ninth bit is not
+// reported, exactly as on hardware: an entry written through NR$44 with a blue
+// low bit the 8-bit form cannot express reads back without it.
+func nineToULAPlus(e uint16) byte {
+	g := byte((e >> 3) & 0x07)
+	r := byte((e >> 6) & 0x07)
+	b := byte((e >> 1) & 0x03)
+	return g<<5 | r<<2 | b
 }
 
 // Enabled reports the ULA+ enable, read from its single home in NR$68 bit 3.
 func (u *ULAPlus) Enabled() bool { return u.d.Raw(0x68)&0x08 != 0 }
 
-// Index is the $BF3B palette index, 6 bits.
-//
-// Nothing reads this yet, because the palette it selects is not modelled. It
-// is kept rather than dropped because it is what the port physically latches:
-// discarding bits 5:0 would make WriteBF3B silently lossy, and a program that
-// selects an index, switches mode group and switches back would find it gone.
+// Index is the $BF3B palette index, 6 bits: which of the 64 ULA+ entries the
+// next colour write or read addresses.
 func (u *ULAPlus) Index() byte { return u.index }
 
 // Mode is the $BF3B mode group, 2 bits.
@@ -68,11 +126,18 @@ func (u *ULAPlus) WriteBF3B(v byte) {
 }
 
 // WriteFF3B applies a write to the data port, reporting whether this port
-// consumed it. Only mode group 01 is the enable; group 00 is palette data,
-// which is not modelled, so the write is DECLINED rather than swallowed and
-// the caller can fall through — matching ReadFF3B, which declines the same
-// group.
+// consumed it. Mode group 00 is a palette colour; group 01 is the enable.
+// Groups 10 and 11 carry nothing the hardware writes, so they are declined
+// rather than swallowed and the caller falls through.
 func (u *ULAPlus) WriteFF3B(v byte) bool {
+	if u.mode == 0 {
+		p, idx, ok := u.ulaPlusEntry()
+		if !ok {
+			return false
+		}
+		p.Set(idx, ulaPlusToNine(v))
+		return true
+	}
 	if u.mode != 0x01 {
 		return false
 	}
@@ -87,15 +152,18 @@ func (u *ULAPlus) WriteFF3B(v byte) bool {
 
 // ReadFF3B returns the enable read-back and whether this port answers.
 //
-// Mode group 00 serves palette data, which is not modelled, so ok is false and
-// the caller falls through. EVERY other group returns the enable, including 10
-// and 11: the core's read mux is `if mode = "00" then palette else enable`
-// (zxnext.vhd:4560-4568), which is deliberately not the same gate as the write
-// side's `mode = "01"`. Narrowing this to group 01 to match the write would
-// diverge from the hardware.
+// Mode group 00 serves the selected palette colour. EVERY other group returns
+// the enable, including 10 and 11: the core's read mux is
+// `if mode = "00" then palette else enable` (zxnext.vhd:4560-4568), which is
+// deliberately not the same gate as the write side's `mode = "01"`. Narrowing
+// this to group 01 to match the write would diverge from the hardware.
 func (u *ULAPlus) ReadFF3B() (byte, bool) {
 	if u.mode == 0 {
-		return 0, false
+		p, idx, ok := u.ulaPlusEntry()
+		if !ok {
+			return 0, false
+		}
+		return nineToULAPlus(p.Get(idx)), true
 	}
 	if u.Enabled() {
 		return 0x01, true

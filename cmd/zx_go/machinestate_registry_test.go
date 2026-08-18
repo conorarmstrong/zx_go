@@ -648,3 +648,38 @@ func bytesEqualRGBA(a, b []byte) bool {
 	}
 	return true
 }
+
+// A ULA+ program drives the palette the classic way: $BF3B selects an entry,
+// $FF3B carries its colour. That path used to set no colours at all -- the
+// write was declined and fell through to nothing.
+//
+// Driven through the real ports on a real Next, because the wiring between
+// them is what was missing.
+func TestTheULAPlusPaletteIsWritableThroughItsPorts(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
+	emu := quietEmulator(t, roms.ModelNext)
+
+	// Index 9, a pure-red ULA+ byte: GGGRRRBB = 000 111 00.
+	emu.ula.WritePort(0xBF3B, 0x09)
+	emu.ula.WritePort(0xFF3B, 0x1C)
+
+	got, ok := emu.ula.ReadPort(0xFF3B)
+	if !ok {
+		t.Fatal("the palette group declined a read through the port")
+	}
+	if got != 0x1C {
+		t.Errorf("read back %#02x, want %#02x", got, 0x1C)
+	}
+
+	// And it landed in the ULA palette at $C0+9, which is where the Radastan
+	// ULA+ nibble addresses.
+	e := emu.nextPalette.Palette(0).Get(0xC0 + 9)
+	if r := (e >> 6) & 0x07; r != 0x07 {
+		t.Errorf("palette entry $C9 red = %d, want 7", r)
+	}
+	if g := (e >> 3) & 0x07; g != 0x00 {
+		t.Errorf("palette entry $C9 green = %d, want 0", g)
+	}
+}

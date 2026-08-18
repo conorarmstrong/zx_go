@@ -443,22 +443,6 @@ so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 The 12 Next `.nex` games now screened render correctly without it, so there is
 still no observed case where it matters. Leave it until one appears.
 
-### 6. [correctness] The ULA+ palette path
-
-**The ULA+ ENABLE is modelled; the ULA+ PALETTE is not.** `pkg/next/ulaplus.go`
-owns the enable — one bit written from both NR$68 bit 3 and port $FF3B in
-`$BF3B` mode group 01, into a single location, read back by both, and ANDed
-with NOT ULAnext before it reaches the LoRes layer (`zxnext.vhd:4246`).
-
-What is still missing is the 64-entry ULA+ palette itself. Writes go only
-through the NextReg path, and a `$FF3B` read in mode group 00 declines rather
-than serving palette data it does not have (`pkg/next/ulaplus.go` ReadFF3B).
-A program driving ULA+ the classic way — `$BF3B` index, `$FF3B` colour — sets
-no colours.
-
-- [ ] Model the mode-group-00 palette write/read path, and route it to the
-  ULA palette the NextReg path already fills.
-
 ---
 
 ## Catalogued — deliberately not doing
