@@ -6,6 +6,91 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.10.1]
+
+Completes the rewind device set, and fixes a disk-corruption bug found while
+doing it. The two remaining uncaptured disk interfaces, the +D / DISCiPLE and
+the Opus Discovery, are now captured and registered, so **every disk interface
+the emulator offers is restored by a rewind**.
+
+The bug is the part worth reading. Nothing about it was found by looking at the
+controller: it surfaced because a mutation of the new capture code survived, and
+the reason nothing in the fixture could move that field turned out to be the
+defect itself.
+
+### Added
+
+- **The +D / DISCiPLE and the Opus Discovery are captured**
+  (`pkg/disciple/state.go`, `pkg/opus/state.go`). Rewinding while either had an
+  operation in flight used to put the machine back and leave the controller
+  where it was, so the operation resumed against a controller mid-command.
+
+  Most of what they carry is state no port reports: the transfer buffer and its
+  position, the sector a write was addressed to when the command started, the
+  physical head position of each drive as distinct from the track register, the
+  direction the last step went, and the whole WRITE TRACK parser mid-format.
+
+  The Opus additionally carries its DRQ byte-clock. It wires DRQ to the Z80's
+  NMI and its ROM moves one byte per interrupt, so a capture that lost the
+  pending byte-period would restore a transfer that never advances: BUSY stays
+  asserted and the ROM's wait loop spins forever.
+
+  Disks are deliberately not captured. They are the medium: a rewind cannot
+  un-write a floppy, and must not un-eject or re-eject one either.
+
+- **A structural field-coverage guard** in both new packages, and one direction
+  of the divMMC ROM restore that had never been exercised.
+
+### Fixed
+
+- **The +D destroyed a track when a Write Track was interrupted.** The format
+  flag was set by Write Track and cleared by nothing, so a format abandoned by a
+  Force Interrupt left every later Write Sector to be committed through
+  `commitWriteTrack`: its 512 sector bytes were parsed as a raw track image and
+  the whole track rebuilt from them.
+
+  Clearing the flag alone was not enough, and measuring both ways on the same
+  probe is what showed it. With the flag sticky, 5509 bytes of the track were
+  overwritten and every sector ID destroyed; with only the flag cleared, 5463
+  were overwritten through the sector path instead. The real defect was that
+  `executeCommand` never aborted the in-flight transfer at all, so the
+  abandoned 6250-byte buffer stayed live with DRQ asserted. Every new command
+  now drops the buffer, position, length, direction, format flag, BUSY and DRQ,
+  which is what `pkg/opus`'s controller has always done.
+
+- **Captured states that would panic or wedge the controller are refused.** The
+  Opus accepted a transfer position exactly at the end of its buffer, which the
+  live controller can never hold and which neither `readData` nor `writeData`
+  bounds-checks, and a format parser claiming a sector ID it did not carry. The
+  +D accepted a position past the transfer length, where nothing advances the
+  transfer so BUSY never drops and GDOS's wait loop spins with no way out.
+
+- **`SaveState` no longer panics on an encode failure** in either new device.
+  Capture runs from the CPU pre-fetch hook, which deliberately skips a failed
+  capture rather than stopping the machine; panicking there would have taken
+  the emulator down mid-frame. Both now return nil, matching the contract
+  `pkg/next/divmmc` documents, and `LoadState` rejects an empty blob.
+
+### Changed
+
+- Both new devices reference their live buffers when capturing rather than
+  pre-copying them, since gob serialises before `SaveState` returns. The copy
+  was happening three times per rewind frame, 8 KB of it from the +D alone.
+
+- Two registry tests and `TestStateRegistryOptionalPeripherals` now fail rather
+  than skip when a ROM will not load. All four ROMs involved are embedded, so a
+  skip could only fire when something was already broken.
+
+### Documentation
+
+- **LoRes / Radastan is implemented but never reaches the screen**, and one
+  comment claimed the opposite. `pkg/next/lores` is a golden-tested port of
+  `video/lores.vhd` that no non-test code imports; `NR$6A` is decoded, stored,
+  and read by no render path. A guest selecting the mode silently gets the
+  ordinary ULA picture. Recorded as roadmap item 6 and deliberately parked, on
+  the same evidence test as the other parked items: none of the 24 installed
+  `.nex` files sets the LoRes loading-screen flag.
+
 ## [v1.10.0]
 
 A minor release: the machine can now be rewound and re-executed, and the
