@@ -75,12 +75,14 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	// unwireNextSubsystems when the machine leaves it.
 	registerDevices(r, e.nextRegs, e.nextPalette, e.nextTilemap, e.nextCopper,
 		e.nextSprites, e.nextLayer2, e.nextDAC, e.nextDMA, e.nextDivMMC,
-		e.nextClipWindows, e.nextReset)
+		e.nextClipWindows, e.nextReset, e.nextLoRes)
 
-	// NOTE: pkg/next/lores has a machinestate.Device but is deliberately absent
-	// here, because the emulator holds no LoRes instance to register — nothing
-	// imports that package. Its state.go was written speculatively. Registering
-	// it is impossible until something owns one; see ROADMAP.
+	// The LoRes layer carries the resolved ULA clip window as well as its own
+	// registers, which is why registering it matters beyond the layer itself.
+	// ClipWindows.LoadState deliberately does not push coordinates back down
+	// on restore, because every consumer captures the coordinates it was given
+	// under its own name from the same instant. That reasoning only holds while
+	// every consumer is a registered Device — and this is one.
 
 	return r
 }

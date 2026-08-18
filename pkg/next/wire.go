@@ -980,16 +980,22 @@ type ClipWindows struct {
 	ula clipWindow
 	tm  clipWindow
 
-	// ulaSink receives the ULA window whenever it changes. The tilemap and
+	// ulaSinks receive the ULA window whenever it changes. The tilemap and
 	// sprite windows are pushed into their layers directly, but the ULA's had
 	// no layer to push into until the LoRes renderer was wired: lores.vhd
 	// takes this window as its clip_x1_i..clip_y2_i ports.
-	ulaSink func(x1, x2, y1, y2 byte)
+	//
+	// A slice rather than one slot, matching Dispatcher.SetOnReset: NR$1A is
+	// the ULA's clip window as well as the LoRes layer's, so a second consumer
+	// is expected. With a single slot whichever registered last would silently
+	// stop the first from ever seeing an update, and the only symptom would be
+	// one layer clipping to a stale rectangle.
+	ulaSinks []func(x1, x2, y1, y2 byte)
 }
 
-// SetULAClipSink installs a callback fed the ULA/LoRes clip window, and calls
-// it once immediately so the caller starts from the reset window rather than
-// from a zero value.
+// SetULAClipSink adds a callback fed the ULA/LoRes clip window, and calls it
+// once immediately so the caller starts from the reset window rather than from
+// a zero value. Multiple sinks run in registration order.
 //
 // The immediate call is the point. lores.Config's clip test is inclusive at
 // both ends, so an all-zero window admits exactly the pixel at (0,0): a layer
@@ -997,14 +1003,18 @@ type ClipWindows struct {
 // to the ULA underneath, which looks like the layer not working at all rather
 // than like a missing default.
 func (cw *ClipWindows) SetULAClipSink(fn func(x1, x2, y1, y2 byte)) {
-	cw.ulaSink = fn
-	cw.pushULA()
+	if fn == nil {
+		return
+	}
+	cw.ulaSinks = append(cw.ulaSinks, fn)
+	c := cw.ula.coord
+	fn(c[0], c[1], c[2], c[3])
 }
 
 func (cw *ClipWindows) pushULA() {
-	if cw.ulaSink != nil {
-		c := cw.ula.coord
-		cw.ulaSink(c[0], c[1], c[2], c[3])
+	c := cw.ula.coord
+	for _, fn := range cw.ulaSinks {
+		fn(c[0], c[1], c[2], c[3])
 	}
 }
 

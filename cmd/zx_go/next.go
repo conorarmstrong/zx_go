@@ -31,6 +31,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 	"github.com/conorarmstrong/zx_go/pkg/next/keymap"
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
+	"github.com/conorarmstrong/zx_go/pkg/next/lores"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
 	"github.com/conorarmstrong/zx_go/pkg/next/rasterlog"
@@ -1757,6 +1758,22 @@ sdReady:
 	e.nextClipWindows = clipWindows
 	e.nextReset = resetControl
 
+	// LoRes / Radastan. WireLoRes chains to the NR$15 and NR$6A handlers rather
+	// than replacing them, so it MUST run after next.Wire has installed
+	// WireLayerPriority and WirePeripheralMasks. Called earlier its own handler
+	// is the one silently replaced, the registers still read back correctly,
+	// and the layer never sees a write.
+	loresCfg := &lores.Config{}
+	e.nextLoRes = loresCfg
+	e.nextLoResState = next.WireLoRes(disp, loresCfg)
+	// lores.vhd takes the ULA clip window as its clip_x1_i..clip_y2_i ports.
+	// Without this the config keeps its zero window, whose inclusive-at-both-
+	// ends test admits exactly the pixel at (0,0).
+	clipWindows.SetULAClipSink(func(x1, x2, y1, y2 byte) {
+		loresCfg.ClipX1, loresCfg.ClipX2 = x1, x2
+		loresCfg.ClipY1, loresCfg.ClipY2 = y1, y2
+	})
+
 	// Warm-boot: skip the cold-boot path entirely and load a captured
 	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG
 	// SHORTCUT that bypasses the real FPGA-bootrom → TBBLUE.FW →
@@ -1880,6 +1897,8 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextDMA = nil
 	e.nextDivMMC = nil
 	e.nextClipWindows = nil
+	e.nextLoRes = nil
+	e.nextLoResState = nil
 	e.nextReset = nil
 }
 

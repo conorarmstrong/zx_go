@@ -5,6 +5,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/next/lores"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
+	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 )
 
 // The LoRes layer's registers were decoded and stored and then read by nothing:
@@ -122,25 +123,105 @@ func TestNR32AndNR33AreTheLoResScrollOffsets(t *testing.T) {
 	}
 }
 
-// NR$15 carries five other things, all of which were already wired. Setting the
-// LoRes bit must not disturb them, and the register must still read back whole.
-func TestTheLoResEnableDoesNotDisturbTheRestOfNR15(t *testing.T) {
+// NR$15 carries five other things, and WireLoRes chains rather than replacing
+// so they keep working. The chain is the thing under test, so the real owner
+// has to be installed first: on a bare dispatcher the previous handler is nil,
+// WireLoRes takes its fallback branch, and this passes with the whole chain
+// deleted while the sprite enable, zero-on-top, over-border and border-clip all
+// silently freeze on the real machine.
+func TestTheLoResEnableChainsToTheRealNR15Owner(t *testing.T) {
 	d := nextregs.New()
-	var cfg lores.Config
-	WireLoRes(d, &cfg)
+	sprites := sprite.New()
+	WireLayerPriority(d, NewLayerPriority(), sprites)
 
+	var cfg lores.Config
+	st := WireLoRes(d, &cfg)
+
+	// $45 is Sonic's value: sprites on, zero-on-top, layer priority; plus the
+	// LoRes enable in bit 7.
 	d.WriteReg(0x15, 0x80|0x45)
+
+	if !st.Enabled() {
+		t.Error("the LoRes enable did not take effect through the chain")
+	}
+	if !sprites.Enabled() {
+		t.Error("chaining dropped the sprite enable: NR$15 bit 0 never reached the engine")
+	}
 	if got := d.ReadReg(0x15); got != 0x80|0x45 {
 		t.Errorf("NR$15 reads back %#02x, want %#02x", got, 0x80|0x45)
 	}
 }
 
-// The ULA clip window (NR$1A) is the layer's clip_x1_i..clip_y2_i, and its
-// zero value clips everything: the layer's own clip test is inclusive on both
-// ends, so an all-zero window admits exactly the pixel at (0,0). The FPGA
-// resets it to the whole area — {00,FF,00,BF}, zxnext.vhd:4971-4974 — and
-// nothing was pushing it into the Config, so a freshly wired layer would have
-// rendered one pixel and left the rest of the screen to the ULA underneath.
+// The enable is read from the register file rather than cached, so it cannot go
+// stale when the dispatcher's own LoadState assigns its register array without
+// firing any handler.
+func TestTheEnableSurvivesARegisterFileRestore(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	st := WireLoRes(d, &cfg)
+
+	d.WriteReg(0x15, 0x80)
+	blob := d.SaveState()
+	d.WriteReg(0x15, 0x00)
+	if st.Enabled() {
+		t.Fatal("the enable did not clear, so the restore below proves nothing")
+	}
+
+	if err := d.LoadState(blob); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !st.Enabled() {
+		t.Error("the enable did not come back with the register file: a cached copy " +
+			"would survive the rewind while the register it mirrors moved underneath it")
+	}
+}
+
+// A reset clears port $FF on the FPGA, so the cached Timex bit must go with it.
+func TestAResetClearsTheCachedTimexDisplayFile(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	st := WireLoRes(d, &cfg)
+
+	st.SetTimexDfile(true)
+	if !cfg.Dfile {
+		t.Fatal("the fixture did not set the display file, so this proves nothing")
+	}
+
+	d.Reset()
+	if cfg.Dfile {
+		t.Error("the pre-reset Timex display file leaked through the reset: Radastan " +
+			"would read from $6000 where the hardware reads $4000")
+	}
+}
+
+// Install-time seeding: anything that put a byte in these registers without
+// going through a write -- applyTBBLUEFWBootDefaults uses Store, and the
+// dispatcher's LoadState assigns directly -- must still be reflected.
+func TestTheConfigIsSeededFromTheRegistersAtInstallTime(t *testing.T) {
+	d := nextregs.New()
+	d.Store(0x6A, 0x20|0x03)
+	d.Store(0x32, 0x40)
+	d.Store(0x33, 0x50)
+
+	var cfg lores.Config
+	WireLoRes(d, &cfg)
+
+	if !cfg.Radastan || cfg.PaletteOffset != 3 || cfg.ScrollX != 0x40 || cfg.ScrollY != 0x50 {
+		t.Errorf("config did not start from the register file: %+v", cfg)
+	}
+}
+
+// The ULA clip window (NR$1A) is the layer's clip_x1_i..clip_y2_i. Its zero
+// value clips everything: the layer's clip test is inclusive at both ends, so
+// an all-zero window admits exactly the pixel at (0,0). The FPGA resets it to
+// the whole area (zxnext.vhd:4971-4974), so a config that never receives the
+// reset window renders one pixel and leaves the rest of the screen to the ULA
+// underneath -- which reads as the layer not working rather than as a missing
+// default.
+//
+// The index-walking and reset semantics of the window itself are pinned in
+// wire_clip_test.go, next to the rest of clipWindow; this is only about the
+// window reaching the layer.
 func TestTheULAClipWindowReachesTheLoResConfig(t *testing.T) {
 	d := nextregs.New()
 	var cfg lores.Config
@@ -150,23 +231,31 @@ func TestTheULAClipWindowReachesTheLoResConfig(t *testing.T) {
 	})
 
 	if cfg.ClipX2 != 0xFF || cfg.ClipY2 != 0xBF {
-		t.Fatalf("the reset window did not reach the layer: got x=%d..%d y=%d..%d, "+
+		t.Fatalf("the reset window did not reach the layer on install: got x=%d..%d y=%d..%d, "+
 			"want 0..255 and 0..191", cfg.ClipX1, cfg.ClipX2, cfg.ClipY1, cfg.ClipY2)
 	}
 
-	// Four writes walk the index x1, x2, y1, y2.
 	d.WriteReg(0x1A, 10)
 	d.WriteReg(0x1A, 200)
-	d.WriteReg(0x1A, 20)
-	d.WriteReg(0x1A, 150)
-	if cfg.ClipX1 != 10 || cfg.ClipX2 != 200 || cfg.ClipY1 != 20 || cfg.ClipY2 != 150 {
-		t.Errorf("clip window = x %d..%d y %d..%d, want 10..200 and 20..150",
-			cfg.ClipX1, cfg.ClipX2, cfg.ClipY1, cfg.ClipY2)
+	if cfg.ClipX1 != 10 || cfg.ClipX2 != 200 {
+		t.Errorf("writes did not reach the layer: x = %d..%d, want 10..200",
+			cfg.ClipX1, cfg.ClipX2)
 	}
+}
 
-	d.Reset()
-	if cfg.ClipX2 != 0xFF || cfg.ClipY2 != 0xBF {
-		t.Errorf("a reset did not put the full window back: x=%d..%d y=%d..%d",
-			cfg.ClipX1, cfg.ClipX2, cfg.ClipY1, cfg.ClipY2)
+// Two consumers are expected -- NR$1A is the ULA's window as well as the LoRes
+// layer's -- so a second sink must not silence the first.
+func TestEveryULAClipSinkIsFed(t *testing.T) {
+	d := nextregs.New()
+	cw := WireClipWindows(d, nil, nil)
+
+	var first, second byte
+	cw.SetULAClipSink(func(x1, _, _, _ byte) { first = x1 })
+	cw.SetULAClipSink(func(x1, _, _, _ byte) { second = x1 })
+
+	d.WriteReg(0x1A, 42)
+	if first != 42 || second != 42 {
+		t.Errorf("sinks saw %d and %d, want 42 and 42: a later sink silenced an earlier one",
+			first, second)
 	}
 }

@@ -96,7 +96,7 @@ func TestStateRegistryDeviceSetNext(t *testing.T) {
 	want := []string{
 		"ay.turbosound", "cpu", "keyboard", "memory",
 		"next.clipwindows", "next.copper", "next.dac", "next.divmmc", "next.dma",
-		"next.layer2", "next.nextregs", "next.palette", "next.reset",
+		"next.layer2", "next.lores", "next.nextregs", "next.palette", "next.reset",
 		"next.sprite", "next.tilemap",
 		"ula",
 	}
@@ -356,19 +356,74 @@ func TestTheRegistryIncludesTheCPUOnEveryModel(t *testing.T) {
 	}
 }
 
-// pkg/next/lores has a machinestate.Device and is NOT in the registry, which
-// looks like an omission and is not one: nothing in the emulator imports that
-// package, so there is no instance to register. Its state.go was written for a
-// device the machine does not currently hold.
+// LoRes is registered now that the emulator owns one, which the orphan test
+// this replaces asked for in as many words.
 //
-// This pins the situation rather than the wish. If LoRes is later wired into
-// the machine, this test fails and points at the registry, which is the moment
-// the registration becomes both possible and necessary.
-func TestLoResIsAnOrphanPackageAndThereforeUnregistered(t *testing.T) {
+// Registering it matters beyond the layer's own registers. It also carries the
+// resolved ULA clip window, and ClipWindows.LoadState deliberately does not
+// push coordinates back down on restore -- its reasoning being that every
+// consumer captures the coordinates it was given, under its own name, from the
+// same instant. That reasoning holds only while every consumer is a registered
+// Device. A sink that was not one would come back from a rewind holding
+// present-time coordinates while the register file held the captured ones.
+func TestRewindRestoresTheLoResClipWindow(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
 	emu := quietEmulator(t, roms.ModelNext)
-	if hasDevice(registeredDevices(emu), "next.lores") {
-		t.Error("next.lores is now registered, so the emulator holds a LoRes instance: " +
-			"delete this test, it has served its purpose")
+	if !hasDevice(registeredDevices(emu), "next.lores") {
+		t.Fatal("the emulator holds a LoRes layer but does not register it")
+	}
+
+	// Narrow the ULA clip window: four writes walk x1, x2, y1, y2.
+	for _, v := range []byte{10, 100, 20, 150} {
+		emu.nextRegs.WriteReg(0x1A, v)
+	}
+	if got := emu.nextLoRes.ClipX2; got != 100 {
+		t.Fatalf("the window did not reach the layer: x2=%d, want 100", got)
+	}
+	snap := emu.stateRegistry().Capture()
+
+	emu.nextRegs.WriteReg(0x1C, 0x04) // reset the ULA index
+	for _, v := range []byte{0, 255, 0, 191} {
+		emu.nextRegs.WriteReg(0x1A, v)
+	}
+	if emu.nextLoRes.ClipX2 != 255 {
+		t.Fatal("the window did not widen, so the rewind below proves nothing")
+	}
+
+	if err := emu.stateRegistry().Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := emu.nextLoRes.ClipX2; got != 100 {
+		t.Errorf("clip x2 = %d after rewind, want 100: the layer kept present-time "+
+			"coordinates while the register file went back", got)
+	}
+}
+
+// The layer's own registers must survive a rewind too.
+func TestRewindRestoresTheLoResMode(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
+	emu := quietEmulator(t, roms.ModelNext)
+
+	emu.nextRegs.WriteReg(0x6A, 0x20|0x05) // radastan, palette offset 5
+	emu.nextRegs.WriteReg(0x32, 0x30)      // scroll X
+	snap := emu.stateRegistry().Capture()
+
+	emu.nextRegs.WriteReg(0x6A, 0x00)
+	emu.nextRegs.WriteReg(0x32, 0x00)
+	if emu.nextLoRes.Radastan || emu.nextLoRes.ScrollX != 0 {
+		t.Fatal("the churn did not clear the layer, so the rewind below proves nothing")
+	}
+
+	if err := emu.stateRegistry().Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !emu.nextLoRes.Radastan || emu.nextLoRes.PaletteOffset != 5 || emu.nextLoRes.ScrollX != 0x30 {
+		t.Errorf("layer after rewind: radastan=%v offset=%d scrollX=%#02x, want true, 5, $30",
+			emu.nextLoRes.Radastan, emu.nextLoRes.PaletteOffset, emu.nextLoRes.ScrollX)
 	}
 }
 

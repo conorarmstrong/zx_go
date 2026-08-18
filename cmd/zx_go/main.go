@@ -44,6 +44,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
 	"github.com/conorarmstrong/zx_go/pkg/next/install"
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
+	"github.com/conorarmstrong/zx_go/pkg/next/lores"
 	"github.com/conorarmstrong/zx_go/pkg/next/nex"
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
@@ -270,6 +271,13 @@ type emulator struct {
 	// are the only way the state registry captures them.
 	nextClipWindows *next.ClipWindows
 	nextReset       *next.ResetControl
+
+	// nextLoRes is the LoRes / Radastan layer's register state (NR$15 bit 7,
+	// NR$6A, NR$32/$33 and the ULA clip window). It is a machinestate.Device in
+	// its own right, so it is captured and restored with the rest of the
+	// machine; nextLoResState holds the parts that are not layer registers.
+	nextLoRes      *lores.Config
+	nextLoResState *next.LoResState
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS
@@ -1743,10 +1751,10 @@ func ensureFileExt(path, ext string) string {
 // and the full Spectrum Next composite (ULA + Layer 2 + sprites +
 // tilemap through the active palette and SLU priority) for
 // ModelNext, at whatever resolution the active Next video mode
-// produces. NOT LoRes/Radastan: NR$6A is decoded and stored but no
-// render path reads it, so that mode falls back to the ordinary ULA
-// picture. pkg/next/lores implements the layer and nothing calls it;
-// see ROADMAP. The pixel data is copied before encode so the PNG
+// produces. NOT LoRes/Radastan: its registers now reach the layer and
+// the layer is captured with the machine, but no render path draws it
+// yet, so that mode still falls back to the ordinary ULA picture. See
+// ROADMAP item 6. The pixel data is copied before encode so the PNG
 // write can't race the emulator goroutine mutating the framebuffer.
 func writeScreenshotPNG(emu *emulator, w io.Writer) error {
 	src := emu.lastFrame()

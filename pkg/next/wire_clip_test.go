@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
+	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 )
 
 // Clip-window registers NR$18 (Layer2), $19 (sprite), $1A (ULA), $1B
@@ -85,5 +86,48 @@ func TestClipWindow_DispatcherResetRestoresDefaults(t *testing.T) {
 	d.Reset()
 	if got := d.ReadReg(0x18); got != 0x00 {
 		t.Errorf("NR$18 after Reset reads $%02X, want $00 (x1 default, idx 0)", got)
+	}
+}
+
+// A reset restores the default coordinates, and must push them down to the
+// layers holding the old ones. Before this, phase 1 of the reset drove a zero
+// write into each window (pushing a half-updated rectangle down), then phase 3
+// restored the coordinates and pushed nothing — so the sprite engine and the
+// tilemap kept clipping to a stale window across a reset while the register
+// read back correctly.
+//
+// The register read-back is asserted elsewhere in this file; this asserts what
+// reached the layers, which is the part that was wrong and the part a
+// regression would silently undo.
+func TestClipWindow_ResetPushesTheDefaultsDownToTheLayers(t *testing.T) {
+	d := nextregs.New()
+	sprites := sprite.New()
+	cw := WireClipWindows(d, nil, sprites)
+
+	var ulaX1, ulaX2 byte
+	cw.SetULAClipSink(func(x1, x2, _, _ byte) { ulaX1, ulaX2 = x1, x2 })
+
+	// Narrow both windows well inside their defaults.
+	for _, reg := range []byte{0x19, 0x1A} {
+		d.WriteReg(reg, 10) // x1
+		d.WriteReg(reg, 50) // x2
+		d.WriteReg(reg, 10) // y1
+		d.WriteReg(reg, 50) // y2
+	}
+	if x1, x2, _, _, _ := sprites.Clip(); x1 != 10 || x2 != 50 {
+		t.Fatalf("the sprite window did not narrow: %d..%d", x1, x2)
+	}
+	if ulaX2 != 50 {
+		t.Fatalf("the ULA window did not narrow: x2=%d", ulaX2)
+	}
+
+	d.Reset()
+
+	if x1, x2, _, _, _ := sprites.Clip(); x1 != 0x00 || x2 != 0xFF {
+		t.Errorf("sprite clip = %d..%d after reset, want 0..255: the engine kept the "+
+			"pre-reset window", x1, x2)
+	}
+	if ulaX1 != 0x00 || ulaX2 != 0xFF {
+		t.Errorf("ULA clip = %d..%d after reset, want 0..255", ulaX1, ulaX2)
 	}
 }

@@ -445,15 +445,22 @@ still no observed case where it matters. Leave it until one appears.
 
 ### 6. [correctness] LoRes / Radastan is implemented but not wired to the screen
 
-**The layer is done; nothing calls it.** `pkg/next/lores` is a hardware-faithful
-port of `video/lores.vhd` with both modes (LoRes 128x96 8-bit, Radastan 128x96
-4-bit), verified against a captured FPGA golden in `fpga_golden_test.go`. It
-exports `Pixel` and `RenderScanline`. **No non-test code imports it.**
+**The layer is done and its registers now reach it; no render path draws it.**
+`pkg/next/lores` is a hardware-faithful port of `video/lores.vhd` with both
+modes (LoRes 128x96 8-bit, Radastan 128x96 4-bit), verified against a captured
+FPGA golden in `fpga_golden_test.go`.
 
-`NR$6A` is decoded and stored (`pkg/next/wire.go:1131`, masked to `$3F`) and
-then never read by any render path. `pkg/ula` — which owns the live Next
-composite — contains no LoRes or Radastan handling at all. So a guest that
-selects the mode silently gets the ordinary ULA picture.
+`WireLoRes` (`pkg/next/loreswire.go`) now connects NR$15 bit 7, NR$6A, NR$32/$33
+and the ULA clip window to the layer's `Config`, and the emulator owns and
+registers one, so the layer is captured and restored with the machine. What is
+still missing is the last step: `pkg/ula`, which owns the live Next composite,
+contains no LoRes or Radastan handling, so a guest that selects the mode still
+gets the ordinary ULA picture.
+
+**One layer input has no source at all.** `lores.vhd`'s `ulap_en_i` selects the
+Radastan high nibble, and nothing in this tree tracks whether ULA+ is enabled,
+so `Config.ULAPlus` stays false and Radastan-with-ULA+ resolves into the wrong
+palette block. That has to be modelled before the mode is complete.
 
 Two things this is **not**. It is not the "speculative `state.go`" the registry
 note and `TestLoResIsAnOrphanPackageAndThereforeUnregistered` describe: those
@@ -474,9 +481,16 @@ loading screen, would not appear in that count and would render wrongly with
 nothing to indicate it. If a Next title is ever screened as "boots but the
 picture is wrong", check `NR$6A` before anything else.
 
-- [ ] Wire `lores.RenderScanline` into the `pkg/ula` Next path, then register
-  the device and delete `TestLoResIsAnOrphanPackageAndThereforeUnregistered`,
-  which says to delete itself at exactly that moment.
+- [x] ~~Registers, clip window and capture~~ — `WireLoRes`, and the layer is a
+  registered `machinestate.Device`. The orphan test that asked to be deleted at
+  exactly this moment has been, replaced by round-trip coverage.
+- [ ] Wire `lores.RenderScanline` into the `pkg/ula` Next path. The
+  substitution rule is settled: `zxnext.vhd:6980` reads
+  `ulalores_pixel_1 <= lores_pixel_1 when lores_pixel_en_1 = '1' else
+  ula_pixel_1`, so LoRes replaces the ULA pixel per pixel where its clip
+  admits, through the ULA palette — which is exactly `RenderScanline`'s
+  documented pre-fill contract.
+- [ ] Find a source for ULA+ enable and connect `Config.ULAPlus`.
 
 ---
 
