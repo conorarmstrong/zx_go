@@ -312,12 +312,18 @@ func TestStateRegistryOptionalPeripherals(t *testing.T) {
 		t.Fatal("if1 registered before one was attached")
 	}
 
+	// Both ROMs are embedded in pkg/roms/data, so neither of these can fail for
+	// want of a file on the machine running the tests. They were skips, which
+	// meant the one situation worth reporting -- ROM loading or the attach path
+	// broken -- reported green and the registration regression shipped behind
+	// it. Verified present on a 48K before changing: EnableMultiface returns
+	// nil and the Interface 1 ROM resolves.
 	if err := emu.peripherals.EnableMultiface(emu.peripherals.GetCompatibleMultifaceVariant(roms.Model48K), "roms"); err != nil {
-		t.Skipf("multiface ROM unavailable: %v", err)
+		t.Fatalf("EnableMultiface: %v", err)
 	}
 	rom, ok := emu.mem.GetROMManager().GetROM(roms.ROMINTERFACE1)
 	if !ok {
-		t.Skip("interface 1 ROM unavailable")
+		t.Fatal("the Interface 1 ROM did not resolve, though it is embedded")
 	}
 	if err := emu.peripherals.EnableInterface1(rom); err != nil {
 		t.Fatalf("EnableInterface1: %v", err)
