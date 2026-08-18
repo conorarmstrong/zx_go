@@ -75,7 +75,7 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	// unwireNextSubsystems when the machine leaves it.
 	registerDevices(r, e.nextRegs, e.nextPalette, e.nextTilemap, e.nextCopper,
 		e.nextSprites, e.nextLayer2, e.nextDAC, e.nextDMA, e.nextDivMMC,
-		e.nextClipWindows, e.nextReset, e.nextLoRes)
+		e.nextClipWindows, e.nextReset, e.nextLoRes, e.nextULAPlus)
 
 	// The LoRes layer carries the resolved ULA clip window as well as its own
 	// registers, which is why registering it matters beyond the layer itself.

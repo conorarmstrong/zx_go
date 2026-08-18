@@ -1063,7 +1063,8 @@ func (u *ULA) SetTimexModeObserver(fn func(mode byte)) { u.timexModeObserver = f
 // package does not import pkg/next.
 type NextULAPlus interface {
 	WriteBF3B(v byte)
-	WriteFF3B(v byte)
+	// WriteFF3B reports whether it consumed the write; false falls through.
+	WriteFF3B(v byte) bool
 	ReadFF3B() (byte, bool)
 }
 
@@ -1391,7 +1392,7 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	// Port $FF3B read: the ULA+ enable read-back. In mode group 00 the port
 	// serves palette data instead, which is not modelled here, so the handler
 	// declines and the read falls through (zxnext.vhd:4560-4568).
-	if u.nextULAPlus != nil && addr>>8 == 0xFF && addr&0xFF == 0x3B {
+	if u.nextULAPlus != nil && addr == 0xFF3B {
 		if v, ok := u.nextULAPlus.ReadFF3B(); ok {
 			return v, true
 		}
@@ -1676,14 +1677,18 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 
 	// Ports $BF3B / $FF3B: the ULA+ register-select and data ports
 	// (zxnext.vhd:2685-2686, full 16-bit decode $BFxx/$FFxx + $3B).
-	if u.nextULAPlus != nil && (addr&0xFF) == 0x3B {
-		switch addr >> 8 {
-		case 0xBF:
+	if u.nextULAPlus != nil {
+		switch addr {
+		case 0xBF3B:
 			u.nextULAPlus.WriteBF3B(val)
 			return
-		case 0xFF:
-			u.nextULAPlus.WriteFF3B(val)
-			return
+		case 0xFF3B:
+			// Declined in the palette mode group, which is not modelled: fall
+			// through rather than swallow the byte, so the write is visible to
+			// whatever handles it later. The read side declines the same group.
+			if u.nextULAPlus.WriteFF3B(val) {
+				return
+			}
 		}
 	}
 

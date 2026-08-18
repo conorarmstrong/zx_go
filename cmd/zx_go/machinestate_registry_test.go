@@ -97,7 +97,7 @@ func TestStateRegistryDeviceSetNext(t *testing.T) {
 		"ay.turbosound", "cpu", "keyboard", "memory",
 		"next.clipwindows", "next.copper", "next.dac", "next.divmmc", "next.dma",
 		"next.layer2", "next.lores", "next.nextregs", "next.palette", "next.reset",
-		"next.sprite", "next.tilemap",
+		"next.sprite", "next.tilemap", "next.ulaplus",
 		"ula",
 	}
 	got := registeredDevices(emu)

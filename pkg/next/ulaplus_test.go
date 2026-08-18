@@ -20,7 +20,9 @@ import (
 //	nr_43_ulanext_en <= nr_wr_dat(0)                    zxnext.vhd:5394
 
 func TestPortFF3BSetsTheULAPlusEnableOnlyInModeGroup01(t *testing.T) {
-	u := NewULAPlus()
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
 
 	// Mode group 00 is the palette-index group: an $FF3B write there is a
 	// palette write, not the enable.
@@ -44,7 +46,9 @@ func TestPortFF3BSetsTheULAPlusEnableOnlyInModeGroup01(t *testing.T) {
 // The index only latches in mode group 00, so a mode-group write does not
 // scribble over the palette index a program set up beforehand.
 func TestTheULAPlusIndexLatchesOnlyInModeGroup00(t *testing.T) {
-	u := NewULAPlus()
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
 
 	u.WriteBF3B(0x2A) // mode 00, index $2A
 	if got := u.Index(); got != 0x2A {
@@ -67,7 +71,7 @@ func TestNR68Bit3WritesTheSameEnableAsThePort(t *testing.T) {
 
 	d.WriteReg(0x68, 0x08)
 	if !u.Enabled() {
-		t.Error("NR$68 bit 3 did not set the ULA+ enable (zxnett.vhd:4551)")
+		t.Error("NR$68 bit 3 did not set the ULA+ enable (zxnext.vhd:4551)")
 	}
 	d.WriteReg(0x68, 0x00)
 	if u.Enabled() {
@@ -154,7 +158,9 @@ func TestTheLayerInputFollowsBothHalvesInEitherOrder(t *testing.T) {
 // Port $FF3B reads the enable back in every mode group except 00, which is the
 // palette-data group (zxnext.vhd:4562-4566).
 func TestPortFF3BReadsTheEnableOutsideModeGroup00(t *testing.T) {
-	u := NewULAPlus()
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
 	u.WriteBF3B(0x40)
 	u.WriteFF3B(0x01)
 
@@ -168,5 +174,115 @@ func TestPortFF3BReadsTheEnableOutsideModeGroup00(t *testing.T) {
 	u.WriteBF3B(0x00) // palette group: this read is not the enable
 	if _, ok := u.ReadFF3B(); ok {
 		t.Error("$FF3B answered the enable in mode group 00, which is palette data")
+	}
+}
+
+// The enable has ONE home, so everything that reports it agrees. It used to
+// live in a struct field with NR$68 storing separately, and the two could
+// disagree: ReadReg saw an overlay while Raw and SaveState saw the last value
+// written to the register.
+func TestTheEnableHasASingleStorageLocation(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
+
+	d.WriteReg(0x68, 0x00) // stored with bit 3 clear
+	u.WriteBF3B(0x40)
+	u.WriteFF3B(0x01) // enabled through the port instead
+
+	if !u.Enabled() {
+		t.Fatal("the port did not set the enable")
+	}
+	if d.Raw(0x68)&0x08 == 0 {
+		t.Error("Raw(NR$68) bit 3 disagrees with the enable: a snapshot or debugger " +
+			"dump would export a machine that never existed")
+	}
+	if d.ReadReg(0x68)&0x08 == 0 {
+		t.Error("ReadReg(NR$68) bit 3 disagrees with the enable")
+	}
+}
+
+// Being in the register file is also what captures it: the dispatcher's own
+// state carries the enable, so a rewind cannot restore the layer input without
+// its driver.
+func TestTheEnableIsCapturedWithTheRegisterFile(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
+
+	u.WriteBF3B(0x40)
+	u.WriteFF3B(0x01)
+	blob := d.SaveState()
+
+	u.WriteFF3B(0x00)
+	if u.Enabled() {
+		t.Fatal("the churn did not clear the enable, so the restore proves nothing")
+	}
+
+	if err := d.LoadState(blob); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !u.Enabled() {
+		t.Error("the enable did not come back with the register file")
+	}
+}
+
+// The $BF3B latch is NOT in the register file, so it needs a capture of its
+// own -- and only the latch, or the enable would sit in two blobs.
+func TestTheSelectLatchRoundTrips(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
+
+	u.WriteBF3B(0x2A) // mode 00, index $2A
+	blob := u.SaveState()
+	u.WriteBF3B(0xC0) // mode 11, index untouched
+	if u.Mode() != 3 {
+		t.Fatal("the churn did not move the mode group")
+	}
+
+	if err := u.LoadState(blob); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if u.Mode() != 0 || u.Index() != 0x2A {
+		t.Errorf("latch after restore: mode=%d index=%#02x, want 0 and $2A", u.Mode(), u.Index())
+	}
+}
+
+// The palette mode group is not modelled, so a write there is declined and the
+// caller falls through -- the same answer the read side gives. Swallowing it
+// would lose the byte with no trace and make the port unextendable.
+func TestAPaletteGroupWriteIsDeclinedNotSwallowed(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
+
+	u.WriteBF3B(0x00) // palette group
+	if u.WriteFF3B(0x01) {
+		t.Error("an $FF3B write in the palette group was consumed; it is not modelled")
+	}
+	u.WriteBF3B(0x40) // enable group
+	if !u.WriteFF3B(0x01) {
+		t.Error("an $FF3B write in the enable group was declined")
+	}
+}
+
+// Every mode group except 00 reads the enable, including 10 and 11. The core's
+// read mux is `if mode = "00" then palette else enable` (zxnext.vhd:4560-4568),
+// which is deliberately NOT the same gate as the write side's `mode = "01"`.
+func TestEveryGroupButThePaletteOneReadsTheEnable(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	u := WireULAPlus(d, &cfg)
+
+	u.WriteBF3B(0x40)
+	u.WriteFF3B(0x01)
+
+	for _, mode := range []byte{0x40, 0x80, 0xC0} {
+		u.WriteBF3B(mode)
+		v, ok := u.ReadFF3B()
+		if !ok || v&0x01 == 0 {
+			t.Errorf("mode group %d: read = %#02x ok=%v, want the enable", mode>>6, v, ok)
+		}
 	}
 }

@@ -22,17 +22,16 @@ import (
 //	nr_6a_lores_radastan_xor   <= nr_wr_dat(4)        zxnext.vhd:5457
 //	nr_6a_lores_palette_offset <= nr_wr_dat(3 downto 0)  zxnext.vhd:5458
 //
-// ONE INPUT IS STILL NOT CONNECTED, and saying so is the point of this
-// paragraph. lores.vhd takes five inputs from outside the raster; the fifth is
-// ulap_en_i, which selects the Radastan high nibble (lores.go's ULAPlus).
-// Nothing in this tree tracks whether ULA+ is enabled, so there is no source to
-// wire it from and Config.ULAPlus stays false. In Radastan mode with ULA+ on,
-// every pixel then resolves into the wrong palette block. That is a real gap,
-// not an omission from this comment.
+// EVERY LAYER INPUT IS NOW CONNECTED. lores.vhd takes five from outside the
+// raster: the mode and palette offset here, both scroll offsets here, the clip
+// window via ClipWindows.SetULAClipSink, the display file as the Timex bit XOR
+// NR$6A bit 4 (SetTimexSource), and ulap_en_i from pkg/next/ulaplus.go.
 //
-// An earlier revision of this paragraph said ULA+ was the only one, while the
-// Timex half of the display-file select had no production source either. It has
-// one now (SetTimexSource), and the count above is the whole of what remains.
+// Two earlier revisions of this paragraph each claimed one input was the only
+// one missing, and each was wrong within a commit or two — first because the
+// Timex half had no production source either, then because ULA+ had just been
+// given one. If an input is added, count them again rather than editing the
+// number.
 
 // LoResState is the part of the layer's input that is not in lores.Config.
 //
@@ -127,17 +126,7 @@ func WireLoRes(d *nextregs.Dispatcher, cfg *lores.Config) *LoResState {
 	// Each of these chains to the handler already installed for the register,
 	// including NR$32/$33 which nothing wires today: a bare SetOnWrite there
 	// would be a silent clobber waiting for the first subsystem that does.
-	chain := func(reg byte, after func(val byte)) {
-		prev := d.OnWriteFn(reg)
-		d.SetOnWrite(reg, func(disp *nextregs.Dispatcher, val byte) {
-			if prev != nil {
-				prev(disp, val)
-			} else {
-				disp.Store(reg, val)
-			}
-			after(val)
-		})
-	}
+	chain := func(reg byte, after func(val byte)) { chainOnWrite(d, reg, after) }
 
 	chain(0x15, func(byte) {}) // read live by Enabled; nothing to cache
 	chain(0x6A, func(val byte) {
