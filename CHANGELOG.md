@@ -81,6 +81,27 @@ defect itself.
   than skip when a ROM will not load. All four ROMs involved are embedded, so a
   skip could only fire when something was already broken.
 
+- **The mutation audit was measuring a third less than it claimed.**
+  `_tools/mutaudit` (local-only) matched only `x.field = s.Field`, which cannot
+  see a `copy()` call, an `append()`-based slice restore, or a nested target
+  like `f.target.track`. Those lines were not counted and were never mutated,
+  and an unmutated line reads as absent rather than as a gap — so the totals
+  looked complete while roughly a quarter of the restores in the tree had never
+  been tested once.
+
+  Corrected, and re-run over all 25 capture files: **376 restores, 375 killed,
+  0 survived, 1 invalid.** The invalid is divMMC's `copy(p.ram[i], s.RAM[i])`,
+  which cannot be neutered inside a `for … range` body without the package
+  ceasing to compile; it was verified by hand with a different mutation, and
+  four tests fail on it.
+
+  The coverage turned out to be real almost everywhere — the previously
+  unmutated lines all kill — but one genuine gap was hiding in it, the divMMC
+  ROM restore fixed above. Two further traps are recorded in the tool: scanning
+  only `LoadState` finds nothing in `pkg/ay` or `pkg/plus3fdc`, whose restores
+  live in `apply()` and `fdc.loadState()`, and deleting a line is not always a
+  valid mutation, so `copy()` is neutered by truncating its source instead.
+
 ### Documentation
 
 - **LoRes / Radastan is implemented but never reaches the screen**, and one
@@ -217,6 +238,14 @@ this entry rather than gathered in one place.
   `pkg/next/state.go` — the tape and clip-window devices added in the same
   release. Both were audited separately and are 8/8 and 10/10, so the coverage
   is real; the claim was narrower than it read. The glob now matches them.
+
+  **A second and larger gap surfaced in v1.10.1: 278 was never the number of
+  field restores.** The audit matched only `x.field = s.Field`, so `copy()`
+  calls, `append()`-based slice restores and nested targets like
+  `f.target.track` were not counted and were never mutated — and an unmutated
+  line reads as absent rather than as a gap, which is why the totals looked
+  complete. The real figure is **376**. See v1.10.1; the coverage was genuine,
+  but this measurement of it was not.
 - **Four ways the `PHASE` verdict could report agreement it had not earned.**
   `PHASE` rescues a pair the pointwise comparison rejected, by asking whether
   either machine's screen appears anywhere in the other's sampled sequence, so
