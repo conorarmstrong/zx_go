@@ -1787,6 +1787,9 @@ sdReady:
 	e.nextULAPlus = next.WireULAPlus(disp, loresCfg)
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(e.nextULAPlus)
+		// The layer replaces the ULA bitmap when NR$15 bit 7 is set; with it
+		// clear the render path costs one nil check a frame.
+		e.ula.SetNextLoRes(compositor.NewLoRes(loresCfg, e.nextLoResState, e.mem, pal))
 	}
 
 	// Warm-boot: skip the cold-boot path entirely and load a captured
@@ -1917,6 +1920,7 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextULAPlus = nil
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(nil)
+		e.ula.SetNextLoRes(nil)
 	}
 	e.nextReset = nil
 }

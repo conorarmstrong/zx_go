@@ -592,3 +592,59 @@ func TestULAPlusEnableReachesTheLoResLayer(t *testing.T) {
 		t.Errorf("$FF3B reads %#02x after NR$68 set the enable, want bit 0 set", got)
 	}
 }
+
+// The whole point of the layer: with NR$15 bit 7 set, a guest's LoRes picture
+// reaches the screen. Before this the registers were decoded, stored, captured
+// and read by no render path, so selecting the mode silently produced the
+// ordinary ULA picture.
+//
+// Driven end to end on a real Next through the register the guest writes,
+// because every part before this was already tested and none of it drew
+// anything.
+func TestEnablingLoResChangesThePicture(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
+	emu := quietEmulator(t, roms.ModelNext)
+
+	// A pattern in bank 5, which is where the layer reads its display from.
+	bank5 := emu.mem.GetPage(5)
+	for i := range bank5 {
+		bank5[i] = byte(i*7 + 1)
+	}
+
+	before := renderFrameForTest(emu)
+
+	emu.nextRegs.WriteReg(0x15, 0x80) // LoRes master enable
+	after := renderFrameForTest(emu)
+
+	if bytesEqualRGBA(before, after) {
+		t.Fatal("enabling LoRes did not change a single pixel: the layer is still not " +
+			"reaching the screen")
+	}
+
+	// And turning it off again puts the ULA picture back, which is what makes
+	// the path safe to have added at all.
+	emu.nextRegs.WriteReg(0x15, 0x00)
+	if restored := renderFrameForTest(emu); !bytesEqualRGBA(before, restored) {
+		t.Error("disabling LoRes did not restore the ULA picture: the substitution is " +
+			"not confined to the frames where the layer is on")
+	}
+}
+
+func renderFrameForTest(e *emulator) []byte {
+	img := e.ula.Render()
+	return append([]byte(nil), img.Pix...)
+}
+
+func bytesEqualRGBA(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

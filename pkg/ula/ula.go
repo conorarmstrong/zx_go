@@ -104,6 +104,12 @@ type ULA struct {
 	// nextULAPlus handles ports $BF3B / $FF3B. nil off the Next.
 	nextULAPlus NextULAPlus
 
+	// nextLoRes replaces the ULA bitmap when the Next's LoRes/Radastan mode is
+	// on. nil off the Next. loresRow is its per-row scratch, hoisted so 192
+	// rows a frame do not churn the allocator.
+	nextLoRes NextLoRes
+	loresRow  [ScreenWidth]color.RGBA
+
 	// Port 0xFE state
 	BorderColour byte
 	Mic          bool
@@ -905,6 +911,18 @@ func (u *ULA) render() *image.RGBA {
 		}
 	}
 
+	// Spectrum Next LoRes / Radastan: this REPLACES the ULA bitmap rather than
+	// compositing over it, so it runs before every other Next layer and hands
+	// them a substituted ULA row:
+	//
+	//	ulalores_pixel_1 <= lores_pixel_1 when lores_pixel_en_1 = '1'
+	//	                    else ula_pixel_1;          -- zxnext.vhd:6980
+	//
+	// Guarded on Active, which is NR$15 bit 7: with LoRes off this costs one
+	// nil check per frame and the picture is byte-identical to before the
+	// layer existed.
+	u.applyNextLoRes()
+
 	// Spectrum Next overlay: if a compositor is wired (ModelNext),
 	// blend Layer 2 (and, later, Tilemap and Sprites) over the
 	// active display region row by row. The compositor pulls
@@ -1051,6 +1069,45 @@ type NextULAPlus interface {
 
 // SetNextULAPlus attaches the ULA+ port handler. nil unhooks.
 func (u *ULA) SetNextULAPlus(p NextULAPlus) { u.nextULAPlus = p }
+
+// NextLoRes is the contract for the Spectrum Next's LoRes / Radastan layer.
+// pkg/next/compositor.LoRes satisfies it; the interface lives here so this
+// package does not import that one.
+//
+// It is deliberately NOT part of NextCompositor. LoRes is not a layer in the
+// mixer: it substitutes for the ULA's own pixels before the mixer runs, so it
+// belongs at a different point in the frame and has a different contract.
+type NextLoRes interface {
+	// Active reports whether the layer would claim any pixel at all.
+	Active() bool
+	// ComposeULARow replaces row's pixels for paper row y wherever the layer's
+	// clip window admits them, leaving the rest as they arrived.
+	ComposeULARow(y int, row []color.RGBA)
+}
+
+// SetNextLoRes attaches the LoRes / Radastan layer. nil unhooks.
+func (u *ULA) SetNextLoRes(l NextLoRes) { u.nextLoRes = l }
+
+// applyNextLoRes substitutes the LoRes picture for the ULA bitmap in the
+// classic 256x192 paper area. The border is untouched: lores.vhd's clip window
+// is expressed in the same raster coordinates as the paper, and the FPGA's
+// substitution happens at the ULA pixel, which the border is not.
+func (u *ULA) applyNextLoRes() {
+	if u.nextLoRes == nil || !u.nextLoRes.Active() {
+		return
+	}
+	for y := 0; y < ScreenHeight; y++ {
+		row := u.loresRow[:]
+		for x := 0; x < ScreenWidth; x++ {
+			r, g, b, a := u.img.At(BorderLeft+x, BorderTop+y).RGBA()
+			row[x] = color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+		}
+		u.nextLoRes.ComposeULARow(y, row)
+		for x := 0; x < ScreenWidth; x++ {
+			u.img.Set(BorderLeft+x, BorderTop+y, row[x])
+		}
+	}
+}
 
 // timexHiResColours decodes the hi-res ink/paper from port $FF bits 5:3. Hi-res
 // uses two bright, complementary colours: ink = colour code, paper = 7 - code

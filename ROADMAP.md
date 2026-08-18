@@ -443,65 +443,21 @@ so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 The 12 Next `.nex` games now screened render correctly without it, so there is
 still no observed case where it matters. Leave it until one appears.
 
-### 6. [correctness] LoRes / Radastan is implemented but not wired to the screen
+### 6. [correctness] The ULA+ palette path
 
-**The layer is done and its registers now reach it; no render path draws it.**
-`pkg/next/lores` is a hardware-faithful port of `video/lores.vhd` with both
-modes (LoRes 128x96 8-bit, Radastan 128x96 4-bit), verified against a captured
-FPGA golden in `fpga_golden_test.go`.
+**The ULA+ ENABLE is modelled; the ULA+ PALETTE is not.** `pkg/next/ulaplus.go`
+owns the enable — one bit written from both NR$68 bit 3 and port $FF3B in
+`$BF3B` mode group 01, into a single location, read back by both, and ANDed
+with NOT ULAnext before it reaches the LoRes layer (`zxnext.vhd:4246`).
 
-`WireLoRes` (`pkg/next/loreswire.go`) now connects NR$15 bit 7, NR$6A, NR$32/$33
-and the ULA clip window to the layer's `Config`, and the emulator owns and
-registers one, so the layer is captured and restored with the machine. What is
-still missing is the last step: `pkg/ula`, which owns the live Next composite,
-contains no LoRes or Radastan handling, so a guest that selects the mode still
-gets the ordinary ULA picture.
+What is still missing is the 64-entry ULA+ palette itself. Writes go only
+through the NextReg path, and a `$FF3B` read in mode group 00 declines rather
+than serving palette data it does not have (`pkg/next/ulaplus.go` ReadFF3B).
+A program driving ULA+ the classic way — `$BF3B` index, `$FF3B` colour — sets
+no colours.
 
-**Every layer input is now connected.** The last one was `ulap_en_i`, which
-selects the Radastan high nibble. Nothing tracked ULA+ enable, so
-`Config.ULAPlus` was permanently false and Radastan-with-ULA+ resolved into the
-wrong palette block. `pkg/next/ulaplus.go` models it: one bit written from both
-NR$68 bit 3 and port $FF3B (mode group 01) into a single location, read back by
-both, ANDed with NOT ULAnext (NR$43 bit 0) before it reaches the layer.
-
-Note the scope: this is the ULA+ **enable**, not the ULA+ palette. The 64-entry
-palette still goes through the NextReg path, and `$FF3B` reads in mode group 00
-decline rather than serving palette data.
-
-This is not a hard problem: the expensive half, the FPGA-faithful pixel
-derivation, already exists and is golden-tested. What is missing is a mode
-branch in the `pkg/ula` render selection, alongside the existing HiRes and
-Layer 2 paths.
-
-Until the layer was wired, the tree framed all of this as a capture-registry
-curiosity — a `state.go` written for a device nothing owned, and a test named
-for the package being an orphan. Both are gone: the layer is owned and
-registered, and the test that asked to be deleted at exactly this moment has
-been. The framing is recorded here only so the next reader knows why the
-package looked speculative for as long as it did.
-
-**Deliberately parked, on the same test as items 2 and 5.** No installed title
-needs it: of the 24 `.nex` files under `roms/next/sd`, not one sets the LoRes
-loading-screen flag (bit `$04` of header byte 10). Flags observed are `$00`,
-`$01` and `$81`.
-
-**Read that evidence narrowly.** It only reads the *load-time* flag. A title
-that switches to LoRes at runtime through `NR$6A`, without declaring a LoRes
-loading screen, would not appear in that count and would render wrongly with
-nothing to indicate it. If a Next title is ever screened as "boots but the
-picture is wrong", check `NR$6A` before anything else.
-
-- [x] ~~Registers, clip window and capture~~ — `WireLoRes`, and the layer is a
-  registered `machinestate.Device`. The orphan test that asked to be deleted at
-  exactly this moment has been, replaced by round-trip coverage.
-- [ ] Wire `lores.RenderScanline` into the `pkg/ula` Next path. The
-  substitution rule is settled: `zxnext.vhd:6980` reads
-  `ulalores_pixel_1 <= lores_pixel_1 when lores_pixel_en_1 = '1' else
-  ula_pixel_1`, so LoRes replaces the ULA pixel per pixel where its clip
-  admits, through the ULA palette — which is exactly `RenderScanline`'s
-  documented pre-fill contract.
-- [ ] Model the ULA+ **palette** path ($BF3B mode group 00 + $FF3B data). The
-  enable is done; the palette writes still go only through NextReg.
+- [ ] Model the mode-group-00 palette write/read path, and route it to the
+  ULA palette the NextReg path already fills.
 
 ---
 
