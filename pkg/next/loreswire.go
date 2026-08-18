@@ -22,13 +22,17 @@ import (
 //	nr_6a_lores_radastan_xor   <= nr_wr_dat(4)        zxnext.vhd:5457
 //	nr_6a_lores_palette_offset <= nr_wr_dat(3 downto 0)  zxnext.vhd:5458
 //
-// ONE INPUT IS NOT CONNECTED, and saying so is the point of this paragraph.
-// lores.vhd takes five inputs from outside the raster; the fifth is ulap_en_i,
-// which selects the Radastan high nibble (lores.go's ULAPlus). Nothing in this
-// tree tracks whether ULA+ is enabled, so there is no source to wire it from
-// and Config.ULAPlus stays false. In Radastan mode with ULA+ on, every pixel
-// then resolves into the wrong palette block. That is a real gap, not an
-// omission from this comment.
+// ONE INPUT IS STILL NOT CONNECTED, and saying so is the point of this
+// paragraph. lores.vhd takes five inputs from outside the raster; the fifth is
+// ulap_en_i, which selects the Radastan high nibble (lores.go's ULAPlus).
+// Nothing in this tree tracks whether ULA+ is enabled, so there is no source to
+// wire it from and Config.ULAPlus stays false. In Radastan mode with ULA+ on,
+// every pixel then resolves into the wrong palette block. That is a real gap,
+// not an omission from this comment.
+//
+// An earlier revision of this paragraph said ULA+ was the only one, while the
+// Timex half of the display-file select had no production source either. It has
+// one now (SetTimexSource), and the count above is the whole of what remains.
 
 // LoResState is the part of the layer's input that is not in lores.Config.
 //
@@ -44,11 +48,25 @@ type LoResState struct {
 	d   *nextregs.Dispatcher
 	cfg *lores.Config
 
-	// timexDfile is port $FF screen-mode bit 0, which belongs to the ULA
-	// rather than to the NextReg file, so it is the one value that has to be
-	// pushed in. SetTimexDfile is the only writer.
-	timexDfile bool
+	// timex reads port $FF screen-mode bit 0, which belongs to the ULA rather
+	// than to the NextReg file. It is a function rather than a cached bool for
+	// the same reason the enable is read through: the ULA captures port $FF in
+	// its own state, and a copy here would survive a rewind while the port it
+	// mirrors moved underneath it. nil until a source is wired, which reads as
+	// the FPGA's power-on 0.
+	timex func() bool
 }
+
+// SetTimexSource supplies port $FF screen-mode bit 0. The ULA owns that port,
+// so the source is a live read rather than a pushed value; call Refresh (or
+// let the ULA call it) when the port changes, so Config.Dfile follows without
+// waiting for the next NR$6A write.
+func (s *LoResState) SetTimexSource(fn func() bool) {
+	s.timex = fn
+	s.refreshDfile()
+}
+
+func (s *LoResState) timexDfile() bool { return s.timex != nil && s.timex() }
 
 // Enabled reports NR$15 bit 7, the layer's master enable, read live from the
 // register file. The FPGA gates the layer's own per-pixel clip enable with it
@@ -57,13 +75,6 @@ type LoResState struct {
 // what reaches the palette. That is why the whole path stays inert until a
 // guest asks for it.
 func (s *LoResState) Enabled() bool { return s.d.Raw(0x15)&0x80 != 0 }
-
-// SetTimexDfile records port $FF screen-mode bit 0 and recomputes the layer's
-// display-file select.
-func (s *LoResState) SetTimexDfile(on bool) {
-	s.timexDfile = on
-	s.refreshDfile()
-}
 
 // refreshDfile combines the two halves the way the FPGA does:
 //
@@ -75,7 +86,7 @@ func (s *LoResState) SetTimexDfile(on bool) {
 // Radastan on the wrong display file for every program that sets NR$6A bit 4,
 // and the layer has no way to tell.
 func (s *LoResState) refreshDfile() {
-	s.cfg.Dfile = s.timexDfile != (s.d.Raw(0x6A)&0x10 != 0)
+	s.cfg.Dfile = s.timexDfile() != (s.d.Raw(0x6A)&0x10 != 0)
 }
 
 // Refresh recomputes every derived value from the register file. It runs at
@@ -137,13 +148,9 @@ func WireLoRes(d *nextregs.Dispatcher, cfg *lores.Config) *LoResState {
 	chain(0x32, func(val byte) { cfg.ScrollX = val })
 	chain(0x33, func(val byte) { cfg.ScrollY = val })
 
-	// A reset clears port $FF on the FPGA, so the cached Timex bit must go
-	// with it. Without this the pre-reset display file leaks through the xor
-	// and Radastan reads from $6000 where hardware reads $4000.
-	d.SetOnReset(func() {
-		s.timexDfile = false
-		s.Refresh()
-	})
+	// A reset clears port $FF on the FPGA. The Timex bit is read through to
+	// the ULA, which clears its own copy, so this only has to recompute.
+	d.SetOnReset(func() { s.Refresh() })
 
 	s.Refresh()
 	return s

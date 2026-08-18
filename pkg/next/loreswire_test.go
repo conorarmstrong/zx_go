@@ -86,7 +86,8 @@ func TestTheDisplayFileIsTheTimexBitXoredWithNR6ABit4(t *testing.T) {
 			v |= 0x10
 		}
 		d.WriteReg(0x6A, v)
-		st.SetTimexDfile(tc.timex)
+		timex := tc.timex
+		st.SetTimexSource(func() bool { return timex })
 
 		if cfg.Dfile != tc.want {
 			t.Errorf("timex=%v xor=%v: Dfile = %v, want %v", tc.timex, tc.xor, cfg.Dfile, tc.want)
@@ -101,7 +102,7 @@ func TestTheDisplayFileIsRecomputedWhicheverArrivesLast(t *testing.T) {
 	var cfg lores.Config
 	st := WireLoRes(d, &cfg)
 
-	st.SetTimexDfile(true)
+	st.SetTimexSource(func() bool { return true })
 	d.WriteReg(0x6A, 0x10) // xor set after the Timex bit
 	if cfg.Dfile {
 		t.Error("Dfile should be true xor true = false when NR$6A arrives second")
@@ -182,15 +183,42 @@ func TestAResetClearsTheCachedTimexDisplayFile(t *testing.T) {
 	var cfg lores.Config
 	st := WireLoRes(d, &cfg)
 
-	st.SetTimexDfile(true)
+	timex := true
+	st.SetTimexSource(func() bool { return timex })
 	if !cfg.Dfile {
 		t.Fatal("the fixture did not set the display file, so this proves nothing")
 	}
 
+	// A reset clears port $FF on the FPGA, so the source goes with it; the
+	// layer must recompute rather than keep the pre-reset display file.
+	timex = false
 	d.Reset()
 	if cfg.Dfile {
 		t.Error("the pre-reset Timex display file leaked through the reset: Radastan " +
 			"would read from $6000 where the hardware reads $4000")
+	}
+}
+
+// The Timex half is read through rather than cached, so it cannot go stale when
+// the ULA's port is restored by a rewind without anyone re-pushing it.
+func TestTheTimexHalfIsReadThroughRatherThanCached(t *testing.T) {
+	d := nextregs.New()
+	var cfg lores.Config
+	st := WireLoRes(d, &cfg)
+
+	port := false
+	st.SetTimexSource(func() bool { return port })
+	if cfg.Dfile {
+		t.Fatal("display file set with the port clear")
+	}
+
+	// Move the port the way a state restore would, behind the layer's back,
+	// then touch the other half. A cached copy would recompute from the old
+	// value here.
+	port = true
+	d.WriteReg(0x6A, 0x00)
+	if !cfg.Dfile {
+		t.Error("the display file was recomputed from a stale Timex bit")
 	}
 }
 

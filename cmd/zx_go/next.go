@@ -1773,6 +1773,14 @@ sdReady:
 		loresCfg.ClipX1, loresCfg.ClipX2 = x1, x2
 		loresCfg.ClipY1, loresCfg.ClipY2 = y1, y2
 	})
+	// The other half of the display-file select is port $FF screen-mode bit 0,
+	// which the ULA owns. Read through rather than cached, so a rewind that
+	// restores the ULA's port cannot leave this holding a present-time value.
+	if e.ula != nil {
+		loresState := e.nextLoResState
+		loresState.SetTimexSource(func() bool { return e.ula.TimexScreenMode()&0x01 != 0 })
+		e.ula.SetTimexModeObserver(func(byte) { loresState.Refresh() })
+	}
 
 	// Warm-boot: skip the cold-boot path entirely and load a captured
 	// post-init state directly into CPU/RAM/NextRegs. This is a DEBUG

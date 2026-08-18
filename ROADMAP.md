@@ -462,13 +462,17 @@ Radastan high nibble, and nothing in this tree tracks whether ULA+ is enabled,
 so `Config.ULAPlus` stays false and Radastan-with-ULA+ resolves into the wrong
 palette block. That has to be modelled before the mode is complete.
 
-Two things this is **not**. It is not the "speculative `state.go`" the registry
-note and `TestLoResIsAnOrphanPackageAndThereforeUnregistered` describe: those
-frame an unwired *video layer* as a capture-registry curiosity, which
-understates it. And it is not a hard problem, because the expensive half —
-the FPGA-faithful pixel derivation — already exists and is golden-tested. What
-is missing is a mode branch in the `pkg/ula` render selection, alongside the
-existing HiRes and Layer 2 paths.
+This is not a hard problem: the expensive half, the FPGA-faithful pixel
+derivation, already exists and is golden-tested. What is missing is a mode
+branch in the `pkg/ula` render selection, alongside the existing HiRes and
+Layer 2 paths.
+
+Until the layer was wired, the tree framed all of this as a capture-registry
+curiosity — a `state.go` written for a device nothing owned, and a test named
+for the package being an orphan. Both are gone: the layer is owned and
+registered, and the test that asked to be deleted at exactly this moment has
+been. The framing is recorded here only so the next reader knows why the
+package looked speculative for as long as it did.
 
 **Deliberately parked, on the same test as items 2 and 5.** No installed title
 needs it: of the 24 `.nex` files under `roms/next/sd`, not one sets the LoRes

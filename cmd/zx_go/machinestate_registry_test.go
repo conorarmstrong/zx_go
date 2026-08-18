@@ -517,3 +517,33 @@ func TestRewindReturnsTheDiscipleAndOpusControllers(t *testing.T) {
 		}
 	})
 }
+
+// The layer's display-file select is port $FF screen-mode bit 0 XORed with
+// NR$6A bit 4 (zxnext.vhd:6796), and the port half had no production source at
+// all: SetTimexSource was called only from tests, so cfg.Dfile collapsed to the
+// NR$6A half and Radastan would have read from the wrong 6 KB block for every
+// program using a Timex display file.
+func TestThePortFFDisplayFileReachesTheLoResLayer(t *testing.T) {
+	if !nextROMsInstalled() {
+		t.Skip("Next ROMs not installed")
+	}
+	emu := quietEmulator(t, roms.ModelNext)
+
+	emu.nextRegs.WriteReg(0x6A, 0x00) // xor half clear
+	emu.ula.WritePort(0x00FF, 0x00)
+	if emu.nextLoRes.Dfile {
+		t.Fatal("display file set with both halves clear")
+	}
+
+	emu.ula.WritePort(0x00FF, 0x01) // Timex screen-mode bit 0
+	if !emu.nextLoRes.Dfile {
+		t.Error("a port $FF write did not reach the layer: the display file is stuck " +
+			"on the NR$6A half alone")
+	}
+
+	// XOR, not OR: with both halves set the layer is back on the first file.
+	emu.nextRegs.WriteReg(0x6A, 0x10)
+	if emu.nextLoRes.Dfile {
+		t.Error("the two halves were combined as OR rather than XOR")
+	}
+}

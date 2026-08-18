@@ -98,6 +98,9 @@ type ULA struct {
 	// = hi-res ink/paper colour. 0 (the reset default) is the normal screen.
 	timexVideoMode byte
 
+	// timexModeObserver is notified on every port $FF write. nil off the Next.
+	timexModeObserver func(mode byte)
+
 	// Port 0xFE state
 	BorderColour byte
 	Mic          bool
@@ -1027,6 +1030,13 @@ func (u *ULA) renderWide() *image.RGBA {
 // the 512x192 8x1 hi-res display mode (bits 2:0 == 110).
 func (u *ULA) timexHiResActive() bool { return u.timexVideoMode&0x07 == 0x06 }
 
+// TimexScreenMode returns the last value written to port $FF, the Timex SCLD
+// video-mode register.
+func (u *ULA) TimexScreenMode() byte { return u.timexVideoMode }
+
+// SetTimexModeObserver installs a callback fired on every port $FF write.
+func (u *ULA) SetTimexModeObserver(fn func(mode byte)) { u.timexModeObserver = fn }
+
 // timexHiResColours decodes the hi-res ink/paper from port $FF bits 5:3. Hi-res
 // uses two bright, complementary colours: ink = colour code, paper = 7 - code
 // (so code 0 = black ink on white paper, the default text colours).
@@ -1555,6 +1565,12 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	// any other $FF semantics are unaffected.
 	if (addr & 0xFF) == 0xFF {
 		u.timexVideoMode = val
+		// The Spectrum Next's LoRes layer takes screen-mode bit 0 as half of
+		// its display-file select (zxnext.vhd:6796), so a consumer has to hear
+		// about the write rather than wait for the next NextReg poke.
+		if u.timexModeObserver != nil {
+			u.timexModeObserver(val)
+		}
 	}
 	// Spectrum Next NextReg ports take priority over any other
 	// dispatch when wired. 0x243B is the select latch (write-only),
