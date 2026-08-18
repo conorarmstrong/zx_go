@@ -6,6 +6,77 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.10.2]
+
+**LoRes, Radastan and ULA+ work.** A guest can select the mode, set its
+colours, scroll it, clip it, and see it. Before this the registers were decoded,
+stored, captured, and read by no render path, so selecting the mode silently
+produced the ordinary ULA picture.
+
+The layer itself was never the missing part. `pkg/next/lores` has been a
+faithful port of `video/lores.vhd` since it was written, golden-tested against
+captured FPGA vectors. What was missing was every wire into and out of it.
+
+### Added
+
+- **LoRes / Radastan reaches the screen.** `NR$15` bit 7 enables it, `NR$6A`
+  carries the mode and palette offset, `NR$32`/`NR$33` its own scroll offsets,
+  and the ULA clip window its clip ports.
+
+  It is **not** a layer in the mixer, and building it as one would have been
+  wrong. It substitutes for the ULA's own pixels before anything else runs
+  (`zxnext.vhd:6980`), and the result goes through the ULA palette. So Layer 2,
+  the tilemap, sprites, transparency and priority needed no changes at all —
+  they see a substituted ULA row and cannot tell.
+
+  The path is inert while `NR$15` bit 7 is clear: one nil check per frame, and
+  the picture is byte-identical to before the layer existed. The end-to-end
+  test pins that by disabling the layer again and comparing frames.
+
+- **ULA+, both halves.** The enable is one bit written from `NR$68` bit 3 and
+  from port `$FF3B` in `$BF3B` mode group 01, into a single location, read back
+  by both, and ANDed with NOT ULAnext before it reaches the layer.
+
+  The palette is the part worth knowing about: **ULA+ does not have a palette of
+  its own.** A `$FF3B` colour write is routed into the Next's own NextReg
+  palette stream, and the 64 entries land at `$C0..$FF` of the ULA palette
+  (`zxnext.vhd:6958`). That is precisely why `lores.vhd`'s Radastan ULA+ nibble
+  is `"11" & offset(1:0)` — it addresses that range. Implementing ULA+ as its
+  own 64-entry table, which is the obvious reading of the ULA+ standard, would
+  have left Radastan-with-ULA+ reading colours nothing ever wrote.
+
+### Fixed
+
+- **The display file was half-wired.** `lores.vhd` takes port `$FF` screen-mode
+  bit 0 XOR `NR$6A` bit 4 (`zxnext.vhd:6796`), and only the NextReg half was
+  connected, so Radastan would have read from the wrong 6 KB block for every
+  program using a Timex display file.
+
+- **The ULA+ enable had two storage locations that could disagree.** `Raw` and
+  `SaveState` reported the last value written to `NR$68` while `ReadReg`
+  reported the enable through an overlay, so a snapshot could export a machine
+  that never existed. Worse, a rewind restored the layer input without its
+  driver, and the next unrelated register write recomputed it from the
+  un-rewound value. The enable now lives in `NR$68` bit 3 and nowhere else,
+  which is what the FPGA does and why its own `nr_68_ulap_en` is commented out.
+
+- **An unmodelled `$FF3B` write was swallowed** rather than declined, so the
+  byte vanished with no trace and no later handler could observe it, while the
+  read side for the same group fell through. Both decline now.
+
+- **A reset left the sprite and tilemap engines clipping to a stale window.**
+  The coordinates were restored and never pushed down. Found while adding the
+  ULA sink, and pinned by a test that asserts what reached the layers rather
+  than what the register reads back.
+
+### Changed
+
+- The mutation audit's own measurement was corrected. It matched only
+  `x.field = s.Field`, so `copy()`, `append()`-based slice restores and nested
+  targets were never mutated — and an unmutated line reads as absent rather
+  than as a gap. Re-run over all 25 capture files: **376 restores, 375 killed,
+  0 survived, 1 invalid**, against a previously documented 278.
+
 ## [v1.10.1]
 
 Completes the rewind device set, and fixes a disk-corruption bug found while
