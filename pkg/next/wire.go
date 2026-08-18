@@ -979,6 +979,33 @@ type ClipWindows struct {
 	spr clipWindow
 	ula clipWindow
 	tm  clipWindow
+
+	// ulaSink receives the ULA window whenever it changes. The tilemap and
+	// sprite windows are pushed into their layers directly, but the ULA's had
+	// no layer to push into until the LoRes renderer was wired: lores.vhd
+	// takes this window as its clip_x1_i..clip_y2_i ports.
+	ulaSink func(x1, x2, y1, y2 byte)
+}
+
+// SetULAClipSink installs a callback fed the ULA/LoRes clip window, and calls
+// it once immediately so the caller starts from the reset window rather than
+// from a zero value.
+//
+// The immediate call is the point. lores.Config's clip test is inclusive at
+// both ends, so an all-zero window admits exactly the pixel at (0,0): a layer
+// wired without this would render one pixel and leave the rest of the screen
+// to the ULA underneath, which looks like the layer not working at all rather
+// than like a missing default.
+func (cw *ClipWindows) SetULAClipSink(fn func(x1, x2, y1, y2 byte)) {
+	cw.ulaSink = fn
+	cw.pushULA()
+}
+
+func (cw *ClipWindows) pushULA() {
+	if cw.ulaSink != nil {
+		c := cw.ula.coord
+		cw.ulaSink(c[0], c[1], c[2], c[3])
+	}
 }
 
 // WireClipWindows installs the faithful clip-window behaviour for NR$18-$1B
@@ -1024,7 +1051,8 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *
 	wire(0x18, l2)
 	d.SetOnWrite(0x19, func(_ *nextregs.Dispatcher, v byte) { spr.write(v); pushSpr() })
 	d.SetOnRead(0x19, func(_ *nextregs.Dispatcher) byte { return spr.read() })
-	wire(0x1A, ula)
+	d.SetOnWrite(0x1A, func(_ *nextregs.Dispatcher, v byte) { ula.write(v); cw.pushULA() })
+	d.SetOnRead(0x1A, func(_ *nextregs.Dispatcher) byte { return ula.read() })
 	d.SetOnWrite(0x1B, func(_ *nextregs.Dispatcher, v byte) { tm.write(v); pushTM() })
 	d.SetOnRead(0x1B, func(_ *nextregs.Dispatcher) byte { return tm.read() })
 	// NR$1C write: bits 0/1/2/3 reset the L2/sprite/ULA/tilemap index
@@ -1051,6 +1079,9 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *
 		for _, c := range all {
 			c.reset()
 		}
+		pushTM()
+		pushSpr()
+		cw.pushULA()
 	})
 	return cw
 }
