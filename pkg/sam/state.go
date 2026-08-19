@@ -128,7 +128,6 @@ func (m *Machine) LoadState(blob []byte) error {
 
 	m.border = s.Border
 	m.clut = s.CLUT
-	m.line = s.Line
 	m.lpen = s.LPen
 	m.hpen = s.HPen
 	m.frameStart = s.FrameStart
@@ -149,6 +148,11 @@ func (m *Machine) LoadState(blob []byte) error {
 	// interrupt arms a Z80 timing hook. Restoring the bytes alone would leave a
 	// machine whose registers read right and whose behaviour is the previous
 	// guest's.
+	//
+	// setLineInterrupt writes m.line itself, which is why there is no
+	// `m.line = s.Line` above it. There was one, and it made the restore look
+	// covered while being unkillable: deleting it changed nothing, because the
+	// call below put the same value back. One writer per field.
 	m.Mem.SetScreenOff(s.Border&borderSOFF != 0)
 	m.setLineInterrupt(s.Line)
 	return nil

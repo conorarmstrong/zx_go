@@ -62,6 +62,15 @@ func (s *SAA) SaveState() []byte {
 	return buf.Bytes()
 }
 
+// decodeForTest exposes the decode step to this package's tests, so the wire
+// struct can be walked by reflection without exporting it.
+func decodeForTest(blob []byte, into any) error {
+	if len(blob) == 0 {
+		return fmt.Errorf("saa1099: empty state")
+	}
+	return gob.NewDecoder(bytes.NewReader(blob)).Decode(into)
+}
+
 // LoadState restores a state captured by SaveState.
 //
 // The blob is decoded whole before any of it is applied, so a malformed one
