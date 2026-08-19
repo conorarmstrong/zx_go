@@ -97,14 +97,11 @@ func (d *Disk) WriteSector(cyl, head, sector int, buf []byte) bool {
 // both carry a header — and by size otherwise, since MGT is a bare sector dump
 // with nothing to identify it.
 //
-// SBT is not supported, deliberately. SimCoupe's manual describes those as
-// "self-booting files designed to be copied to an empty SAM disk, then booted"
-// and notes they are "not technically disk images"; where in a blank disk the
-// file goes, and what directory entry is written for it, is not published
-// anywhere this project can use. The only description of it is in another
-// emulator's GPL source, and reading that to derive it is the thing this
-// project's licence rules exist to prevent. It stays unsupported until a
-// specification turns up rather than being guessed at.
+// SBT is deliberately NOT reachable from here. It is a raw file rather than a
+// disk image, so any byte sequence is a valid one and there is nothing to
+// detect: given the job, this function would have to treat every unrecognised
+// file as an SBT, and a corrupt disk image would quietly become a bootable disk
+// containing itself. It is resolved by extension in LoadDiskFile instead.
 func LoadDisk(data []byte) (*Disk, error) {
 	if len(data) >= len(sadSignature) && string(data[:len(sadSignature)]) == sadSignature {
 		return loadSAD(data)

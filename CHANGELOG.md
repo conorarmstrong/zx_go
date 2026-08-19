@@ -6,6 +6,30 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **SBT files on the SAM Coupé.** An SBT is not a disk image: it is a single SAM
+  CODE file meant to be copied onto a blank disk and booted. Loading one builds
+  the disk around it — a standard 800K MGT holding just that file, with a
+  directory entry the DOS auto-executes — and write-protects it, since there is
+  no file behind it to write a change back to.
+
+  v1.11.0 shipped this as deliberately unsupported, on the grounds that the
+  layout was not published anywhere the project could use. That was half right.
+  The layout is a FACT about bytes and no one owns it; what is owned is the code
+  that implements it. Reading for the format and writing our own construction is
+  the same thing this project already does with the GPL FPGA sources it cites
+  throughout the Next code. The format is written out in `pkg/sam/disk_sbt.go`.
+
+  The capacity is the check that the format was read correctly: the chain walks
+  76 cylinders of head 0 and all 80 of head 1, ten sectors each at 510 payload
+  bytes, less the 9-byte header — 795591 bytes, exactly the documented maximum.
+
+  SBT carries no signature of any kind, so it is resolved by file extension
+  (`sam.LoadDiskFile`). `sam.LoadDisk` deliberately cannot reach it: with only
+  bytes to go on it would have to treat every unrecognised file as an SBT, and a
+  corrupt disk image would quietly become a bootable disk containing itself.
+
 ## [v1.11.0]
 
 **Sound is in stereo, the SAM Coupé can be rewound, and three more machines
