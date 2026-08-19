@@ -8,6 +8,10 @@ package sam
 type WD1772 struct {
 	disk *Disk
 
+	// stateID distinguishes this drive in a captured machine state; the two
+	// drives must not share one. See SetStateID in state.go.
+	stateID string
+
 	status  byte
 	track   byte
 	sector  byte

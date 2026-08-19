@@ -1110,7 +1110,7 @@ func (e *emulator) handleKeyDown(ev *fyne.KeyEvent) {
 		if err := e.quickSaveState(); err != nil {
 			slog.Warn("quick-save failed", "err", err)
 		} else {
-			slog.Info("quick-saved state", "path", quickSavePath())
+			slog.Info("quick-saved state", "path", e.quickSavePath())
 		}
 		return
 	case fyne.KeyF4:

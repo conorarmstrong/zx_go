@@ -173,6 +173,37 @@ func TestTheBeeperEventsAreConsumedByTheFrame(t *testing.T) {
 	}
 }
 
+// An isolated toggle must click at the speaker's level, not at twice it.
+//
+// A high-pass filter's step response is the step height, and a full low-to-high
+// toggle is a 2·amplitude step, so the AC-coupled output overshoots to double
+// the level the speaker is actually driven to. A cone cannot deflect past its
+// drive level, so the output is bounded to it — the same clamp pkg/ula applies
+// to the Spectrum's beeper, and it was missing here: the SAM's filter was
+// constructed with no limit at all, which falls back to full scale.
+func TestAnIsolatedToggleIsClampedToTheSpeakerLevel(t *testing.T) {
+	m := newTestMachine(t)
+	beepAt(t, m, 0, false)
+	beepAt(t, m, CyclesPerFrame/2, true)
+
+	buf := make([]int16, SamplesPerFrame*2)
+	m.GenerateAudioStereo(buf)
+
+	var peak int16
+	for _, v := range buf {
+		if v > peak {
+			peak = v
+		}
+	}
+	if peak > beeperAmplitude {
+		t.Errorf("peak = %d, want no more than the speaker level %d: the high-pass "+
+			"step response is doubling an isolated toggle", peak, beeperAmplitude)
+	}
+	if peak == 0 {
+		t.Error("the toggle produced nothing")
+	}
+}
+
 // largestJump returns the biggest absolute difference between consecutive
 // samples on the left channel.
 func largestJump(frame []int16) int32 {

@@ -76,6 +76,14 @@ func New(rom0, rom1 []byte) *Machine {
 		FDC:  [2]*WD1772{NewWD1772(), NewWD1772()},
 		line: 0xFF, // line interrupt disabled
 	}
+	// The two drives must answer to different names in a captured state, or a
+	// registry holding both would restore whichever was applied last into both.
+	m.FDC[0].SetStateID("sam.fdc1")
+	m.FDC[1].SetStateID("sam.fdc2")
+	// Bound the AC-coupled beeper to the speaker's physical amplitude. A
+	// high-pass's step response is the step height, so an isolated full toggle
+	// would otherwise overshoot to twice the level the speaker is driven to.
+	m.beeperDC.SetLimit(int32(beeperAmplitude))
 	m.CPU = z80.New(m.Mem, m)
 	// Maskable frame interrupt as a narrow pulse (the SAM ASIC pulses int_ula
 	// once per frame, held ~128 cycles), reusing the shared Z80 timing hooks.

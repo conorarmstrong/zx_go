@@ -26,12 +26,19 @@ import (
 func (e *emulator) stateRegistry() *machinestate.Registry {
 	r := machinestate.New()
 
-	// The SAM Coupé runs on pkg/sam's own memory, keyboard and ASIC, none of
-	// which capture yet; e.mem and e.kbd hold inert stand-ins that exist so the
-	// GUI's menu code has something to read. Registering those would produce a
-	// capture that restores nothing the machine actually runs on, which is
-	// worse than having no capture at all.
+	// The SAM Coupé runs on pkg/sam's own memory, keyboard, sound chip and disk
+	// controllers, none of which the Spectrum path knows about. e.mem and e.kbd
+	// hold inert stand-ins that exist so the GUI's menu code has something to
+	// read, so the SAM registers its own devices and returns before reaching
+	// them — registering the stand-ins would produce a capture that restores
+	// nothing the machine actually runs on.
+	//
+	// The CPU is shared: newSamEmulator points e.cpu at the SAM's own z80, so
+	// it is the same device the Spectrum path registers, and it goes first here
+	// for the same reason it does there.
 	if e.sam != nil {
+		registerDevices(r, e.cpu, e.sam, e.sam.Mem, e.sam.Kbd, e.sam.SAA,
+			e.sam.FDC[0], e.sam.FDC[1])
 		return r
 	}
 
