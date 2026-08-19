@@ -6,6 +6,127 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.11.0]
+
+**Sound is in stereo, the SAM Coupé can be rewound, and three more machines
+have save states.**
+
+A minor bump rather than a patch one, which breaks the run of v1.10.x: this
+adds capability on four fronts rather than completing something already
+started.
+
+### Added
+
+- **Stereo audio, end to end.** Three subsystems computed a genuine two-channel
+  pair and had it discarded one line before the sink, because the ring buffer,
+  the mixer and the WAV recorder were all mono and only widened by duplicating
+  each sample. The FPGA keeps the two apart the whole way through a dedicated
+  mixer entity (`audio/audio_mixer.vhd`), whose ports are `pcm_L_o` and
+  `pcm_R_o`. This does the same.
+
+  The beeper stays mono on purpose, and that is not a shortcut: it is one bit
+  driving one speaker, as are the tape's EAR line, SpecDrum and Covox. Those
+  are summed in mono and widened once.
+
+- **AY panning, and the two registers that drive it.** The law is
+  `turbosound.vhd:186-192`, resolved: `mono = A+B+C`, `ABC = (A+B, B+C)`,
+  `ACB = (A+C, B+C)`. Only the middle letter moves between the two stereo
+  cases, which is the whole content of the naming — it is the channel heard
+  from both speakers.
+
+  `NR$08` bit 5 and `NR$09` bits 7:5 now reach the chips. Both were decoded,
+  stored and read back correctly while driving nothing, so a guest selecting
+  ACB heard ABC. Mono remains the default and the only correct setting for
+  every classic machine, whose AY drives one internal speaker.
+
+- **The Next's DAC bank is two stereo pairs.** `soundrive.vhd:110-111` sums
+  chA+chB into `pcm_L_o` and chC+chD into `pcm_R_o`, and labels them "left" and
+  "right" in its port list. Meaning all four together turned a hard-panned pair
+  into silence.
+
+- **The SAM Coupé's 1-bit beeper.** The machine keeps the Spectrum's speaker on
+  `$FE` bit 4 for compatibility, and it was not modelled at all — so 48K
+  software made no sound, and neither did the SAM ROM's key click. Only a
+  genuine edge is recorded, since that port also carries the border colour, MIC
+  and SOFF.
+
+- **The SAM Coupé is captured.** It was the one machine in the line with no
+  state capture: the registry returned an *empty* set for it, so rewind and
+  time travel silently did nothing. Six devices now: the CPU, the memory map,
+  the keyboard, the SAA1099 and both WD1772s, plus the ASIC latches.
+
+  Disks and the ROM are deliberately excluded, on the rule the tape player
+  already follows. A rewind cannot un-write a floppy and must not un-insert one.
+
+- **Save states for the Spectrum Next, the SAM and the ZX80/ZX81.** All three
+  were refused outright, which was right while SZX was the only option: `.sna`,
+  `.z80` and `.szx` all describe a 48K/128K memory map and a Z80, and there is
+  nowhere in any of them for the Next's 2 MB and its NextRegs, the SAM's paging
+  and SAA1099, or the ZX81's CPU-generated display.
+
+  They now save the machinestate capture — the same one the rewind ring takes —
+  in a container tagged with the machine, so a wrong-machine load says which
+  machine the file came from rather than listing device names. The classic
+  Spectrums keep SZX, because it is portable and other emulators read it.
+
+- **Extended DSK images on the SAM**, through the parser the +3 already uses.
+  An image whose tracks disagree on geometry is refused with the offending
+  track named rather than flattened; the SAM's sector store has one geometry,
+  so accepting it would place every sector after the odd track at the wrong
+  offset — the image would load, most of it would read correctly, and it would
+  fail as a corrupt file mid-game. An *unformatted* track is a different case
+  and is accepted: real dumps carry them.
+
+  SBT is deliberately **not** supported. They are not disk images, and where in
+  a blank disk the file goes is not published anywhere this project can use.
+
+### Fixed
+
+- **The Next's DAC reset to the negative rail.** `soundrive.vhd:71-74` loads
+  `$80` into all four channels, because mid-scale is what silence means for a
+  centred DAC. Resetting to 0 was a full-scale DC offset that the AC-coupling
+  downstream then removed — inaudible *and* wrong, which is the combination
+  that keeps a bug alive.
+
+- **The SAM's beeper had no output clamp**, so an isolated toggle overshot to
+  twice the level the speaker is driven to. A high-pass's step response is the
+  step height, which is why `pkg/ula` bounds its own.
+
+- **A reset left the SAM's speaker asserted.** It cleared the BORDER latch and
+  nothing behind it, so the guest's next BEEP-high write was not an edge and
+  the first click after a reset was swallowed.
+
+- **An edge in a frame's overshoot window was discarded.** `ExecuteFrame` runs
+  past its budget by the length of whichever instruction crossed the boundary,
+  so a write in that window lands past the frame length and no sample can reach
+  it. Truncating the list afterwards threw it away, leaving the speaker at the
+  pre-write level for the whole of the next frame.
+
+- **The SAM's beeper event list grew without bound** with no audio consumer —
+  `--no-sound` and every headless run — and the capture path encoded the whole
+  thing on every rewind frame.
+
+### Worth knowing
+
+Three findings that cost more to reach than they look.
+
+**A clamp that models one source must not be applied to the bus.** The SAM's DC
+blocker was filtering the summed output, so the beeper's cone-excursion limit
+became a level cap on the SAA1099, which reaches full scale on its own: a loud
+frame was clipped to a quarter of its range with nearly half its samples pinned
+on the limit. The beeper is filtered alone now, before it is summed.
+
+**An interface method cannot silently stop matching; a type assertion can.**
+The ULA reached the Next's DAC through a runtime assertion, so renaming the
+method it looked for disconnected the DAC from the audio path with no build
+error and no failing test. `NextDAC` declares those methods now.
+
+**gob does not police a schema.** Renaming a field in a device's wire struct
+decodes cleanly and leaves the new one zero-filled, which for a DAC resting at
+`$80` means the negative rail rather than silence. The container's version has
+to be bumped when any device's wire struct changes shape, not only when the
+framing does.
+
 ## [v1.10.2]
 
 **LoRes, Radastan and ULA+ work.** A guest can select the mode, set its
