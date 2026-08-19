@@ -134,6 +134,12 @@ type AY struct {
 	// counter accumulates fractional cycles per audio sample so we can advance
 	// the internal state by an exact integer number of master cycles.
 	clockAccum float64
+
+	// stereo is how this chip's three channels reach the two outputs. It is a
+	// property of the machine's wiring rather than of the chip, so it is not
+	// touched by Reset — a Next reset clears NR$08, and the Engine pushes the
+	// resulting mode down. See stereo.go.
+	stereo StereoMode
 }
 
 // New creates a new AY instance with all registers cleared. The noise LFSR
@@ -611,22 +617,33 @@ func cyclesPerSample() float64 {
 	return float64(AYClock) / 16.0 / float64(SampleRate)
 }
 
-// advanceSample steps the internal clock by the fractional number of AY ticks
-// due for one audio sample (accumulating leftover fractional cycles in
-// clockAccum) and returns the summed three-channel mix, unclamped. Must be
-// called with the mutex held.
-func (a *AY) advanceSample(cps float64) int32 {
+// advanceClock steps the internal clock by the fractional number of AY ticks
+// due for one audio sample, accumulating leftover fractional cycles in
+// clockAccum. Must be called with the mutex held.
+//
+// Both mixers go through here so that a stereo pull and a mono pull advance
+// the generators identically. If they diverged, switching the panning mode
+// mid-tune would shift the pitch.
+func (a *AY) advanceClock(cps float64) {
 	a.clockAccum += cps
 	steps := int(a.clockAccum)
 	a.clockAccum -= float64(steps)
 	for s := 0; s < steps; s++ {
 		a.stepClock()
 	}
-	// Sum the three channels and divide by 3 to keep the result within
-	// int16 range.
+}
+
+// advanceSample steps the clock one audio sample and returns the summed
+// three-channel mix, unclamped. This is the mono sum whatever the panning mode
+// is set to: a caller asking for one channel must not be handed one side of a
+// stereo image. Must be called with the mutex held.
+func (a *AY) advanceSample(cps float64) int32 {
+	a.advanceClock(cps)
+	// Sum the three channels and divide by the channel count to keep the
+	// result within int16 range.
 	return (int32(a.channelLevel(0)) +
 		int32(a.channelLevel(1)) +
-		int32(a.channelLevel(2))) / 3
+		int32(a.channelLevel(2))) / mixHeadroom
 }
 
 func clampSample(v int32) int16 {

@@ -4,6 +4,7 @@ import (
 	"image"
 	"os"
 
+	"github.com/conorarmstrong/zx_go/pkg/audio"
 	"github.com/conorarmstrong/zx_go/pkg/saa1099"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
@@ -53,7 +54,16 @@ type Machine struct {
 	frame        *image.RGBA
 	renderCursor int
 
-	audioScratch []int16 // reused stereo scratch for GenerateAudioMono
+	// The 1-bit beeper on BORDER bit 4. Its transitions are timestamped
+	// within the frame so the waveform is reconstructed at sample accuracy;
+	// beeperLevel is the live bit (used to spot an actual edge among the
+	// border writes that share the port), and frameStartBeeper is the level
+	// carried in from the previous frame.
+	beeperEvents     []beeperEvent
+	beeperLevel      bool
+	frameStartBeeper bool
+	// beeperDC AC-couples the mix, one filter per channel.
+	beeperDC audio.StereoDCBlocker
 }
 
 // New builds a SAM machine from the two 16 KB ROM halves. z80.New resets the

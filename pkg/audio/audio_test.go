@@ -16,26 +16,26 @@ func fakeSystem() *AudioSystem {
 }
 
 // fakeReader builds an audioReader wired to as with buffers sized
-// for `samples` mono samples — enough to drive Read() once without
+// for `frames` stereo frames — enough to drive Read() once without
 // touching oto. Lets us test the mixing stages in Read directly.
-func fakeReader(as *AudioSystem, samples int) *audioReader {
+func fakeReader(as *AudioSystem, frames int) *audioReader {
 	return &audioReader{
 		audioSys:  as,
-		buffer:    make([]byte, samples*ChannelCount*2),
-		mixBuffer: make([]int16, samples),
+		buffer:    make([]byte, frames*ChannelCount*2),
+		mixBuffer: make([]int16, frames*ChannelCount),
 	}
 }
 
-// fakeDACSource records that MixInto was called and applies a
+// fakeDACSource records that MixIntoStereo was called and applies a
 // constant contribution. Used to prove SetDAC + Read wiring runs
-// MixInto exactly once per Read call with the buffer the audio
+// it exactly once per Read call with the buffer the audio
 // system intends to expose.
 type fakeDACSource struct {
 	contrib int16
 	calls   int
 }
 
-func (f *fakeDACSource) MixInto(buf []int16) {
+func (f *fakeDACSource) MixIntoStereo(buf []int16) {
 	f.calls++
 	for i := range buf {
 		buf[i] += f.contrib
@@ -105,18 +105,19 @@ func TestSetDACNilSkipsMix(t *testing.T) {
 
 // TestPushAndPopRoundTrip verifies that samples pushed by the
 // emulation goroutine come back out in order from the playback path.
+// The beeper is mono, so each pushed sample occupies one stereo frame.
 func TestPushAndPopRoundTrip(t *testing.T) {
 	as := fakeSystem()
 
 	in := []int16{1, 2, 3, 4, 5}
 	as.PushBeeperSamples(in)
 
-	out := make([]int16, len(in))
-	as.popBeeperSamples(out)
+	out := make([]int16, len(in)*ChannelCount)
+	as.popStereoSamples(out)
 
 	for i := range in {
-		if out[i] != in[i] {
-			t.Errorf("sample %d: got %d, want %d", i, out[i], in[i])
+		if out[i*2] != in[i] || out[i*2+1] != in[i] {
+			t.Errorf("frame %d: got (%d, %d), want (%d, %d)", i, out[i*2], out[i*2+1], in[i], in[i])
 		}
 	}
 }
@@ -131,25 +132,26 @@ func TestPopUnderflowDecaysToSilence(t *testing.T) {
 	as := fakeSystem()
 	as.PushBeeperSamples([]int16{100, 200, 300})
 
-	out := make([]int16, 6)
-	as.popBeeperSamples(out)
+	// Six frames requested, three available.
+	out := make([]int16, 6*ChannelCount)
+	as.popStereoSamples(out)
 
-	// Real samples drain first; the first underrun slot continues from the
+	// Real samples drain first; the first underrun frame continues from the
 	// last real sample (continuous — no step into the gap).
-	if out[0] != 100 || out[1] != 200 || out[2] != 300 {
-		t.Fatalf("drained samples = %v, want [100 200 300 ...]", out[:3])
+	if out[0] != 100 || out[2] != 200 || out[4] != 300 {
+		t.Fatalf("drained left channel = [%d %d %d], want [100 200 300]", out[0], out[2], out[4])
 	}
-	if out[3] != 300 {
-		t.Errorf("first underrun slot = %d, want 300 (continuous with last real sample)", out[3])
+	if out[6] != 300 {
+		t.Errorf("first underrun frame = %d, want 300 (continuous with last real sample)", out[6])
 	}
 	// Then it decays toward 0 (strictly shrinking, no flat plateau).
-	if out[4] >= out[3] || out[5] >= out[4] {
-		t.Errorf("underrun not decaying toward silence: %v", out[3:])
+	if out[8] >= out[6] || out[10] >= out[8] {
+		t.Errorf("underrun not decaying toward silence: %d %d %d", out[6], out[8], out[10])
 	}
 
 	// A long underrun must fade essentially to silence.
-	long := make([]int16, 4000)
-	as.popBeeperSamples(long)
+	long := make([]int16, 4000*ChannelCount)
+	as.popStereoSamples(long)
 	if v := long[len(long)-1]; v < -2 || v > 2 {
 		t.Errorf("after a long underrun, tail = %d, want ~0 (faded to silence)", v)
 	}
@@ -164,10 +166,10 @@ func TestPopFromEmptyHoldsZero(t *testing.T) {
 	for i := range out {
 		out[i] = 0x7FFF // poison
 	}
-	as.popBeeperSamples(out)
+	as.popStereoSamples(out)
 	for i, v := range out {
 		if v != 0 {
-			t.Errorf("sample %d: got %d, want 0", i, v)
+			t.Errorf("slot %d: got %d, want 0", i, v)
 		}
 	}
 }
@@ -179,9 +181,10 @@ func TestPopFromEmptyHoldsZero(t *testing.T) {
 func TestQueueOverflowDropsOldest(t *testing.T) {
 	as := fakeSystem()
 
-	// Push two ring-buffers worth of distinguishable samples in
-	// one go. The first half should be overwritten by the second.
-	const burst = queueCapacity * 2
+	// Push two ring-buffers worth of distinguishable mono samples in one go;
+	// each occupies one stereo frame. The first half should be overwritten by
+	// the second.
+	const burst = queueCapacity // mono samples = queueCapacity/2 frames * 2
 	in := make([]int16, burst)
 	for i := range in {
 		in[i] = int16(i % 32767)
@@ -191,9 +194,9 @@ func TestQueueOverflowDropsOldest(t *testing.T) {
 	// Drain everything and verify the first sample is from the
 	// SECOND half of the input (the oldest got dropped).
 	out := make([]int16, queueCapacity)
-	as.popBeeperSamples(out)
+	as.popStereoSamples(out)
 
-	expectedFirst := int16((burst - queueCapacity) % 32767)
+	expectedFirst := int16((burst - queueCapacity/ChannelCount) % 32767)
 	if out[0] != expectedFirst {
 		t.Errorf("after overflow: out[0] = %d, want %d (oldest should be dropped)", out[0], expectedFirst)
 	}
@@ -207,14 +210,14 @@ func TestResetClearsQueue(t *testing.T) {
 	as.PushBeeperSamples([]int16{1, 2, 3})
 	as.Reset()
 
-	out := make([]int16, 3)
+	out := make([]int16, 4)
 	for i := range out {
 		out[i] = 0x7FFF // poison
 	}
-	as.popBeeperSamples(out)
+	as.popStereoSamples(out)
 	for i, v := range out {
 		if v != 0 {
-			t.Errorf("after Reset: sample %d = %d, want 0", i, v)
+			t.Errorf("after Reset: slot %d = %d, want 0", i, v)
 		}
 	}
 }
@@ -470,7 +473,7 @@ func TestStartRecordingFinalisesPriorRecording(t *testing.T) {
 }
 
 // TestWriteRecordingAppendsSamples verifies writeRecording appends
-// samples and StopRecording back-patches the sample count into the
+// samples and StopRecording back-patches the frame count into the
 // header (bytes 4 and 40).
 func TestWriteRecordingAppendsSamples(t *testing.T) {
 	as := fakeSystem()
@@ -479,8 +482,8 @@ func TestWriteRecordingAppendsSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Push 8 samples through the private write path. Each sample is
-	// 2 bytes (16-bit mono) so we expect dataSize == 16 in the
+	// Push 8 interleaved slots = 4 stereo frames through the private write
+	// path. Each frame is 4 bytes, so we expect dataSize == 16 in the
 	// finalised header.
 	in := []int16{1, -1, 2, -2, 3, -3, 4, -4}
 	as.writeRecording(in)
@@ -494,8 +497,13 @@ func TestWriteRecordingAppendsSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := decodeWavHeader(t, b)
+	// The recording is stereo, so a player separates the channels rather than
+	// playing the interleave as twice as many mono samples at half pitch.
+	if h.channels != ChannelCount {
+		t.Errorf("recording channels = %d, want %d", h.channels, ChannelCount)
+	}
 	if h.dataSize != 16 {
-		t.Errorf("dataSize after 8 samples = %d, want 16", h.dataSize)
+		t.Errorf("dataSize after 4 stereo frames = %d, want 16", h.dataSize)
 	}
 	if h.riffSize != 36+16 {
 		t.Errorf("riffSize after Stop = %d, want %d", h.riffSize, 36+16)
@@ -536,10 +544,10 @@ func TestPrefillSilenceProvidesCushion(t *testing.T) {
 	}
 
 	out := make([]int16, queuePrefill)
-	as.popBeeperSamples(out)
+	as.popStereoSamples(out)
 	for i, v := range out {
 		if v != 0 {
-			t.Errorf("prefill sample %d = %d, want 0 (silence)", i, v)
+			t.Errorf("prefill slot %d = %d, want 0 (silence)", i, v)
 			break
 		}
 	}
@@ -557,36 +565,36 @@ func TestStartRecording_OpenError(t *testing.T) {
 	}
 }
 
-// TestWriteRecording_MaxSamplesCap covers writeRecording's maxWavSamples
+// TestWriteRecording_MaxFramesCap covers writeRecording's maxWavFrames
 // truncation, the remaining==0 early-return, and the recScratch grow path.
-func TestWriteRecording_MaxSamplesCap(t *testing.T) {
+func TestWriteRecording_MaxFramesCap(t *testing.T) {
 	as := fakeSystem()
 	dir := t.TempDir()
 	path := dir + "/cap.wav"
 	if err := as.StartRecording(path); err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	// One sample slot left before the WAV size fields would overflow.
+	// One frame left before the WAV size fields would overflow.
 	as.recMu.Lock()
-	as.recSamples = maxWavSamples - 1
+	as.recSamples = maxWavFrames - 1
 	as.recMu.Unlock()
 
-	// Three samples offered → only one is written (truncation path).
-	as.writeRecording([]int16{0x1111, 0x2222, 0x3333})
+	// Three frames offered → only one is written (truncation path).
+	as.writeRecording([]int16{0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666})
 	as.recMu.Lock()
 	got := as.recSamples
 	as.recMu.Unlock()
-	if got != maxWavSamples {
-		t.Errorf("recSamples = %d, want %d (capped)", got, maxWavSamples)
+	if got != maxWavFrames {
+		t.Errorf("recSamples = %d, want %d (capped)", got, maxWavFrames)
 	}
 
 	// Now full: remaining==0 → early return, no change.
-	as.writeRecording([]int16{0x4444})
+	as.writeRecording([]int16{0x7777, 0x0888})
 	as.recMu.Lock()
 	got = as.recSamples
 	as.recMu.Unlock()
-	if got != maxWavSamples {
-		t.Errorf("after full, recSamples = %d, want %d", got, maxWavSamples)
+	if got != maxWavFrames {
+		t.Errorf("after full, recSamples = %d, want %d", got, maxWavFrames)
 	}
 	if err := as.StopRecording(); err != nil {
 		t.Fatalf("StopRecording: %v", err)

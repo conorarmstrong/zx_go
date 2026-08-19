@@ -10,11 +10,16 @@ import (
 )
 
 // AYSource is the minimal interface that the audio system needs from an AY
-// sound chip implementation. It is satisfied by *ay.AY but kept as an
-// interface here so the audio package does not need to import the ay package
-// (which would create a dependency cycle through the ULA).
+// sound chip implementation. It is satisfied by *ay.AY and *ay.Engine but kept
+// as an interface here so the audio package does not need to import the ay
+// package (which would create a dependency cycle through the ULA).
+//
+// The buffer is interleaved stereo, because an AY is a stereo source on this
+// hardware: the Next pans its three channels per NR$08 bit 5 and NR$09 bits
+// 7:5 (turbosound.vhd), and a chip left in mono simply writes the same value
+// to both slots.
 type AYSource interface {
-	MixInto(buf []int16)
+	MixIntoStereo(buf []int16)
 }
 
 // DACSource is the minimal interface for the Spectrum Next's four
@@ -22,8 +27,12 @@ type AYSource interface {
 // granularity: the current level is applied uniformly across the
 // whole buffer rather than integrating individual writes within
 // the frame (contrast pkg/audiodac's event-based reconstruction).
+//
+// Interleaved stereo for the same reason: soundrive.vhd sums channels A and B
+// into the left output and C and D into the right, so the bank has a real
+// stereo image and folding it down here would discard it.
 type DACSource interface {
-	MixInto(buf []int16)
+	MixIntoStereo(buf []int16)
 }
 
 const (
@@ -33,18 +42,23 @@ const (
 	BitDepth     = 16   // 16-bit
 	BufferSize   = 1024 // oto buffer size in samples — small enough that Read() runs ~43 times/sec, keeping playback latency low
 
-	// SamplesPerFrame is the number of mono beeper samples one
-	// emulator frame produces at SampleRate / 50Hz. The ULA pushes
-	// exactly this many samples to the audio system per frame.
+	// SamplesPerFrame is the number of audio frames one emulator frame
+	// produces at SampleRate / 50Hz, counted PER CHANNEL. A producer pushing
+	// stereo therefore hands over SamplesPerFrame*ChannelCount int16 values.
 	SamplesPerFrame = SampleRate / 50
 
-	// queueCapacity is the ring buffer size in mono samples — about
-	// 12 frames at 50Hz (~240 ms). Wide enough to absorb scheduler
-	// jitter, GC pauses, and the natural push/pull oscillation
-	// between the 50Hz producer and the ~43Hz consumer.
-	queueCapacity = SamplesPerFrame * 12
+	// queueCapacity is the ring buffer size in int16 slots. Two slots make one
+	// stereo frame, so this is about 12 emulator frames at 50Hz (~240 ms):
+	// wide enough to absorb scheduler jitter, GC pauses, and the natural
+	// push/pull oscillation between the 50Hz producer and the ~43Hz consumer.
+	//
+	// Everything below counts SLOTS, not frames, and the ring is kept
+	// frame-aligned by only ever moving the head and tail two at a time. A
+	// single-slot move would rotate the interleave, turning one dropped sample
+	// into a permanent left/right swap for the rest of the session.
+	queueCapacity = SamplesPerFrame * ChannelCount * 12
 
-	// queuePrefill is how many silence samples we seed the queue
+	// queuePrefill is how many silent slots we seed the queue
 	// with at startup so the consumer's first pull doesn't drain
 	// the queue to zero. Without this cushion, the producer is
 	// always exactly one push behind the consumer (they have equal
@@ -53,7 +67,7 @@ const (
 	// stutter at the consumer's pull rate. Four frames give the
 	// queue enough headroom that the discrete-event oscillation
 	// never reaches the bottom.
-	queuePrefill = SamplesPerFrame * 4
+	queuePrefill = SamplesPerFrame * ChannelCount * 4
 )
 
 // prefillSilence indexes queue (a [queueCapacity]int16 array) directly over
@@ -79,13 +93,18 @@ type AudioSystem struct {
 	player  oto.Player
 	reader  *audioReader
 
-	// Beeper sample ring buffer.
-	queueMu    sync.Mutex
-	queue      [queueCapacity]int16
-	queueHead  int   // next write position
-	queueTail  int   // next read position
-	queueSize  int   // number of samples currently in the buffer
-	lastSample int16 // value to hold during underflow (DC, no clicks)
+	// Interleaved stereo sample ring buffer. All four counters are in int16
+	// slots and always move in pairs, so the ring never loses frame alignment.
+	queueMu   sync.Mutex
+	queue     [queueCapacity]int16
+	queueHead int // next write slot
+	queueTail int // next read slot
+	queueSize int // slots currently in the buffer
+
+	// lastL/lastR are held during underflow (DC, no clicks), one per channel.
+	// A single shared value would collapse the stereo image to mono for the
+	// length of every buffer starve.
+	lastL, lastR int16
 
 	// Optional AY-3-8912 source.
 	ayMu sync.RWMutex
@@ -175,14 +194,32 @@ func (as *AudioSystem) prefillSilence() {
 	for i := 0; i < queuePrefill; i++ {
 		as.queue[i] = 0
 	}
-	as.lastSample = 0
+	as.lastL, as.lastR = 0, 0
 }
 
-// PushBeeperSamples enqueues a batch of mono beeper samples generated
-// by the ULA at end of frame. The samples are consumed by the oto
-// playback goroutine via Read. If the buffer would overflow (the
-// playback goroutine is falling behind), the oldest samples are
-// dropped — audio glitches are preferable to growing latency.
+// pushFrame appends one stereo frame. On overflow the oldest FRAME is dropped,
+// never a single slot: audio glitches are preferable to growing latency, but a
+// half-frame drop would rotate the interleave and swap the channels for good.
+// Caller holds queueMu.
+func (as *AudioSystem) pushFrame(l, r int16) {
+	as.queue[as.queueHead] = l
+	as.queue[(as.queueHead+1)%queueCapacity] = r
+	as.queueHead = (as.queueHead + 2) % queueCapacity
+	if as.queueSize == queueCapacity {
+		as.queueTail = (as.queueTail + 2) % queueCapacity
+	} else {
+		as.queueSize += 2
+	}
+}
+
+// PushBeeperSamples enqueues a batch of MONO samples generated by the ULA at
+// end of frame, placing each on both channels.
+//
+// Mono is the honest shape for this input rather than a shortcut. The
+// Spectrum's beeper is one bit driving one speaker, and everything the ULA
+// folds into this frame before pushing — the tape's EAR waveform, SpecDrum,
+// Covox — is a single-ended source too. Sources with a real stereo image use
+// PushStereoSamples.
 func (as *AudioSystem) PushBeeperSamples(samples []int16) {
 	if len(samples) == 0 {
 		return
@@ -190,14 +227,17 @@ func (as *AudioSystem) PushBeeperSamples(samples []int16) {
 	as.queueMu.Lock()
 	defer as.queueMu.Unlock()
 	for _, s := range samples {
-		as.queue[as.queueHead] = s
-		as.queueHead = (as.queueHead + 1) % queueCapacity
-		if as.queueSize == queueCapacity {
-			// Buffer is full; advance tail to drop the oldest sample.
-			as.queueTail = (as.queueTail + 1) % queueCapacity
-		} else {
-			as.queueSize++
-		}
+		as.pushFrame(s, s)
+	}
+}
+
+// PushStereoSamples enqueues interleaved stereo frames (L, R, L, R ...).
+// A trailing odd slot is ignored rather than pushed as half a frame.
+func (as *AudioSystem) PushStereoSamples(interleaved []int16) {
+	as.queueMu.Lock()
+	defer as.queueMu.Unlock()
+	for i := 0; i+1 < len(interleaved); i += 2 {
+		as.pushFrame(interleaved[i], interleaved[i+1])
 	}
 }
 
@@ -213,46 +253,57 @@ const (
 	underrunDecayDen = 256
 )
 
-// popBeeperSamples drains up to len(out) samples from the ring buffer into
-// out. Any unfilled slots continue from the last delivered sample and then
-// decay toward 0, so underruns fade to silence smoothly instead of clicking.
-// Returns the slice unchanged.
-func (as *AudioSystem) popBeeperSamples(out []int16) {
+// decayHeld shrinks a held level one step toward silence.
+func decayHeld(v int16) int16 {
+	return int16(int32(v) * underrunDecayNum / underrunDecayDen)
+}
+
+// popStereoSamples drains up to len(out) slots from the ring buffer into out,
+// a frame at a time. Any unfilled frames continue from the last delivered one
+// and then decay toward 0 PER CHANNEL, so underruns fade to silence smoothly
+// instead of clicking, and without the image collapsing to the centre on the
+// way down. A trailing odd slot in out is left untouched.
+func (as *AudioSystem) popStereoSamples(out []int16) {
 	as.queueMu.Lock()
 	defer as.queueMu.Unlock()
 	n := 0
-	for n < len(out) && as.queueSize > 0 {
+	for n+1 < len(out) && as.queueSize > 0 {
 		out[n] = as.queue[as.queueTail]
-		as.queueTail = (as.queueTail + 1) % queueCapacity
-		as.queueSize--
-		n++
+		out[n+1] = as.queue[(as.queueTail+1)%queueCapacity]
+		as.queueTail = (as.queueTail + 2) % queueCapacity
+		as.queueSize -= 2
+		n += 2
 	}
 	if n > 0 {
-		as.lastSample = out[n-1]
+		as.lastL, as.lastR = out[n-2], out[n-1]
 	}
-	for ; n < len(out); n++ {
-		out[n] = as.lastSample
-		as.lastSample = int16(int32(as.lastSample) * underrunDecayNum / underrunDecayDen)
+	for ; n+1 < len(out); n += 2 {
+		out[n], out[n+1] = as.lastL, as.lastR
+		as.lastL, as.lastR = decayHeld(as.lastL), decayHeld(as.lastR)
 	}
 }
 
-// Read implements io.Reader for the audioReader. Pulls beeper samples
-// from the ring buffer, mixes in any attached AY chip, then expands
-// the mono mix to stereo for the oto sink.
+// Read implements io.Reader for the audioReader. Pulls interleaved stereo
+// frames from the ring buffer, mixes in any attached AY chip and DAC bank, and
+// hands the result to the oto sink.
+//
+// This mirrors audio_mixer.vhd, which sums the beeper, the AY pair and the DAC
+// pair into pcm_L_o / pcm_R_o. Each stage below adds into the same interleaved
+// buffer, so a source that is mono simply contributes equally to both slots.
 func (ar *audioReader) Read(p []byte) (n int, err error) {
 	bytesToRead := len(p)
 	if bytesToRead > len(ar.buffer) {
 		bytesToRead = len(ar.buffer)
 	}
-	samples := bytesToRead / (ChannelCount * 2)
+	slots := bytesToRead / 2
 
-	if cap(ar.mixBuffer) < samples {
-		ar.mixBuffer = make([]int16, samples)
+	if cap(ar.mixBuffer) < slots {
+		ar.mixBuffer = make([]int16, slots)
 	}
-	mixBuf := ar.mixBuffer[:samples]
+	mixBuf := ar.mixBuffer[:slots]
 
-	// Step 1: pull beeper samples from the ULA's ring buffer.
-	ar.audioSys.popBeeperSamples(mixBuf)
+	// Step 1: pull the beeper/tape/DAC frame the ULA pushed.
+	ar.audioSys.popStereoSamples(mixBuf)
 
 	// Step 2: mix in the AY chip's output (it generates samples
 	// from its own internal counters at audio rate).
@@ -260,7 +311,7 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 	ay := ar.audioSys.ay
 	ar.audioSys.ayMu.RUnlock()
 	if ay != nil {
-		ay.MixInto(mixBuf)
+		ay.MixIntoStereo(mixBuf)
 	}
 
 	// Step 2.5: mix in the Next DAC bank if attached (frame-snapshot
@@ -269,11 +320,11 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 	dac := ar.audioSys.dac
 	ar.audioSys.dacMu.RUnlock()
 	if dac != nil {
-		dac.MixInto(mixBuf)
+		dac.MixIntoStereo(mixBuf)
 	}
 
-	// Step 3: WAV recording — append the mono mix before expansion (and
-	// before the keep-alive dither, so captures stay clean for diagnostics).
+	// Step 3: WAV recording — append the mix before the keep-alive dither, so
+	// captures stay clean for diagnostics.
 	ar.audioSys.writeRecording(mixBuf)
 
 	// Step 3.5: keep-alive dither — a sub-audible noise floor that stops the
@@ -281,14 +332,12 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 	// sound. Added to the device output only.
 	applyKeepAliveDither(mixBuf, ar.audioSys.keepAlive, &ar.ditherRNG)
 
-	// Step 4: emit the mono mix as interleaved stereo bytes.
-	for i := 0; i < samples; i++ {
+	// Step 4: emit as little-endian bytes. The buffer is already interleaved,
+	// so this is a straight widening with no channel decision left to make.
+	for i := 0; i < slots; i++ {
 		s := mixBuf[i]
-		base := i * ChannelCount * 2
-		ar.buffer[base] = byte(s)
-		ar.buffer[base+1] = byte(s >> 8)
-		ar.buffer[base+2] = byte(s)
-		ar.buffer[base+3] = byte(s >> 8)
+		ar.buffer[i*2] = byte(s)
+		ar.buffer[i*2+1] = byte(s >> 8)
 	}
 	copy(p, ar.buffer[:bytesToRead])
 	return bytesToRead, nil
@@ -349,7 +398,7 @@ func (as *AudioSystem) Reset() {
 }
 
 // StartRecording opens path for writing and begins capturing the mixed
-// mono audio output as a 16-bit PCM WAV file at SampleRate. If a
+// audio output as a 16-bit stereo PCM WAV file at SampleRate. If a
 // recording is already in progress it is finalised first.
 func (as *AudioSystem) StartRecording(path string) error {
 	if err := as.StopRecording(); err != nil {
@@ -359,7 +408,7 @@ func (as *AudioSystem) StartRecording(path string) error {
 	if err != nil {
 		return fmt.Errorf("create wav file: %w", err)
 	}
-	if err := writeWavHeader(f, 0, 1, SampleRate, 16); err != nil {
+	if err := writeWavHeader(f, 0, ChannelCount, SampleRate, 16); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		return fmt.Errorf("write wav header: %w", err)
@@ -371,11 +420,11 @@ func (as *AudioSystem) StartRecording(path string) error {
 	return nil
 }
 
-// maxWavSamples is the largest number of mono 16-bit samples we can
+// maxWavFrames is the largest number of stereo 16-bit frames we can
 // capture before either of the WAV header's uint32 size fields would
-// overflow. About 13.6 hours at 44.1kHz; writeRecording stops
+// overflow. About 6.8 hours at 44.1kHz; writeRecording stops
 // appending past this point.
-const maxWavSamples uint64 = (0xFFFFFFFF - 36) / 2
+const maxWavFrames uint64 = (0xFFFFFFFF - 36) / (ChannelCount * 2)
 
 // StopRecording finalises any in-progress recording.
 func (as *AudioSystem) StopRecording() error {
@@ -392,7 +441,7 @@ func (as *AudioSystem) StopRecording() error {
 		_ = f.Close()
 		return err
 	}
-	if err := writeWavHeader(f, uint32(samples), 1, SampleRate, 16); err != nil {
+	if err := writeWavHeader(f, uint32(samples), ChannelCount, SampleRate, 16); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -406,24 +455,27 @@ func (as *AudioSystem) IsRecording() bool {
 	return as.recFile != nil
 }
 
-// writeRecording appends a mono sample buffer to the active WAV file.
-func (as *AudioSystem) writeRecording(samples []int16) {
+// writeRecording appends an interleaved stereo buffer to the active WAV file.
+// recSamples counts FRAMES, matching the header's sample-count field, so an
+// odd trailing slot is dropped rather than written as half a frame.
+func (as *AudioSystem) writeRecording(interleaved []int16) {
 	as.recMu.Lock()
 	defer as.recMu.Unlock()
 	if as.recFile == nil {
 		return
 	}
-	remaining := maxWavSamples - as.recSamples
+	remaining := maxWavFrames - as.recSamples
 	if remaining == 0 {
 		return
 	}
-	n := uint64(len(samples))
-	if n > remaining {
-		n = remaining
-		samples = samples[:n]
+	frames := uint64(len(interleaved) / ChannelCount)
+	if frames > remaining {
+		frames = remaining
 	}
+	n := frames
+	samples := interleaved[:frames*ChannelCount]
 
-	need := int(n) * 2
+	need := int(frames) * ChannelCount * 2
 	if cap(as.recScratch) < need {
 		as.recScratch = make([]byte, need)
 	}

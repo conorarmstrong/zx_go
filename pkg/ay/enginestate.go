@@ -22,6 +22,14 @@ type engineState struct {
 	Chips    [3][]byte
 	Selected byte
 	Disabled bool
+
+	// Panning, from NR$08 bit 5 and NR$09 bits 7:5. It is captured here rather
+	// than read back from the register file because nextregs.LoadState assigns
+	// its register array directly without firing any OnWrite handler, so a
+	// rewind moves NR$08 without anything downstream hearing about it. The
+	// chips are re-told on restore, so the Engine stays the single owner.
+	ACB      bool
+	MonoMask byte
 }
 
 // StateID identifies the engine in a captured machine state.
@@ -42,6 +50,8 @@ func (e *Engine) SaveState() []byte {
 	}
 	s.Selected = e.selected
 	s.Disabled = e.disabled
+	s.ACB = e.acb
+	s.MonoMask = e.monoMask
 
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
@@ -79,5 +89,10 @@ func (e *Engine) LoadState(b []byte) error {
 	}
 	e.selected = s.Selected
 	e.disabled = s.Disabled
+	e.acb = s.ACB
+	e.monoMask = s.MonoMask
+	// Push the restored panning back down, since apply() rebuilds each chip
+	// from its own blob and the mode is not part of it.
+	e.applyPanning()
 	return nil
 }

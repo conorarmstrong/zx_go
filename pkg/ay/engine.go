@@ -13,6 +13,13 @@ type Engine struct {
 	chips    [3]*AY
 	selected byte // 0..2
 	disabled bool // NextReg 0x06 bit 2: AY chip disable
+
+	// Panning. Both registers behind these are engine-wide, so the Engine is
+	// where they live and the chips are simply told the result — see
+	// applyPanning. acb is NR$08 bit 5 (shared by all three PSGs); monoMask is
+	// NR$09 bits 7:5, one bit per PSG.
+	acb      bool
+	monoMask byte
 }
 
 // NewEngine returns an Engine with three freshly-reset AY chips.
@@ -75,6 +82,49 @@ func (e *Engine) SetChip(i int, c *AY) {
 		return
 	}
 	e.chips[i] = c
+	// The adopted chip has to inherit the panning the engine is already
+	// carrying. The Next hands over the ULA's AY during wiring, which happens
+	// after the boot defaults have been applied to NR$08, so without this the
+	// machine's own chip would be the one left unpanned.
+	e.applyPanning()
+}
+
+// SetStereoMode applies NR$08 bit 5: clear selects ABC, set selects ACB
+// (zxnext.vhd:5177). It is one bit for all three PSGs.
+func (e *Engine) SetStereoMode(acb bool) {
+	e.acb = acb
+	e.applyPanning()
+}
+
+// SetMonoMask applies NR$09 bits 7:5, which force individual PSGs back to mono
+// (zxnext.vhd:5186). Bit 5 is PSG 0, bit 6 is PSG 1, bit 7 is PSG 2: the VHDL
+// assigns nr_wr_dat(7 downto 5) to a (2 downto 0) vector, so the high bit of
+// the field lands on the high index. The mask is taken whole, so passing the
+// NR$09 byte is safe — the other bits are not ours.
+func (e *Engine) SetMonoMask(nr09 byte) {
+	e.monoMask = (nr09 >> 5) & 0x07
+	e.applyPanning()
+}
+
+// applyPanning pushes the resolved mode down to each chip.
+//
+// The mono mask wins outright, matching the VHDL: mono_mode_i(n) appears in
+// all three of PSG n's mux conditions, so a chip held mono is unreachable by
+// stereo_mode_i.
+func (e *Engine) applyPanning() {
+	for i, c := range e.chips {
+		if c == nil {
+			continue
+		}
+		switch {
+		case e.monoMask&(1<<uint(i)) != 0:
+			c.SetStereoMode(StereoMono)
+		case e.acb:
+			c.SetStereoMode(StereoACB)
+		default:
+			c.SetStereoMode(StereoABC)
+		}
+	}
 }
 
 // MixInto sums all three TurboSound chips into buf, so the Engine satisfies the
@@ -94,6 +144,21 @@ func (e *Engine) MixInto(buf []int16) {
 	for _, c := range e.chips {
 		if c != nil {
 			c.MixInto(buf)
+		}
+	}
+}
+
+// MixIntoStereo is the same sum into an interleaved stereo buffer, each chip
+// contributing through its own panning. This is what the audio system pulls
+// (audio.AYSource); it mirrors pcm_ay_L_o / pcm_ay_R_o, which turbosound.vhd
+// forms by adding all three PSGs' panned pairs (turbosound.vhd:334-335).
+func (e *Engine) MixIntoStereo(buf []int16) {
+	if e.disabled {
+		return
+	}
+	for _, c := range e.chips {
+		if c != nil {
+			c.MixIntoStereo(buf)
 		}
 	}
 }

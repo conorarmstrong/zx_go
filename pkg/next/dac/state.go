@@ -11,17 +11,17 @@ import (
 //
 // The four channel values are the small part, and they are not even what the
 // frame in flight is made of. Each port write only appends a timed event
-// holding the mixed level at that T-state; nothing reaches the audio until
-// GenerateFrame integrates the events and folds the last one into the level
-// carried into the next frame. A capture taken part way through a frame that
-// stopped at the four channels would restore a bank missing every write since
-// the last frame boundary, and missing the level it was sitting at before
+// holding the output pair at that T-state; nothing reaches the audio until
+// GenerateFrameStereo integrates the events and folds the last one into the
+// pair carried into the next frame. A capture taken part way through a frame
+// that stopped at the four channels would restore a bank missing every write
+// since the last frame boundary, and missing the level it was sitting at before
 // them: it would run, at the right volume, playing a different note.
 //
 // The channels still have to be captured, for the frames that come after. Every
-// event records the mean of all four (MixedLevel), so a channel the guest has
-// not written for a while sets part of the level of the next event on any other
-// channel — restoring three of the four is audible on the very next write.
+// event records the mean of a channel pair (LevelL / LevelR), so a channel the
+// guest has not written for a while sets half the level of the next event on
+// its partner — restoring three of the four is audible on the very next write.
 //
 // SounDrive is deliberately not part of this capture. It is a standalone
 // reference model of audio/soundrive.vhd that nothing constructs (the live port
@@ -35,7 +35,8 @@ import (
 // parallel form rather than being encoded directly.
 type eventState struct {
 	TStateOffset int
-	Level        byte
+	Left         byte
+	Right        byte
 }
 
 // bankState is the wire form. Every field is exported because gob only encodes
@@ -43,9 +44,10 @@ type eventState struct {
 // field to Bank without adding it here is the failure this package's tests are
 // built to catch.
 type bankState struct {
-	Levels     [4]byte
-	StartLevel byte
-	Events     []eventState
+	Levels [4]byte
+	StartL byte
+	StartR byte
+	Events []eventState
 }
 
 // StateID identifies the DAC bank in a captured machine state.
@@ -54,12 +56,13 @@ func (b *Bank) StateID() string { return "next.dac" }
 // SaveState captures the complete bank state.
 func (b *Bank) SaveState() []byte {
 	s := bankState{
-		Levels:     b.levels,
-		StartLevel: b.startLevel,
-		Events:     make([]eventState, len(b.events)),
+		Levels: b.levels,
+		StartL: b.startL,
+		StartR: b.startR,
+		Events: make([]eventState, len(b.events)),
 	}
 	for i, e := range b.events {
-		s.Events[i] = eventState{TStateOffset: e.tstateOffset, Level: e.level}
+		s.Events[i] = eventState{TStateOffset: e.tstateOffset, Left: e.left, Right: e.right}
 	}
 
 	var buf bytes.Buffer
@@ -90,10 +93,11 @@ func (b *Bank) LoadState(blob []byte) error {
 	}
 
 	b.levels = s.Levels
-	b.startLevel = s.StartLevel
+	b.startL = s.StartL
+	b.startR = s.StartR
 	b.events = b.events[:0]
 	for _, e := range s.Events {
-		b.events = append(b.events, dacEvent{tstateOffset: e.TStateOffset, level: e.Level})
+		b.events = append(b.events, dacEvent{tstateOffset: e.TStateOffset, left: e.Left, right: e.Right})
 	}
 	return nil
 }

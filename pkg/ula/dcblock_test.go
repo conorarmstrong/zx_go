@@ -1,6 +1,10 @@
 package ula
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/audio"
+)
 
 // TestDCBlockerSilencesIdleRail is the tracer for the captured bug: the
 // beeper rests at a full-scale rail (beeperLow) whenever the speaker bit is
@@ -10,12 +14,12 @@ import "testing"
 // turn a constant idle level into silence (0) with no startup step (it
 // lazy-seeds from the first sample, matching the audio system's prefill 0).
 func TestDCBlockerSilencesIdleRail(t *testing.T) {
-	var d dcBlocker
+	var d audio.DCBlocker
 	samples := make([]int16, 4000)
 	for i := range samples {
 		samples[i] = beeperLow // idle rail held for the whole stream
 	}
-	d.process(samples)
+	d.Process(samples)
 
 	if samples[0] != 0 {
 		t.Errorf("first sample = %d, want 0 (lazy-seeded — no startup click)", samples[0])
@@ -36,7 +40,8 @@ func TestDCBlockerSilencesIdleRail(t *testing.T) {
 // clamped to the speaker amplitude (beeperHigh): an isolated toggle reads as a
 // click at the level, not a doubled spike.
 func TestDCBlockerClampsIsolatedToggleToSpeakerLevel(t *testing.T) {
-	d := dcBlocker{limit: int32(beeperHigh)}
+	var d audio.DCBlocker
+	d.SetLimit(int32(beeperHigh))
 	samples := make([]int16, 200)
 	for i := range samples {
 		if i >= 10 {
@@ -45,7 +50,7 @@ func TestDCBlockerClampsIsolatedToggleToSpeakerLevel(t *testing.T) {
 			samples[i] = beeperLow
 		}
 	}
-	d.process(samples)
+	d.Process(samples)
 
 	peak := samples[10]
 	if peak != beeperHigh {
@@ -58,7 +63,7 @@ func TestDCBlockerClampsIsolatedToggleToSpeakerLevel(t *testing.T) {
 // near-full amplitude — the corner is only a few Hz, so a real beeper note
 // must not be attenuated.
 func TestDCBlockerPreservesTone(t *testing.T) {
-	var d dcBlocker
+	var d audio.DCBlocker
 	samples := make([]int16, 4410) // 0.1 s @ 44.1 kHz
 	const half = 11                // ~2 kHz square wave
 	for i := range samples {
@@ -68,7 +73,7 @@ func TestDCBlockerPreservesTone(t *testing.T) {
 			samples[i] = beeperLow
 		}
 	}
-	d.process(samples)
+	d.Process(samples)
 
 	var maxMag int16
 	for i := len(samples) / 2; i < len(samples); i++ {
@@ -89,9 +94,9 @@ func TestDCBlockerPreservesTone(t *testing.T) {
 // regression: an idle frame (no toggles) comes out of generateBeeperFrame as
 // a full beeperLow DC rail; once DC-blocked it must be silence.
 func TestIdleFrameProducesSilenceAfterDCBlock(t *testing.T) {
-	var d dcBlocker
+	var d audio.DCBlocker
 	samples, _ := generateBeeperFrame(nil, false) // all beeperLow
-	d.process(samples)
+	d.Process(samples)
 	for i, s := range samples {
 		if s < -1 || s > 1 {
 			t.Errorf("idle sample %d = %d, want ~0 (no boot/reset click)", i, s)

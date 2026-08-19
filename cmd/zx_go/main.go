@@ -144,7 +144,7 @@ type emulator struct {
 	// --no-sound) when the SAM machine is built; the run loop pushes a mono
 	// downmix each frame. nil for every other machine and in headless mode.
 	samAudio    *audio.AudioSystem
-	samAudioBuf []int16 // reused per-frame mono buffer for samAudio
+	samAudioBuf []int16 // reused per-frame interleaved stereo buffer for samAudio
 
 	// speccyDAC is the classic-Spectrum SpecDrum/Covox 8-bit DAC (non-nil on
 	// 48K/128K/+2/+2A/+3; nil on Next/ZX8x). Toggled from the Peripherals menu.
@@ -1368,10 +1368,10 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 						e.sam.RunFrame()
 						if e.samAudio != nil {
 							if e.samAudioBuf == nil {
-								e.samAudioBuf = make([]int16, sam.SamplesPerFrame)
+								e.samAudioBuf = make([]int16, sam.SamplesPerFrame*audio.ChannelCount)
 							}
-							e.sam.GenerateAudioMono(e.samAudioBuf)
-							e.samAudio.PushBeeperSamples(e.samAudioBuf)
+							e.sam.GenerateAudioStereo(e.samAudioBuf)
+							e.samAudio.PushStereoSamples(e.samAudioBuf)
 						}
 					case e.rzxPlayback.Load() != nil:
 						playback := e.rzxPlayback.Load()

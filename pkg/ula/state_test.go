@@ -313,7 +313,7 @@ func dcProbe(u *ULA) []int16 {
 	for i := range probe {
 		probe[i] = int16(4000 * (i%2*2 - 1))
 	}
-	u.dc.process(probe)
+	u.dc.Left().Process(probe)
 	return probe
 }
 
@@ -646,7 +646,7 @@ func driveEverything(u *ULA, ts *uint64) {
 	// leaves it at the speaker amplitude for the life of the machine. It is
 	// still filter state and still restored, so it is moved by hand — the only
 	// way it can be made to differ between capture and restore.
-	u.dc.limit = int32(beeperHigh) / 3
+	u.dc.SetLimit(int32(beeperHigh) / 3)
 }
 
 func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
@@ -703,10 +703,13 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"ULAScrollY", before.ULAScrollY == after.ULAScrollY},
 		{"ULAFineScrollX", before.ULAFineScrollX == after.ULAFineScrollX},
 		{"HasRendered", before.HasRendered == after.HasRendered},
-		{"DCPrevIn", before.DCPrevIn == after.DCPrevIn},
-		{"DCPrevOut", before.DCPrevOut == after.DCPrevOut},
+		{"DCLeft.PrevIn", before.DCLeft.PrevIn == after.DCLeft.PrevIn},
+		{"DCLeft.PrevOut", before.DCLeft.PrevOut == after.DCLeft.PrevOut},
+		{"DCLeft.Seeded", before.DCLeft.Seeded == after.DCLeft.Seeded},
+		{"DCRight.PrevIn", before.DCRight.PrevIn == after.DCRight.PrevIn},
+		{"DCRight.PrevOut", before.DCRight.PrevOut == after.DCRight.PrevOut},
+		{"DCRight.Seeded", before.DCRight.Seeded == after.DCRight.Seeded},
 		{"DCLimit", before.DCLimit == after.DCLimit},
-		{"DCSeeded", before.DCSeeded == after.DCSeeded},
 		{"DCEnabled", before.DCEnabled == after.DCEnabled},
 		{"FastLoad", before.FastLoad == after.FastLoad},
 		{"FEReadCount", before.FEReadCount == after.FEReadCount},

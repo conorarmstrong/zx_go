@@ -137,16 +137,21 @@ func TestNextDACPortWritesRouteToDACBank(t *testing.T) {
 	// Channel D via port 0xFB.
 	h.ULA().WritePort(0xFB, 0x80)
 
-	// Verify the contribution to a 4-sample buffer. Channel A at
-	// 0xC0 (192), Channel D at 0x80 (128), others at 0 → mean =
-	// (192+0+0+128)/4 = 80. Centred = 80 - 128 = -48. Contrib =
-	// -48 * 64 = -3072.
+	// Verify the contribution to two stereo frames. Channel A is a LEFT
+	// channel and D is a RIGHT one (soundrive.vhd sums A+B into pcm_L_o and
+	// C+D into pcm_R_o), so the two sides differ:
+	//
+	//	left  = (A 0xC0 + B rest 0x80) / 2 = 0xA0 = 160 → (160-128)*64 =  2048
+	//	right = (C rest 0x80 + D 0x80) / 2 = 0x80 = 128 → (128-128)*64 =     0
 	buf := []int16{0, 0, 0, 0}
-	h.NextDAC().MixInto(buf)
-	const wantContrib int16 = -3072
-	for i, v := range buf {
-		if v != wantContrib {
-			t.Errorf("DAC mix contrib buf[%d] = %d, want %d", i, v, wantContrib)
+	h.NextDAC().MixIntoStereo(buf)
+	const wantL, wantR int16 = 2048, 0
+	for i := 0; i+1 < len(buf); i += 2 {
+		if buf[i] != wantL {
+			t.Errorf("DAC frame %d left = %d, want %d", i/2, buf[i], wantL)
+		}
+		if buf[i+1] != wantR {
+			t.Errorf("DAC frame %d right = %d, want %d", i/2, buf[i+1], wantR)
 		}
 	}
 }

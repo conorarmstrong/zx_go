@@ -898,6 +898,9 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 	} else {
 		WirePeripheral3(opts.Dispatcher, nil)
 	}
+	// AFTER WireContentionDisable (NR$08) and WirePeripheral3 (NR$09): this
+	// chains onto both, and chaining requires their handlers to exist already.
+	WireAYStereo(opts.Dispatcher, opts.AYEngine)
 	if eps, ok := opts.DivMMCPager.(EntryPointsSetter); ok {
 		WireDivMMCEntryPoints(opts.Dispatcher, eps)
 	}

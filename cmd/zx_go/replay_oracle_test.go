@@ -820,7 +820,9 @@ func replayRun(e *emulator, model roms.SpectrumModel, k int) replayTrace {
 			tr.border = append(tr.border, e.ula.BorderColour)
 		}
 		if e.nextDAC != nil {
-			tr.dac = append(tr.dac, e.nextDAC.MixedLevel())
+			// Both sides: the bank is two stereo pairs, so a fingerprint of
+			// one of them would not notice a replay that lost the other.
+			tr.dac = append(tr.dac, e.nextDAC.LevelL(), e.nextDAC.LevelR())
 		}
 		for _, s := range oracleAudioProbe(e, oracleAudioSamples) {
 			tr.audio = binary.BigEndian.AppendUint16(tr.audio, uint16(s))

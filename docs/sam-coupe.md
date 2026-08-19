@@ -32,8 +32,10 @@ redistribution in 2008 — so nothing needs installing (see
   write-protect.
 - **Sound:** the SAA1099 chip — six tone channels (two groups of three), per
   channel left/right amplitude, two noise generators, two envelope generators —
-  mixed to the audio device (currently down-mixed to mono; `--no-sound` silences
-  it).
+  played in **true stereo**, plus the 1-bit beeper on BORDER bit 4 that SAM
+  software inherits from the Spectrum. Both are AC-coupled like the machine's
+  own output stage, so a held speaker level is silence rather than a DC rail.
+  `--no-sound` silences it.
 - **Light pen:** the ASIC LPEN/HPEN raster registers (the boot ROM syncs to the
   raster through them).
 - **Disk:** the WD1772 controller and MGT (800K/720K) + SAD disk images, loaded
@@ -56,11 +58,8 @@ redistribution in 2008 — so nothing needs installing (see
 
 ## Current limitations / in progress
 
-- **Stereo audio** — the SAA1099 is emulated in full stereo, but the shared
-  audio device currently plays a mono down-mix; widening the device to true
-  stereo (and adding the 1-bit beeper) is the remaining audio work.
 - **Disk formats** — EDSK and SBT are not yet parsed (MGT and SAD are).
-- **Save states (.ssx) and SAM-specific debugger views** — planned.
+- **SAM-specific debugger views** — planned.
 
 ## Notes
 

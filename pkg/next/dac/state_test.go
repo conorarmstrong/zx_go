@@ -79,7 +79,7 @@ var scripts = []struct {
 }
 
 // drive replays a script through the bank exactly as the machine does — the
-// ULA forwards the write, then records the resulting mixed level at the
+// ULA forwards the write, then records the resulting output pair at the
 // T-state it landed on — and returns the audio produced, flattened for
 // comparison.
 func drive(b *Bank, writes []portWrite, frames int) []byte {
@@ -91,13 +91,13 @@ func drive(b *Bank, writes []portWrite, frames int) []byte {
 			}
 			b.Record(w.t)
 		}
-		out = append(out, pcm(b.GenerateFrame(testSamples, testTStates))...)
+		out = append(out, pcm(b.GenerateFrameStereo(testSamples, testTStates))...)
 	}
 	return out
 }
 
 // primed returns a bank part way through a frame: four channels sitting at
-// four distinct levels, a mixed level carried over from an earlier frame, and
+// four distinct levels, an output pair carried over from an earlier frame, and
 // two writes already timed for the frame that has not been generated yet.
 // Their offsets sit before the first offset either script uses, so the
 // combined event stream stays in T-state order.
@@ -109,7 +109,7 @@ func primed() *Bank {
 	b.WritePort(0xFB, 0x50) // D
 	b.Record(0)
 	b.Record(testTStates / 2)
-	b.GenerateFrame(testSamples, testTStates) // carries the mixed level forward
+	b.GenerateFrameStereo(testSamples, testTStates) // carries the output pair forward
 
 	// ...and stop part way through the next frame, mid-sequence.
 	b.WritePort(0xF3, 0x0C) // B, through its alias port
@@ -123,8 +123,7 @@ func primed() *Bank {
 // between taking a capture and rewinding to it: frames get generated (which
 // consumes the pending writes and moves the carried level) and the guest keeps
 // writing channels. Every captured field differs afterwards, and every channel
-// differs by enough that dropping any single one of them shifts the
-// four-channel mean past its divide-by-four.
+// differs by enough that dropping any single one of them shifts its pair's mean.
 //
 // That "every captured field differs" is what every mutation score in this file
 // rests on, so it is asserted rather than trusted: retune a value here to match
@@ -136,7 +135,7 @@ func perturb(b *Bank) {
 	b.WritePort(0x4F, 0x11) // C
 	b.WritePort(0xFB, 0x20) // D
 	b.Record(20)
-	b.GenerateFrame(testSamples, testTStates)
+	b.GenerateFrameStereo(testSamples, testTStates)
 	b.WritePort(0x1F, 0x77) // A, leaving one write timed but not yet mixed
 	b.Record(600)
 }
@@ -211,7 +210,7 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 		b.Record(i * 100)
 		b.WritePort(0xFB, byte(0xF0-0x10*i))
 		b.Record(i*100 + 40)
-		b.GenerateFrame(testSamples, testTStates)
+		b.GenerateFrameStereo(testSamples, testTStates)
 	}
 
 	if err := b.LoadState(st); err != nil {
@@ -318,13 +317,16 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"Levels[B]", before.Levels[ChannelB] == after.Levels[ChannelB]},
 		{"Levels[C]", before.Levels[ChannelC] == after.Levels[ChannelC]},
 		{"Levels[D]", before.Levels[ChannelD] == after.Levels[ChannelD]},
-		{"StartLevel", before.StartLevel == after.StartLevel},
-		// The pending-event buffer is three restores, not one: the truncation
-		// that clears what is already there, and the two halves of each event.
-		// A restore that dropped only the level would leave every offset right.
+		{"StartL", before.StartL == after.StartL},
+		{"StartR", before.StartR == after.StartR},
+		// The pending-event buffer is four restores, not one: the truncation
+		// that clears what is already there, and the three parts of each event.
+		// A restore that dropped only the right-hand level would leave every
+		// offset and every left-hand level right.
 		{"len(Events)", len(before.Events) == len(after.Events)},
 		{"Events[].TStateOffset", sameOffsets(before.Events, after.Events)},
-		{"Events[].Level", sameLevels(before.Events, after.Events)},
+		{"Events[].Left", sameLefts(before.Events, after.Events)},
+		{"Events[].Right", sameRights(before.Events, after.Events)},
 	} {
 		if f.same {
 			t.Errorf("%s is unchanged by the drive sequence, so a lost restore of it "+
@@ -345,12 +347,24 @@ func sameOffsets(a, b []eventState) bool {
 	return true
 }
 
-func sameLevels(a, b []eventState) bool {
+func sameLefts(a, b []eventState) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].Level != b[i].Level {
+		if a[i].Left != b[i].Left {
+			return false
+		}
+	}
+	return true
+}
+
+func sameRights(a, b []eventState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Right != b[i].Right {
 			return false
 		}
 	}

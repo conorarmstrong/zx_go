@@ -5,6 +5,8 @@ import (
 	"encoding/gob"
 	"fmt"
 	"image/color"
+
+	"github.com/conorarmstrong/zx_go/pkg/audio"
 )
 
 // Complete state capture, for rewind and for replaying execution forward from
@@ -84,10 +86,13 @@ type ulaState struct {
 	// The DC blocker's fields are unexported, so they are mirrored rather
 	// than embedded: gob would silently drop them, which is exactly the kind
 	// of silent omission this file exists to prevent.
-	DCPrevIn  int32
-	DCPrevOut float64
+	// The DC-blocking filter is one pole PER CHANNEL, so both positions are
+	// captured. Restoring only the left would leave the right channel's filter
+	// running on from the present, which on a hard-panned Next program is an
+	// audible step at the rewind point on one side only.
+	DCLeft    audio.DCState
+	DCRight   audio.DCState
 	DCLimit   int32
-	DCSeeded  bool
 	DCEnabled bool
 
 	FastLoad    bool
@@ -145,10 +150,9 @@ func (u *ULA) SaveState() []byte {
 
 		HasRendered: u.hasRendered,
 
-		DCPrevIn:  u.dc.prevIn,
-		DCPrevOut: u.dc.prevOut,
-		DCLimit:   u.dc.limit,
-		DCSeeded:  u.dc.seeded,
+		DCLeft:    audio.CaptureDC(u.dc.Left()),
+		DCRight:   audio.CaptureDC(u.dc.Right()),
+		DCLimit:   u.dc.Limit(),
 		DCEnabled: u.dcEnabled,
 
 		FastLoad:    u.fastLoad,
@@ -208,10 +212,9 @@ func (u *ULA) LoadState(b []byte) error {
 
 	u.hasRendered = s.HasRendered
 
-	u.dc.prevIn = s.DCPrevIn
-	u.dc.prevOut = s.DCPrevOut
-	u.dc.limit = s.DCLimit
-	u.dc.seeded = s.DCSeeded
+	audio.ApplyDC(u.dc.Left(), s.DCLeft)
+	audio.ApplyDC(u.dc.Right(), s.DCRight)
+	u.dc.SetLimit(s.DCLimit)
 	u.dcEnabled = s.DCEnabled
 
 	u.fastLoad = s.FastLoad

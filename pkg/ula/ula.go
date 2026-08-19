@@ -180,7 +180,7 @@ type ULA struct {
 	// boundaries click like a speaker wired to a battery). dcEnabled allows
 	// disabling it (A/B diagnostics) — when off, the raw ±beeper levels are
 	// emitted (faithful square waves, but the idle DC rail/click returns).
-	dc        dcBlocker
+	dc        audio.StereoDCBlocker
 	dcEnabled bool
 
 	// fastLoad, when set, mutes audio output: during fast-tape turbo many
@@ -406,8 +406,20 @@ type NextRasterLog interface {
 // through). The ULA forwards every port write to the DAC; the bank
 // internally checks the low byte for one of the documented DAC
 // ports and ignores everything else.
+// The frame methods are part of the contract rather than something the ULA
+// discovers with a runtime type assertion. They used to be discovered, and it
+// cost a silent regression: renaming GenerateFrame to GenerateFrameStereo made
+// the assertion stop matching, which disconnected the DAC from the audio path
+// with no build error and no failing test. An interface method cannot fail that
+// way.
 type NextDAC interface {
 	WritePort(port uint16, val byte) bool
+	// Record timestamps the write that just happened, so the frame can be
+	// reconstructed at sample accuracy rather than snapshotted per pull.
+	Record(tstateOffset int)
+	// GenerateFrameStereo returns one frame of interleaved stereo samples,
+	// 2*samplesPerFrame values, and clears the recorded events.
+	GenerateFrameStereo(samplesPerFrame, tstatesPerFrame int) []int16
 }
 
 // SpeccyDAC is the contract for the classic-Spectrum SpecDrum/Covox 8-bit DAC.
@@ -665,7 +677,7 @@ func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 	// Bound the DC-blocked audio to the speaker's physical amplitude so an
 	// isolated speaker toggle clicks at the level, not the high-pass's 2x
 	// step-response overshoot.
-	u.dc.limit = int32(beeperHigh)
+	u.dc.SetLimit(int32(beeperHigh))
 	u.dcEnabled = true
 	u.initPalette()
 
@@ -1779,12 +1791,10 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	// classic ULA ports). When the port wasn't a DAC port the bank
 	// returns false and we continue with the normal dispatch.
 	if u.nextDAC != nil && u.nextDAC.WritePort(addr, val) {
-		// Record the timed write so flushAudioFrame can reconstruct the DAC
+		// Record the timed write so the frame can reconstruct the DAC
 		// waveform sample-accurately (event-timed, like the beeper).
 		if u.audio != nil && u.mem.TStates != nil {
-			if rec, ok := u.nextDAC.(interface{ Record(int) }); ok {
-				rec.Record(int(*u.mem.TStates - u.frameStartTstate))
-			}
+			u.nextDAC.Record(int(*u.mem.TStates - u.frameStartTstate))
 		}
 		return
 	}
@@ -2219,7 +2229,7 @@ func (u *ULA) Reset() {
 	// Re-arm the DC blocker so the first post-reset frame establishes a fresh
 	// silent baseline (the audio queue is re-primed with silence too). This is
 	// what stops the reset itself (e.g. a +3 disk boot) from clicking.
-	u.dc.reset()
+	u.dc.Reset()
 
 	// Sync the AY presence with the current memory model. SwitchModel may
 	// have changed the machine since the ULA was created, so we (re)create
@@ -2274,27 +2284,36 @@ func (u *ULA) flushAudioFrame() {
 		u.tapeAudioEvents = u.tapeAudioEvents[:0]
 		u.frameStartTapeState = false
 		u.frameStartSpeakerState = u.Speaker
-		u.dc.reset()
+		u.dc.Reset()
 		u.audio.PushBeeperSamples(make([]int16, audio.SamplesPerFrame))
 		if u.mem.TStates != nil {
 			u.frameStartTstate = *u.mem.TStates
 		}
 		return
 	}
+	u.audio.PushStereoSamples(u.mixAudioFrame())
+	u.audioEvents = u.audioEvents[:0]
+	if u.mem.TStates != nil {
+		u.frameStartTstate = *u.mem.TStates
+	}
+}
+
+// mixAudioFrame builds the interleaved stereo frame for the just-finished
+// frame, consuming the recorded events. It mirrors audio_mixer.vhd, which sums
+// the beeper, tape, AY and DAC into one pair.
+//
+// Only the Next's DAC bank is two-sided. The beeper is one bit driving one
+// speaker; the tape's EAR line is one bit; SpecDrum and Covox are single-ended
+// 8-bit DACs. Those are summed in mono and then widened, which is both cheaper
+// and more honest than carrying two identical copies through every stage.
+func (u *ULA) mixAudioFrame() []int16 {
+	const tstatesPerFrame = 69888
+
 	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
 	// Mix the SpecDrum/Covox DAC frame (event-timed, sample-accurate) into the
-	// beeper waveform before pushing it.
+	// beeper waveform.
 	if u.speccyDAC != nil && u.speccyDAC.Enabled() {
-		const tstatesPerFrame = 69888
 		mixInt16(samples, u.speccyDAC.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
-	}
-	// Spectrum Next 4-channel DAC: event-timed, mixed the same way (replaces the
-	// old per-pull MixInto snapshot).
-	if gen, ok := u.nextDAC.(interface {
-		GenerateFrame(int, int) []int16
-	}); ok && gen != nil {
-		const tstatesPerFrame = 69888
-		mixInt16(samples, gen.GenerateFrame(audio.SamplesPerFrame, tstatesPerFrame))
 	}
 	// Tape-loading sound: reconstruct the EAR waveform and mix it in (the
 	// audible pilot whistle + data screech). Only while a tape is playing, so
@@ -2308,21 +2327,35 @@ func (u *ULA) flushAudioFrame() {
 		u.frameStartTapeState = false
 	}
 	u.tapeAudioEvents = u.tapeAudioEvents[:0]
-
-	// AC-couple the mix (beeper + tape + DAC) like the hardware's output
-	// capacitor: a held level decays to silence and only edges make sound, so
-	// idle/power-on/reset and the gaps between loader blocks no longer step
-	// to a full-scale DC rail (the "battery click").
-	if u.dcEnabled {
-		u.dc.process(samples)
-	}
-
-	u.audio.PushBeeperSamples(samples)
 	u.frameStartSpeakerState = finalState
-	u.audioEvents = u.audioEvents[:0]
-	if u.mem.TStates != nil {
-		u.frameStartTstate = *u.mem.TStates
+
+	frame := widenToStereo(samples)
+
+	// Spectrum Next 4-channel DAC: event-timed, and the one source with a real
+	// stereo image (soundrive.vhd sums A+B left and C+D right).
+	if u.nextDAC != nil {
+		mixInt16(frame, u.nextDAC.GenerateFrameStereo(audio.SamplesPerFrame, tstatesPerFrame))
 	}
+
+	// AC-couple each channel like the hardware's output capacitor: a held level
+	// decays to silence and only edges make sound, so idle/power-on/reset and
+	// the gaps between loader blocks no longer step to a full-scale DC rail
+	// (the "battery click").
+	if u.dcEnabled {
+		u.dc.ProcessStereo(frame)
+	}
+	return frame
+}
+
+// widenToStereo turns a mono frame into an interleaved stereo one by putting
+// each sample on both channels.
+func widenToStereo(mono []int16) []int16 {
+	out := make([]int16, len(mono)*2)
+	for i, s := range mono {
+		out[i*2] = s
+		out[i*2+1] = s
+	}
+	return out
 }
 
 // mixInt16 adds src into dst element-wise with int16 saturation. Used to fold
