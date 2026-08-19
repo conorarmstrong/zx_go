@@ -38,10 +38,14 @@ redistribution in 2008 — so nothing needs installing (see
   `--no-sound` silences it.
 - **Light pen:** the ASIC LPEN/HPEN raster registers (the boot ROM syncs to the
   raster through them).
-- **Disk:** the WD1772 controller and MGT (800K/720K) + SAD disk images, loaded
-  from **File → Load SAM Disk 1/2**. Real games boot — load the disk, then type
-  `BOOT` at the SAM BASIC prompt (verified end to end with Manic Miner and
-  Tetris booting to their title screens).
+- **Disk:** the WD1772 controller and MGT (800K/720K), SAD and **Extended DSK**
+  images, loaded from **File → Load SAM Disk 1/2**. EDSK is what SAMdisk writes
+  and is read by the same parser the +3 uses. An EDSK whose tracks do not share
+  one geometry is refused with the offending track named rather than flattened:
+  the SAM's sector store has a single geometry, so accepting one would place
+  every sector after the odd track at the wrong offset. Real games boot — load
+  the disk, then type `BOOT` at the SAM BASIC prompt (verified end to end with
+  Manic Miner and Tetris booting to their title screens).
 - **Interrupts:** the 50 Hz frame interrupt and the programmable line interrupt,
   with the active-low STATUS register.
 - **ASIC contention:** the SAM's heavy memory/IO contention (it makes the 6 MHz
@@ -58,7 +62,13 @@ redistribution in 2008 — so nothing needs installing (see
 
 ## Current limitations / in progress
 
-- **Disk formats** — EDSK and SBT are not yet parsed (MGT and SAD are).
+- **SBT files** — not supported, and deliberately. They are not disk images:
+  SimCoupe's manual describes them as "self-booting files designed to be copied
+  to an empty SAM disk, then booted". Where in a blank disk the file goes, and
+  what directory entry is written for it, is not published anywhere this
+  project can use — the only description is in another emulator's GPL source,
+  and reading that is what this project's licence rules exist to prevent. It
+  stays unsupported until a specification turns up rather than being guessed at.
 - **SAM-specific debugger views** — planned.
 
 ## Notes

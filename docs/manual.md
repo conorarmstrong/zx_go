@@ -162,13 +162,23 @@ The fastest way to bookmark a moment. **F2** writes the whole machine to a
 single quick-save slot; **F4** restores it. They're also in the **File** menu
 ("Quick Save State" / "Quick Load State").
 
-The slot lives in your user config directory (`quicksave.szx`) and survives
-restarts, so you can quit, come back, and press F4 to pick up where you were.
+The slot lives in your user config directory and survives restarts, so you can
+quit, come back, and press F4 to pick up where you were.
 
-Quick save/load is available on the **48K…+3 and Pentagon** machines. It is
-**not** offered for the ZX80/ZX81 (no compatible state format) or the Spectrum
-Next (its full hardware state isn't captured by an `.szx` snapshot — use the
-Next's own snapshot facilities instead).
+**Quick save/load works on every machine**, but there are two slot files and
+which one you get depends on what can represent the machine.
+
+The **48K…+3 and Pentagon** use `quicksave.szx`. SZX is a portable format other
+emulators read, so that slot is a file you can take elsewhere.
+
+The **Spectrum Next, SAM Coupé and ZX80/ZX81** use `quicksave.zxgostate`. SZX
+describes a 48K/128K memory map and a Z80, and there is nowhere in it for the
+Next's 2 MB and its NextRegs, the SAM's paging and SAA1099, or the ZX81's
+CPU-generated display — so those machines save the emulator's own full-machine
+capture instead, the same one the rewind ring takes. That format is ours and is
+**not portable**: it holds each emulated device's internal state, so it is a
+save state for this build rather than an interchange file. Loading one into a
+different machine is refused, and the message says which machine it came from.
 
 ### Named snapshots
 
@@ -329,9 +339,8 @@ on `P` on the ZX81. Details and the per-machine keymap:
 - **Wrong keys / can't find a symbol** — see
   [KEYBOARD_GUIDE.md](../KEYBOARD_GUIDE.md), or remap via Emulator → Custom
   Keymap.
-- **Quick save says it's unavailable** — that machine (ZX80/81 or Next) doesn't
-  use the `.szx` quick-save slot; use a named snapshot or the machine's own
-  facilities instead.
+- **"This save state is from a …"** — the quick-save slot holds a state from a
+  different machine. Switch back to that machine, or overwrite the slot with F2.
 
 For anything deeper — timing, hardware conformance, the debugger, or how zx_go
 stacks up against other emulators — follow the links at the top of this manual.

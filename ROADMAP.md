@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-16 — v1.9.1, plus unreleased work)
+## CURRENT STATE (2026-08-19 — v1.10.2, plus unreleased work)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -357,7 +357,7 @@ to leave it stalled, not to work around it here.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 4. [product] Time travel: three mechanisms shipped, two devices short
+### 4. [product] Time travel
 
 Three mechanisms, deliberately separate.
 
@@ -400,13 +400,19 @@ canonical ordering so two captures of an unchanged machine compare equal.
   only checks the fields someone remembered to add. Worth knowing: the LFSR
   mutation initially passed, because the fixture wrote `0x38` to the mixer and
   those bits are active low, so it had disabled noise on every channel.
-- [x] ~~The remaining devices~~ — the CPU, ULA, memory, `plus3fdc`, `betadisk`,
-  `disciple` (the +D), `opus`, keyboard, `if1`, `multiface`, the DAC, the tape
-  player (`pkg/ula/tapestate.go` — position, not the tape image) and the whole
-  Next set are captured; `(*emulator).stateRegistry` is the list, and it
-  registers each device exactly when the machine really carries it.
-  `pkg/next/lores` has a `Device` that nothing can register, because no code
-  owns a LoRes instance — see item 6, which is the real reason.
+- [x] ~~The remaining devices~~ — **every machine the emulator builds is now
+  captured.** The CPU, ULA, memory, `plus3fdc`, `betadisk`, `disciple` (the +D),
+  `opus`, keyboard, `if1`, `multiface`, the DAC, the tape player
+  (`pkg/ula/tapestate.go` — position, not the tape image), the whole Next set
+  including LoRes and ULA+, and the SAM Coupé's own memory, keyboard, SAA1099
+  and both WD1772s. `(*emulator).stateRegistry` is the list, and it registers
+  each device exactly when the machine really carries it.
+
+  The SAM was the last hole and it was a total one: the registry returned an
+  EMPTY registry for it, so rewind and time travel silently did nothing there.
+  The field-coverage guard written alongside the capture found a real bug on its
+  first run — the SAM's DC blocker had no output clamp, so an isolated beeper
+  toggle overshot to twice the speaker's drive level.
 
   The +D and the Opus were the last two, and the audit that verified them found
   a real controller bug rather than a capture gap: the +D's format flag was

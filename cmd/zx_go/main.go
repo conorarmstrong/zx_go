@@ -3695,10 +3695,10 @@ func main() {
 				fyne.NewMenuItem("Eject TR-DOS Disk B", func() {
 					emu.ejectTRD(1)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad/.dsk)...", func() {
 					loadSAMDisk(emu, w, 0)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad/.dsk)...", func() {
 					loadSAMDisk(emu, w, 1)
 				}),
 				fyne.NewMenuItem("Save Disk A (DSK)...", func() {
