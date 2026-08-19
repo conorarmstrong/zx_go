@@ -16,6 +16,8 @@
 // the low byte only, matching real hardware.
 package dac
 
+import "github.com/conorarmstrong/zx_go/pkg/audio"
+
 // Channel identifies one of the four DACs.
 type Channel int
 
@@ -209,22 +211,7 @@ func (b *Bank) MixIntoStereo(buf []int16) {
 		return
 	}
 	for i := 0; i+1 < len(buf); i += 2 {
-		buf[i] = saturatingAdd(buf[i], contribL)
-		buf[i+1] = saturatingAdd(buf[i+1], contribR)
-	}
-}
-
-// saturatingAdd clamps rather than wraps: the sum of beeper (±20000) + AY
-// (similar) + DAC (±8128) can exceed int16 range, and a wrap-around produces
-// audible pops at the extrema.
-func saturatingAdd(s int16, contrib int32) int16 {
-	sum := int32(s) + contrib
-	switch {
-	case sum > 32767:
-		return 32767
-	case sum < -32768:
-		return -32768
-	default:
-		return int16(sum)
+		buf[i] = audio.SaturatingAdd16(buf[i], contribL)
+		buf[i+1] = audio.SaturatingAdd16(buf[i+1], contribR)
 	}
 }

@@ -250,6 +250,59 @@ func TestOutOfRangeSectorIDsAreRefused(t *testing.T) {
 	}
 }
 
+// An unformatted track is media, not a bad image. EDSK stores one as a zero
+// length, and real dumps carry them: an outer cylinder never written, or a
+// damaged one the dumper could not read. Refusing the whole disk over one meant
+// the user got nothing; the flat store simply keeps its zeros there, which is
+// what the guest reads off blank media anyway.
+func TestAnUnformattedTrackDoesNotRejectTheDisk(t *testing.T) {
+	const cyls, heads, sectors, size = 4, 2, 10, 512
+	var tracks []edskTrack
+	for c := 0; c < cyls; c++ {
+		for h := 0; h < heads; h++ {
+			tr := edskTrack{cyl: c, head: h}
+			if c == 3 && h == 1 {
+				tracks = append(tracks, tr) // no sectors: an unformatted track
+				continue
+			}
+			for s := 1; s <= sectors; s++ {
+				data := make([]byte, size)
+				for i := range data {
+					data[i] = sectorFill(c, h, s, i)
+				}
+				tr.sectors = append(tr.sectors, edskSector{
+					c: byte(c), h: byte(h), r: byte(s), n: 2, data: data,
+				})
+			}
+			tracks = append(tracks, tr)
+		}
+	}
+
+	d, err := LoadDisk(buildEDSK(t, cyls, heads, tracks))
+	if err != nil {
+		t.Fatalf("LoadDisk refused a disk with one unformatted track: %v", err)
+	}
+	// The formatted tracks still read correctly...
+	got, ok := d.ReadSector(0, 0, 1)
+	if !ok {
+		t.Fatal("sector (0,0,1) is missing")
+	}
+	if got[0] != sectorFill(0, 0, 1, 0) {
+		t.Errorf("sector (0,0,1) byte 0 = %#02x, want %#02x", got[0], sectorFill(0, 0, 1, 0))
+	}
+	// ...and the unformatted one reads as blank rather than as another track's
+	// data shifted into its place.
+	blank, ok := d.ReadSector(3, 1, 1)
+	if !ok {
+		t.Fatal("the unformatted track is not addressable at all")
+	}
+	for i, v := range blank {
+		if v != 0 {
+			t.Fatalf("unformatted sector byte %d = %#02x, want 0: something else landed there", i, v)
+		}
+	}
+}
+
 // MGT and SAD keep working. The EDSK branch is chosen by signature, so a
 // headerless MGT must not be dragged into it.
 func TestTheExistingFormatsStillLoad(t *testing.T) {

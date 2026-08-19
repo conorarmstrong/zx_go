@@ -62,8 +62,12 @@ type Machine struct {
 	beeperEvents     []beeperEvent
 	beeperLevel      bool
 	frameStartBeeper bool
-	// beeperDC AC-couples the mix, one filter per channel.
-	beeperDC audio.StereoDCBlocker
+	// beeperDC AC-couples the beeper alone, before it is summed with the SAA.
+	// The clamp it carries bounds a cone's excursion to the level a 1-bit
+	// source drives it to; over the summed bus it would be a level cap on the
+	// SAA as well, which reaches full scale on its own.
+	beeperDC      audio.DCBlocker
+	beeperScratch []int16 // reused per-frame beeper waveform
 }
 
 // New builds a SAM machine from the two 16 KB ROM halves. z80.New resets the
@@ -113,6 +117,10 @@ func NewFromROM(romImage []byte) (*Machine, error) {
 
 // RunFrame executes one 50 Hz SAM frame.
 func (m *Machine) RunFrame() {
+	// Anything the previous frame recorded and nobody consumed is stale. With
+	// no audio sink attached (--no-sound, every headless run) that is every
+	// frame, and the list would otherwise grow for the life of the process.
+	m.DropAudioFrame()
 	m.frameStart = m.CPU.Tstates()
 	m.renderCursor = 0
 	m.CPU.ExecuteFrame(CyclesPerFrame)
@@ -134,6 +142,14 @@ func (m *Machine) Reset() {
 	m.frameStart = 0
 	m.frameCount = 0
 	m.renderCursor = 0
+	// The speaker returns to rest with everything else. Clearing the BORDER
+	// latch without the model behind it leaves the emulated speaker asserted
+	// while the port reads low, so the guest's next BEEP-high write is not an
+	// edge at all and the first click after a reset is swallowed.
+	m.beeperEvents = m.beeperEvents[:0]
+	m.beeperLevel = false
+	m.frameStartBeeper = false
+	m.beeperDC.Reset()
 }
 
 // InsertDisk loads a disk image into drive 1 (drive 0) or drive 2 (drive 1).

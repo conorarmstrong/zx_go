@@ -2292,7 +2292,6 @@ func (u *ULA) flushAudioFrame() {
 		return
 	}
 	u.audio.PushStereoSamples(u.mixAudioFrame())
-	u.audioEvents = u.audioEvents[:0]
 	if u.mem.TStates != nil {
 		u.frameStartTstate = *u.mem.TStates
 	}
@@ -2306,6 +2305,12 @@ func (u *ULA) flushAudioFrame() {
 // speaker; the tape's EAR line is one bit; SpecDrum and Covox are single-ended
 // 8-bit DACs. Those are summed in mono and then widened, which is both cheaper
 // and more honest than carrying two identical copies through every stage.
+//
+// It CONSUMES the frame: every event list it reads is cleared and every carried
+// level updated before it returns. That has to be all of them or none — the
+// speaker events were once cleared by the caller instead, which meant any
+// second caller replayed the same frame for ever with nothing at the call site
+// to suggest it.
 func (u *ULA) mixAudioFrame() []int16 {
 	const tstatesPerFrame = 69888
 
@@ -2328,6 +2333,7 @@ func (u *ULA) mixAudioFrame() []int16 {
 	}
 	u.tapeAudioEvents = u.tapeAudioEvents[:0]
 	u.frameStartSpeakerState = finalState
+	u.audioEvents = u.audioEvents[:0]
 
 	frame := widenToStereo(samples)
 
@@ -2366,15 +2372,7 @@ func mixInt16(dst, src []int16) {
 		n = len(src)
 	}
 	for i := 0; i < n; i++ {
-		sum := int32(dst[i]) + int32(src[i])
-		switch {
-		case sum > 32767:
-			dst[i] = 32767
-		case sum < -32768:
-			dst[i] = -32768
-		default:
-			dst[i] = int16(sum)
-		}
+		dst[i] = audio.SaturatingAdd16(dst[i], int32(src[i]))
 	}
 }
 

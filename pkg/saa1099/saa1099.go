@@ -257,12 +257,17 @@ func (s *SAA) envApplied(g int) (l, r int) {
 	return e, e
 }
 
+// clamp16 saturates rather than wrapping. It is audio.Clamp16's policy kept
+// locally on purpose: this package models a chip, and reaching for pkg/audio
+// would pull the oto sound driver into every binary that links a SAA1099. If
+// the policy ever changes, it changes in both.
 func clamp16(v int) int16 {
-	if v > 32767 {
+	switch {
+	case v > 32767:
 		return 32767
-	}
-	if v < -32768 {
+	case v < -32768:
 		return -32768
+	default:
+		return int16(v)
 	}
-	return int16(v)
 }

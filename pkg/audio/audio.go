@@ -171,9 +171,11 @@ func New() (*AudioSystem, error) {
 
 	as := &AudioSystem{context: ctx, keepAlive: defaultKeepAliveLevel}
 	as.reader = &audioReader{
-		audioSys:  as,
-		buffer:    make([]byte, BufferSize*ChannelCount*2),
-		mixBuffer: make([]int16, BufferSize),
+		audioSys: as,
+		buffer:   make([]byte, BufferSize*ChannelCount*2),
+		// One slot per int16 the buffer above can hold, so Read never has to
+		// grow this on the oto callback goroutine.
+		mixBuffer: make([]int16, BufferSize*ChannelCount),
 		ditherRNG: 0x9E3779B9, // any non-zero seed
 	}
 	as.prefillSilence()
@@ -295,7 +297,12 @@ func (ar *audioReader) Read(p []byte) (n int, err error) {
 	if bytesToRead > len(ar.buffer) {
 		bytesToRead = len(ar.buffer)
 	}
-	slots := bytesToRead / 2
+	// Round down to whole stereo frames. Every stage below stops at the last
+	// complete frame, so an odd slot would be left holding whatever the
+	// previous call put there — mixBuffer is reused — and that stale sample
+	// would be dithered, recorded and emitted.
+	slots := (bytesToRead / 2) &^ 1
+	bytesToRead = slots * 2
 
 	if cap(ar.mixBuffer) < slots {
 		ar.mixBuffer = make([]int16, slots)
@@ -472,10 +479,9 @@ func (as *AudioSystem) writeRecording(interleaved []int16) {
 	if frames > remaining {
 		frames = remaining
 	}
-	n := frames
 	samples := interleaved[:frames*ChannelCount]
 
-	need := int(frames) * ChannelCount * 2
+	need := len(samples) * 2
 	if cap(as.recScratch) < need {
 		as.recScratch = make([]byte, need)
 	}
@@ -488,7 +494,7 @@ func (as *AudioSystem) writeRecording(interleaved []int16) {
 		as.recFile = nil
 		return
 	}
-	as.recSamples += n
+	as.recSamples += frames
 }
 
 // writeWavHeader writes a 44-byte canonical PCM WAV header.

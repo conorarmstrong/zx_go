@@ -47,38 +47,52 @@ const dcBlockerR = 0.9998
 // rail yields 0 immediately (no synthetic startup edge) and matches the audio
 // system's prefill silence.
 func (d *DCBlocker) Process(samples []int16) {
+	lim, limF := d.bounds()
+	for i, s := range samples {
+		samples[i] = d.step(s, lim, limF)
+	}
+}
+
+// bounds resolves the output clamp once, so the per-sample path does not
+// re-derive it.
+func (d *DCBlocker) bounds() (int32, float64) {
 	lim := d.limit
 	if lim <= 0 || lim > 32767 {
 		lim = 32767
 	}
-	limF := float64(lim)
-	for i, s := range samples {
-		x := int32(s)
-		if !d.seeded {
-			d.prevIn = x
-			d.prevOut = 0
-			d.seeded = true
-		}
-		// Keep the filter state (prevOut) un-clamped so the math stays linear
-		// and a held level still decays correctly; only the emitted sample is
-		// bounded to the speaker amplitude.
-		y := float64(x-d.prevIn) + dcBlockerR*d.prevOut
+	return lim, float64(lim)
+}
+
+// step filters one sample.
+func (d *DCBlocker) step(s int16, lim int32, limF float64) int16 {
+	x := int32(s)
+	if !d.seeded {
 		d.prevIn = x
-		d.prevOut = y
-		switch {
-		case y > limF:
-			samples[i] = int16(lim)
-		case y < -limF:
-			samples[i] = int16(-lim)
-		default:
-			samples[i] = int16(y)
-		}
+		d.prevOut = 0
+		d.seeded = true
+	}
+	// Keep the filter state (prevOut) un-clamped so the math stays linear
+	// and a held level still decays correctly; only the emitted sample is
+	// bounded to the speaker amplitude.
+	y := float64(x-d.prevIn) + dcBlockerR*d.prevOut
+	d.prevIn = x
+	d.prevOut = y
+	switch {
+	case y > limF:
+		return int16(lim)
+	case y < -limF:
+		return int16(-lim)
+	default:
+		return int16(y)
 	}
 }
 
 // SetLimit bounds the output magnitude to the speaker's physical amplitude.
 // <=0 means int16 max (no extra clamp).
 func (d *DCBlocker) SetLimit(lim int32) { d.limit = lim }
+
+// Limit reports the bound.
+func (d *DCBlocker) Limit() int32 { return d.limit }
 
 // Reset re-arms the lazy seed so the next frame's first sample establishes a
 // fresh 0 baseline. Called on machine reset, where the audio queue is also
@@ -110,9 +124,15 @@ func (d *StereoDCBlocker) Right() *DCBlocker { return &d.r }
 // ProcessStereo high-pass-filters an interleaved buffer in place, each channel
 // through its own filter. A trailing odd slot is left alone.
 func (d *StereoDCBlocker) ProcessStereo(frame []int16) {
+	// The bounds are resolved once for each channel rather than per sample:
+	// this runs 882 times a frame per machine, and calling Process on
+	// one-element slices made every sample pay a function call plus a
+	// re-derivation of the clamp.
+	limL, limFL := d.l.bounds()
+	limR, limFR := d.r.bounds()
 	for i := 0; i+1 < len(frame); i += 2 {
-		d.l.Process(frame[i : i+1])
-		d.r.Process(frame[i+1 : i+2])
+		frame[i] = d.l.step(frame[i], limL, limFL)
+		frame[i+1] = d.r.step(frame[i+1], limR, limFR)
 	}
 }
 

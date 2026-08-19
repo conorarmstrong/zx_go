@@ -762,7 +762,11 @@ func oracleTilemapDemoMachine(t *testing.T, model roms.SpectrumModel) *emulator 
 func oracleAudioProbe(e *emulator, count int) []int16 {
 	if e.nextAY != nil {
 		buf := make([]int16, count)
-		e.nextAY.MixInto(buf)
+		// Stereo, so a replay that lost the engine's NR$08/NR$09 panning is
+		// visible. The mono MixInto ignores the mode by design (see
+		// pkg/ay's TestTheMonoMixIsUnaffectedByThePanningMode), so
+		// fingerprinting through it could never catch that divergence.
+		e.nextAY.MixIntoStereo(buf)
 		return buf
 	}
 	if e.ula != nil {

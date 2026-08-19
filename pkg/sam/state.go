@@ -52,11 +52,17 @@ func encodeGob(v any) []byte {
 // encodes exported fields, and every field of the running Machine that is not
 // owned by a sub-device is here.
 //
-// The renderer's own frame buffer is not, and that is deliberate: renderCursor
-// is, so a restore resumes drawing from the right scan line, but the pixels
+// The renderer's own frame buffer is not, and that is deliberate: the pixels
 // already drawn are re-composed on the next flush from the memory and CLUT that
 // ARE captured. Capturing a 4-plus-megabyte image per rewind step to save one
 // frame of staleness is the wrong trade.
+//
+// RenderCursor is captured for completeness and is INERT on every path today:
+// RunFrame zeroes it before executing, and every capture and restore happens at
+// a frame boundary under withEmulationPaused, so the restored value is always
+// overwritten before anything reads it. It is kept rather than dropped because
+// it stops being inert the moment anything restores mid-frame, and a capture
+// that silently omits a field is the harder failure to find.
 type machineState struct {
 	Border byte
 	CLUT   [16]byte
@@ -76,10 +82,10 @@ type machineState struct {
 	FrameStartBeeper bool
 	BeeperEvents     []beeperEventState
 
-	// The AC-coupling filter, one pole per channel. Restoring only the left
-	// would leave the right running on from the present.
-	BeeperDCLeft  audio.DCState
-	BeeperDCRight audio.DCState
+	// The AC-coupling filter. It is one pole, not two: the beeper is mono and
+	// is filtered before it is summed with the SAA, so there is no second
+	// channel to carry.
+	BeeperDC      audio.DCState
 	BeeperDCLimit int32
 }
 
@@ -105,8 +111,7 @@ func (m *Machine) SaveState() []byte {
 		BeeperLevel:      m.beeperLevel,
 		FrameStartBeeper: m.frameStartBeeper,
 		BeeperEvents:     make([]beeperEventState, len(m.beeperEvents)),
-		BeeperDCLeft:     audio.CaptureDC(m.beeperDC.Left()),
-		BeeperDCRight:    audio.CaptureDC(m.beeperDC.Right()),
+		BeeperDC:         audio.CaptureDC(&m.beeperDC),
 		BeeperDCLimit:    m.beeperDC.Limit(),
 	}
 	for i, e := range m.beeperEvents {
@@ -139,8 +144,7 @@ func (m *Machine) LoadState(blob []byte) error {
 	for _, e := range s.BeeperEvents {
 		m.beeperEvents = append(m.beeperEvents, beeperEvent{tstate: e.TState, high: e.High})
 	}
-	audio.ApplyDC(m.beeperDC.Left(), s.BeeperDCLeft)
-	audio.ApplyDC(m.beeperDC.Right(), s.BeeperDCRight)
+	audio.ApplyDC(&m.beeperDC, s.BeeperDC)
 	m.beeperDC.SetLimit(s.BeeperDCLimit)
 
 	// Two latches have effects outside their own byte and have to be re-applied

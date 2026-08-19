@@ -1,6 +1,9 @@
 package sam
 
-import "github.com/conorarmstrong/zx_go/pkg/saa1099"
+import (
+	"github.com/conorarmstrong/zx_go/pkg/audio"
+	"github.com/conorarmstrong/zx_go/pkg/saa1099"
+)
 
 // SamplesPerFrame is the number of stereo sample pairs one 50 Hz SAM frame
 // produces at the audio sample rate.
@@ -24,6 +27,58 @@ const SamplesPerFrame = saa1099.SampleRate / 50
 // an isolated toggle would otherwise clip.
 const beeperAmplitude int16 = 8000
 
+// beeperFrame reconstructs one frame of the AC-coupled 1-bit speaker, one
+// mono sample per audio frame.
+//
+// The AC-coupling and its clamp belong to the BEEPER, not to the mix. The
+// clamp bounds a cone's excursion to the level it is driven to, because a
+// high-pass's step response is the step height and a full toggle would
+// otherwise overshoot to twice it. Running that over the summed bus made it a
+// level cap on the SAA1099 as well, which reaches full scale on its own: it
+// clipped a loud frame to a quarter of its range with nearly half the samples
+// pinned on the limit. The SAA needs no DC blocking anyway — it is centred
+// already, and a silent chip returns zeros.
+func (m *Machine) beeperFrame(frames int) []int16 {
+	if cap(m.beeperScratch) < frames {
+		m.beeperScratch = make([]int16, frames)
+	}
+	out := m.beeperScratch[:frames]
+
+	level := m.frameStartBeeper
+	idx := 0
+	for i := 0; i < frames; i++ {
+		sampleEnd := (i + 1) * CyclesPerFrame / frames
+		// Take the level in force at the END of the sample window. The SAM's
+		// beeper is a square wave rather than a DAC, so sampling it is the
+		// right model; box-filtering would round the edges of a signal whose
+		// edges are the whole content.
+		for idx < len(m.beeperEvents) && m.beeperEvents[idx].tstate < sampleEnd {
+			level = m.beeperEvents[idx].high
+			idx++
+		}
+		if level {
+			out[i] = beeperAmplitude
+		} else {
+			out[i] = -beeperAmplitude
+		}
+	}
+
+	// Anything left is an edge in the frame's OVERSHOOT window: ExecuteFrame
+	// runs past its budget by the length of whichever instruction crossed the
+	// boundary, so a write in that window carries an offset past
+	// CyclesPerFrame and no sample can reach it. Fold those into the level
+	// carried forward rather than dropping them — discarding one left the
+	// speaker at the pre-write level for the whole of the next frame.
+	for ; idx < len(m.beeperEvents); idx++ {
+		level = m.beeperEvents[idx].high
+	}
+	m.frameStartBeeper = level
+	m.beeperEvents = m.beeperEvents[:0]
+
+	m.beeperDC.Process(out)
+	return out
+}
+
 // beeperEvent is one speaker transition, timestamped within the frame.
 type beeperEvent struct {
 	tstate int
@@ -46,6 +101,16 @@ func (m *Machine) recordBeeper(val byte) {
 	if now > m.frameStart {
 		off = int(now - m.frameStart)
 	}
+	// The list has to stay in T-state order: the frame builder is a single
+	// forward scan that never looks back, so an event filed ahead of one
+	// already recorded would be applied in the first sample window and its
+	// successor's level would win for the rest of the frame. A write whose
+	// timestamp appears to predate the frame — a restore that rewinds the CPU
+	// clock without the frame start, say — is pinned to the last event instead
+	// of to zero.
+	if n := len(m.beeperEvents); n > 0 && off < m.beeperEvents[n-1].tstate {
+		off = m.beeperEvents[n-1].tstate
+	}
 	m.beeperEvents = append(m.beeperEvents, beeperEvent{tstate: off, high: high})
 }
 
@@ -63,49 +128,34 @@ func (m *Machine) GenerateAudioStereo(buf []int16) {
 	}
 	m.SAA.GenerateStereo(buf[:frames*2])
 
-	level := m.frameStartBeeper
-	idx := 0
+	// The beeper is mono — one bit, one speaker — so it reaches both channels
+	// equally, and it arrives already AC-coupled and clamped to the level the
+	// cone is driven to.
+	beeper := m.beeperFrame(frames)
 	for i := 0; i < frames; i++ {
-		sampleEnd := (i + 1) * CyclesPerFrame / frames
-		// Take the level in force at the END of the sample window. The SAM's
-		// beeper is a square wave rather than a DAC, so sampling it is the
-		// right model; box-filtering would round the edges of a signal whose
-		// edges are the whole content.
-		for idx < len(m.beeperEvents) && m.beeperEvents[idx].tstate < sampleEnd {
-			level = m.beeperEvents[idx].high
-			idx++
-		}
-		var contrib int32
-		if level {
-			contrib = int32(beeperAmplitude)
-		} else {
-			contrib = -int32(beeperAmplitude)
-		}
-		buf[i*2] = clampInt16(int32(buf[i*2]) + contrib)
-		buf[i*2+1] = clampInt16(int32(buf[i*2+1]) + contrib)
+		contrib := int32(beeper[i])
+		buf[i*2] = audio.SaturatingAdd16(buf[i*2], contrib)
+		buf[i*2+1] = audio.SaturatingAdd16(buf[i*2+1], contrib)
 	}
+}
 
-	m.frameStartBeeper = level
+// DropAudioFrame discards the beeper events of the frame that just ended,
+// carrying the speaker's level forward.
+//
+// It exists for the runs with no audio consumer — --no-sound, and every
+// headless run — where GenerateAudioStereo is never called and the event list
+// would otherwise grow for the lifetime of the process. The capture path makes
+// that worse than a leak: Machine.SaveState gob-encodes the whole list on every
+// rewind frame.
+func (m *Machine) DropAudioFrame() {
+	if len(m.beeperEvents) == 0 {
+		return
+	}
+	// beeperLevel is the live bit, so it is where the frame actually ended.
+	m.frameStartBeeper = m.beeperLevel
 	m.beeperEvents = m.beeperEvents[:0]
-
-	// AC-couple each channel, as the machine's output capacitor does. Without
-	// it a speaker held at either level is a DC rail rather than silence: the
-	// beeper rests LOW, so an idle SAM would sit at -beeperAmplitude for ever
-	// and the first toggle would step from there.
-	m.beeperDC.ProcessStereo(buf[:frames*2])
 }
 
 // GenerateAudio is the same frame, kept under its original name for callers
 // that already speak stereo.
 func (m *Machine) GenerateAudio(buf []int16) { m.GenerateAudioStereo(buf) }
-
-func clampInt16(v int32) int16 {
-	switch {
-	case v > 32767:
-		return 32767
-	case v < -32768:
-		return -32768
-	default:
-		return int16(v)
-	}
-}

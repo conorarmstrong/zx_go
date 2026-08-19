@@ -209,8 +209,18 @@ func loadEDSK(data []byte) (*Disk, error) {
 		for h := 0; h < parsed.Sides; h++ {
 			track := parsed.Track(h, c)
 			if track == nil {
-				return nil, fmt.Errorf("sam: EDSK has no track at cylinder %d head %d, "+
-					"which a flat SAM image cannot represent", c, h)
+				// EDSK stores an unformatted track as a zero length, which
+				// ParseDSK leaves as a nil track. That is a real thing to find
+				// on a real disk — an outer cylinder never written, or a
+				// damaged one a dumper could not read — and it is not grounds
+				// to refuse the image. The flat store has no way to say
+				// "unformatted", so it keeps the zeros it was allocated with,
+				// which is what the guest gets from blank media anyway.
+				//
+				// This is a different case from the geometry mismatch below.
+				// There, accepting the image would put every later sector at
+				// the wrong offset; here nothing moves.
+				continue
 			}
 			// Walk the track's OWN ID list rather than probing for sector 1, 2,
 			// 3 and so on. Probing sees only the prefix of numbers that happen
@@ -221,7 +231,10 @@ func loadEDSK(data []byte) (*Disk, error) {
 				return nil, fmt.Errorf("sam: EDSK cylinder %d head %d: %w", c, h, err)
 			}
 			if len(ids) == 0 {
-				return nil, fmt.Errorf("sam: EDSK cylinder %d head %d has no sectors", c, h)
+				// A present track carrying no sectors is the other way an
+				// image says "unformatted", alongside the zero-length entry
+				// handled above. Same answer: leave the zeros.
+				continue
 			}
 
 			if sectors == 0 {

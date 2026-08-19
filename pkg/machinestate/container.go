@@ -28,8 +28,22 @@ const (
 	containerMagic = "ZXGOSTATE"
 
 	// containerVersion is the layout version. Bump it when the framing below
-	// changes; changes to a DEVICE's own blob are that device's business and
-	// are caught by its LoadState.
+	// changes, AND when any device's wire struct changes shape.
+	//
+	// The second half is not obvious and is the reason this comment is long.
+	// A device's blob is its own gob encoding, and gob does not police a
+	// schema: decoding a blob written before a field was renamed or removed
+	// succeeds, silently leaving the new field at its zero value. LoadState
+	// never sees an error, so it applies a state that is partly the file's and
+	// partly zeros.
+	//
+	// That is worse than it sounds for anything whose zero is not its rest
+	// state. pkg/next/dac is the example to remember: its channels rest at
+	// $80, because a centred DAC's silence is mid-scale, so a zero-filled
+	// restore puts both outputs on the negative rail rather than at silence.
+	//
+	// Bumping this is what turns that into "save-state version N, this build
+	// reads version M" at the door.
 	containerVersion = 1
 )
 

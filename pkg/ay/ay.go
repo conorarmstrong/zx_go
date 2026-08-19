@@ -646,14 +646,19 @@ func (a *AY) advanceSample(cps float64) int32 {
 		int32(a.channelLevel(2))) / mixHeadroom
 }
 
+// clampSample saturates rather than wrapping. It is audio.Clamp16's policy
+// kept locally on purpose: this package models a chip and imports only sync,
+// and reaching for pkg/audio would pull the oto sound driver into every binary
+// that links an AY. If the policy ever changes, it changes in both.
 func clampSample(v int32) int16 {
-	if v > 32767 {
+	switch {
+	case v > 32767:
 		return 32767
-	}
-	if v < -32768 {
+	case v < -32768:
 		return -32768
+	default:
+		return int16(v)
 	}
-	return int16(v)
 }
 
 // GenerateSamples generates `count` audio samples (mono, signed 16-bit). The
