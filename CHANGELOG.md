@@ -6,6 +6,16 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The reason SBT is unsupported was wrong, and is corrected**
+  (`docs/sam-coupe.md`). v1.11.0 said the format was not published anywhere the
+  project could use. The format was never the obstacle: an SBT is a single SAM
+  CODE file and building a disk around it is straightforward. What stops it is
+  that `BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
+  user's file has no DOS on it and the ROM answers `53 No DOS`. The missing
+  piece is a DOS image to put in slot 1, not a specification.
+
 ## [v1.11.0]
 
 **Sound is in stereo, the SAM Coupé can be rewound, and three more machines

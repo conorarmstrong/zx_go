@@ -62,13 +62,27 @@ redistribution in 2008 — so nothing needs installing (see
 
 ## Current limitations / in progress
 
-- **SBT files** — not supported, and deliberately. They are not disk images:
-  SimCoupe's manual describes them as "self-booting files designed to be copied
-  to an empty SAM disk, then booted". Where in a blank disk the file goes, and
-  what directory entry is written for it, is not published anywhere this
-  project can use — the only description is in another emulator's GPL source,
-  and reading that is what this project's licence rules exist to prevent. It
-  stays unsupported until a specification turns up rather than being guessed at.
+- **SBT files** — not supported, and the obstacle is a **DOS image**, not the
+  format. An SBT is not a disk image: it is a single SAM CODE file meant to be
+  copied onto a disk and booted, so handling one means building a disk around
+  it.
+
+  Building the disk is the easy half and is well understood. What stops it is
+  that `BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
+  user's file has no DOS on it and the ROM answers `53 No DOS`. A real bootable
+  SAM disk shows the arrangement: SAMDOS occupies slot 1, the title's own files
+  the next few slots, and the auto-run file a later one. Note that the file-type
+  byte does not identify the DOS — SAMDOS and the title's code files share a
+  base type of 19 (CODE), differing only in the hidden/protected flags — so it
+  is the **slot position** that matters.
+
+  Emulators that support SBT do it by supplying a DOS of their own and injecting
+  it. We have no DOS image to place in slot 1. Bundling one would need its
+  redistribution status established: the notice in `LICENSES/` covers "all my
+  SAM Coupé titles (including ROMs)", which may or may not reach SAMDOS
+  depending on its authorship, and nobody here has checked. Copying a DOS out of
+  a disk the user already owns is the other route, and is a design decision
+  rather than a detail.
 - **SAM-specific debugger views** — planned.
 
 ## Notes
