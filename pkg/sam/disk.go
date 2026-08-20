@@ -97,11 +97,30 @@ func (d *Disk) WriteSector(cyl, head, sector int, buf []byte) bool {
 // both carry a header — and by size otherwise, since MGT is a bare sector dump
 // with nothing to identify it.
 //
-// SBT is deliberately NOT reachable from here. It is a raw file rather than a
-// disk image, so any byte sequence is a valid one and there is nothing to
-// detect: given the job, this function would have to treat every unrecognised
-// file as an SBT, and a corrupt disk image would quietly become a bootable disk
-// containing itself. It is resolved by extension in LoadDiskFile instead.
+// SBT is not supported, and what blocks it is NOT the format.
+//
+// An SBT is a single SAM CODE file meant to be copied onto a disk and booted,
+// so loading one means building the disk around it. That much was implemented
+// and reverted, because the disk it built could not boot: the SAM ROM's BOOT
+// loads directory slot 1 as the DOS, and a disk carrying only the user's file
+// has no DOS in it at all. It answers "53 No DOS".
+//
+// A real bootable disk settles the shape of it. games/ManicMiner.dsk holds
+// samdos2 (file type 83) in slot 1, the game's data in slot 2, and AUTOminer
+// (type 16) in slot 3 — the ROM boots the DOS, and the DOS then finds and runs
+// the AUTO* file. So an SBT disk needs a DOS image in slot 1 and the SBT file
+// in a later slot under an AUTO* name.
+//
+// That is why SimCoupe can do this and we cannot: it ships an embedded SAMDOS
+// and injects it. Its own comment says as much — the "auto" name exists "so
+// SimCoupe's embedded DOS boots it", which only makes sense once you know a DOS
+// is being supplied from outside the file.
+//
+// So the missing piece is a DOS image, not a specification. Bundling one is a
+// licensing question this project has not answered (the SAM ROMs are
+// redistributable; SAMDOS is a separate program), and lifting one out of a disk
+// the user already owns is a design decision rather than a detail. Until one of
+// those is settled, an SBT cannot be made to boot.
 func LoadDisk(data []byte) (*Disk, error) {
 	if len(data) >= len(sadSignature) && string(data[:len(sadSignature)]) == sadSignature {
 		return loadSAD(data)

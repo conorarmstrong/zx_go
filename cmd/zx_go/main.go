@@ -872,8 +872,7 @@ func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 			dialog.ShowError(fmt.Errorf("failed to read disk: %w", readErr), w)
 			return
 		}
-		// Path-aware: SBT has no signature at all, so it is resolved by name.
-		disk, derr := sam.LoadDiskFile(path, data)
+		disk, derr := sam.LoadDisk(data)
 		if derr != nil {
 			dialog.ShowError(fmt.Errorf("failed to load SAM disk: %w", derr), w)
 			return
@@ -888,7 +887,7 @@ func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 				"From SAM BASIC, boot it with:  BOOT  (or load with LOAD).",
 				filepath.Base(path), drive+1), w)
 	}, w)
-	fd.SetFilter(storage.NewExtensionFileFilter([]string{".mgt", ".sad", ".dsk", ".img", ".sbt"}))
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".mgt", ".sad", ".dsk", ".img"}))
 	showFileDialog(fd, w)
 }
 
@@ -3696,10 +3695,10 @@ func main() {
 				fyne.NewMenuItem("Eject TR-DOS Disk B", func() {
 					emu.ejectTRD(1)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad/.dsk/.sbt)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad/.dsk)...", func() {
 					loadSAMDisk(emu, w, 0)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad/.dsk/.sbt)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad/.dsk)...", func() {
 					loadSAMDisk(emu, w, 1)
 				}),
 				fyne.NewMenuItem("Save Disk A (DSK)...", func() {
