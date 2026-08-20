@@ -284,7 +284,7 @@ defect itself.
   skip could only fire when something was already broken.
 
 - **The mutation audit was measuring a third less than it claimed.**
-  `_tools/mutaudit` (local-only) matched only `x.field = s.Field`, which cannot
+  The audit's pattern matched only `x.field = s.Field`, which cannot
   see a `copy()` call, an `append()`-based slice restore, or a nested target
   like `f.target.track`. Those lines were not counted and were never mutated,
   and an unmutated line reads as absent rather than as a gap — so the totals
@@ -431,9 +431,9 @@ this entry rather than gathered in one place.
   outlives the port write that set it, and captures are taken at instruction
   boundaries. Removed, with `TestFormatFailNeverOutlivesTheCommandThatSetsIt`
   as the defence: removing a captured field is a claim needing the same rigour
-  as adding one. It was the one survivor of an audit of 278 field restores, which
-  `_tools/mutaudit/fullaudit.sh` (local-only) reported at 277/277 killed
-  afterwards, against a green baseline and with no invalid results.
+  as adding one. It was the one survivor of an audit of 278 field restores,
+  which reported 277/277 killed afterwards, against a green baseline and with
+  no invalid results.
 
   A review caught that "all" overstated it: the sweep globbed `pkg/*/state.go`
   and `pkg/next/*/state.go`, which misses `pkg/ula/tapestate.go` and
@@ -510,7 +510,7 @@ manifest, and the roadmap entries that had drifted out of step with the code.
   *Boots* on exactly that figure, five of them identical to the pixel, which is
   what gave it away: unrelated games do not draw the same screen. `Screening`
   now carries `FlatBitmap` and `Classify` treats it as blank. This is the test
-  `_tools/refdiff` has always applied, and it reported all eight as blank.
+  the differential driver has always applied, and it reported all eight as blank.
 
 ### Changed (compatibility manifest)
 
@@ -548,9 +548,9 @@ drive tracks=42", against a real +3 drive's 40 — and fails three more
 identically to us, ending on the same vertical stripe pattern. Only California
 Games remains undecided.
 
-### Tooling (local-only)
+### Tooling (not part of a clone)
 
-- `_tools/refdiff` probes with a **set** of keys rather than one, matching the
+- The differential driver probes with a **set** of keys rather than one, matching the
   screening harness, because SPACE alone reported INERT for two titles whose
   menus take numbers. Our side leads and the reference replays the same count:
   the two runs cannot agree live, and comparing differently-driven machines
@@ -602,14 +602,14 @@ A minor rather than a patch release: it adds exported API to `pkg/testharness`
   each, 0.1% apart and both still. Movie's "all 6" was the same mistake; it
   decodes 2.
 
-### Tooling (local-only)
+### Tooling (not part of a clone)
 
-- `_tools/tapeprobe` reports the decoded count, dumps a tape's block table
+- The tape probe reports the decoded count, dumps a tape's block table
   (`-blocks`) and writes a screenshot per title (`-shots`). The shot is taken
   *after* the screening's input probe, which is stated in the flag help
   because it matters: R-Type's shot shows the ERROR IN LOADING that follows
   keys being pressed at its rewind prompt.
-- `_tools/refdiff` now covers the tape class: across its 18 rows the block
+- The differential driver now covers the tape class: across its 18 rows the block
   counts agree with a reference emulator on 15, and every pair was read by eye
   as the same correct sequence. Three fixes were needed to get there, all of
   them things the tool was measuring wrongly:
@@ -1112,8 +1112,7 @@ the new `ZX_GO_FDC_TRACE`:
 - **TX-1696 runs. It was never an emulator fault.** The last Next SD game that
   would not render is solved: it loads its assets from `C:/common/ayfx3.afb`
   and `C:/common/highScore.bin` — absolute paths at the **root** of the SD
-  card — while this card shipped them only inside
-  `/games/Next/TX-1696/common/`.
+  card — while this card shipped them only inside the game's own directory.
 
   Traced through the guest's own calls: the first `F_OPEN` (`main.nex`)
   succeeds with handle `0x02`; the second returns carry-set with `0x11`. The
@@ -1186,8 +1185,8 @@ the new `ZX_GO_FDC_TRACE`:
   - **NextBASIC games** (`TestNextBasicSDGames`) launch the way a user does:
     Command Line, `.cd`, `LOAD`, `RUN`. All three run — Orb, baSnake and
     NextBASIC Invaders. The path must be **quoted**: `.cd` splits its argument
-    on spaces, so `/games/next/nextbasic invaders` was read as two paths and
-    both reported missing, which is why that game would not load.
+    on spaces, so a card path containing one was read as two paths and both
+    reported missing, which is why that game would not load.
   - **NEXTipede** loads from tape and runs its DEMO MODE attract sequence.
   - **Pogie and THEH** have nothing to launch: only assets and a 49179-byte
     `.snx`, which is a 48K snapshot and cannot hold a Next game's banked
@@ -2109,8 +2108,8 @@ with FPGA-derived tests.
 ### Added
 
 - **The FPGA-derived paging golden now exercises the NR`$8E`/`$EFF7` gate
-  class.** `_tools/paging-vhdl-test` (the GHDL extract of the real MMU
-  decode) gained an `$EFF7` stimulus input and testbench sequences for the
+  class.** The GHDL extract of the real MMU decode gained an `$EFF7` stimulus
+  input and testbench sequences for the
   `$8E` bit-3 suppression, the bit-3-set reload, the `$DFFD` clamp, and the
   `$EFF7` bit-3 RAM-at-`$0000` behaviour. Regenerated
   `testdata/paging_golden.txt` (144 mappings) and taught the replay the
@@ -2118,8 +2117,8 @@ with FPGA-derived tests.
   fix makes it fail (`$C000` 228 vs 4).
 - Unit-level `TestNR8E_GateMatrix` mirroring the same suppress/reload/clamp
   cases beside the unconditional-port matrix.
-- `docs/internal/hardware-audit/paging-gate-catalogue.md` — the full
-  catalogue of paging/MMU gates with per-rule status (fixed / modelled /
+- An internal catalogue of paging/MMU gates with per-rule status
+  (fixed / modelled /
   deliberately deferred), so the exception rules are documented rather than
   rediscovered bug-by-bug. Two rules are recorded as conscious deviations
   (NR`$8E` under a locked pager; the SounDrive DAC F1/F9 port-conflict

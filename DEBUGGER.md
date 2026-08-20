@@ -709,10 +709,10 @@ sqlite3 /tmp/boot.db \
    FROM m1 a JOIN m1 b ON b.seq=a.seq+1 WHERE a.bank<>b.bank LIMIT 20;"
 ```
 
-Two trace DBs (e.g. ours vs a reference run) can be diffed with the
-`_tools/tracediff` helper (local-only: `_tools/` is gitignored), which prints
-the first aligned row where PC / bank / SP / registers differ — the
-first-divergence finder.
+Two trace DBs (e.g. ours vs a reference run) can be diffed by walking both in
+step and printing the first aligned row where PC / bank / SP / registers
+differ. That is the whole of the first-divergence finder, and the schema above
+is what makes it a few lines of SQL.
 
 #### Crash detection
 
@@ -1353,7 +1353,7 @@ The disassembly format is stable: 4-digit hex address, two spaces, hex bytes, tw
 
 ### "Find where two emulators first diverge"
 
-This is what the `step N`, `cold-reset` and `set-reg` commands documented above exist for: they let a script drive two emulators in step and compare them. The maintainer's own driver scripts live in `_tools/zrcp/`, which is **gitignored and not part of a clone** — they hardcode the path to a locally installed reference binary, so they are notes rather than something you can run. The method they implement is the part worth keeping:
+This is what the `step N`, `cold-reset` and `set-reg` commands documented above exist for: they let a script drive two emulators in step and compare them. No driver script ships with zx_go — one has to hardcode the path to whichever reference binary you have installed, so it would be a note rather than something you could run. The method is the part worth keeping, and it is short enough to reimplement from this description:
 
 - **Lockstep.** Single-step both emulators and compare all CPU registers (PC/SP/AF/BC/DE/HL/IX/IY/I/IM) after each instruction. Mask the undocumented F3/F5 bits — emulators disagree about them for reasons that rarely alter behaviour. On the first divergence, print both states and the surrounding disassembly. One roundtrip per step per emulator makes it slow: budget ~10 minutes to reach a 100K-step divergence.
 

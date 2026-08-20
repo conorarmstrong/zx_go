@@ -63,9 +63,9 @@ SPACE moves the PC off `$7670` at once.
 
 The lesson to keep: **when no reference will corroborate a title, disassemble
 the loop rather than keep hunting for a reference.** Two emulators refusing to
-start an image says nothing about ours. `_tools/loaderstop` (local-only) does
-the whole sequence — sample the PC, dump the stack, disassemble the callers,
-press a key and report whether it moved.
+start an image says nothing about ours. The sequence worth automating is:
+sample the PC, dump the stack, disassemble the callers, press a key and report
+whether it moved.
 
 Tracing it also turned up a genuine datasheet violation on the way: READ A
 TRACK was not setting ND when the ID it is given is absent from the track, now
@@ -148,10 +148,9 @@ remaining gap.
 - [~] **Verify what the keypress did.** Partly automated, and no longer purely
   manual. A response proves a title is waiting rather than hung; it does not
   prove the title is playable. Rather than hand-write an expectation per
-  title, `_tools/refdiff` (local-only) drives zx_go and a reference emulator
-  through the same load-and-keypress sequence and compares the resulting
-  6912-byte display file. **Six +3 disk titles verified so far**, two of them
-  byte-identical.
+  title, a differential driver runs zx_go and a reference emulator through the
+  same load-and-keypress sequence and compares the resulting 6912-byte display
+  file. **Six +3 disk titles verified so far**, two of them byte-identical.
 
   Both sides are now paced in **guest** T-states rather than one stepping
   frames while the other free-ran, so the old "cannot be synchronised" limit
@@ -186,12 +185,12 @@ remaining gap.
   machine's screen appears anywhere in the other's sequence. A hit within
   `PhaseMatchPct = 0.5` reports `PHASE` instead of `DIVERGES`.
 
-  It sits in a tracked package rather than in `_tools/refdiff` (local-only) for
-  one reason: that directory is gitignored, so tests written there are
-  invisible to CI by construction, and the verdict taxonomy is mostly refusal.
-  A guard that can never fire looks exactly like a guard that never needed to
-  fire. The driver still produces the screens; the package decides what they
-  mean, and `go test ./...` now covers it.
+  It sits in a tracked package rather than beside the driver for one reason:
+  the driver is not part of a clone, so tests written there are invisible to CI
+  by construction, and the verdict taxonomy is mostly refusal. A guard that can
+  never fire looks exactly like a guard that never needed to fire. The driver
+  still produces the screens; the package decides what they mean, and
+  `go test ./...` now covers it.
 
   **A review on 2026-08-16 found four ways the rescue could fire wrongly, all
   now fixed and pinned.** The cause was shared: `BestCrossMatch` searched raw
@@ -250,16 +249,15 @@ remaining gap.
 that can host a title calling the OS at runtime. **All 12 launch and render**,
 re-confirmed at v1.9.0 on 2026-08-15.
 
-`SpecNext_Games/` (local-only) is a download staging area, and it holds two
-different things. Its four **downloaded** titles — DougieDo, EternalBattle,
-BasInvaders, BlokBoy — are already installed under `roms/next/sd/games/Next/`
-and are already counted in the figures above, so finding them there is not
-evidence of unscreened work.
+The maintainer's download staging area holds two different things, and they are
+easy to confuse. Four of its titles are already installed on the SD card and
+already counted in the figures above, so finding them there is not evidence of
+unscreened work.
 
-Its `next_native_games.txt` is not that. It catalogues **108 Next titles by
-URL**, of which only a handful are on the SD card, so **roughly 100 titles are
-undownloaded and unscreened**. That is the largest single block of open
-compatibility work in this document. Fetching them is a bulk pull from a
+Its URL catalogue is not that. It lists **108 Next titles**, of which only a
+handful are on the card, so **roughly 100 titles are undownloaded and
+unscreened**. That is the largest single block of open compatibility work in
+this document. Fetching them is a bulk pull from a
 third-party site and needs the maintainer's say-so, which is why it is recorded
 here rather than started.
 

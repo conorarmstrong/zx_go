@@ -12,8 +12,8 @@ which it reached by closing exactly the kind of inaccuracies this file
 enumerates. Per-feature "validated against the VHDL" claims are **spot
 checks**; they do not prove conformance of the whole surface. This matrix
 replaces spot-checking with **enumeration**: list every aspect of
-the FPGA core (`_tools/reference/tbblue-fpga/cores/zxnext/src/zxnext.vhd` +
-`video/zxula_timing.vhd`), map each to our implementation and a test, and tick
+the FPGA core (the ZX Spectrum Next FPGA sources: `cores/zxnext/src/zxnext.vhd`
+and `video/zxula_timing.vhd`), map each to our implementation and a test, and tick
 it off only when a test pins it to the VHDL value. A green row = that aspect is
 conformant. The boot is the integration test that the rows are *complete*.
 

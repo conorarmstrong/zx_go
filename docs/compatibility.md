@@ -293,7 +293,7 @@ elsewhere in this document say nothing about Next-only hardware.
 | NEXTipede | **Boots** | Next tape. Screened 2026-08-12: loads and runs its DEMO MODE attract sequence — mushrooms, centipede and spider all animating. |
 | Pogie | Untested | Not screenable from the files present: the directory holds only assets (`.spr`, `.cpa`, `.map`) plus a 49179-byte `.snx`, which is a 48K snapshot and cannot hold a Next game's banked state. No standalone loadable program. |
 | THEH | Untested | Not screenable from the files present, as Pogie: assets plus a 48K-sized `.snx`. Loading that snapshot alone gives a black screen. |
-| TX-1696 | **Works** | Solved 2026-08-12. **Not an emulator fault: the game's assets must sit at the SD card root.** It opens `C:/common/ayfx3.afb` and `C:/common/highScore.bin` — absolute paths at the root of C: — while this card shipped them only inside `/games/Next/TX-1696/common/`. The open fails, the game does not check carry and uses the errno as a file handle, so every read then fails and it retries for ever with a blank screen. Copy the game's `common/` folder to the card root and it runs: title screen, PLAY/CREDITS/SETTINGS menu and ship all render. |
+| TX-1696 | **Works** | Solved 2026-08-12. **Not an emulator fault: the game's assets must sit at the SD card root.** It opens `C:/common/ayfx3.afb` and `C:/common/highScore.bin` — absolute paths at the root of C: — while this card shipped them only inside the game's own directory. The open fails, the game does not check carry and uses the errno as a file handle, so every read then fails and it retries for ever with a blank screen. Copy the game's `common/` folder to the card root and it runs: title screen, PLAY/CREDITS/SETTINGS menu and ship all render. |
 | Warhawk | **Boots** | Screened 2026-08-12 via the genuine NextZXOS NEXLOAD path: launches and renders (PC=0x9071). Input not driven. |
 
 ### Community titles (SpecNext itch.io releases)
@@ -346,8 +346,7 @@ every bitmap byte holds the same value carries no shape at all — uninitialised
 video memory renders as even vertical stripes and scores 18432 px in 2 colours,
 clearing both floors. Eight +3 disk rows were recorded as *Boots* on exactly
 that, five of them identical to the pixel. Screening now tests the bitmap for
-structure (`Screening.FlatBitmap`), which is the test `_tools/refdiff`
-(local-only) has always used and which reported all eight as blank.
+structure (`Screening.FlatBitmap`), which reported all eight as blank.
 
 **Known weakness: the +3 menu still measures as content.** It is drawn in
 the middle of the display, so it clears both the pixel and the canvas
@@ -384,9 +383,8 @@ question:
 **A short count is usually not a fault.** Most of these titles are
 multiloads: Lemmings decodes 2 blocks of 125 and puts up "PRESS SPACE TO
 BEGIN", because the other 121 are levels that load once you start. Read
-the screen before reading the count — the maintainer's `_tools/tapeprobe
--shots` writes one per title, and `_tools/refdiff -keep` writes ours beside a
-reference's. (`_tools/` is gitignored, so neither is in a clone.)
+the screen before reading the count. `Harness.SaveScreenshot` writes a PNG per
+title, which is what makes that possible without a reference emulator to hand.
 
 The titles are commercial and are not in this repository. The test reads
 a gitignored path list and skips when it is absent; it never fails the
