@@ -199,8 +199,28 @@ func (c *CPU) executeZ80NEDInstruction(opcode byte) bool {
 		c.pixelad()
 		c.tstates += 8
 		return true
-	case 0x98: // JP (C)    PC = (PC & 0xC000) | (BC & 0x3FFF)
-		c.PC = (c.PC & 0xC000) | (c.bc() & 0x3FFF)
+	case 0x98: // JP (C)    PC = (PC & 0xC000) | (IN(C) << 6)
+		// The FPGA core drives IORQ on M-cycle 2 with the address set to
+		// BC, then (cpu/t80n.vhd:979-983):
+		//
+		//	when JP_C =>
+		//	   if IORQ_i = '1' then
+		//	      PC(13 downto 6) <= unsigned(DI_Reg);
+		//	      PC(5 downto 0) <= "000000";
+		//	   end if;
+		//
+		// So the jump target is chosen by the BYTE READ FROM THE PORT,
+		// not by BC: the instruction lands on one of 256 64-byte slots
+		// in the current 16K page. Using BC directly and never reading
+		// the port sent keyboard and UART jump tables to the wrong
+		// handler.
+		var in byte = 0xFF
+		if c.ula != nil {
+			if v, handled := c.ula.ReadPort(c.bc()); handled {
+				in = v
+			}
+		}
+		c.PC = (c.PC & 0xC000) | (uint16(in) << 6)
 		c.tstates += 13
 		return true
 	}

@@ -313,6 +313,11 @@ type fdcState struct {
 	DRQReads    int
 	IntRQ       bool
 	IdxCounter  int
+	// Formatting distinguishes a WRITE TRACK transfer collecting a track
+	// image from an ordinary sector write. Without it a rewind taken
+	// mid-format resumed as a sector write and committed the track image
+	// into one sector.
+	Formatting bool
 }
 
 // SetStateID names this controller for capture. The two drives must answer
@@ -343,6 +348,7 @@ func (w *WD1772) SaveState() []byte {
 		BufPos:      w.bufPos,
 		Writing:     w.writing,
 		MultiSector: w.multiSector,
+		Formatting:  w.formatting,
 		DRQReads:    w.drqReads,
 		IntRQ:       w.intrq,
 		IdxCounter:  w.idxCounter,
@@ -379,6 +385,7 @@ func (w *WD1772) LoadState(blob []byte) error {
 	w.bufPos = s.BufPos
 	w.writing = s.Writing
 	w.multiSector = s.MultiSector
+	w.formatting = s.Formatting
 	w.drqReads = s.DRQReads
 	w.intrq = s.IntRQ
 	w.idxCounter = s.IdxCounter

@@ -273,6 +273,18 @@ func driveFixtures() []namedFixture[*WD1772] {
 			w.WriteData(0x77)
 			return w
 		}},
+		{"mid format", func(t *testing.T) *WD1772 {
+			// WRITE TRACK collects a whole track image, so a capture
+			// taken here has to say it is formatting: restored as an
+			// ordinary sector write it would commit the track image
+			// into one sector.
+			w := withDisk(t)
+			w.WriteCommand(0xF0)
+			for _, b := range []byte{0xFE, 0x00, 0x00, 0x01, 0x02, 0xF7, 0xFB} {
+				w.WriteData(b)
+			}
+			return w
+		}},
 		{"a starved DRQ", func(t *testing.T) *WD1772 {
 			w := withDisk(t)
 			w.WriteTrack(0)

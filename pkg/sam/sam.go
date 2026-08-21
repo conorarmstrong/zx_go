@@ -150,6 +150,10 @@ func (m *Machine) Reset() {
 	m.beeperLevel = false
 	m.frameStartBeeper = false
 	m.beeperDC.Reset()
+	// The SAA goes quiet with the beeper. Left running, music from the
+	// previous program kept playing over the copyright screen after
+	// Machine -> Reboot.
+	m.SAA.Reset()
 }
 
 // InsertDisk loads a disk image into drive 1 (drive 0) or drive 2 (drive 1).

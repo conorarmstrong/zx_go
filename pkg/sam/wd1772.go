@@ -1,5 +1,7 @@
 package sam
 
+import "bytes"
+
 // WD1772 is the SAM Coupé's floppy disk controller (a WD179x-family part, MFM
 // only). It exposes four registers selected by the low two address bits —
 // status/command, track, sector, data — and serves sectors from a Disk image.
@@ -20,10 +22,14 @@ type WD1772 struct {
 	side    int
 	lastDir int // step direction memory (+1 in, -1 out)
 
-	cmdType1    bool
-	buffer      []byte
-	bufPos      int
-	writing     bool
+	cmdType1 bool
+	buffer   []byte
+	bufPos   int
+	writing  bool
+	// formatting is set while a WRITE TRACK transfer is collecting the
+	// host's track image; filling the buffer then commits the format
+	// rather than a single sector.
+	formatting  bool
 	multiSector bool
 	drqReads    int // consecutive DRQ-pending status reads (LOST_DATA timeout)
 	intrq       bool
@@ -72,6 +78,13 @@ func (f *WD1772) WriteSector(v byte) { f.sector = v }
 // WriteCommand issues a controller command.
 func (f *WD1772) WriteCommand(cmd byte) {
 	f.intrq = false
+	// A new command ends any format in progress, committing the part of
+	// the track that had already streamed past the head. FORCE INTERRUPT
+	// does its own commit below, so exclude it here to avoid doing it
+	// twice.
+	if f.formatting && cmd>>4 != 0xD {
+		f.commitWriteTrack()
+	}
 	switch cmd >> 4 {
 	case 0x0: // RESTORE
 		f.seekTo(0)
@@ -91,10 +104,147 @@ func (f *WD1772) WriteCommand(cmd byte) {
 		f.readAddress()
 	case 0xD: // FORCE INTERRUPT
 		f.forceInterrupt()
-	default: // 0xE READ TRACK / 0xF WRITE TRACK — complete benignly
-		f.cmdType1 = false
-		f.endIO(0)
+	case 0xE: // READ TRACK
+		f.readTrackCmd()
+	case 0xF: // WRITE TRACK (FORMAT)
+		f.writeTrackCmd()
 	}
+}
+
+// writeTrackLen is the number of format bytes the host streams for one
+// double-density track. SAMDOS writes a full track image; the parser
+// below takes whatever arrives and stops at the end of the buffer, so
+// the exact length only has to be generous enough to hold a real one.
+const writeTrackLen = 6250
+
+// writeTrackCmd (WD177x $Fx) begins a FORMAT: the host streams a whole
+// track of format bytes through DRQ and commitWriteTrack parses them
+// into sectors.
+//
+// This used to fall into a "complete benignly" branch — INTRQ raised, no
+// error, not one byte moved — so SAMDOS reported the disk formatted and
+// every old sector was still there.
+func (f *WD1772) writeTrackCmd() {
+	f.cmdType1 = false
+	if f.disk == nil {
+		f.endIO(wdRNF)
+		return
+	}
+	if f.disk.WriteProtected() {
+		f.endIO(wdWriteProt)
+		return
+	}
+	f.buffer, f.bufPos = make([]byte, writeTrackLen), 0
+	f.writing, f.formatting, f.multiSector = true, true, false
+	f.status = wdBusy | wdDRQ
+	f.drqReads = 0
+}
+
+// commitWriteTrack parses the collected format stream and writes each
+// sector's data into the image.
+//
+// The SAM image is a flat geometry store, so a format cannot move a
+// sector or change its size: what it does is lay fresh data over the
+// track, which is exactly what SAMDOS's FORMAT is for. An ID whose
+// cylinder/sector falls outside the image's geometry is skipped rather
+// than folded somewhere else.
+func (f *WD1772) commitWriteTrack() {
+	f.formatting = false
+	if f.disk == nil {
+		f.endIO(wdRNF)
+		return
+	}
+	for _, sec := range parseFormatStream(f.buffer) {
+		if sec.data == nil {
+			continue // ID-only record: nothing to write
+		}
+		f.disk.WriteSector(f.cyl, f.side, int(sec.r), sec.data)
+	}
+	f.endIO(0)
+}
+
+// formatSector is one record recovered from a WRITE TRACK stream.
+type formatSector struct {
+	c, h, r, n byte
+	data       []byte
+}
+
+// parseFormatStream extracts sectors from a WD177x WRITE TRACK byte
+// stream: an $FE ID address mark is followed by C,H,R,N; the next $FB
+// data address mark is followed by 128<<N data bytes. $F5-$F7 are the
+// controller's "write a special byte / write the CRC" codes and carry no
+// payload, so they are simply passed over by the scan.
+func parseFormatStream(stream []byte) []formatSector {
+	var sectors []formatSector
+	i := 0
+	for i < len(stream) {
+		if stream[i] != 0xFE {
+			i++
+			continue
+		}
+		if i+5 > len(stream) {
+			break
+		}
+		c, h, r, n := stream[i+1], stream[i+2], stream[i+3], stream[i+4]
+		i += 5
+		// Find this sector's data address mark, giving up if a new ID
+		// arrives first (an ID-only sector).
+		for i < len(stream) && stream[i] != 0xFB && stream[i] != 0xFE {
+			i++
+		}
+		if i >= len(stream) || stream[i] != 0xFB {
+			sectors = append(sectors, formatSector{c: c, h: h, r: r, n: n})
+			continue
+		}
+		i++ // skip the data address mark
+		size := 128 << (n & 0x07)
+		end := i + size
+		if end > len(stream) {
+			end = len(stream)
+		}
+		data := make([]byte, size)
+		copy(data, stream[i:end])
+		i = end
+		sectors = append(sectors, formatSector{c: c, h: h, r: r, n: n, data: data})
+	}
+	return sectors
+}
+
+// readTrackCmd (WD177x $Ex) hands the host a whole track image. The
+// SAM image stores sectors rather than flux, so the track is
+// synthesised with the same IDAM/DAM framing a format writes — which is
+// what makes a READ TRACK / WRITE TRACK round trip work.
+func (f *WD1772) readTrackCmd() {
+	f.cmdType1 = false
+	if f.disk == nil {
+		f.endIO(wdRNF)
+		return
+	}
+	_, _, spt, ss := f.disk.Geometry()
+	sizeCode := byte(0)
+	for s := ss; s > 128; s >>= 1 {
+		sizeCode++
+	}
+	var image []byte
+	image = append(image, bytes.Repeat([]byte{0x4E}, 60)...) // post-index gap
+	for sec := 1; sec <= spt; sec++ {
+		data, ok := f.disk.ReadSector(f.cyl, f.side, sec)
+		if !ok {
+			continue
+		}
+		image = append(image, bytes.Repeat([]byte{0x00}, 12)...)
+		image = append(image, 0xFE, byte(f.cyl), byte(f.side), byte(sec), sizeCode)
+		image = append(image, 0xF7)                              // CRC
+		image = append(image, bytes.Repeat([]byte{0x4E}, 22)...) // ID gap
+		image = append(image, bytes.Repeat([]byte{0x00}, 12)...)
+		image = append(image, 0xFB)
+		image = append(image, data...)
+		image = append(image, 0xF7)                              // CRC
+		image = append(image, bytes.Repeat([]byte{0x4E}, 54)...) // data gap
+	}
+	f.buffer, f.bufPos, f.writing, f.multiSector = image, 0, false, false
+	f.status = wdBusy | wdDRQ
+	f.drqReads = 0
 }
 
 func (f *WD1772) seekTo(target int) {
@@ -192,6 +342,13 @@ func (f *WD1772) readAddress() {
 }
 
 func (f *WD1772) forceInterrupt() {
+	// A FORCE INTERRUPT during a WRITE TRACK terminates the format. On
+	// the real part each sector is written as it streams past the head,
+	// so whatever arrived before the abort is already on the disk: commit
+	// what we collected rather than discarding it.
+	if f.formatting {
+		f.commitWriteTrack()
+	}
 	// FORCE INTERRUPT terminates any command and reverts the status register to
 	// Type I reporting (head position / spin-up), as on the WD1772. SAMDOS reads
 	// the status here after loading the DOS to confirm the disk is still ready.
@@ -243,6 +400,10 @@ func (f *WD1772) WriteData(val byte) {
 	f.bufPos++
 	f.drqReads = 0
 	if f.bufPos >= len(f.buffer) {
+		if f.formatting {
+			f.commitWriteTrack()
+			return
+		}
 		f.disk.WriteSector(f.cyl, f.side, int(f.sector), f.buffer)
 		if f.multiSector {
 			f.sector++

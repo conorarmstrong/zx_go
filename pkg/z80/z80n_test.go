@@ -649,22 +649,49 @@ func TestZ80N_NEXTREGTolerantOfNilSink(t *testing.T) {
 	}
 }
 
+// JP (C) reads port BC and jumps within the current 16K page to the
+// 64-byte slot the port BYTE selects. The FPGA core is explicit
+// (cpu/t80n.vhd:979-983, reached from the ED $98 mcode entry that
+// drives IORQ on M-cycle 2 with the address set to BC):
+//
+//	when JP_C =>
+//	   if IORQ_i = '1' then
+//	      PC(13 downto 6) <= unsigned(DI_Reg);
+//	      PC(5 downto 0) <= "000000";
+//	   end if;
+//
+// i.e. PC = (PC & $C000) | (IN(C) << 6). We had PC = (PC & $C000) |
+// (BC & $3FFF) and never read the port at all, so keyboard and UART
+// jump tables landed in the wrong handler.
 func TestZ80N_JPC(t *testing.T) {
 	cpu, _ := createZ80NTestCPU()
-	cpu.PC = 0x8123   // top two bits 10
-	cpu.setBC(0x1234) // bottom 14 bits = 0x1234
+	ula := cpu.ula.(*mockULA)
+
+	cpu.PC = 0x8123 // top two bits 10
+	cpu.setBC(0x1234)
+	ula.ports[0x1234] = 0x2A
 	_ = cpu.executeZ80NEDInstruction(0x98)
-	// (0x8123 & 0xC000) | (0x1234 & 0x3FFF) = 0x8000 | 0x1234 = 0x9234
-	if cpu.PC != 0x9234 {
-		t.Errorf("JP (C): PC = %#x, want 0x9234", cpu.PC)
+	// (0x8123 & 0xC000) | (0x2A << 6) = 0x8000 | 0x0A80 = 0x8A80
+	if cpu.PC != 0x8A80 {
+		t.Errorf("JP (C): PC = %#x, want 0x8A80", cpu.PC)
 	}
 
-	// Verify high bits are preserved across boundaries.
-	cpu.PC = 0x4567
-	cpu.setBC(0xC123) // BC&0x3FFF = 0x0123
+	// The port byte, not BC, chooses the slot: same BC, different byte.
+	cpu.PC = 0x8123
+	ula.ports[0x1234] = 0x00
 	_ = cpu.executeZ80NEDInstruction(0x98)
-	if cpu.PC != 0x4123 {
-		t.Errorf("JP (C) mask: PC = %#x, want 0x4123", cpu.PC)
+	if cpu.PC != 0x8000 {
+		t.Errorf("JP (C) with port byte 0: PC = %#x, want 0x8000", cpu.PC)
+	}
+
+	// The top two bits of PC are preserved and the low six are cleared.
+	cpu.PC = 0x4567
+	cpu.setBC(0xC123)
+	ula.ports[0xC123] = 0xFF
+	_ = cpu.executeZ80NEDInstruction(0x98)
+	// 0x4000 | (0xFF << 6) = 0x4000 | 0x3FC0 = 0x7FC0
+	if cpu.PC != 0x7FC0 {
+		t.Errorf("JP (C) mask: PC = %#x, want 0x7FC0", cpu.PC)
 	}
 }
 
@@ -897,12 +924,14 @@ func TestZ80N_JPC_HighBitsAtBoundary(t *testing.T) {
 	// platonically correct; if a real Next program ever shows
 	// it should use the instruction's own PC, flip this test.
 	cpu, _ := createZ80NTestCPU()
+	ula := cpu.ula.(*mockULA)
 	cpu.PC = 0x4000 // just past a 16K boundary
 	cpu.setBC(0x0010)
+	ula.ports[0x0010] = 0x01
 	_ = cpu.executeZ80NEDInstruction(0x98)
-	// PC at execution: 0x4000 -> high bits 01 -> (0x4000 & 0xC000) | (0x10 & 0x3FFF) = 0x4010
-	if cpu.PC != 0x4010 {
-		t.Errorf("JP (C) at 16K boundary: PC = %#x, want 0x4010", cpu.PC)
+	// PC at execution: 0x4000 -> high bits 01 -> 0x4000 | (0x01 << 6) = 0x4040
+	if cpu.PC != 0x4040 {
+		t.Errorf("JP (C) at 16K boundary: PC = %#x, want 0x4040", cpu.PC)
 	}
 }
 
