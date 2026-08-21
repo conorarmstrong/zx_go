@@ -32,8 +32,8 @@ func TestCard_CMD25_WriteMultipleBlock(t *testing.T) {
 	src, _ := NewImageSource(img, false)
 	c := NewCard(src)
 
-	// CMD25 starting at LBA 1.
-	if r1 := sendCommand(c, 25, 1); r1 != 0x00 {
+	// CMD25 starting at sector 1. SDSC takes a byte address.
+	if r1 := sendCommand(c, 25, 1*512); r1 != 0x00 {
 		t.Fatalf("CMD25 R1=%02X, want 0x00", r1)
 	}
 

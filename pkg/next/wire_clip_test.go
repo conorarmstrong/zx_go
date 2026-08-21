@@ -20,7 +20,7 @@ import (
 
 func clipDisp() *nextregs.Dispatcher {
 	d := nextregs.New()
-	WireClipWindows(d, nil, nil)
+	WireClipWindows(d, nil, nil, nil)
 	return d
 }
 
@@ -102,7 +102,7 @@ func TestClipWindow_DispatcherResetRestoresDefaults(t *testing.T) {
 func TestClipWindow_ResetPushesTheDefaultsDownToTheLayers(t *testing.T) {
 	d := nextregs.New()
 	sprites := sprite.New()
-	cw := WireClipWindows(d, nil, sprites)
+	cw := WireClipWindows(d, nil, sprites, nil)
 
 	var ulaX1, ulaX2 byte
 	cw.SetULAClipSink(func(x1, x2, _, _ byte) { ulaX1, ulaX2 = x1, x2 })

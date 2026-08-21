@@ -86,6 +86,12 @@ func (c *ClipWindows) LoadState(b []byte) error {
 	c.ula.idx = s.ULAIdx
 	c.tm.coord = s.TilemapCoord
 	c.tm.idx = s.TilemapIdx
+	// Put the restored windows back into the layers. Without this a
+	// restore reinstated the registers and left every layer clipping to
+	// the window the running program had set.
+	if c.pushAll != nil {
+		c.pushAll()
+	}
 	return nil
 }
 

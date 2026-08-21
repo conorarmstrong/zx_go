@@ -129,13 +129,37 @@ func (t *Tilemap) SetClip(x1, x2, y1, y2 byte) {
 	t.clipX1, t.clipX2, t.clipY1, t.clipY2 = x1, x2, y1, y2
 }
 
+// Clip returns the current clip window (x1,x2,y1,y2).
+func (t *Tilemap) Clip() (x1, x2, y1, y2 byte) {
+	return t.clipX1, t.clipX2, t.clipY1, t.clipY2
+}
+
 // RenderScanline writes len(dst) palette-indexed bytes for visible
 // row y. Caller controls dst length; we read at most that many
 // pixels and stop. Out-of-mode / disabled returns all zeros so the
 // compositor's transparency-or-replace path works correctly.
 func (t *Tilemap) RenderScanline(y int, dst []byte) {
+	t.RenderScanlineBelow(y, dst, nil)
+}
+
+// RenderScanlineBelow is RenderScanline with the per-pixel "below ULA"
+// plane the FPGA carries alongside each pixel. below[x] is 1 where the
+// ULA layer draws over the tilemap pixel, matching pixel_below_o
+// (video/tilemap.vhd:388):
+//
+//	tm_tilemap_pixel_wdata(8) <=
+//	    (tm_tilemap_1(0) or mode_512_q) and not tm_on_top_q;
+//
+// That is: the per-tile attribute's bit 0 ("ULA over tilemap"), forced
+// on in 512-tile mode where the same bit is the tile index's 9th bit
+// instead, and suppressed entirely while tm_on_top is set. below may be
+// nil, and is only as long as the caller made it.
+func (t *Tilemap) RenderScanlineBelow(y int, dst, below []byte) {
 	for i := range dst {
 		dst[i] = 0
+	}
+	for i := range below {
+		below[i] = 0
 	}
 	if !t.enabled || t.mem == nil {
 		return
@@ -214,6 +238,7 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 	// Sonic's options/text screen relies on this (its font lives in tiles
 	// 256+, addressed via attr bit 0); ignoring it renders tile 0 everywhere.
 	mode512 := t.control&(1<<1) != 0
+	onTop := t.OnTop()
 
 	for x := 0; x < len(dst); x++ {
 		if x < clipXStart || x > clipXEnd {
@@ -244,6 +269,12 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 			defAddr := (tilesOffsetBase + int(tileIdx)*8 + pixelRow) & 0x3FFF
 			bit := (tilesBuf[defAddr] >> (7 - uint(pixelInTile))) & 1
 			dst[x] = (attr & 0xFE) | bit
+			if x < len(below) {
+				below[x] = 0
+				if (attr&0x01 != 0 || mode512) && !onTop {
+					below[x] = 1
+				}
+			}
 			continue
 		}
 
@@ -272,11 +303,25 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 		} else {
 			nibble = b & 0x0F
 		}
-		if nibble == 0 {
-			// Index 0 is the standard transparent slot — pass through.
-			dst[x] = 0
-		} else {
-			dst[x] = (paletteOffset << 4) | nibble
+		// The FPGA assembles the pixel unconditionally
+		// (video/tilemap.vhd:382-383):
+		//
+		//	tm_tilemap_pixel_data_standard(7 downto 4) <= tm_tilemap_1(7 downto 4);
+		//	tm_tilemap_pixel_data_standard(3 downto 0) <= tm_mem_data_i(...);
+		//
+		// Transparency is decided downstream by comparing the LOW
+		// nibble against NR$4C (reset $F, tilemap.vhd:427), so nibble
+		// 0 is an ordinary opaque index $00, $10, $20 … Special-casing
+		// it to a bare 0 here threw the palette offset away, and a
+		// background tile drawn with a non-zero offset came out as
+		// palette[0].
+		dst[x] = (paletteOffset << 4) | nibble
+		if x < len(below) {
+			// pixel_below_o (video/tilemap.vhd:388).
+			below[x] = 0
+			if (attr&0x01 != 0 || mode512) && !onTop {
+				below[x] = 1
+			}
 		}
 	}
 }

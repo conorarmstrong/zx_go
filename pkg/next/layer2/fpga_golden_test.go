@@ -16,7 +16,9 @@ import (
 //	    The effective SRAM byte address (and pixel-enable) the FPGA computes
 //	    for raster coordinate coord (= hc*1000 + vc; hc/vc are i_phc/i_pvc for
 //	    res 00, i_whc/i_wvc for the wide res 01/1X), with scroll (sx 9-bit,
-//	    sy 8-bit), starting bank, all clip windows at reset defaults.
+//	    sy 8-bit), starting bank, and the clip inputs tied wide open
+//	    (x1=$00 x2=$FF y1=$00 y2=$FF — see tb_layer2.vhd; note this is
+//	    one row taller than the NextReg $18 reset default of $BF).
 //	PIX  res off sc1 sram_addr pixel
 //	    o_layer2_pixel for a fetched byte data = (sram_addr*131+7) mod 256,
 //	    with palette offset off; sc1 selects the 4bpp nibble (0 = high,
@@ -88,6 +90,12 @@ func TestLayer2AddressMatchesFPGAGolden(t *testing.T) {
 	for _, v := range addrs {
 		l := New(nil)
 		l.SetResolution(byte(v.res))
+		// The testbench tied the clip inputs wide open
+		// (_tools/layer2-vhdl-test/tb_layer2.vhd:53-56: x1=$00 x2=$FF
+		// y1=$00 y2=$FF), one row taller than the NextReg $18 reset
+		// default of $BF. Match the capture conditions so these
+		// vectors test the address path rather than the clip.
+		l.SetClip(0x00, 0xFF, 0x00, 0xFF)
 		l.SetActiveBank(byte(v.bank))
 		l.SetScrollX(uint16(v.sx))
 		l.SetScrollY(byte(v.sy))

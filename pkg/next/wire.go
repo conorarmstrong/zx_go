@@ -937,7 +937,7 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 		WireTilemap(opts.Dispatcher, opts.Tilemap, opts.Palette)
 	}
 	WirePeripheralMasks(opts.Dispatcher)
-	clipWindows := WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites)
+	clipWindows := WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites, opts.Layer2)
 	opts.Memory.SpeedMultiplier = opts.CPU.SpeedMultiplier
 	applyTBBLUEFWBootDefaults(opts.Dispatcher)
 	return clipWindows, resetControl
@@ -994,6 +994,14 @@ type ClipWindows struct {
 	// stop the first from ever seeing an update, and the only symptom would be
 	// one layer clipping to a stale rectangle.
 	ulaSinks []func(x1, x2, y1, y2 byte)
+
+	// pushAll re-sends every window to the layer that renders with it.
+	// The NR$18/$19/$1B write handlers do this on each guest write, but
+	// a state restore bypasses them: LoadState used to put the register
+	// copies back and leave the layers clipping to whatever window the
+	// running program had set, so a rewind across a clip change restored
+	// a machine that still drew the old rectangle.
+	pushAll func()
 }
 
 // SetULAClipSink adds a callback fed the ULA/LoRes clip window, and calls it
@@ -1028,7 +1036,7 @@ func (cw *ClipWindows) pushULA() {
 //
 // The returned *ClipWindows is the machinestate.Device for the state these
 // handlers own; callers that do not capture state can ignore it.
-func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *sprite.Engine) *ClipWindows {
+func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *sprite.Engine, l2Layer *layer2.Layer2) *ClipWindows {
 	cw := &ClipWindows{
 		l2:  clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}},
 		spr: clipWindow{def: [4]byte{0x00, 0xFF, 0x00, 0xBF}},
@@ -1057,11 +1065,23 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *
 		}
 	}
 	pushSpr()
-	wire := func(reg byte, c *clipWindow) {
-		d.SetOnWrite(reg, func(_ *nextregs.Dispatcher, v byte) { c.write(v) })
-		d.SetOnRead(reg, func(_ *nextregs.Dispatcher) byte { return c.read() })
+	// Layer 2's window has to reach the layer, the way $19/$1A/$1B reach
+	// theirs. Stored only in the wire layer it did nothing, and Layer 2
+	// drew full-frame however the guest clipped it.
+	pushL2 := func() {
+		if l2Layer != nil {
+			l2Layer.SetClip(l2.coord[0], l2.coord[1], l2.coord[2], l2.coord[3])
+		}
 	}
-	wire(0x18, l2)
+	pushL2()
+	cw.pushAll = func() {
+		pushL2()
+		pushSpr()
+		pushTM()
+		cw.pushULA()
+	}
+	d.SetOnWrite(0x18, func(_ *nextregs.Dispatcher, v byte) { l2.write(v); pushL2() })
+	d.SetOnRead(0x18, func(_ *nextregs.Dispatcher) byte { return l2.read() })
 	d.SetOnWrite(0x19, func(_ *nextregs.Dispatcher, v byte) { spr.write(v); pushSpr() })
 	d.SetOnRead(0x19, func(_ *nextregs.Dispatcher) byte { return spr.read() })
 	d.SetOnWrite(0x1A, func(_ *nextregs.Dispatcher, v byte) { ula.write(v); cw.pushULA() })

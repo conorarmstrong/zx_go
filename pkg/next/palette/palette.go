@@ -100,7 +100,12 @@ type Bank struct {
 	// Two-byte latch for the NR$44 9-bit palette write protocol: pending9
 	// holds the high byte (first write) until the second write arrives and
 	// commits both. Stored here (not in the wire-layer closure) so
-	// ResetWriteLatches can clear a half-completed pair across a reboot.
+	// ResetWriteLatches can clear a half-completed pair across a reboot,
+	// and NR$40 / NR$41 / NR$43 each clear it during a session, exactly
+	// as the FPGA clears nr_palette_sub_idx on all three
+	// (zxnext.vhd:5375, 5381, 5394). Without that, an abandoned odd
+	// NR$44 write left the latch armed and every colour after it landed
+	// one write out of step.
 	pending9 byte
 	have9    bool
 
@@ -152,6 +157,7 @@ func NewBank() *Bank {
 // toggles first/second, bits 1-2 select layer.
 func (b *Bank) Select(val byte) {
 	b.selected = val & 0x07
+	b.have9 = false // nr_palette_sub_idx <= '0' (zxnext.vhd:5394)
 }
 
 // Selected returns the currently-selected palette index (0..7).
@@ -159,7 +165,10 @@ func (b *Bank) Selected() byte { return b.selected }
 
 // SetIndex installs the palette-write cursor (NextReg 0x40 write).
 // Subsequent value writes auto-increment from here.
-func (b *Bank) SetIndex(i byte) { b.index = i }
+func (b *Bank) SetIndex(i byte) {
+	b.index = i
+	b.have9 = false // nr_palette_sub_idx <= '0' (zxnext.vhd:5375)
+}
 
 // Index returns the current write cursor.
 func (b *Bank) Index() byte { return b.index }
@@ -252,6 +261,7 @@ func (b *Bank) observeWrite(index byte, newVal uint16, newPrio byte) {
 }
 
 func (b *Bank) Write8(val byte) {
+	b.have9 = false // nr_palette_sub_idx <= '0' (zxnext.vhd:5381)
 	// 9th bit (low blue) = written byte's bit1 OR bit0, per zxnext.vhd:4919
 	// (nr_palette_value <= nr_wr_dat & (nr_wr_dat(1) or nr_wr_dat(0))) —
 	// NOT forced to 0. NextReg $44 read-back returns this bit, and

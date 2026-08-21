@@ -53,13 +53,55 @@ type Layer2 struct {
 	// raster journal can replay it at its own scanline.
 	scrollObserver func(ScrollWrite)
 	scrollY        byte
+
+	// clipX1..clipY2 mirror the NextReg $18 clip window. The FPGA reset
+	// value is the whole screen (X 0..255, Y 0..191), which is what New
+	// installs. X is in 2-pixel units in the wide resolutions and 1:1 in
+	// 256x192 (layer2.vhd:129-135).
+	clipX1, clipX2, clipY1, clipY2 byte
+}
+
+// SetClip installs the Layer 2 clip window (NextReg $18 coords
+// X1,X2,Y1,Y2). The layer is drawn only inside it (layer2.vhd:167):
+//
+//	layer2_clip_en <= '1' when (hc_eff >= clip_x1_q) and (hc_eff <= clip_x2_q)
+//	                       and (vc_eff >= clip_y1_q) and (vc_eff <= clip_y2_q) ...
+//
+// Sprites ($19), the ULA ($1A) and the tilemap ($1B) each had their
+// window pushed into the layer; Layer 2's was stored in the wire layer
+// and never arrived, so the layer drew full-frame however the guest
+// clipped it.
+func (l *Layer2) SetClip(x1, x2, y1, y2 byte) {
+	l.clipX1, l.clipX2, l.clipY1, l.clipY2 = x1, x2, y1, y2
+}
+
+// Clip returns the current clip window (x1,x2,y1,y2).
+func (l *Layer2) Clip() (x1, x2, y1, y2 byte) {
+	return l.clipX1, l.clipX2, l.clipY1, l.clipY2
+}
+
+// clipEnabled reports layer2_clip_en for an effective coordinate. In
+// 256x192 the X coordinates are 1:1; in the wide resolutions they are
+// 2-pixel units, so x1 scales to x1*2 and x2 to x2*2+1
+// (layer2.vhd:129-135).
+func (l *Layer2) clipEnabled(hcEff, vcEff int) bool {
+	x1, x2 := int(l.clipX1), int(l.clipX2)
+	if l.resolution != 0 {
+		x1, x2 = x1*2, x2*2+1
+	}
+	return hcEff >= x1 && hcEff <= x2 &&
+		vcEff >= int(l.clipY1) && vcEff <= int(l.clipY2)
 }
 
 // New constructs a Layer 2 reader backed by the given memory bus.
 // Disabled by default — guest code (or test code) flips it on
 // when ready.
 func New(mem BankReader) *Layer2 {
-	return &Layer2{mem: mem}
+	// The FPGA reset clip window is the whole 256x192 screen
+	// (zxnext.vhd:4959-4962: x1=$00 x2=$FF y1=$00 y2=$BF). A guest that
+	// wants the taller 320x256 or 640x256 frame has to widen Y itself,
+	// exactly as on hardware.
+	return &Layer2{mem: mem, clipX1: 0x00, clipX2: 0xFF, clipY1: 0x00, clipY2: 0xBF}
 }
 
 // SetActiveBank installs the RAM bank that holds the first 16 KB
@@ -217,8 +259,8 @@ func (l *Layer2) fpgaFrameAddr(hcEff, vcEff int) (addr int, valid bool) {
 // (video/layer2.vhd:172-175): the bank-effective mapping that places the
 // framebuffer in the 128K ZX-RAM window and the A21 on-screen guard. Given the
 // EFFECTIVE coordinate (hcEff = displayed screen column, vcEff = displayed row)
-// it returns the 21-bit SRAM byte address and the final per-pixel enable (clip
-// defaults to the full screen, so enable = on-screen validity AND A21=0).
+// it returns the 21-bit SRAM byte address and the final per-pixel enable:
+// on-screen validity AND A21=0 AND inside the NR$18 clip window.
 func (l *Layer2) fpgaSramAddr(hcEff, vcEff int) (addr int, enabled bool) {
 	addr16, valid := l.fpgaFrameAddr(hcEff, vcEff)
 
@@ -228,7 +270,9 @@ func (l *Layer2) fpgaSramAddr(hcEff, vcEff int) (addr int, enabled bool) {
 	// layer2_addr_eff = (bank_eff + addr(16:14)) & addr(13:0); :173. 22-bit.
 	addrEff := (((bankEff + ((addr16 >> 14) & 0x7)) & 0xFF) << 14) | (addr16 & 0x3FFF)
 	a21 := (addrEff >> 21) & 1
-	return addrEff & 0x1FFFFF, valid && a21 == 0
+	// layer2_en <= layer2_en_q and layer2_clip_en and not addr_eff(21);
+	// :175.
+	return addrEff & 0x1FFFFF, valid && a21 == 0 && l.clipEnabled(hcEff, vcEff)
 }
 
 // fpgaEffectiveAddr is fpgaSramAddr driven by the RAW raster counter, forming
@@ -294,8 +338,8 @@ func (l *Layer2) LineHeight() int {
 // from the active framebuffer to dst, applying the FPGA's scroll + wrap +
 // per-pixel palette offset (video/layer2.vhd). dst must have at least LineWidth
 // bytes; extra bytes are left untouched. Off-screen pixels (the FPGA's
-// hc_valid/vc_valid wrap regions) and out-of-range banks render as transparent
-// (index 0).
+// hc_valid/vc_valid wrap regions), pixels outside the NR$18 clip window, and
+// out-of-range banks render as transparent (index 0).
 //
 // Memory mapping: the FPGA's framebuffer offset addr16 = y*256 + x (256 mode)
 // or x*256 + y (wide) folds onto our paged RAM as bank = activeBank +
@@ -322,7 +366,11 @@ func (l *Layer2) RenderScanline(y int, dst []byte) {
 	// Fast path: 256 mode, no scroll, identity offset — the original
 	// row-major bank copy. Behaviourally identical to the faithful path
 	// below for this common case, but avoids the per-pixel address math.
-	if l.resolution == 0 && l.scrollX == 0 && l.scrollY == 0 && y < Height {
+	// The fast path skips the per-pixel FPGA math, so it is only safe
+	// while the clip window leaves this whole row alone.
+	rowUnclipped := l.clipX1 == 0x00 && l.clipX2 == 0xFF &&
+		y >= int(l.clipY1) && y <= int(l.clipY2)
+	if l.resolution == 0 && l.scrollX == 0 && l.scrollY == 0 && y < Height && rowUnclipped {
 		bankNum := int(l.activeBank) + y/64
 		bankOff := (y % 64) * Width
 		page := l.mem.GetPage(bankNum)
@@ -369,7 +417,7 @@ func (l *Layer2) RenderScanline(y int, dst []byte) {
 // bank reads as not-ok (transparent).
 func (l *Layer2) fetchByte(hcEff, vcEff int) (byte, bool) {
 	addr16, en := l.fpgaFrameAddr(hcEff, vcEff)
-	if !en {
+	if !en || !l.clipEnabled(hcEff, vcEff) {
 		return 0, false
 	}
 	bank := int(l.activeBank) + addr16/0x4000

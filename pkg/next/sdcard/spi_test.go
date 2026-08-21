@@ -241,13 +241,14 @@ func TestCard_CMD24_WriteBlock(t *testing.T) {
 	img := make([]byte, 4096)
 	src, _ := NewImageSource(img, false)
 	c := NewCard(src)
-	// Send CMD24 with LBA=2.
+	// Send CMD24 for sector 2. This card is SDSC (CCS=0), so the
+	// argument is a BYTE address: 2 * 512 = 0x00000400.
 	c.WriteCS(0xFE)
 	c.WriteData(0x40 | 24)
-	c.WriteData(0)
-	c.WriteData(0)
-	c.WriteData(0)
-	c.WriteData(2)
+	c.WriteData(0x00)
+	c.WriteData(0x00)
+	c.WriteData(0x04)
+	c.WriteData(0x00)
 	c.WriteData(0xFF)
 	var r1 byte = 0xFF
 	for i := 0; i < 16 && r1 == 0xFF; i++ {

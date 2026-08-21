@@ -421,22 +421,18 @@ func (c *Card) dispatch() {
 		c.handleReadBlock(arg)
 		// Track where we are so ReadData can fetch the next block.
 		// arg is byte address (SDSC) or LBA (SDHC) — convert to LBA.
-		if c.advertiseSDHC {
-			c.multiReadLBA = arg + 1
-		} else {
-			c.multiReadLBA = (arg / 512) + 1
-		}
+		c.multiReadLBA = c.argToLBA(arg) + 1
 		c.multiReadActive = true
 	case 24: // WRITE_BLOCK
-		c.handleWriteBlockStart(arg)
+		c.handleWriteBlockStart(c.argToLBA(arg))
 	case 25: // WRITE_MULTIPLE_BLOCK
-		c.handleWriteMultiBlockStart(arg)
+		c.handleWriteMultiBlockStart(c.argToLBA(arg))
 	case 32: // ERASE_WR_BLK_START
-		c.eraseStart = arg
+		c.eraseStart = c.argToLBA(arg)
 		c.eraseStartSet = true
 		c.respondR1(0x00)
 	case 33: // ERASE_WR_BLK_END
-		c.eraseEnd = arg
+		c.eraseEnd = c.argToLBA(arg)
 		c.respondR1(0x00)
 	case 38: // ERASE
 		c.handleErase()
@@ -577,6 +573,21 @@ func (c *Card) queueDataBlock(data []byte, n int) {
 	c.rxQueue = append(c.rxQueue, byte(crc>>8), byte(crc))
 }
 
+// argToLBA converts a host command argument to a block number.
+//
+// SDSC cards (CCS=0, which is what we advertise) take a BYTE address;
+// SDHC/SDXC take the LBA directly. Only the read path used to make
+// this conversion: CMD24, CMD25 and the CMD32/33 erase range passed
+// the raw argument through as if it were already an LBA, so a write
+// addressed at sector 2 landed at offset 2 instead of 1024, and CMD25
+// stepped 512 sectors between consecutive blocks.
+func (c *Card) argToLBA(arg uint32) uint32 {
+	if c.advertiseSDHC {
+		return arg
+	}
+	return arg / 512
+}
+
 // handleReadBlock dispatches CMD17/18 with the same response
 // framing the CMD9 / CMD10 paths use, byte-for-byte matching
 // the canonical MMC SPI implementation:
@@ -596,13 +607,7 @@ func (c *Card) handleReadBlock(arg uint32) {
 	c.respondR1(0x00) // respondR1 supplies the Ncr pad
 	buf := make([]byte, 512)
 	if c.src != nil {
-		sector := arg
-		if !c.advertiseSDHC {
-			// SDSC: arg is byte address — divide back to LBA.
-			sector = arg / 512
-		}
-		// SDHC/SDXC: arg is already the LBA (block number).
-		_ = c.src.ReadBlock(sector, buf)
+		_ = c.src.ReadBlock(c.argToLBA(arg), buf)
 	}
 	c.queueRawDataBlock(buf)
 }

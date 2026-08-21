@@ -15,10 +15,10 @@ func TestCard_Erase_ZeroesRange(t *testing.T) {
 	c := NewCard(src)
 
 	// Erase blocks 1..3 inclusive.
-	if r := sendCommand(c, 32, 1); r != 0x00 {
+	if r := sendCommand(c, 32, 1*512); r != 0x00 {
 		t.Fatalf("CMD32 R1=%02X, want 0x00", r)
 	}
-	if r := sendCommand(c, 33, 3); r != 0x00 {
+	if r := sendCommand(c, 33, 3*512); r != 0x00 {
 		t.Fatalf("CMD33 R1=%02X, want 0x00", r)
 	}
 	if r := sendCommand(c, 38, 0); r != 0x00 {
@@ -67,8 +67,8 @@ func TestCard_Erase_SwappedBoundsStillErases(t *testing.T) {
 	src, _ := NewImageSource(img, false)
 	c := NewCard(src)
 
-	sendCommand(c, 32, 5) // start > end
-	sendCommand(c, 33, 4)
+	sendCommand(c, 32, 5*512) // start > end
+	sendCommand(c, 33, 4*512)
 	sendCommand(c, 38, 0)
 
 	for b := 4; b <= 5; b++ {

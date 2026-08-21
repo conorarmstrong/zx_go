@@ -49,6 +49,11 @@ func TestLayer2Resolution320ColumnMajor(t *testing.T) {
 	l.SetEnabled(true)
 	l.SetResolution(1) // 320×256
 	l.SetActiveBank(0)
+	// The NR$18 reset window is the 256×192 screen (y2 = $BF), and the
+	// FPGA does not widen Y with the resolution (layer2.vhd:137-138), so
+	// a guest wanting all 256 rows has to say so. This test is about
+	// addressing, not clipping.
+	l.SetClip(0x00, 0xFF, 0x00, 0xFF)
 	if l.LineWidth() != 320 || l.LineHeight() != 256 {
 		t.Fatalf("dims = %d×%d, want 320×256", l.LineWidth(), l.LineHeight())
 	}

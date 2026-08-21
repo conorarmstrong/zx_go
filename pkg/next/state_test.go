@@ -26,7 +26,7 @@ import (
 func clipFixture(t *testing.T) (*nextregs.Dispatcher, *ClipWindows) {
 	t.Helper()
 	d := nextregs.New()
-	return d, WireClipWindows(d, nil, nil)
+	return d, WireClipWindows(d, nil, nil, nil)
 }
 
 // driveClipWindowsA leaves each of the four windows with a different

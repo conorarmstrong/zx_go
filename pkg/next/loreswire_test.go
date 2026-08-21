@@ -253,7 +253,7 @@ func TestTheConfigIsSeededFromTheRegistersAtInstallTime(t *testing.T) {
 func TestTheULAClipWindowReachesTheLoResConfig(t *testing.T) {
 	d := nextregs.New()
 	var cfg lores.Config
-	cw := WireClipWindows(d, nil, nil)
+	cw := WireClipWindows(d, nil, nil, nil)
 	cw.SetULAClipSink(func(x1, x2, y1, y2 byte) {
 		cfg.ClipX1, cfg.ClipX2, cfg.ClipY1, cfg.ClipY2 = x1, x2, y1, y2
 	})
@@ -275,7 +275,7 @@ func TestTheULAClipWindowReachesTheLoResConfig(t *testing.T) {
 // layer's -- so a second sink must not silence the first.
 func TestEveryULAClipSinkIsFed(t *testing.T) {
 	d := nextregs.New()
-	cw := WireClipWindows(d, nil, nil)
+	cw := WireClipWindows(d, nil, nil, nil)
 
 	var first, second byte
 	cw.SetULAClipSink(func(x1, _, _, _ byte) { first = x1 })

@@ -144,6 +144,16 @@ func (b *Bank) Level(c Channel) byte {
 // handled), false otherwise — the caller (ULA's port dispatcher)
 // uses this as a fall-through signal.
 func (b *Bank) WritePort(port uint16, val byte) bool {
+	// Port to channel per the FPGA's port_dac_A..D decode
+	// (zxnext.vhd:2658-2664), taking the union of the DAC modes: the
+	// NR$82-85 internal_port_enable bits that gate them on hardware are
+	// not plumbed here, and this decode already took the union for the
+	// ports it knew about. $5F (channel D in SounDrive mode 1 and in
+	// stereo A/D) and $DF (the SpecDrum mono A+D pair) were missing, so
+	// the right-hand pair stayed at mid-scale and a hard-panned right
+	// DAC was silent. See SounDrive for the mode-gated reference; $3F
+	// and $B3 stay out of this map because both alias decodes the ULA
+	// dispatcher already owns.
 	switch port & 0xFF {
 	case 0x1F, 0xF1:
 		b.levels[ChannelA] = val
@@ -151,7 +161,10 @@ func (b *Bank) WritePort(port uint16, val byte) bool {
 		b.levels[ChannelB] = val
 	case 0x4F, 0xF9:
 		b.levels[ChannelC] = val
-	case 0xFB:
+	case 0x5F, 0xFB:
+		b.levels[ChannelD] = val
+	case 0xDF: // mono_AD
+		b.levels[ChannelA] = val
 		b.levels[ChannelD] = val
 	default:
 		return false

@@ -1788,8 +1788,23 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		return
 	}
 
-	// Spectrum Next DAC ports (0x0F / 0x1F / 0xF1 / 0xF3 / 0xF9 /
-	// 0xDF / 0xFB on the low byte). The bank returns true if the
+	// Classic-Spectrum SpecDrum ($DF) / Covox ($FB) DAC. When an enabled
+	// device claims the port, latch the 8-bit sample with its T-state offset so
+	// flushAudioFrame can reconstruct the waveform, and consume the write
+	// (claiming $FB is why Covox and the ZX Printer can't both be on at once).
+	//
+	// This runs ahead of the Next's internal DAC because both decode $DF
+	// and $FB. An add-on the user has explicitly enabled wins the port;
+	// the internal bank picks it up otherwise.
+	if u.speccyDAC != nil && u.speccyDAC.Handles(byte(addr&0xFF)) {
+		if u.audio != nil && u.mem.TStates != nil {
+			u.speccyDAC.Record(int(*u.mem.TStates-u.frameStartTstate), val)
+		}
+		return
+	}
+
+	// Spectrum Next DAC ports (0x0F / 0x1F / 0x4F / 0x5F / 0xDF / 0xF1 /
+	// 0xF3 / 0xF9 / 0xFB on the low byte). The bank returns true if the
 	// port was a DAC channel — when handled, fall through to the
 	// rest of the dispatch is unnecessary (DAC ports don't alias
 	// classic ULA ports). When the port wasn't a DAC port the bank
@@ -1799,17 +1814,6 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		// waveform sample-accurately (event-timed, like the beeper).
 		if u.audio != nil && u.mem.TStates != nil {
 			u.nextDAC.Record(int(*u.mem.TStates - u.frameStartTstate))
-		}
-		return
-	}
-
-	// Classic-Spectrum SpecDrum ($DF) / Covox ($FB) DAC. When an enabled
-	// device claims the port, latch the 8-bit sample with its T-state offset so
-	// flushAudioFrame can reconstruct the waveform, and consume the write
-	// (claiming $FB is why Covox and the ZX Printer can't both be on at once).
-	if u.speccyDAC != nil && u.speccyDAC.Handles(byte(addr&0xFF)) {
-		if u.audio != nil && u.mem.TStates != nil {
-			u.speccyDAC.Record(int(*u.mem.TStates-u.frameStartTstate), val)
 		}
 		return
 	}
