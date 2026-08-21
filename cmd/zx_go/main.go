@@ -1794,6 +1794,9 @@ func applySnapshotToEmulator(emu *emulator, snap *snapshot.Snapshot) error {
 // snapshot rewrites the CPU registers and the whole of RAM, all of which the
 // emulation goroutine reads every frame.
 func applySnapshotToEmulatorLocked(emu *emulator, snap *snapshot.Snapshot) error {
+	if err := emu.spectrumOnlyFeature(); err != nil {
+		return err
+	}
 	// Pause emulation during snapshot loading
 	wasPaused := emu.paused.Load()
 	if !emu.paused.Load() {
@@ -1857,8 +1860,54 @@ func applySnapshotToEmulatorLocked(emu *emulator, snap *snapshot.Snapshot) error
 	return nil
 }
 
+// spectrumOnlyFeature reports why a Spectrum-only feature cannot run on
+// the current machine, or nil when it can.
+//
+// The SAM Coupé, ZX80 and ZX81 are first-class machines with their own
+// video and IO, and e.ula is nil on all three. Every feature that reaches
+// through the ULA — the classic snapshot formats, tape, RZX, Kempston —
+// used to dereference it and take the process down with no error dialog,
+// because the menus offered those items on every machine.
+func (e *emulator) spectrumOnlyFeature() error {
+	if e.ula != nil {
+		return nil
+	}
+	switch {
+	case e.sam != nil:
+		return fmt.Errorf("this is a Spectrum-only feature: the SAM Coupé loads disks through File \u2192 Load SAM Disk, and F2 / F4 capture its whole machine state")
+	case e.zx8x != nil:
+		return fmt.Errorf("this is a Spectrum-only feature: the ZX80/ZX81 load .p / .o programs, and F2 / F4 capture their whole machine state")
+	}
+	return fmt.Errorf("this is a Spectrum-only feature and the current machine has no Spectrum ULA")
+}
+
+// admitFileForMachine reports why a file extension cannot be loaded on the
+// current machine, or nil when it can.
+//
+// Split out of loadFileByPath so the guard is reachable from a test: the
+// loader itself is a closure over the whole menu-construction scope. It
+// used to check for the ZX80/ZX81 alone, which left the SAM Coupé — the
+// other machine with no Spectrum ULA — to dereference the nil pointer on
+// a .tap, .rzx or snapshot and take the process down with no dialog.
+func (e *emulator) admitFileForMachine(ext string) error {
+	if e.ula != nil {
+		return nil
+	}
+	if e.zx8x != nil {
+		switch ext {
+		case ".p", ".81", ".o", ".80":
+			return nil
+		}
+		return fmt.Errorf("%s files are Spectrum-only — switch to a Spectrum model first (the ZX80/ZX81 load .p/.o programs)", ext)
+	}
+	return fmt.Errorf("%s files are Spectrum-only: %w", ext, e.spectrumOnlyFeature())
+}
+
 // createSnapshotFromEmulator creates a snapshot from the current emulator state
 func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
+	if err := emu.spectrumOnlyFeature(); err != nil {
+		return nil, err
+	}
 	snap := snapshot.New()
 
 	// Copy CPU state
@@ -1937,6 +1986,11 @@ func (e *emulator) withEmulationPaused(fn func() error) error {
 // mutation so the CPU can't be mid-frame when the snapshot apply +
 // T-state reset happens.
 func (e *emulator) startRZXPlayback(file *rzx.File) error {
+	// RZX replays a Spectrum's IN stream through the ULA's playback hook,
+	// so it needs one. The File menu offers the item on every machine.
+	if err := e.spectrumOnlyFeature(); err != nil {
+		return err
+	}
 	if e.rzxRecord.Load() != nil {
 		return fmt.Errorf("cannot start playback while recording")
 	}
@@ -3187,15 +3241,8 @@ func main() {
 	// refresh the recent submenu UI.
 	loadFileByPath := func(path string) (string, error) {
 		ext := strings.ToLower(filepath.Ext(path))
-		// On the ZX80/ZX81 (no ULA) only the native program formats are
-		// loadable; Spectrum tape/disk/snapshot formats would dereference the
-		// nil ula, so reject them with a clear message.
-		if emu.zx8x != nil {
-			switch ext {
-			case ".p", ".81", ".o", ".80":
-			default:
-				return "", fmt.Errorf("%s files are Spectrum-only — switch to a Spectrum model first (the ZX80/ZX81 load .p/.o programs)", ext)
-			}
+		if err := emu.admitFileForMachine(ext); err != nil {
+			return "", err
 		}
 		switch ext {
 		case ".tap":
@@ -3513,8 +3560,18 @@ func main() {
 						}
 						slog.Info("snapshot save location selected", "path", writer.URI().Path())
 
-						// Create snapshot from current emulator state
-						snap, err := createSnapshotFromEmulator(emu)
+						// Create snapshot from current emulator state.
+						// Pause first: the copy walks the CPU registers and
+						// eight banks, and without this the emulation
+						// goroutine ran underneath it, so a save could take
+						// PC from one instruction and the registers from the
+						// next. F2 and the RZX capture already paused.
+						var snap *snapshot.Snapshot
+						err = emu.withEmulationPaused(func() error {
+							s, err := createSnapshotFromEmulator(emu)
+							snap = s
+							return err
+						})
 						if err != nil {
 							dialog.ShowError(fmt.Errorf("failed to create snapshot: %w", err), w)
 							_ = writer.Close()
@@ -4290,13 +4347,13 @@ func main() {
 				for dir := 0; dir < 5; dir++ {
 					emu.dispatchJoystick(dir, false)
 				}
-				if emu.joystickType == JoystickKempston {
-					emu.ula.KempstonEnabled = false
+				// Kempston is a Spectrum port; the SAM and ZX80/ZX81
+				// have no ULA to enable it on. The other joystick types
+				// go through the keyboard matrix and are unaffected.
+				if emu.ula != nil {
+					emu.ula.KempstonEnabled = t == JoystickKempston
 				}
 				emu.joystickType = t
-				if t == JoystickKempston {
-					emu.ula.KempstonEnabled = true
-				}
 				saveConfig()
 				fyne.Do(func() {
 					updateLabels()
@@ -4427,7 +4484,12 @@ func main() {
 				dbg.SetTimeTravel(ttController{emu: emu})
 				dbg.SetCallbacks(
 					func() { emu.paused.Store(true) },
-					func() { emu.cpu.StepInstruction() },
+					// StepInstructionWithIRQ, not StepInstruction: the plain
+					// fetch-and-execute never delivers INT or NMI, so HALT
+					// never ended, IM 1 / IM 2 handlers never ran and F8 / F12
+					// did nothing while single-stepping. Telnet `step` and
+					// Step Over already use the IRQ-aware path.
+					func() { emu.cpu.StepInstructionWithIRQ() },
 					func() { emu.paused.Store(false) },
 					func() bool { return emu.paused.Load() },
 				)
@@ -4441,7 +4503,7 @@ func main() {
 					lines := debugger.Disassemble(read, c.PC, 1)
 					if len(lines) == 0 || len(lines[0].Bytes) == 0 ||
 						!isCallLike(lines[0].Bytes[0], lines[0].Bytes) {
-						c.StepInstruction()
+						c.StepInstructionWithIRQ()
 						return
 					}
 					target := c.PC + uint16(len(lines[0].Bytes))

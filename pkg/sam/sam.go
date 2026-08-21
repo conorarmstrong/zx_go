@@ -91,6 +91,7 @@ func New(rom0, rom1 []byte) *Machine {
 	m.CPU = z80.New(m.Mem, m)
 	// Maskable frame interrupt as a narrow pulse (the SAM ASIC pulses int_ula
 	// once per frame, held ~128 cycles), reusing the shared Z80 timing hooks.
+	m.CPU.FrameTStates = CyclesPerFrame
 	m.CPU.IntAssertTstate = samFrameIntTstate
 	m.CPU.IntPulseTstates = samIntActiveCycles
 	// Line-accurate renderer: a write to displayed video memory flushes the

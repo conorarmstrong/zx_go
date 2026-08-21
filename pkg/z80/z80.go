@@ -140,6 +140,16 @@ type CPU struct {
 	// caller that hasn't opted in. pkg/next/wire sets them for ModelNext.
 	IntAssertTstate uint64
 	IntPulseTstates uint64
+
+	// FrameTStates is the length of one machine frame in 3.5 MHz-reference
+	// T-states, used by StepInstructionWithIRQ to place the frame-interrupt
+	// boundary while the debugger single-steps. Zero means the 70908 the
+	// Spectrum 128K family and the Next run at, which is the default.
+	//
+	// The SAM Coupé's frame is 119808 with its INT at 99840, so a hardcoded
+	// 70908 meant single-stepping a SAM never latched the frame interrupt:
+	// HALT never ended and IM 1 handlers never ran.
+	FrameTStates uint64
 	frameIntFired   bool // narrow-pulse: pulse raised this frame
 	frameIntDeasct  bool // narrow-pulse: pulse withdrawn this frame (one-shot)
 
@@ -1140,6 +1150,15 @@ const stepFrameBudget = uint64(70908)
 // Use this from the debugger's single-step path. Conformance tests
 // (Zexdoc / Zexall) keep using the plain StepInstruction because
 // they expect IRQs to stay off during the test.
+// frameBudgetTstates is the machine's frame length at the 3.5 MHz
+// reference, defaulting to the 70908 the 128K family and the Next run at.
+func (c *CPU) frameBudgetTstates() uint64 {
+	if c.FrameTStates > 0 {
+		return c.FrameTStates
+	}
+	return stepFrameBudget
+}
+
 func (c *CPU) StepInstructionWithIRQ() {
 	narrowPulse := c.IntPulseTstates > 0
 	// One ULA frame is stepFrameBudget T-states at the 3.5 MHz reference,
@@ -1150,7 +1169,7 @@ func (c *CPU) StepInstructionWithIRQ() {
 	// (which scales its budget identically). Without this the single-step
 	// path would fire the frame INT SpeedMultiplier× too often at turbo —
 	// e.g. 8× at 28 MHz — spurious interrupts that derail boot.
-	frameBudget := stepFrameBudget * uint64(c.SpeedMultiplier())
+	frameBudget := c.frameBudgetTstates() * uint64(c.SpeedMultiplier())
 	// Frame-boundary IRQ assertion. Legacy: assert at the boundary, hold.
 	// Narrow pulse: only reset the per-frame one-shots here; the pulse
 	// itself is raised/withdrawn by frameIntPulse below (timing.md §1c).
