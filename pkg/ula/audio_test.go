@@ -1,6 +1,7 @@
 package ula
 
 import (
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
@@ -14,7 +15,7 @@ func TestFlushAudioFrameSilent(t *testing.T) {
 	u.Speaker = false
 	u.frameStartSpeakerState = false
 
-	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState, roms.FrameTStates(roms.Model48K))
 
 	if len(samples) != audio.SamplesPerFrame {
 		t.Fatalf("len(samples) = %d, want %d", len(samples), audio.SamplesPerFrame)
@@ -33,7 +34,7 @@ func TestFlushAudioFrameInitialHigh(t *testing.T) {
 	u := newAudioTestULA(t)
 	u.frameStartSpeakerState = true
 
-	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState, roms.FrameTStates(roms.Model48K))
 	for i, s := range samples {
 		if s != beeperHigh {
 			t.Errorf("sample %d = %d, want %d (high)", i, s, beeperHigh)
@@ -55,7 +56,7 @@ func TestFlushAudioFrameSquareWave(t *testing.T) {
 		{tstateOffset: 69888 / 2, state: true},
 	}
 
-	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState, roms.FrameTStates(roms.Model48K))
 
 	// First sample must be low.
 	if samples[0] != beeperLow {
@@ -95,7 +96,7 @@ func TestFlushAudioFrameMultipleToggles(t *testing.T) {
 		{tstateOffset: 3 * tpf / 4, state: true},
 	}
 
-	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	samples, _ := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState, roms.FrameTStates(roms.Model48K))
 
 	// Sample at the middle of each quarter and check the level.
 	check := func(t *testing.T, sampleIdx int, want int16, label string) {
@@ -134,7 +135,7 @@ func TestFlushAudioFrameIntegratesSubSampleToggles(t *testing.T) {
 		{tstateOffset: 3 * tstatesPerSample / 4, state: false},
 	}
 
-	samples, _ := generateBeeperFrame(events, false)
+	samples, _ := generateBeeperFrame(events, false, roms.FrameTStates(roms.Model48K))
 
 	// Sample 0 should be near the midpoint between beeperLow and
 	// beeperHigh. Without the integration fix, sample 0 would be
@@ -160,7 +161,7 @@ func TestFlushAudioFramePartialOverlap(t *testing.T) {
 	events := []audioEvent{
 		{tstateOffset: 101 * tpf / samples, state: true},
 	}
-	out, _ := generateBeeperFrame(events, false)
+	out, _ := generateBeeperFrame(events, false, roms.FrameTStates(roms.Model48K))
 
 	if out[100] != beeperLow {
 		t.Errorf("sample 100 (just before boundary): got %d, want %d", out[100], beeperLow)

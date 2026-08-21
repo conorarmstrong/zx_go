@@ -93,10 +93,12 @@ func TestCopperMatchesFPGAGolden(t *testing.T) {
 			rw = &recordWriter{}
 			c.SetRegWriter(rw)
 		case "LOAD":
-			idx := uint16(atoi(fld[1]))
+			// The golden records a WORD index; the cursor is a byte
+			// address, so the instruction at word N starts at byte 2N.
+			idx := uint16(atoi(fld[1])) * 2
 			word := hx(fld[2])
+			c.SetWritePtrHighAndMode(byte((idx >> 8) & 0x07))
 			c.SetWritePtrLow(byte(idx & 0xFF))
-			c.SetWritePtrHighAndMode(byte((idx >> 8) & 0x03))
 			c.WriteData(byte(word >> 8))
 			c.WriteData(byte(word & 0xFF))
 		case "MODE":

@@ -1312,7 +1312,8 @@ func WireKeymap(d *nextregs.Dispatcher, m *keymap.Map) {
 // handlers that drive the Copper coprocessor: 0x60 is the data
 // port (two consecutive writes form one 16-bit instruction),
 // 0x61 is the low 8 bits of the write cursor, 0x62 is the high
-// 2 bits + 2-bit start mode.
+// 3 bits + 2-bit start mode. The cursor is a byte address into the
+// 2 KB instruction memory, so two 0x60 writes advance it by two.
 //
 // OnRead handlers return the live cursor / mode rather than the
 // last value written, so software polling for "where is the
@@ -1334,7 +1335,9 @@ func WireCopper(d *nextregs.Dispatcher, c *copper.Copper) {
 		return byte(c.Cursor() & 0xFF)
 	})
 	d.SetOnRead(0x62, func(_ *nextregs.Dispatcher) byte {
-		return byte((c.Cursor()>>8)&0x03) | (byte(c.Mode()) << 6)
+		// port_253b_dat <= nr_62_copper_mode & "000" & nr_copper_addr(10 downto 8)
+		// (zxnext.vhd:6087) — three address bits, not two.
+		return byte((c.Cursor()>>8)&0x07) | (byte(c.Mode()) << 6)
 	})
 }
 

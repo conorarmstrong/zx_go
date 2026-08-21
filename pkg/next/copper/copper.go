@@ -78,12 +78,19 @@ type RegWriter interface {
 	WriteReg(reg, val byte)
 }
 
+// CopperRAMBytes is the size of the copper instruction memory in bytes.
+// The FPGA's nr_copper_addr is 11 bits (zxnext.vhd:1194), addressing
+// each byte of the 1024 16-bit instructions.
+const CopperRAMBytes = MaxInstructions * 2
+
 // Copper holds the instruction memory + cursor + start mode.
 type Copper struct {
-	program  [MaxInstructions]uint16
-	writePtr uint16 // pattern-RAM write head, byte-granular
-	hi       byte   // staged high byte for the two-byte write
-	hiSet    bool
+	program [MaxInstructions]uint16
+	// writePtr is the FPGA's nr_copper_addr: an 11-bit BYTE address into
+	// the instruction memory, not an instruction index. Modelling it as a
+	// 10-bit word index put every NR$61 address at twice its intended
+	// word and left the top 1 KB unreachable.
+	writePtr uint16
 	mode     StartMode
 	pc       uint16 // execution pointer
 	stopped  bool
@@ -106,19 +113,15 @@ func (c *Copper) SetRegWriter(rw RegWriter) { c.regs = rw }
 // (high byte first); WriteData latches the first byte, then
 // commits the pair on the second.
 func (c *Copper) WriteData(b byte) {
-	if !c.hiSet {
-		c.hi = b
-		c.hiSet = true
-		return
+	word := c.writePtr >> 1
+	if c.writePtr&1 == 0 {
+		// copper_msb_we with nr_copper_write_8 = '1' (zxnext.vhd:3977-3978).
+		c.program[word] = (c.program[word] & 0x00FF) | (uint16(b) << 8)
+	} else {
+		// copper_lsb_we (zxnext.vhd:3998-3999).
+		c.program[word] = (c.program[word] & 0xFF00) | uint16(b)
 	}
-	c.hiSet = false
-	if c.writePtr < MaxInstructions {
-		c.program[c.writePtr] = (uint16(c.hi) << 8) | uint16(b)
-	}
-	c.writePtr++
-	if c.writePtr >= MaxInstructions {
-		c.writePtr = 0
-	}
+	c.writePtr = (c.writePtr + 1) & (CopperRAMBytes - 1)
 }
 
 // SetWritePtrLow / SetWritePtrHighAndMode are the NextReg 0x61 /
@@ -126,27 +129,33 @@ func (c *Copper) WriteData(b byte) {
 // 0x62 carries the high 2 bits + 2-bit start mode + 4 reserved
 // bits.
 func (c *Copper) SetWritePtrLow(b byte) {
-	c.writePtr = (c.writePtr & 0x300) | uint16(b)
-	// Setting the write cursor starts a fresh 16-bit instruction write, so the
-	// two-byte (hi/lo) pairing phase resets. Without this a stray odd NR$60
-	// byte left staged before the cursor move — e.g. the dispatcher reset
-	// writing NR$60=$00 — pairs off-by-one with the following program stream,
-	// turning a real "WAIT y; MOVE r,v" list into garbage "MOVE NR$01..,$16"
-	// MOVEs that clobber the whole NextReg config (Nextoid reset-to-Welcome bug).
-	c.hiSet = false
+	// nr_copper_addr(7 downto 0) <= nr_wr_dat (zxnext.vhd:5427).
+	c.writePtr = (c.writePtr & 0x700) | uint16(b)
 }
 
-// SetWritePtrHighAndMode sets the high 2 cursor bits (val bits 0-1)
-// AND the start-mode (val bits 6-7).
+// SetWritePtrHighAndMode sets the high 3 cursor bits (val bits 2-0)
+// AND the start mode (val bits 7-6), per zxnext.vhd:5430-5431:
+//
+//	nr_62_copper_mode <= nr_wr_dat(7 downto 6);
+//	nr_copper_addr(10 downto 8) <= nr_wr_dat(2 downto 0);
+//
+// The program counter restarts only when the mode actually CHANGES to
+// 01 or 11 (device/copper.vhd:70-76 gates the reset on
+// `last_state_s /= copper_en_i`). Restarting on every write meant guest
+// code that set the cursor's high bits — which has to go through this
+// same register — silently rewound its own running list.
 func (c *Copper) SetWritePtrHighAndMode(b byte) {
-	c.writePtr = (c.writePtr & 0xFF) | (uint16(b&0x03) << 8)
-	c.hiSet = false // cursor move resets the two-byte write phase (see SetWritePtrLow)
-	c.mode = StartMode((b >> 6) & 0x03)
-	switch c.mode {
+	c.writePtr = (c.writePtr & 0xFF) | (uint16(b&0x07) << 8)
+	newMode := StartMode((b >> 6) & 0x03)
+	changed := newMode != c.mode
+	c.mode = newMode
+	switch newMode {
 	case StartStop:
 		c.stopped = true
 	case StartFromZero, StartOnVBL:
-		c.pc = 0
+		if changed {
+			c.pc = 0
+		}
 		c.stopped = false
 	case StartContinue:
 		c.stopped = false
@@ -273,17 +282,13 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 			c.pc++
 		}
 	}
-	// Did we run off the end?
+	// Run off the end and the address counter wraps: copper_list_addr_s
+	// is a plain 10-bit counter (device/copper.vhd:48) with no terminal
+	// condition, so a list without a never-releasing WAIT runs round
+	// again. We used to stop instead, which silently ended any list that
+	// relied on the wrap.
 	if c.pc >= MaxInstructions {
-		if c.mode == StartOnVBL {
-			// Park at the end of the list; the program counter is reset
-			// to 0 at the start of the next frame by the VBL check at
-			// Step entry (so the list restarts precisely on the raster
-			// wrap, not when it happens to run off the end).
-			c.pc = MaxInstructions
-		} else {
-			c.stopped = true
-		}
+		c.pc = 0
 	}
 	return executed
 }

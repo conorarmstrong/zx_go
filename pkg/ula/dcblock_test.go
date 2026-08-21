@@ -1,6 +1,7 @@
 package ula
 
 import (
+	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/audio"
@@ -95,7 +96,7 @@ func TestDCBlockerPreservesTone(t *testing.T) {
 // a full beeperLow DC rail; once DC-blocked it must be silence.
 func TestIdleFrameProducesSilenceAfterDCBlock(t *testing.T) {
 	var d audio.DCBlocker
-	samples, _ := generateBeeperFrame(nil, false) // all beeperLow
+	samples, _ := generateBeeperFrame(nil, false, roms.FrameTStates(roms.Model48K)) // all beeperLow
 	d.Process(samples)
 	for i, s := range samples {
 		if s < -1 || s > 1 {

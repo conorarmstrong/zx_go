@@ -51,7 +51,7 @@ func primed() *Copper {
 	prog := []uint16{
 		0x1601, // 0: MOVE NR$16,$01
 		0x80C8, // 1: WAIT y=200 — where the fixture is parked
-		0x600B, // 2: MOVE NR$60,$0B — re-enters WriteData, completing the pair
+		0x600B, // 2: MOVE NR$60,$0B — re-enters WriteData (see below)
 		0x1702, // 3: MOVE NR$17,$02
 		0x80D2, // 4: WAIT y=210
 		0x0000, // 5: NOOP until index 2 writes MOVE NR$1A,$0B over it
@@ -73,8 +73,14 @@ func primed() *Copper {
 	// is.
 	c.Step(40, 511, 8)
 
-	// Mid-operation: cursor moved back to index 5, high half of an NR$60 pair
-	// latched, low half still to come.
+	// Mid-operation: the cursor is moved to byte address 5 — an ODD
+	// address, so the next NR$60 byte lands in the LOW half of word 2 —
+	// and one byte is written there. That leaves the cursor at 6 and
+	// turns word 2 into MOVE NR$60,$1A, which is what the drive sequence
+	// below re-enters WriteData through. The odd address is the point:
+	// the cursor's low bit is the whole of the half-word phase, and a
+	// capture that loses it reassembles every later instruction half a
+	// word out.
 	c.SetWritePtrLow(5)
 	c.WriteData(0x1A)
 
@@ -250,13 +256,14 @@ func TestCaptureIsIndependentOfLaterChanges(t *testing.T) {
 	if err := c.LoadState(st); err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	for i, want := range []uint16{0x1601, 0x80C8, 0x600B, 0x1702, 0x80D2, 0x0000, 0x1803, 0x80FA} {
+	// Word 2's low half carries the 0x1A the fixture wrote at byte 5.
+	for i, want := range []uint16{0x1601, 0x80C8, 0x601A, 0x1702, 0x80D2, 0x0000, 0x1803, 0x80FA} {
 		if got := c.Instruction(uint16(i)); got != Decode(want) {
 			t.Errorf("instruction[%d] = %+v after restore, want %+v", i, got, Decode(want))
 		}
 	}
-	if c.Cursor() != 5 {
-		t.Errorf("cursor = %d after restore, want 5", c.Cursor())
+	if c.Cursor() != 6 {
+		t.Errorf("cursor = %d after restore, want 6", c.Cursor())
 	}
 }
 
@@ -349,8 +356,6 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 	}{
 		{"Program", before.Program == after.Program},
 		{"WritePtr", before.WritePtr == after.WritePtr},
-		{"Hi", before.Hi == after.Hi},
-		{"HiSet", before.HiSet == after.HiSet},
 		{"Mode", before.Mode == after.Mode},
 		{"Pc", before.Pc == after.Pc},
 		{"Stopped", before.Stopped == after.Stopped},

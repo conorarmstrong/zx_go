@@ -2198,7 +2198,7 @@ func (u *ULA) tapeLevel() bool {
 	u.lastTapeTstate = now
 	// Record EAR transitions so flushAudioFrame can reproduce the loading sound.
 	if u.audio != nil && playing && u.TapeIn != prev {
-		if off := int(now - u.frameStartTstate); off >= 0 && off < 69888 {
+		if off := int(now - u.frameStartTstate); off >= 0 && off < u.audioFrameTStates() {
 			u.tapeAudioEvents = append(u.tapeAudioEvents, audioEvent{tstateOffset: off, state: u.TapeIn})
 		}
 	}
@@ -2315,6 +2315,30 @@ func (u *ULA) flushAudioFrame() {
 	}
 }
 
+// audioFrameTStates is the length of one ULA frame in the units the audio
+// events are stamped in — CPU T-states since the frame started.
+//
+// Two things decide it. The model: 69888 on a 48K, 70908 on the 128K
+// family and the Next, 71680 on a Pentagon. And the CPU speed: at 7, 14
+// or 28 MHz the Z80 burns SpeedMultiplier times as many T-states inside
+// the same 50 Hz frame, and the events carry the CPU clock.
+//
+// The mixer used to hard-code 69888. On a 128K that made beeper music run
+// about 1.4% fast and cut every event in the last ~1020 T of each frame;
+// on a Next at 28 MHz it dropped most of the frame outright.
+func (u *ULA) audioFrameTStates() int {
+	if u.mem == nil {
+		return 69888
+	}
+	n := roms.FrameTStates(u.mem.GetCurrentModel())
+	if u.mem.SpeedMultiplier != nil {
+		if m := u.mem.SpeedMultiplier(); m > 0 {
+			n *= m
+		}
+	}
+	return n
+}
+
 // mixAudioFrame builds the interleaved stereo frame for the just-finished
 // frame, consuming the recorded events. It mirrors audio_mixer.vhd, which sums
 // the beeper, tape, AY and DAC into one pair.
@@ -2330,9 +2354,9 @@ func (u *ULA) flushAudioFrame() {
 // second caller replayed the same frame for ever with nothing at the call site
 // to suggest it.
 func (u *ULA) mixAudioFrame() []int16 {
-	const tstatesPerFrame = 69888
+	tstatesPerFrame := u.audioFrameTStates()
 
-	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState)
+	samples, finalState := generateBeeperFrame(u.audioEvents, u.frameStartSpeakerState, tstatesPerFrame)
 	// Mix the SpecDrum/Covox DAC frame (event-timed, sample-accurate) into the
 	// beeper waveform.
 	if u.speccyDAC != nil && u.speccyDAC.Enabled() {
@@ -2343,7 +2367,7 @@ func (u *ULA) mixAudioFrame() []int16 {
 	// there's no DC bias once loading finishes.
 	if u.tape != nil && u.tape.IsPlaying() {
 		tapeSamples, finalTape := generateSquareWaveFrame(
-			u.tapeAudioEvents, u.frameStartTapeState, -tapeAudioAmplitude, tapeAudioAmplitude)
+			u.tapeAudioEvents, u.frameStartTapeState, -tapeAudioAmplitude, tapeAudioAmplitude, tstatesPerFrame)
 		mixInt16(samples, tapeSamples)
 		u.frameStartTapeState = finalTape
 	} else {
@@ -2410,8 +2434,8 @@ func mixInt16(dst, src []int16) {
 // midpoint version had on a clean square wave. Integration converts
 // the jitter into amplitude variation, which is much less perceptible
 // and naturally low-pass-filters the output.
-func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int16, finalState bool) {
-	return generateSquareWaveFrame(events, initialState, beeperLow, beeperHigh)
+func generateBeeperFrame(events []audioEvent, initialState bool, tstatesPerFrame int) (samples []int16, finalState bool) {
+	return generateSquareWaveFrame(events, initialState, beeperLow, beeperHigh, tstatesPerFrame)
 }
 
 // generateSquareWaveFrame is the box-filter square-wave reconstruction shared by
@@ -2419,8 +2443,7 @@ func generateBeeperFrame(events []audioEvent, initialState bool) (samples []int1
 // by `events`) into one frame of samples between `low` (state false) and `high`
 // (state true). See generateBeeperFrame for why integration (not point-sampling)
 // is used.
-func generateSquareWaveFrame(events []audioEvent, initialState bool, low, high int16) (samples []int16, finalState bool) {
-	const tstatesPerFrame = 69888
+func generateSquareWaveFrame(events []audioEvent, initialState bool, low, high int16, tstatesPerFrame int) (samples []int16, finalState bool) {
 	samples = make([]int16, audio.SamplesPerFrame)
 	state := initialState
 	eventIdx := 0

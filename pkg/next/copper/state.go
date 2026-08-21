@@ -18,14 +18,13 @@ import (
 // Two of those deserve naming, because they are invisible to the guest and to
 // every snapshot format:
 //
-//   - The pairing phase. NR$60 delivers a 16-bit instruction as two consecutive
-//     register writes: the first is latched in hi, the second commits the pair.
-//     Restore between them without the phase and the guest's next byte is taken
-//     as a high half when it was meant as a low one — every instruction after
-//     it is off by one, so a real "WAIT y; MOVE r,v" list resumes as garbage
-//     MOVEs that clobber the whole NextReg config. Not resetting that phase on
-//     a cursor set was a real bug here (see SetWritePtrLow); losing it across a
-//     rewind is the same failure one step along.
+//   - The write cursor. It is the FPGA's nr_copper_addr: an 11-bit BYTE
+//     address, so its low bit decides whether the next NR$60 byte lands in an
+//     instruction's high half or its low one. That is the whole of the
+//     "pairing phase" — there is no separate latch, because NR$60 writes each
+//     byte straight into its own half of the addressed word
+//     (zxnext.vhd:3977-3999). Lose the cursor's low bit across a rewind and
+//     every instruction after the restore is assembled half a word out.
 //   - lastScanline. It is one half of a comparison: a StartOnVBL restart fires
 //     when the line being stepped is below the line last stepped. Restore
 //     without it and the first step after the rewind either invents a restart
@@ -59,8 +58,6 @@ type copperState struct {
 	Program [MaxInstructions]uint16
 
 	WritePtr uint16
-	Hi       byte
-	HiSet    bool
 
 	Mode    byte
 	Pc      uint16
@@ -77,8 +74,6 @@ func (c *Copper) SaveState() []byte {
 	s := copperState{
 		Program:      c.program,
 		WritePtr:     c.writePtr,
-		Hi:           c.hi,
-		HiSet:        c.hiSet,
 		Mode:         byte(c.mode),
 		Pc:           c.pc,
 		Stopped:      c.stopped,
@@ -114,8 +109,6 @@ func (c *Copper) LoadState(b []byte) error {
 
 	c.program = s.Program
 	c.writePtr = s.WritePtr
-	c.hi = s.Hi
-	c.hiSet = s.HiSet
 	c.mode = StartMode(s.Mode)
 	c.pc = s.Pc
 	c.stopped = s.Stopped

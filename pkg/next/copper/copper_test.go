@@ -39,11 +39,12 @@ func TestDecodeNOOP(t *testing.T) {
 	}
 }
 
-func TestWriteDataLatchesPair(t *testing.T) {
+func TestWriteDataFillsBothHalvesOfAWord(t *testing.T) {
 	c := New()
-	c.SetWritePtrLow(0x10)
-	c.WriteData(0x42) // high byte staged
-	c.WriteData(0x55) // commits
+	// The cursor is a byte address, so word 0x10 starts at byte 0x20.
+	c.SetWritePtrLow(0x20)
+	c.WriteData(0x42) // high half
+	c.WriteData(0x55) // low half
 	if got := c.Instruction(0x10); got.Op != OpMOVE || got.Reg != 0x42 || got.Val != 0x55 {
 		t.Errorf("instruction[0x10] = %+v, want MOVE 0x42/0x55", got)
 	}
@@ -183,14 +184,14 @@ func TestMOVEIntoCopperOwnRegistersDoesNotCrash(t *testing.T) {
 
 func TestCursorWraps(t *testing.T) {
 	c := New()
-	c.SetWritePtrLow(0xFF)
-	c.SetWritePtrHighAndMode(0x03) // high 2 bits both set -> cursor 0x3FF
-	if c.Cursor() != 0x3FF {
-		t.Errorf("Cursor after high-write = %#x, want 0x3FF", c.Cursor())
+	c.SetWritePtrHighAndMode(0x07) // high 3 bits set
+	c.SetWritePtrLow(0xFE)         // -> byte address 0x7FE, the last word
+	if c.Cursor() != 0x7FE {
+		t.Errorf("Cursor after high-write = %#x, want 0x7FE", c.Cursor())
 	}
-	// Write past end — pointer wraps.
-	c.WriteData(0x00)
-	c.WriteData(0x00) // commit at 0x3FF -> 0x400, wraps to 0
+	// Write past the end — the byte address wraps.
+	c.WriteData(0x00) // 0x7FE -> 0x7FF
+	c.WriteData(0x00) // 0x7FF -> 0x800, wraps to 0
 	if c.Cursor() != 0 {
 		t.Errorf("Cursor after wrap = %#x, want 0", c.Cursor())
 	}

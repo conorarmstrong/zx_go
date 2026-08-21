@@ -228,12 +228,16 @@ func ParseDSK(data []byte) (*Disk, error) {
 		if err != nil {
 			return nil, fmt.Errorf("track %d: %w", i, err)
 		}
-		h := int(track.H)
-		c := int(track.C)
-		if h >= sides || c >= cylinders {
-			h = i % sides
-			c = i / sides
-		}
+		// The track-size table IS the physical order: block i is
+		// cylinder i/sides, head i%sides. The Track-Info C/H labels are
+		// the IDs written into the format, which the FDC matches against
+		// a command's cylinder — they are not a position, and copy
+		// protection and bad dumps both mislabel them freely. Indexing
+		// by the labels whenever they happened to be in range piled
+		// every track of a disk tagged C=0 into one slot and left the
+		// rest of the image empty.
+		h := i % sides
+		c := i / sides
 		d.Tracks[h][c] = track
 
 		offset += tlen

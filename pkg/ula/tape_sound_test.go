@@ -1,6 +1,10 @@
 package ula
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/roms"
+)
 
 // The tape-loading sound reconstructs the EAR signal as an audible square wave:
 // a toggling (pilot-like) signal yields a varying waveform bounded by the tape
@@ -13,7 +17,7 @@ func TestTapeSoundWaveform(t *testing.T) {
 		state = !state
 		events = append(events, audioEvent{tstateOffset: off, state: state})
 	}
-	samples, _ := generateSquareWaveFrame(events, false, -tapeAudioAmplitude, tapeAudioAmplitude)
+	samples, _ := generateSquareWaveFrame(events, false, -tapeAudioAmplitude, tapeAudioAmplitude, roms.FrameTStates(roms.Model48K))
 
 	var lo, hi int16 = 32767, -32768
 	for _, s := range samples {
@@ -32,7 +36,7 @@ func TestTapeSoundWaveform(t *testing.T) {
 	}
 
 	// No transitions → flat DC at the low level (inaudible), not noise.
-	silent, _ := generateSquareWaveFrame(nil, false, -tapeAudioAmplitude, tapeAudioAmplitude)
+	silent, _ := generateSquareWaveFrame(nil, false, -tapeAudioAmplitude, tapeAudioAmplitude, roms.FrameTStates(roms.Model48K))
 	for i, s := range silent {
 		if s != -tapeAudioAmplitude {
 			t.Fatalf("silent tape sample %d = %d, want flat %d", i, s, -tapeAudioAmplitude)
@@ -44,7 +48,7 @@ func TestTapeSoundWaveform(t *testing.T) {
 // refactor that extracted generateSquareWaveFrame.
 func TestBeeperFrameUnchangedByRefactor(t *testing.T) {
 	events := []audioEvent{{tstateOffset: 0, state: true}, {tstateOffset: 34944, state: false}}
-	samples, final := generateBeeperFrame(events, false)
+	samples, final := generateBeeperFrame(events, false, roms.FrameTStates(roms.Model48K))
 	if len(samples) == 0 {
 		t.Fatal("no beeper samples")
 	}
