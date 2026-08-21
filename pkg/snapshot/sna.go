@@ -177,7 +177,23 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 	header[20] = s.CPU.R
 	header[21] = s.CPU.F
 	header[22] = s.CPU.A
-	binary.LittleEndian.PutUint16(header[23:25], s.CPU.SP)
+
+	// The 48K SNA format has no PC field. PC lives on the guest stack
+	// and the header SP points at it, which is why loadSNA pops it.
+	// Model the push the way the Z80 does: SP -= 2, then PC low at SP
+	// and PC high at SP+1. Bytes that land below 0x4000 fall in ROM
+	// and are discarded, exactly as on hardware. 128K SNA carries PC
+	// in its trailer instead, so it must not push.
+	sp := s.CPU.SP
+	var pushed map[uint16]byte
+	if !s.Memory.Is128K {
+		sp -= 2
+		pushed = map[uint16]byte{
+			sp:     byte(s.CPU.PC),
+			sp + 1: byte(s.CPU.PC >> 8),
+		}
+	}
+	binary.LittleEndian.PutUint16(header[23:25], sp)
 	header[25] = s.CPU.IM & 0x03
 	header[26] = s.CPU.BorderColor & 0x07
 
@@ -195,13 +211,13 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 	if s.Memory.Is128K {
 		pagedBank = int(s.Memory.Port7FFD & 0x07)
 	}
-	if _, err := file.Write(s.Memory.RAM[5]); err != nil {
+	if err := writeSNABank(file, s.Memory.RAM[5], 0x4000, pushed); err != nil {
 		return fmt.Errorf("failed to write RAM bank 5: %w", err)
 	}
-	if _, err := file.Write(s.Memory.RAM[2]); err != nil {
+	if err := writeSNABank(file, s.Memory.RAM[2], 0x8000, pushed); err != nil {
 		return fmt.Errorf("failed to write RAM bank 2: %w", err)
 	}
-	if _, err := file.Write(s.Memory.RAM[pagedBank]); err != nil {
+	if err := writeSNABank(file, s.Memory.RAM[pagedBank], 0xC000, pushed); err != nil {
 		return fmt.Errorf("failed to write RAM paged bank %d: %w", pagedBank, err)
 	}
 
@@ -232,4 +248,21 @@ func (s *Snapshot) saveSNA(file io.Writer) error {
 	}
 
 	return nil
+}
+
+// writeSNABank emits one 16K bank mapped at base, substituting any
+// pushed bytes that land inside it. The substitution is made on a
+// copy so a save never mutates the snapshot it was handed.
+func writeSNABank(file io.Writer, bank []byte, base uint16, pushed map[uint16]byte) error {
+	out := bank
+	if len(pushed) > 0 {
+		out = append([]byte(nil), bank...)
+		for addr, v := range pushed {
+			if int(addr) >= int(base) && int(addr) < int(base)+len(out) {
+				out[addr-base] = v
+			}
+		}
+	}
+	_, err := file.Write(out)
+	return err
 }

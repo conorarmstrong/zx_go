@@ -1611,7 +1611,7 @@ func TestSZXMachineIDDetection(t *testing.T) {
 		{"Plus2A", ZXSTMID_PLUS2A, true},
 		{"Plus3", ZXSTMID_PLUS3, true},
 		{"128KE", ZXSTMID_128KE, true},
-		{"Pentagon", ZXSTMID_PENTAGON128, false},
+		{"Pentagon", ZXSTMID_PENTAGON128, true},
 		{"TC2048", ZXSTMID_TC2048, false},
 	}
 

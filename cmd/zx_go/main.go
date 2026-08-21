@@ -1838,7 +1838,7 @@ func applySnapshotToEmulatorLocked(emu *emulator, snap *snapshot.Snapshot) error
 
 	// Apply memory paging for 128K machines
 	if snap.Memory.Is128K {
-		emu.mem.PageMemory(snap.Memory.Port7FFD)
+		emu.mem.RestorePagingLatches(snap.Memory.Port7FFD, snap.Memory.Port1FFD)
 	} else {
 		// A 48K snapshot on a 128K-family machine needs the 48 BASIC ROM
 		// paged in and paging locked, or its ROM calls run against the wrong
@@ -1897,10 +1897,13 @@ func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
 		copy(snap.Memory.RAM[i], bank)
 	}
 
-	// Set memory configuration
+	// Set memory configuration. Both paging latches come from the live
+	// machine: recording zero for $7FFD mapped bank 0 at $C000, ROM 0,
+	// screen page 5 and unlocked paging on every reload, whatever the
+	// machine was actually doing.
 	snap.Memory.Is128K = (emu.mem.GetCurrentModel() != roms.Model48K)
 	if snap.Memory.Is128K {
-		snap.Memory.Port7FFD = 0
+		snap.Memory.Port7FFD, snap.Memory.Port1FFD, _ = emu.mem.GetPortState()
 	}
 
 	// Copy border color

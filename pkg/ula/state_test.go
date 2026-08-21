@@ -41,13 +41,18 @@ var _ machinestate.Device = (*ULA)(nil)
 // The screen content matters: against a blank screen the scroll, flash and
 // attribute paths all render identically whatever their state, and a test that
 // cannot see a field cannot fail when that field's restore is deleted.
+//
+// The machine is a Next because that is the only model whose ULA can reach
+// every captured field: port $FF is the SCLD register, which a Sinclair 48K
+// has no decode for, so on a 48K fixture TimexVideoMode could never move and
+// the completeness guard below would have nothing to check it against.
 func newStateTestULA(t *testing.T) (*ULA, *uint64) {
 	t.Helper()
 	dir := "test_roms_ula_state"
 	createTestROMs(t, dir)
 	t.Cleanup(func() { cleanupTestROMs(dir) })
 
-	mem, err := memory.New(dir, roms.Model48K)
+	mem, err := memory.New(dir, roms.ModelNext)
 	if err != nil {
 		t.Fatalf("memory.New: %v", err)
 	}

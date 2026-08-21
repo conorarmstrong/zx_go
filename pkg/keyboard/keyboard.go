@@ -20,7 +20,15 @@ type Keyboard struct {
 
 	// Special key states
 	breakPressed bool
-	nmiCallback  func() // Callback for NMI (Multiface red button simulation)
+	// breakHeldCaps / breakHeldSpace record whether CAPS SHIFT and SPACE
+	// were already down when BREAK (F11) was pressed. BREAK asserts both,
+	// so releasing it must lift only the ones BREAK itself put down:
+	// ORing both back on unconditionally pulled a physically-held Shift
+	// or Space out of the matrix and left it up until the user released
+	// and pressed that key again.
+	breakHeldCaps  bool
+	breakHeldSpace bool
+	nmiCallback    func() // Callback for NMI (Multiface red button simulation)
 
 	// Typed-character symbol pulse. TypeRune injects the SYMBOL-SHIFT
 	// combination for a typed symbol (e.g. '.', ';', ':') as a brief overlay
@@ -88,11 +96,17 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 	case fyne.KeyF11: // F11 = BREAK (CAPS SHIFT + SPACE)
 		k.breakPressed = isPressed
 		if isPressed {
+			k.breakHeldCaps = k.matrix[0]&0x01 == 0
+			k.breakHeldSpace = k.matrix[7]&0x01 == 0
 			k.matrix[0] &= ^byte(0x01) // CAPS SHIFT
 			k.matrix[7] &= ^byte(0x01) // SPACE
 		} else {
-			k.matrix[0] |= byte(0x01) // CAPS SHIFT
-			k.matrix[7] |= byte(0x01) // SPACE
+			if !k.breakHeldCaps {
+				k.matrix[0] |= byte(0x01) // CAPS SHIFT
+			}
+			if !k.breakHeldSpace {
+				k.matrix[7] |= byte(0x01) // SPACE
+			}
 		}
 		log.Printf("BREAK key %s", map[bool]string{true: "pressed", false: "released"}[isPressed])
 		return
@@ -163,6 +177,17 @@ func (k *Keyboard) ReleaseAll() {
 	for i := range k.matrix {
 		k.matrix[i] = 0xFF
 	}
+	// The typed-symbol overlay is part of "everything is up" too. Scan
+	// still ANDs pulseMatrix while pulseFrames > 0, so clearing only the
+	// physical matrix left an injected SYMBOL-SHIFT combo asserted for
+	// up to two more frames after focus loss or a reboot, and BASIC
+	// typed a run of the same symbol.
+	for i := range k.pulseMatrix {
+		k.pulseMatrix[i] = 0xFF
+	}
+	k.pulseFrames = 0
+	k.breakPressed = false
+	k.breakHeldCaps, k.breakHeldSpace = false, false
 	k.matrixMu.Unlock()
 }
 

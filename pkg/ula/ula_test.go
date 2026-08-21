@@ -672,7 +672,9 @@ func TestTimexHiResRender(t *testing.T) {
 	createTestROMs(t, testDir)
 	defer cleanupTestROMs(testDir)
 
-	mem, _ := memory.New(testDir, roms.Model48K)
+	// The SCLD lives on the Next, not on a Sinclair ULA: a 48K ignores
+	// writes to port $FF, so hi-res is unreachable from one.
+	mem, _ := memory.New(testDir, roms.ModelNext)
 	ula := New(mem, keyboard.New())
 
 	// Row 0, byte column 0: display file 1 = all ink (0xFF), file 2 = all paper.

@@ -22,10 +22,14 @@ const (
 	Z80_HW_48K       = 0
 	Z80_HW_48K_IF1   = 1
 	Z80_HW_SAMRAM    = 2
+	Z80_HW_48K_MGT   = 3
 	Z80_HW_128K      = 4
 	Z80_HW_128K_IF1  = 5
+	Z80_HW_128K_MGT  = 6
 	Z80_HW_PLUS3     = 7
 	Z80_HW_PLUS3_BUG = 8
+	Z80_HW_PENTAGON  = 9
+	Z80_HW_SCORPION  = 10
 	Z80_HW_PLUS2     = 12
 	Z80_HW_PLUS2A    = 13
 )
@@ -123,13 +127,25 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 			s.Memory.Is128K = hwMode == 3 || hwMode == 4
 		} else { // version 3+
 			switch hwMode {
-			case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3, Z80_HW_PLUS3_BUG:
+			case Z80_HW_128K, Z80_HW_128K_IF1, Z80_HW_128K_MGT,
+				Z80_HW_PLUS2, Z80_HW_PLUS2A, Z80_HW_PLUS3, Z80_HW_PLUS3_BUG,
+				Z80_HW_PENTAGON, Z80_HW_SCORPION:
+				// Pentagon 128 and Scorpion 256 are 128K-family: both page
+				// banks 0-7 through port $7FFD exactly as a 128K does. Left
+				// out of this list they loaded as 48K, which places only
+				// banks 5/2/0 and crashes the guest on resume.
 				s.Memory.Is128K = true
 			}
 		}
 		if s.Memory.Is128K && len(extHeader) > 3 {
 			// Port 0x7FFD paging value for 128K machines.
 			s.Memory.Port7FFD = extHeader[3]
+		}
+		// A v3 header written for a +2A/+3 is 55 bytes and carries
+		// $1FFD in its last one (header offset 86). Without it a +3
+		// snapshot loses special paging and the ROM 2/3 selection.
+		if len(extHeader) > 54 {
+			s.Memory.Port1FFD = extHeader[54]
 		}
 
 		// Read memory blocks
@@ -335,8 +351,10 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	header[10] = s.CPU.I
 	header[11] = s.CPU.R & 0x7F
 
-	// Flags byte
-	flagsByte := byte(0x01) // Bit 0 = bit 7 of R register
+	// Flags byte. Bit 0 carries bit 7 of R, so it starts clear and is
+	// set only when R actually has that bit: seeding it with 0x01 set
+	// the bit unconditionally and every reload came back with R|0x80.
+	flagsByte := byte(0x00)
 	if s.CPU.R&0x80 != 0 {
 		flagsByte |= 0x01
 	}

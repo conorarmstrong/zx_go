@@ -122,7 +122,14 @@ func (s *Snapshot) loadSZX(file io.Reader) error {
 	switch header.MachineID {
 	case ZXSTMID_16K, ZXSTMID_48K, ZXSTMID_NTSC48K:
 		s.Memory.Is128K = false
-	case ZXSTMID_128K, ZXSTMID_PLUS2, ZXSTMID_PLUS2A, ZXSTMID_PLUS3, ZXSTMID_128KE:
+	case ZXSTMID_128K, ZXSTMID_PLUS2, ZXSTMID_PLUS2A, ZXSTMID_PLUS3,
+		ZXSTMID_PLUS3E, ZXSTMID_128KE,
+		ZXSTMID_PENTAGON128, ZXSTMID_PENTAGON512, ZXSTMID_PENTAGON1024,
+		ZXSTMID_SCORPION, ZXSTMID_SE:
+		// Every one of these pages banks 0-7 through port $7FFD the way a
+		// 128K does, whatever else it adds on top. Falling through to the
+		// 48K default placed only banks 5/2/0 and left paging off, so a
+		// Pentagon or +3e snapshot from another emulator crashed on resume.
 		s.Memory.Is128K = true
 	default:
 		s.Memory.Is128K = false // Default to 48K for unknown machines
@@ -233,6 +240,7 @@ func (s *Snapshot) loadSZXSpecRegs(data []byte) error {
 
 	s.CPU.BorderColor = regs.Border & 0x07
 	s.Memory.Port7FFD = regs.Port7FFD
+	s.Memory.Port1FFD = regs.Port1FFD
 
 	return nil
 }
@@ -412,7 +420,7 @@ func (s *Snapshot) saveSZXSpecRegs(file io.Writer) error {
 	regs := szxSpecRegs{
 		Border:   s.CPU.BorderColor,
 		Port7FFD: s.Memory.Port7FFD,
-		Port1FFD: 0,                 // Not used in our emulator
+		Port1FFD: s.Memory.Port1FFD,
 		PortFE:   s.CPU.BorderColor, // Same as border
 	}
 

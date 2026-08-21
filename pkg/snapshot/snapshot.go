@@ -48,6 +48,13 @@ type MemoryState struct {
 	RAM      [8][]byte // 8 banks of 16KB each
 	Is128K   bool
 	Port7FFD byte // 128K paging register
+	// Port1FFD is the +2A/+3 secondary paging register: bit 0 selects
+	// special paging, bits 2:1 the special configuration, and bit 2
+	// doubles as the high bit of the ROM select. A +3 snapshot without
+	// it loses special paging and ROM 2/3. Carried by SZX and by .z80
+	// v3 with a 55-byte extended header; the SNA format has no slot
+	// for it.
+	Port1FFD byte
 }
 
 // Snapshot handles loading and saving of emulator snapshots.

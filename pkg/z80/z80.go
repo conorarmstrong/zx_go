@@ -473,6 +473,15 @@ func (c *CPU) Reset() {
 	c.Halted = false
 	c.tstates = 0
 	c.IM2Vector = 0xFF // ZX Spectrum ULA puts 0xFF on data bus during INTA
+	// A hardware /RESET drops the interrupt request lines with everything
+	// else. Left latched, a PendingNMI raised by the NMI button just
+	// before a reboot survived it: the machine ran the first instruction
+	// at $0000 and then jumped to $0066 as if the button were still down.
+	// eiDelay is the one-instruction acknowledgement deferral an EI arms,
+	// and it has nothing to defer against on a fresh machine.
+	c.PendingNMI.Store(false)
+	c.IRQPending.Store(false)
+	c.eiDelay = false
 }
 
 // SoftReset models the Spectrum Next's NextReg $02 bit 0 soft

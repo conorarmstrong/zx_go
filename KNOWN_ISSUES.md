@@ -538,6 +538,24 @@ the copyright screen.
 and beeper (`pkg/sam/sam.go`). It does not call `SAA.Reset()`.
 `rebootLocked` only calls `e.sam.Reset()`.
 
+### SAM SBT files cannot be loaded
+
+**Affects:** File → Load SAM Disk with an `.sbt` name. MGT, SAD and
+EDSK disk images all load.
+
+**What you see.** The file is refused as an unknown format.
+
+**Cause.** An SBT is not a disk image. It is a single SAM CODE file
+meant to be written onto a disk and booted, so loading one means
+building a disk around it. Building the disk is the easy half. What
+stops it is that `BOOT` loads **directory slot 1 as the DOS**, so a
+disk carrying only the user's file has no DOS on it and the ROM
+answers `53 No DOS`. We have no DOS image to place in that slot.
+
+`docs/sam-coupe.md` carries the full write-up, including why the
+file-type byte does not identify the DOS and what the two routes to
+a DOS image are.
+
 ---
 
 ## Recently fixed

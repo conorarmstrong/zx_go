@@ -1657,7 +1657,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	// NextZXOS's 64/85-column text modes (e.g. the .more text viewer) use the
 	// hi-res mode. Stored here; rendered by renderTimexHiRes. Falls through so
 	// any other $FF semantics are unaffected.
-	if (addr & 0xFF) == 0xFF {
+	// Only a machine with an SCLD decodes this. A Sinclair 48K/128K/+3
+	// drives $FF as the floating bus and ignores writes to it, so an
+	// ordinary OUT (C),r with C = $FF used to switch the emulator into
+	// a 640-wide Timex frame on machines that have no such mode.
+	if (addr&0xFF) == 0xFF && u.mem != nil && u.mem.GetCurrentModel() == roms.ModelNext {
 		u.timexVideoMode = val
 		// The Spectrum Next's LoRes layer takes screen-mode bit 0 as half of
 		// its display-file select (zxnext.vhd:6796), so a consumer has to hear
@@ -2214,6 +2218,16 @@ func (u *ULA) Reset() {
 	u.flash = false
 	u.flashCount = 0
 	u.KempstonState = 0
+	// Video-mode latches go with the rest. Leaving timexVideoMode set
+	// meant a reboot out of a 64-column NextZXOS screen kept drawing a
+	// 640-wide scrambled picture until something wrote $FF again; the
+	// same argument covers NextReg $68's ULA-output disable, the ULA
+	// scroll offsets ($26/$27) and the $123B read-back shadow, all of
+	// which reset to zero on the FPGA.
+	u.timexVideoMode = 0
+	u.ulaOutputDisabled = false
+	u.ulaScrollX, u.ulaScrollY = 0, 0
+	u.port123BVal = 0
 	// Clear any per-scanline border changes left in the buffer.
 	// Without this, a model switch (e.g. 48K -> Next via the
 	// Machine menu) inherits the previous model's border writes;

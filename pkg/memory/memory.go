@@ -2038,6 +2038,32 @@ func (m *Memory) Restore48KPagingState() {
 	}
 }
 
+// RestorePagingLatches puts the paging hardware into the state a
+// snapshot recorded.
+//
+// A restore is the machine being placed into a state, not a guest port
+// write, so the $7FFD lock bit must not block it. PageMemory is the
+// guest-facing entry point and no-ops once PagingEnabled is false, so
+// a restore taken after a 128K title had written bit 5 of $7FFD did
+// not change the map at all. Paging is force-enabled here for the
+// duration; $1FFD goes first, because it carries the +2A/+3 ROM-select
+// high bit and the special-paging mode, and then $7FFD, whose bit 5
+// re-establishes the lock exactly as it would on hardware.
+//
+// No-op on a 48K, which has neither latch.
+func (m *Memory) RestorePagingLatches(port7FFD, port1FFD byte) {
+	if m.currentModel == roms.Model48K {
+		return
+	}
+	switch m.currentModel {
+	case roms.ModelPlus2A, roms.ModelPlus3:
+		m.PagingEnabled = true
+		m.PageMemoryPlus3(port1FFD)
+	}
+	m.PagingEnabled = true
+	m.PageMemory(port7FFD)
+}
+
 // PageMemory handles the 128K memory paging mechanism.
 func (m *Memory) PageMemory(val byte) {
 	if !m.PagingEnabled {
