@@ -107,6 +107,12 @@ type Copper struct {
 	// lastScanline tracks the previous Step's raster line so a wrap back
 	// to the top of the frame can trigger the StartOnVBL program restart.
 	lastScanline uint16
+	// executing is raised only across a MOVE's register write. It carries
+	// no hardware meaning: it exists so a debugger watching a NextReg can
+	// tell a copper MOVE from a CPU OUT, since both arrive at the same
+	// Dispatcher.WriteReg and a MOVE reported against the Z80's PC would
+	// name an instruction that had nothing to do with the write.
+	executing bool
 }
 
 // New returns an empty copper.
@@ -176,6 +182,16 @@ func (c *Copper) Cursor() uint16 { return c.writePtr }
 
 // Mode returns the current start mode.
 func (c *Copper) Mode() StartMode { return c.mode }
+
+// PC returns the execution pointer: the index of the instruction the copper
+// is on. During a MOVE's register write this is the MOVE itself, because the
+// increment happens after the write.
+func (c *Copper) PC() uint16 { return c.pc }
+
+// Executing reports whether the copper is inside a MOVE's register write.
+// A NextReg trace callback that sees this true was called by the copper; one
+// that sees it false was called by the CPU (or by a reset, or by wiring).
+func (c *Copper) Executing() bool { return c.executing }
 
 // Instruction returns the decoded instruction at index i. Indexes
 // past MaxInstructions return a NOOP.
@@ -268,7 +284,11 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 		switch inst.Op {
 		case OpMOVE:
 			if c.regs != nil {
+				// Raised across the write only, and cleared before the pc
+				// moves on, so a trace callback reads the MOVE's own index.
+				c.executing = true
 				c.regs.WriteReg(inst.Reg, inst.Val)
+				c.executing = false
 			}
 			c.pc++
 			spent += 2 // dout raised, then cleared

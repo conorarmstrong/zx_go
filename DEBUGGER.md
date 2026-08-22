@@ -580,6 +580,7 @@ Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, 
 | `clear-watch-read` | — | Clear the active read watch. |
 | `watch-zero on/off` | — | Halt as soon as M1 fetches from a region where the next 16 bytes ahead of PC all read as $00. Pinpoints the moment a guest JP / RET / JR lands in uninitialised RAM or an empty config-mode backing buffer. Fires `snapshot-on-bp` with reason="watch-zero". |
 | `watch-port PORT [=VAL]` | — | Halt on guest port writes. Ports < $100 match the low byte of the actual port (so `watch-port $FE` catches `OUT ($FE),A` regardless of A); ports >= $100 match exactly. `=VAL` filters by byte value. `watch-port off` clears all; no-arg lists active. Z80N `NEXTREG nn,nn` opcodes bypass the port path — use `nr-trace` for NextReg visibility. |
+| `watch-nextreg REG[,REG…] [=VAL] [log]` | — | Halt on a write to a named NextReg. `watch-port` cannot do this: a NextReg write is a select on `$243B` followed by a value on `$253B`, so a watch on either port sees half a transaction, and a `=VAL` on `$253B` matches the value whatever register it lands in. This keys on the register instead, and so also catches the Z80N `NEXTREG nn,nn` opcodes and the single-write `$57` path, which never touch the ports. `=VAL` fires only on that byte; `log` reports without halting, for a register written every frame. `watch-nextreg off` clears all; no-arg lists active. Copper MOVEs trip it too — the hit line names the writer (`by=cpu at=$8123` or `by=copper at=copper instruction 7`) so a MOVE is never reported against whatever address the Z80 happened to be at. |
 
 #### Tracepoints (non-halting)
 
@@ -588,7 +589,7 @@ Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, 
 | `tp ADDR` | — | Arm a tracepoint at ADDR. When PC hits ADDR, the debugger emits an `slog.Info("tp-hit")` line with full register state (PC, SP, AF, BC, DE, HL, IX, IY, IFF1, insns) and **does not halt**. A hit counter accrues per-PC. |
 | `list-tp` | — | Show every active tracepoint with its hit count. |
 | `clear-tp [ADDR]` | — | Remove one (by ADDR) or all. |
-| `nr-trace REG[,REG…]` | — | Add NextReg numbers to the runtime trace set. Each guest write to a watched NR emits an `slog.Info("nr-trace")` line with reg + value + CPU PC. `nr-trace` (no arg) lists active. `nr-trace off` clears all. Chained on top of any tracer the `ZX_GO_NEXTREG_WATCH` env var installed at startup. |
+| `nr-trace REG[,REG…]` | — | Add NextReg numbers to the runtime trace set. Each guest write to a watched NR emits an `slog.Info("nr-trace")` line with reg + value + CPU PC. `nr-trace` (no arg) lists active. `nr-trace off` clears all. Chained on top of any tracer the `ZX_GO_NEXTREG_WATCH` env var installed at startup. Logs only; `watch-nextreg` is the halting counterpart. |
 | `trace-divmmc-ram [BANK\|all\|any] [OFF\|LO-HI]` | — | Log every write that lands in divMMC RAM matching the filter. `slog.Info("divmmc-ram-trace")` per match with bank/addr/val/pc/insns. `trace-divmmc-ram` (no args) shows current filter + hit count. `trace-divmmc-ram off` disables. Replaces any prior `pager.SetWriteLogger` callback, so env-var diagnostics that share the slot are clobbered while this is armed. |
 | `trace-writes $LO[-$HI] [limit=N]` | — | Log every CPU write (Memory.Write path) into the virtual address range, with the RESOLVED destination: 8K slot + MMU8 bank value + override flag + ROM bank. Distinguishes config-mode NR$04 routing from MMU8 mapping from alt-rom redirects — `bank=0` could mean three different physical destinations and the existing `watch-mem` doesn't disambiguate. `slog.Info("write-trace")` per match. `trace-writes off` disarms; no-arg shows armed range + hit count; `limit=N` caps log lines (counter still tracks hits beyond the cap). |
 | `trace-nextreg-deltas REG[,REG…]\|all` | `nr-deltas` | Log only NextReg writes that ACTUALLY CHANGE the stored value — silently drops idempotent writes. NR$04 (RAMPAGE) can take tens of thousands of writes per boot via the FPGA-bootrom INIR loop; this filter cuts the log volume by >100x while still capturing every transition. Each line is one `slog.Info("nr-delta")` with reg/old/new/pc/insns. First observation per reg shows `old=init` to distinguish a fresh capture from a real value change. `trace-nextreg-deltas off` clears; no-arg shows armed set + hit count. |
@@ -824,7 +825,8 @@ copper-disasm, layer-state, sprite-list, palette-dump, bank-peek, bank-poke,
 pool-scan, load-bin, compare-foreign, step-over, hot, callgraph, retgraph,
 rstgraph, why-pc, snapshot-on-bp, irq-stats, catch, crash-detect, nmi,
 watch-reg, list-watches, clear-watch, watch-mem, clear-watch-mem, watch-read,
-clear-watch-read, watch-port, watch-zero, tp, list-tp, clear-tp, nr-trace,
+clear-watch-read, watch-port, watch-nextreg, watch-zero, tp, list-tp,
+clear-tp, nr-trace,
 trace-divmmc-ram, trace-writes, trace-nextreg-deltas, tt-snap, tt-rewind,
 replay-back, step-back, step-forward, run-back, reverse-status
 ```

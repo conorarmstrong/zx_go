@@ -6,6 +6,26 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`watch-nextreg` halts on a write to a named NextReg.** Neither existing
+  half could do it. `nr-trace` names registers and logs their writes without
+  stopping; `watch-port` stops, but a NextReg write is a select on `$243B`
+  followed by a value on `$253B`, so a watch on either port sees half a
+  transaction and a `=VAL` on `$253B` matches the value whatever register it
+  lands in. Keying the watch on the register instead also catches the Z80N
+  `NEXTREG nn,nn` opcodes and the single-write `$57` path, which never touch
+  the ports at all. Takes an optional `=VAL` filter and a `log` mode that
+  reports without halting.
+
+  Copper MOVEs trip it too, deliberately: a MOVE reaches the same
+  `Dispatcher.WriteReg` the CPU reaches through the ports, and "which copper
+  list is stamping on this register" is one of the questions the command
+  exists to answer. So the hit line names the writer. `Copper.Executing` is
+  raised across the MOVE's register write only, and `Copper.PC` reports the
+  MOVE itself rather than the instruction after it, so a MOVE is never
+  reported against whatever address the Z80 happened to be at.
+
 ### Changed
 
 - **The reason SBT is unsupported was wrong, and is corrected**

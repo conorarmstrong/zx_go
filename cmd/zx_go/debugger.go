@@ -292,6 +292,12 @@ type remoteDebugger struct {
 	nrTraces         nrTraceSet
 	nrTraceInstalled bool
 
+	// nrWatches is the live set of NextReg-write watchpoints, the halting
+	// counterpart to nrTraces. Same chaining rule: ensureNRWatchHook wraps
+	// whatever tracer is already installed rather than replacing it.
+	nrWatches        nrWatchSet
+	nrWatchInstalled bool
+
 	// catchIRQ halts the CPU at the next interrupt-taken event.
 	// Cheap when off (one atomic read at the head of cpu.interrupt
 	// via a hook). irqStatsBaseline lets `irq-stats` report deltas
@@ -868,6 +874,7 @@ var commandsNeedingPause = map[string]bool{
 	"clear-tp":             true,
 	"watch-port":           true,
 	"nr-trace":             true,
+	"watch-nextreg":        true,
 	"trace-nextreg-deltas": true,
 	"nr-deltas":            true,
 	"irq-stats":            true,
@@ -933,7 +940,7 @@ func (d *remoteDebugger) handleCommand(line string) string {
 	case "help", "?":
 		return "OK [step-back walks the recorded M1 ring: instant, registers only, NO memory. " +
 			"replay-back re-executes from a tt-on checkpoint: the whole machine, memory included.] " +
-			"pause set-pause-timeout break-on-sd continue step step-over step-back replay-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
+			"pause set-pause-timeout break-on-sd continue step step-over step-back replay-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace watch-nextreg trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
 	case "set-pause-timeout":
 		// Query form (no arg) reports the current value; otherwise set
 		// the pause-ack wait to N seconds. Used to await a `continue`
@@ -1159,6 +1166,8 @@ func (d *remoteDebugger) handleCommand(line string) string {
 		return d.cmdWatchPort(args)
 	case "nr-trace":
 		return d.cmdNRTrace(args)
+	case "watch-nextreg":
+		return d.cmdWatchNextReg(args)
 	case "irq-stats":
 		return d.cmdIRQStats(args)
 	case "nr-snap":
