@@ -9,7 +9,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 
-	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -89,14 +88,14 @@ type PageMapWidget struct {
 	nextBox    *fyne.Container
 	root       *fyne.Container
 
-	mem          *memory.Memory
+	mem          Memory
 	nextProvider NextProvider // optional; nil for non-Next emulators
 }
 
 // NewPageMapWidget builds a fresh diagram bound to mem. Pass a
 // non-nil NextProvider to enable the 8-slot view; passing nil
 // leaves the diagram in 4-slot classic mode permanently.
-func NewPageMapWidget(mem *memory.Memory) *PageMapWidget {
+func NewPageMapWidget(mem Memory) *PageMapWidget {
 	w := &PageMapWidget{mem: mem}
 
 	w.classic = make([]*pagemapCell, 4)
@@ -171,7 +170,7 @@ func (w *PageMapWidget) refreshClassic() {
 			// ROM. 16=ROM0, 17=ROM1, 18=ROM2, 19=ROM3.
 			bankStr = fmt.Sprintf("ROM %d", bankIdx-16)
 			bg = pagemapColors.rom
-		case bankIdx == w.mem.ScreenPage:
+		case bankIdx == w.mem.ScreenPageIndex():
 			// The bank holding the visible screen.
 			bankStr = fmt.Sprintf("RAM %d (screen)", bankIdx)
 			bg = pagemapColors.screen

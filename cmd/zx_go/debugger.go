@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
-	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
@@ -53,7 +52,7 @@ import (
 // read, not the underlying RAM bank.
 type cpuState struct {
 	cpu  *z80.CPU
-	mem  *memory.Memory
+	mem  debugger.Memory
 	bank byte
 	// divMMC paging snapshot, captured at evaluation time. Lets a
 	// breakpoint guard target the divMMC-paged context faithfully
@@ -109,7 +108,7 @@ func divmmcStateOf(emu *emulator) (paged, automap, mapram, conmem bool) {
 func (d *remoteDebugger) condState(bank byte) cpuState {
 	paged, automap, mapram, conmem := divmmcStateOf(d.emu)
 	return cpuState{
-		cpu: d.emu.cpu, mem: d.emu.mem, bank: bank,
+		cpu: d.emu.cpu, mem: d.emu.debugMemory(), bank: bank,
 		dmmcPaged: paged, dmmcAutomap: automap,
 		dmmcMapram: mapram, dmmcConmem: conmem,
 	}
@@ -1287,7 +1286,7 @@ func (d *remoteDebugger) cmdGetMemory(args []string) string {
 	if n > 256 {
 		n = 256
 	}
-	mem := d.emu.mem
+	mem := d.emu.debugMemory()
 	var b strings.Builder
 	for i := uint16(0); i < n; i++ {
 		fmt.Fprintf(&b, "%02X", mem.Read(addr+i))
@@ -1306,7 +1305,7 @@ func (d *remoteDebugger) cmdReadMemory(args []string) string {
 	if err != nil {
 		return "ERR " + err.Error()
 	}
-	v := d.emu.mem.Read(addr)
+	v := d.emu.debugMemory().Read(addr)
 	return fmt.Sprintf("OK $%02X", v)
 }
 
@@ -1322,7 +1321,7 @@ func (d *remoteDebugger) cmdWriteMemory(args []string) string {
 	if err != nil {
 		return "ERR " + err.Error()
 	}
-	d.emu.mem.Write(addr, byte(v&0xFF))
+	d.emu.debugMemory().Write(addr, byte(v&0xFF))
 	return "OK"
 }
 
@@ -1846,7 +1845,7 @@ func (d *remoteDebugger) cmdDisasm(args []string) string {
 			}
 		}
 	}
-	read := func(a uint16) byte { return d.emu.mem.Read(a) }
+	read := func(a uint16) byte { return d.emu.debugMemory().Read(a) }
 	lines := debugger.Disassemble(read, addr, count)
 	var b strings.Builder
 	b.WriteString(head)

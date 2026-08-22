@@ -224,6 +224,13 @@ func (m *Memory) HEPR() byte { return m.hepr }
 // ScreenMode returns the active SAM screen mode 1-4 (VMPR bits 5-6 + 1).
 func (m *Memory) ScreenMode() int { return int((m.vmpr&vmprModeMask)>>5) + 1 }
 
+// SectionPages returns the internal RAM page each of the four 16 KB
+// sections (A=$0000, B=$4000, C=$8000, D=$C000) currently maps, with -1
+// where the section holds ROM, external RAM or a scratch page. This is
+// the SAM's equivalent of a Spectrum page map, for the debugger's
+// memory views.
+func (m *Memory) SectionPages() [4]int { return m.sectionPage }
+
 // VisibleScreenPage returns the physical RAM page holding the displayed image.
 // Modes 3/4 use a 24 KB bitmap over two pages, so the page is forced even.
 func (m *Memory) VisibleScreenPage() byte {

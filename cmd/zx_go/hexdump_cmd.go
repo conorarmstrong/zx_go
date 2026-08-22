@@ -56,7 +56,7 @@ func (d *remoteDebugger) cmdHexDump(args []string) string {
 	}
 	data := make([]byte, n)
 	for i := uint16(0); i < n; i++ {
-		data[i] = d.emu.mem.Read(addr + i)
+		data[i] = d.emu.debugMemory().Read(addr + i)
 	}
 	return strings.TrimRight("OK\r\n"+formatHexDump(addr, data), "\r\n")
 }

@@ -16,7 +16,6 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
@@ -111,7 +110,7 @@ var NextRegsOfInterest = []uint8{
 
 type Debugger struct {
 	cpu *z80.CPU
-	mem *memory.Memory
+	mem Memory
 
 	window fyne.Window
 	mu     sync.Mutex
@@ -247,14 +246,14 @@ type Debugger struct {
 	ttW *TimeTravelWidget
 }
 
-func New(cpu *z80.CPU, mem *memory.Memory, app fyne.App) *Debugger {
+func New(cpu *z80.CPU, mem Memory, app fyne.App) *Debugger {
 	return NewWithBreakpoints(cpu, mem, app, nil)
 }
 
 // NewWithBreakpoints is New with an externally-supplied shared
 // breakpoint set (pass the emulator's so the telnet and visual
 // debuggers share one store). A nil bps allocates a private set.
-func NewWithBreakpoints(cpu *z80.CPU, mem *memory.Memory, app fyne.App, bps *BreakpointSet) *Debugger {
+func NewWithBreakpoints(cpu *z80.CPU, mem Memory, app fyne.App, bps *BreakpointSet) *Debugger {
 	if bps == nil {
 		bps = NewBreakpointSet()
 	}
@@ -496,7 +495,7 @@ func (d *Debugger) cpuBank() int {
 // without the cmd/zx_go cpuState wrapper.
 type visualCPUState struct {
 	cpu  *z80.CPU
-	mem  *memory.Memory
+	mem  Memory
 	bank byte
 }
 

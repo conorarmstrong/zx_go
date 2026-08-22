@@ -1968,6 +1968,12 @@ func (m *Memory) GetPageMap() ([4]int, [4]int) {
 	return m.memoryPageReadMap, m.memoryPageWriteMap
 }
 
+// ScreenPageIndex returns the RAM page the display is read from. The
+// field itself stays public; this is the accessor form the debugger's
+// Memory interface needs, so a machine with a different paging model can
+// supply the same answer.
+func (m *Memory) ScreenPageIndex() int { return m.ScreenPage }
+
 // GetPortState returns the current port 7FFD and 1FFD values for debugging.
 func (m *Memory) GetPortState() (byte, byte, bool) {
 	return m.port7FFD, m.port1FFD, m.specialPaging

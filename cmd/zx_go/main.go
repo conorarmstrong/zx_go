@@ -4463,8 +4463,12 @@ func main() {
 							dialog.ShowError(perr, w)
 							return
 						}
+						// Through debugMemory, so a poke on the SAM
+						// lands in the machine that is running rather
+						// than in the stand-in 48K.
+						dm := emu.debugMemory()
 						for _, p := range pokes {
-							emu.mem.Write(p.Addr, p.Val)
+							dm.Write(p.Addr, p.Val)
 						}
 						dialog.ShowInformation("Pokes Applied", fmt.Sprintf("Applied %d poke(s).", len(pokes)), w)
 					},
@@ -4474,7 +4478,7 @@ func main() {
 				form.Show()
 			}),
 			fyne.NewMenuItem("Debugger", func() {
-				dbg := debugger.NewWithBreakpoints(emu.cpu, emu.mem, a, emu.sharedBreakpoints())
+				dbg := debugger.NewWithBreakpoints(emu.cpu, emu.debugMemory(), a, emu.sharedBreakpoints())
 				// Share the register-watchpoint set with the telnet
 				// debugger so a watch set on either surface fires and
 				// is listed on both (the GUI Watchpoints tab).
@@ -4499,7 +4503,7 @@ func main() {
 				// reusing the same call-detection as telnet step-over.
 				dbg.SetStepOver(func() {
 					c := emu.cpu
-					read := func(a uint16) byte { return emu.mem.Read(a) }
+					read := func(a uint16) byte { return emu.debugMemory().Read(a) }
 					lines := debugger.Disassemble(read, c.PC, 1)
 					if len(lines) == 0 || len(lines[0].Bytes) == 0 ||
 						!isCallLike(lines[0].Bytes[0], lines[0].Bytes) {

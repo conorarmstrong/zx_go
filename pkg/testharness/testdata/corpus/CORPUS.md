@@ -138,6 +138,14 @@ Two real bugs were found by adding them:
 
 - **zxnext_layer2_tilemap** — Layer 2 256x192 background composited under a
   tilemap layer (a full JRPG-style scene). The richest renderer of the set.
+  Note the 2-pixel unpainted column down the left edge and the 1-pixel row
+  across the top. That is the program's own NR$18 clip window, not a
+  rendering fault: it writes x1=1, x2=254, y1=1, y2=254 while Layer 2 is
+  still in 256x192, then switches to the 320x256 resolution, where the FPGA
+  takes the X coordinates as 2-pixel units (video/layer2.vhd:129-135). x1=1
+  therefore becomes column 2. The golden was regenerated on 2026-08-22 when
+  the clip window was first honoured; before that Layer 2 drew full-frame
+  however a program clipped it.
 - **zxnext_tilemap** — tilemap layer with scrolling.
 - **SpecBong** — hardware sprites + tilemap-text HUD over a Layer 2 playfield;
   captured at its pre-start frame (no input is injected in the slice).

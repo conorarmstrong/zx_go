@@ -49,7 +49,7 @@ func (d *remoteDebugger) cmdWatchReg(args []string) string {
 	}
 	// Validate the register name against the live cpuState adapter
 	// — catches typos at set-time rather than silently never firing.
-	if _, ok := (cpuState{cpu: d.emu.cpu, mem: d.emu.mem}).Reg(reg); !ok {
+	if _, ok := (cpuState{cpu: d.emu.cpu, mem: d.emu.debugMemory()}).Reg(reg); !ok {
 		return "ERR unknown register: " + reg
 	}
 	d.regWatches.Add(w)
