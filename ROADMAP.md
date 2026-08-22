@@ -447,6 +447,24 @@ so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
 The 12 Next `.nex` games now screened render correctly without it, so there is
 still no observed case where it matters. Leave it until one appears.
 
+### 6. [tooling] Break on a write to a specific NextReg
+
+**Small, and genuinely missing.** The debugger can break on a CPU register
+(`watch-reg`), on memory (`watch-mem` / `watch-read`) and on a port
+(`watch-port`, which halts and takes an optional value match). It cannot break
+on "NR$xx was written".
+
+`nr-trace` comes closest and only logs: it takes a set of register numbers and
+prints each write, without halting. `watch-port $253B` halts on any NextReg
+*value* write and `watch-port $243B` on any *select*, but a NextReg write is a
+select followed by a value, so neither identifies which register was hit — and
+a value match on `$253B` matches the value, not the register.
+
+What it wants is a watch keyed on the register number, halting where `nr-trace`
+logs, reusing the same set `nr-trace` already maintains
+(`cmd/zx_go/nrtrace_cmd.go`) and the halt path `watch-port` already has
+(`cmd/zx_go/portwatch_cmd.go`). Both halves exist; nothing joins them.
+
 ---
 
 ## Catalogued — deliberately not doing

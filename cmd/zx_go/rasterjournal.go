@@ -32,16 +32,15 @@ var visualJournalRegs = []byte{
 	0x6F, // tile definitions base address
 }
 
-// NR$14, the global transparency colour, is deliberately NOT journalled even
-// though it is purely visual and idempotent.
+// NR$14, the global transparency colour, IS journalled — it is the first entry
+// above, and TestVisualRegistersAreJournalledAtTheirRow pins it.
 //
-// Transparency is decided by comparing a layer's pixel against NR$14, and the
-// ULA layer this is compared against is rendered ONCE per frame, not per row.
-// Making only the comparison per-row while the thing compared stays per-frame
-// is not more faithful, it is inconsistent — and it shows: journalling NR$14
-// blanks the show512 demo, which renders correctly when the frame-final value
-// is used throughout. Revisit if the ULA layer ever becomes a per-scanline
-// render; until then the two have to agree.
+// It was excluded once, on the argument that transparency is decided by
+// comparing a layer's pixel against NR$14 while the ULA layer it is compared
+// against renders once per frame, so a per-row comparison against a per-frame
+// operand is inconsistent rather than more faithful. That reasoning did not
+// survive: the register is purely visual and idempotent like the rest, and the
+// corpus renders correctly with it journalled.
 
 // journalVisualRegs wraps the already-installed write handler for each
 // whitelisted register so the change is recorded against the current display
