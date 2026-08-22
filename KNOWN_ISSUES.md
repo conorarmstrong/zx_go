@@ -34,7 +34,7 @@ or, on a machine with no OpenGL of any kind:
 not by platform. In fyne v2.6.3, `internal/painter/gl/gl_es.go` is chosen by
 
 ```
-(gles || arm || arm64) && !android && !ios && !mobile && !darwin && !wasm
+(gles || arm || arm64) && !android && !ios && !mobile && !darwin && !wasm && !test_web_driver
 ```
 
 and `gl_core.go` carries an explicit `!arm && !arm64`, so **no build tag can select
@@ -91,23 +91,6 @@ application to ship ANGLE. The fix has to be a *fallback*, tried only after the
 native context API has already refused, so that it cannot regress anything.
 That is what #6484 does.
 
-### Snapshot rewind lands on a capture, not on an exact instruction
-
-**Affects:** the **Time Travel** tab and the `tt-rewind` command. It does
-**not** affect reverse debugging, which is a separate mechanism described in
-`DEBUGGER.md`.
-
-**What you see.** A rewind puts the machine back to the nearest capture at or
-before the target rather than to the instruction you asked for, and the ring
-holds 16 captures by default, so the reachable window is short.
-
-**What to use instead.** `replay-back` reaches any instruction inside the ring
-by restoring the newest capture at or before it and re-executing forward, with
-the whole machine. Before handing an instant back it re-runs the window to the
-present and compares the machine it produced against the machine that was
-there, so a window it cannot reproduce is refused rather than answered wrongly.
-`tt-rewind` does not check, because it is not re-executing anything.
-
 ### The process does not exit when window creation fails
 
 **Affects:** any platform where the GUI cannot obtain an OpenGL context, which
@@ -116,12 +99,24 @@ today means the case above.
 After the error, the process stays resident with no window and no console
 prompt returned. It was still running three minutes later using about 40 MB.
 
-The cause is that the toolkit's run loop blocks with no window to service, and
-its `NewWindow` returns no error for us to test. A clean exit with a non-zero
-status and a one-line explanation would be friendlier, but the only way to do
-that from our side would be a watchdog around the run loop, which is the kind
-of workaround this project rejects. It belongs in the same upstream report as
-the hint above.
+**Cause.** The toolkit does try to exit, and its own guard throws the attempt
+away. `ShowAndRun` is `Show()` then `Run()`, and `Show()` runs the window
+creation *inline* on the main goroutine, because the run loop has not started
+yet (`internal/async/goroutine.go:44`, `internal/driver/glfw/loop.go:41`). So
+when `glfw.CreateWindow` fails, `initFailed` sees `running` still false and
+takes the `Quit()` branch rather than the `os.Exit(1)` one
+(`glfw/driver.go:146-153`). `Quit()` closes the `done` channel only under
+`running.CompareAndSwap(true, false)`, which cannot succeed while `running` is
+false, so `done` is never closed (`glfw/driver.go:110-113`). `Run()` then
+starts the loop, which blocks on `<-d.done` (`glfw/loop.go:128`) waiting for a
+quit that was raised before it existed and discarded.
+
+None of that is reachable from here. `NewWindow` returns no error, and the
+window, the flag and the channel are all unexported. A watchdog around the run
+loop would paper over it, which is the kind of workaround this project rejects.
+It belongs in the same upstream report as the hint above, and the shape of the
+fix is that a quit raised before the loop starts has to be remembered rather
+than dropped.
 
 **Workaround:** close the process from Task Manager, and use `--headless`.
 
