@@ -125,419 +125,6 @@ the hint above.
 
 **Workaround:** close the process from Task Manager, and use `--headless`.
 
-### File → Save Snapshot / Load Snapshot crash on the SAM, ZX80 and ZX81
-
-**Affects:** File → Snapshots & ROM → Save Snapshot… and Load Snapshot…, on
-the SAM Coupé, ZX80 and ZX81. F2 / F4 quick-save is a different path and is
-not this bug.
-
-**What you see.** The window disappears. The process dies. There is no
-error dialog: `createSnapshotFromEmulator` and
-`applySnapshotToEmulator` both dereference `emu.ula` (`cmd/zx_go/main.go`),
-and `ula` is nil on those three machines (the cleanup path already guards
-the same pointer for this reason).
-
-Those machines cannot be represented by `.szx` / `.z80` / `.sna` at all,
-which is why F2 writes `quicksave.zxgostate` instead. The File menu still
-offers the classic formats and then panics rather than refusing.
-
-**Workaround:** use F2 / F4. Do not use File → Save Snapshot or Load
-Snapshot on these machines.
-
-### Saving a 128K-family machine records port $7FFD as 0
-
-**Affects:** File → Save Snapshot, F2 on 48K/128K/+2/+2A/+3/Pentagon,
-RZX recording, and `snapshot-on-bp`. All three portable formats.
-
-**What you see.** Save a 128K (or +2 / +2A / +3 / Pentagon) game and load
-it back. The picture is the wrong screen, the 128 editor ROM is paged in
-over the game, or the machine crashes a moment later. RAM contents are
-intact; the paging latch is not.
-
-**Cause.** `createSnapshotFromEmulator` copies the eight physical banks
-correctly, then writes `snap.Memory.Port7FFD = 0`
-(`cmd/zx_go/main.go`). `GetPortState()` already returns the live latch
-and is used everywhere else. On load, `applySnapshotToEmulator` feeds
-that zero through `PageMemory`, which maps bank 0 at `$C000`, ROM 0, and
-screen page 5, and leaves paging unlocked.
-
-A second fault on the load path: `PageMemory` is the guest-facing port
-write, so it no-ops when paging is already locked (`PagingEnabled` is
-false). Restoring a snapshot after a 128K title has written bit 5 of
-`$7FFD` therefore does not change the map at all.
-
-`$1FFD` is not in `snapshot.MemoryState`. SZX writes `Port1FFD: 0` with
-the comment "Not used in our emulator" (`pkg/snapshot/szx.go`), which
-has not been true since +2A/+3 paging existed. A +3 snapshot loses
-special paging and ROM 2/3.
-
-**Workaround:** rewind / `replay-back` restore the registry, including
-the paging latches. Use those rather than File → Save on a 128K-family
-machine. A 48K save is unaffected, because there is no `$7FFD`.
-
-### A 48K `.sna` written by File → Save does not store PC
-
-**Affects:** File → Save Snapshot with a `.sna` name, on a 48K machine.
-128K `.sna` stores PC in the trailer and is not this bug. F2 writes
-`.szx`, so it is not this bug either.
-
-**What you see.** Save a 48K game as `.sna`, load it, and execution
-resumes at whatever two bytes happened to sit on the stack, with SP two
-higher than you left it. Usually a crash or a jump into garbage.
-
-**Cause.** The 48K SNA format keeps PC on the stack. `loadSNA` pops it
-(`pkg/snapshot/sna.go`). `saveSNA` never pushes it. The tests already
-say so: "48K SNA stores PC on the stack and our save path doesn't push"
-(`pkg/snapshot/snapshot_test.go`). The round-trip tests avoid the case
-by saving 128K SNA instead.
-
-**Workaround:** save as `.szx` or `.z80`, or use F2.
-
-### A `.z80` written by File → Save always sets bit 7 of R
-
-**Affects:** File → Save Snapshot as `.z80`. Load of a `.z80` from
-another emulator is fine; the decoder reads bit 0 of the flags byte
-correctly. SZX stores the whole of R and is not this bug.
-
-**What you see.** Save as `.z80` and reload. R is `original | 0x80`.
-Refresh-based random numbers and a few loaders that sample R come back
-wrong. Most games do not notice.
-
-**Cause.** `saveZ80` initialises the flags byte to `0x01` and then ORs
-bit 0 if R bit 7 is set (`pkg/snapshot/z80.go`). Bit 0 is therefore
-always set. On load, bit 0 of that byte is copied into R bit 7. The
-round-trip test uses `R = 0x80`, which cannot see the fault, and does
-not check R at all on the way back.
-
-**Workaround:** save as `.szx`.
-
-### A Pentagon snapshot from another emulator loads as 48K
-
-**Affects:** File → Load Snapshot of a `.szx` or `.z80` that names the
-Pentagon (SZX machine id 7, `.z80` v3 hardware mode 9) or +3e (SZX id
-6). Snapshots this emulator writes itself are tagged 128K, not
-Pentagon, so they do not hit this path.
-
-**What you see.** A Pentagon 128 snapshot from Fuse or similar loads as
-a 48K machine: `ensureModelForSnapshot` does not switch, because
-`Is128K` is false, and only banks 5/2/0 are treated as the 48K image.
-The program crashes on resume.
-
-**Cause.** `loadSZX` classifies `ZXSTMID_PENTAGON128` and
-`ZXSTMID_PLUS3E` in the default branch as 48K (`pkg/snapshot/szx.go`),
-even though both constants are defined. `loadZ80` has no Pentagon
-hardware mode; the comment still says Pentagon is a machine "the
-emulator doesn't model", which stopped being true when `--pentagon`
-landed. Scorpion (SZX id 10, `.z80` v3 mode 10) has the same
-classification bug; we do not emulate it, so a 48K fallback there is at
-least a refusal rather than a wrong 128K map.
-
-**Workaround:** switch to Pentagon 128 first, then load only snapshots
-this emulator saved (they are tagged 128K). Or convert the file in
-another emulator to a plain 128K `.szx` before loading.
-
-### File → Save Snapshot races the emulation goroutine
-
-**Affects:** File → Save Snapshot only. F2 and RZX capture both call
-`withEmulationPaused` first.
-
-**What you see.** Rare torn saves: PC from one instruction, registers
-from the next, RAM a mix of both. Usually invisible; when it hits, the
-file reloads as a crash.
-
-**Cause.** `createSnapshotFromEmulator` copies CPU registers and eight
-banks with no pause and without `coreMu`. The RZX recorder's own
-comment says it pauses "so the CPU state isn't sampled mid-frame". The
-File menu callback does not.
-
-### Machine → Reboot can still take a pending NMI
-
-**Affects:** F8 / F12 (NMI) followed by a reboot, on any machine that
-uses `cpu.Reset`. The SAM and ZX80/ZX81 have their own reset and are
-not this path.
-
-**What you see.** Press F8 or F12, then reboot before the NMI is
-serviced. The first instruction at `$0000` runs, then the CPU jumps to
-`$0066` as if the button were still down. On a Next that opens the NMI
-Browser in the middle of bootrom; with a Multiface it pages the MF ROM
-in over the freshly reset machine.
-
-**Cause.** `CPU.Reset` (`pkg/z80/z80.go`) clears registers, IFF, IM and
-`tstates`. It does not clear `PendingNMI`, `IRQPending` or `eiDelay`.
-`rebootLocked` calls that Reset and nothing else drops the latch.
-
-### 128K / Next beeper and tape audio are mixed on a 48K frame
-
-**Affects:** every 128K-family machine, including the Next. 48K is
-correct.
-
-**What you see.** 128K beeper music runs about 1.4% fast and can click
-at the frame join. The tape-loading whistle is cut for the last ~1020
-T-states of each 128K frame. On the Next at 28 MHz, most timed
-beeper/DAC events after 69888 T in the frame are dropped.
-
-**Cause.** `mixAudioFrame` and `generateSquareWaveFrame`
-(`pkg/ula/ula.go`) hard-code `tstatesPerFrame = 69888`. Tape EAR
-transitions use the same bound. The rest of the emulator already knows
-the 128K/Next frame is 70908 (`pkg/roms/timing.go`,
-`pkg/ula/classic_timing_test.go`).
-
-### A Timex hi-res mode survives reboot
-
-**Affects:** Machine → Reboot after a program has written Timex SCLD
-(port `$FF`) mode 6, most visibly on the Next.
-
-**What you see.** After NextZXOS 64/85-column, reboot can still draw a
-640-wide scrambled picture until something writes `$FF` again.
-
-**Cause.** `ULA.Reset` clears border, MIC, speaker, flash and AY. It
-does not clear `timexVideoMode`, `ulaOutputDisabled`, the ULA scroll
-offsets, or the Layer 2 `$123B` latch (`pkg/ula/ula.go`). Reboot only
-calls `u.Reset()` for the ULA.
-
-### A typed symbol can stick after focus loss or reboot
-
-**Affects:** typing punctuation (`.`, `;`, `:`, …) and then alt-tabbing
-or rebooting within two frames. F11 BREAK can also stick across
-`ReleaseAll`.
-
-**What you see.** A SYMBOL-SHIFT combo stays down after every physical
-key has been released. BASIC types a run of the same symbol, or BREAK
-stays asserted after reboot.
-
-**Cause.** `TypeRune` holds the combo in `pulseMatrix` /
-`pulseFrames`. `ReleaseAll` (`pkg/keyboard/keyboard.go`) only fills
-`matrix` with `$FF`. `Scan` still ANDs the overlay while
-`pulseFrames > 0`. Focus-loss and reboot both call `ReleaseAll`.
-
-### NextZXOS writes to the SD card land on the wrong sector
-
-**Affects:** Spectrum Next, any guest write to the SD image (save,
-mkdir, copy). Reads, including cold boot, are not this bug.
-
-**What you see.** NextZXOS boots and reads files correctly. A save or
-copy writes into the wrong place in the `.img`, so the file is missing
-or the image is corrupted. A subsequent read of that file returns the
-old data.
-
-**Cause.** The card advertises SDSC (CCS=0). CMD17 converts the host's
-byte address to an LBA (`arg / 512`). CMD24 / CMD25 / erase pass the
-raw argument to `WriteBlock` as an LBA (`pkg/next/sdcard/spi.go`). Real
-SDSC uses byte addresses for both. A write of sector 2 therefore lands
-at offset 2, not 1024. CMD25 then increments that value as if it were
-an LBA, so sequential blocks are 512 sectors apart.
-
-### Next DAC port `$5F` (and SpecDrum `$DF`) never reach the bank
-
-**Affects:** Next programs that use SounDrive mode 1 or stereo A/D
-(port `$5F` → channel D), and SpecDrum on `$DF` when the classic
-add-on is not enabled.
-
-**What you see.** The right-hand pair stays at mid-scale. A hard-panned
-right DAC is silent.
-
-**Cause.** The live decode in `Bank.WritePort` (`pkg/next/dac/dac.go`)
-maps `$1F/$F1`, `$0F/$F3`, `$4F/$F9`, `$FB`. The FPGA map also has
-`$5F` → D and `$DF` → A+D (`pkg/next/dac/soundrive.go`, labelled as
-the faithful reference that is not wired). Stereo mix of A+B / C+D is
-already correct; channel D is simply never written from those ports.
-
-### Layer 2 ignores its clip window (NextReg `$18`)
-
-**Affects:** Next titles that write the Layer 2 clip window, including
-copper lists that MOVE `$18`.
-
-**What you see.** Layer 2 is drawn full-frame. Sprites, ULA/LoRes and
-the tilemap clip correctly.
-
-**Cause.** `wire(0x18, l2)` stores the four coordinates
-(`pkg/next/wire.go`). Sprite (`$19`), ULA (`$1A`) and tilemap (`$1B`)
-each push into their layer. Layer 2 has no `SetClip`; `fpgaSramAddr`
-hard-codes a full-screen window (`pkg/next/layer2/layer2.go`). The
-layer's own state comment already records that the coordinates are
-never pushed down.
-
-### Load Tape, Open File, RZX and Kempston crash on the SAM (and Load Tape on the ZX80/ZX81)
-
-**Affects:** File → Load Tape, File → Open File / drag-and-drop of
-`.tap` / `.tzx` / `.rzx`, and Machine → Joystick → Kempston, whenever
-`ula` is nil. File → Load Tape is also unguarded on the ZX80/ZX81
-(Open File there already refuses Spectrum formats). This is separate
-from File → Save/Load Snapshot, which is the same class of nil
-dereference on a different menu item.
-
-**What you see.** The window disappears. There is no error dialog.
-
-**Cause.** Those handlers call `emu.ula.SetTapePlayer`,
-`startRZXPlayback` (`e.ula.SetRZXPlaybackHook`) or
-`emu.ula.KempstonEnabled` (`cmd/zx_go/main.go`). `loadFileByPath`
-guards ZX80/ZX81 only. The SAM is not in that check.
-
-**Workaround:** do not load tapes, RZX or Kempston on those machines.
-Use File → Load SAM Disk on the Coupé, and `.p` / `.o` on the ZX80/ZX81.
-
-### F11 BREAK release lifts CAPS SHIFT and SPACE even if they are still held
-
-**Affects:** F11 as BREAK, while Left Shift or Space is down.
-
-**What you see.** Hold Shift, tap F11, keep holding Shift. CAPS SHIFT
-is gone: cursor keys and CAPS-LOCK combos stop working until Shift is
-released and pressed again. The same happens with Space.
-
-**Cause.** F11 down clears matrix bits 0.0 and 7.0. F11 up ORs them
-back on (`pkg/keyboard/keyboard.go`) and returns, without looking at
-the live Shift/Space state. This is not the TypeRune overlay already
-logged under focus-loss.
-
-### Port `$FF` Timex hi-res is honoured on 48K / 128K / +3
-
-**Affects:** classic Sinclair machines. The Next is supposed to decode
-this register (SCLD). The existing reboot-leaves-hi-res issue is
-separate: that is leftover state after a valid Next write.
-
-**What you see.** A 48K or 128K program that writes port `$FF` with
-bits 2:0 equal to `110` (including `OUT (C),r` with C=`$FF`) switches
-the emulator into a 640-wide Timex frame. Real hardware ignores that
-write.
-
-**Cause.** `writePortInternal` stores every `$FF` write in
-`timexVideoMode` with no model check (`pkg/ula/ula.go`). `render()`
-then takes `timexHiResActive()` on any machine.
-
-### Z80N `JP (C)` jumps from BC, not from `IN (C)`
-
-**Affects:** Spectrum Next programs that use `ED 98`.
-
-**What you see.** The jump lands in the wrong 64-byte slot of the
-current 16K page. Keyboard / UART jump tables go to the wrong
-handler.
-
-**Cause.** The opcode is `PC := (PC & $C000) | (IN(C) << 6)`
-(SpecNext wiki; FPGA `t80n.vhd` JP_C: IORQ read, then
-`PC[13:6] <= DI`, `PC[5:0] <= 0`). The implementation is
-`PC = (PC & 0xC000) | (BC & 0x3FFF)` (`pkg/z80/z80n.go`) and never
-reads the port. The unit test pins that wrong formula.
-
-### SAM pokes, hexdump and the visual debugger look at a dummy 48K
-
-**Affects:** the SAM Coupé: Emulator → Enter Poke, the visual
-debugger, telnet `hexdump` / peek / poke, and `read $addr`
-breakpoint conditions.
-
-**What you see.** A poke reports success and the game does not
-change. The hex view is a blank 48K Spectrum, not SAM RAM.
-
-**Cause.** `newSamEmulator` (`cmd/zx_go/sam.go`) puts the live
-machine in `e.sam` and installs an inert `memory.New(..., Model48K)`
-as `e.mem` so the menus do not nil-panic. Those tools still read
-`emu.mem`.
-
-### GUI Debugger Step never delivers INT or NMI
-
-**Affects:** the visual debugger's Step button, on every machine.
-Telnet `step` and GUI Step Over are a different path.
-
-**What you see.** HALT never ends. IM 1 / IM 2 handlers never run.
-F8 / F12 does nothing while single-stepping.
-
-**Cause.** The Step callback is `emu.cpu.StepInstruction()`
-(`cmd/zx_go/main.go`), which only fetches and executes. Telnet
-`step` uses `StepInstructionWithIRQ`. Step Over also uses
-WithIRQ. Step does not.
-
-A second fault on the IRQ-aware path: `StepInstructionWithIRQ`
-hard-codes a 70908 T frame (`pkg/z80/z80.go`). SAM's frame is
-119808 T with INT at 99840, so even telnet step never latches
-the SAM frame interrupt.
-
-### Copper write cursor is an instruction index, not a byte address
-
-**Affects:** Next programs that upload a Copper list through
-NextReg `$60`–`$62` (and anything that reads `$61` back). Cycle-
-accurate MOVE timing is a separate, already-documented gap.
-
-**What you see.** A list uploaded at byte address 2 lands in
-instruction 2 (byte 4). After two `$60` writes, a read of `$61`
-returns 1, not 2. The top 1K of Copper RAM cannot be addressed.
-A list that does not HALT stops instead of wrapping. Writing
-`$62` with the same start mode restarts the PC.
-
-**Cause.** Hardware `nr_copper_addr` is 11 bits, 0–`$7FF`; `$60`
-writes one byte and increments that address; `$62` bits 2:0 are
-addr 10:8. This model treats `writePtr` as a 10-bit instruction
-index, masks `$62` with `0x03`, and commits `$60` every two writes
-(`pkg/next/copper/copper.go`). Mode 01/10 set `stopped` at
-instruction 1024; any `$62` write with mode 01 or 11 does
-`pc = 0`.
-
-### Palette NextReg `$44` half-pair survives `$40` / `$41` / `$43`
-
-**Affects:** Next software that writes a 9-bit colour, then changes
-index or palette select, then writes `$44` again. Reboot already
-clears the latch; this is the live-session case.
-
-**What you see.** Colours land in the wrong slot. Later 9-bit writes
-are off by one. NextZXOS palette editors and any copper list that
-mixes `$40`/`$43` with `$44` show the wrong paper.
-
-**Cause.** FPGA `zxnext.vhd` clears `nr_palette_sub_idx` on NR `$40`,
-`$41` and `$43`. `WriteNR44` only clears `have9` after the second
-byte (`pkg/next/palette/palette.go`). The `$40`/`$41`/`$43`
-handlers never call `ResetWriteLatches`.
-
-### Tilemap nibble 0 drops the palette offset and is treated as transparent
-
-**Affects:** Next tilemap graphics whose pixel nibble is 0 but whose
-attribute palette offset is not.
-
-**What you see.** Background tiles vanish, or they pick `palette[0]`
-instead of `offset<<4`. Sprites and Layer 2 are unaffected.
-
-**Cause.** `tilemap.go` writes `dst[x] = 0` when the nibble is 0,
-instead of `(paletteOffset << 4) | nibble`. Hardware compares the
-nibble to NR `$4C` (reset `$0F`), so nibble 0 is opaque as index
-`$00`, `$10`, `$20`, … The compositor then also skips low-nibble 0
-when `on_top` is off (`pkg/next/compositor/compositor.go`).
-
-### +3 / DISCiPLE DSK tracks are stored by the Track-Info C/H labels
-
-**Affects:** Extended DSK images whose Track-Info C/H does not match
-the file order (copy-protection, bad dumps, every track tagged
-`C=0`). Standard commercial disks whose labels match physical order
-are fine.
-
-**What you see.** SEEK 0 hits an empty or wrong track. The loader
-fails or reads the wrong sectors. Save and reload scramble the map
-further.
-
-**Cause.** After parsing each Track-Info block, `ParseDiskImage`
-indexes `d.Tracks[H][C]` from the header labels if they are in
-range (`pkg/plus3fdc/disk.go`). EDSK physical order is the
-track-size table. In-range but lying labels skip the table-order
-fallback, so two tracks with the same C/H overwrite one slot.
-
-### SAM FORMAT reports success and writes nothing
-
-**Affects:** SAM Coupé `FORMAT` / WRITE TRACK, and READ TRACK.
-
-**What you see.** SAMDOS reports the disk formatted. The old sectors
-are still there. A subsequent `BOOT` or `LOAD` reads the previous
-contents.
-
-**Cause.** `WD1772.WriteCommand` treats `$E` / `$F` as "complete
-benignly" (`pkg/sam/wd1772.go`): INTRQ, no error, no bytes moved.
-
-### A SAM reboot leaves the SAA1099 running
-
-**Affects:** Machine → Reboot on the SAM Coupé.
-
-**What you see.** Music from the previous program keeps playing over
-the copyright screen.
-
-**Cause.** `Machine.Reset` clears the CPU, paging, border, line INT
-and beeper (`pkg/sam/sam.go`). It does not call `SAA.Reset()`.
-`rebootLocked` only calls `e.sam.Reset()`.
-
 ### SAM SBT files cannot be loaded
 
 **Affects:** File → Load SAM Disk with an `.sbt` name. MGT, SAD and
@@ -559,6 +146,280 @@ a DOS image are.
 ---
 
 ## Recently fixed
+
+### File → Save / Load Snapshot crashed on the SAM, ZX80 and ZX81
+
+**Fixed.** Those three machines have no Spectrum ULA — `emu.ula` is nil
+on all of them — but the File menu offered the classic snapshot formats
+anyway and both handlers dereferenced it for the border colour. The
+window disappeared with no error dialog.
+
+A new `spectrumOnlyFeature()` names the machine and what to use instead,
+and guards `createSnapshotFromEmulator`, `applySnapshotToEmulator` and
+`startRZXPlayback`. F2 / F4 were always the right answer on those
+machines; now the menu says so instead of crashing.
+
+### Saving a 128K-family machine recorded port $7FFD as 0
+
+**Fixed.** `createSnapshotFromEmulator` copied the eight banks correctly
+and then wrote a hardcoded zero for the paging latch, so every reload
+mapped bank 0 at $C000, ROM 0 and screen page 5 whatever the machine was
+actually doing. Both latches now come from `GetPortState`.
+
+Two related faults went with it. `$1FFD` was absent from
+`snapshot.MemoryState` and the SZX writer put a literal 0 in its slot, so
+a +2A/+3 save lost special paging and ROM 2/3; it is now part of the wire
+format, round-tripped through SZX and read from a 55-byte `.z80` v3
+extended header. And the restore ran through `PageMemory`, the
+guest-facing port write, which no-ops once a title has locked paging with
+`$7FFD` bit 5 — a restore after that changed nothing at all. Restores go
+through `RestorePagingLatches` now: placing a machine into a state is not
+the same as asking it to change state, so the lock cannot block it, and
+bit 5 re-establishes the lock afterwards exactly as on hardware.
+
+### A 48K `.sna` written by File → Save did not store PC
+
+**Fixed.** The 48K SNA format has no PC field: PC is pushed onto the
+guest stack and the header SP points at it, which is why `loadSNA` pops
+it. `saveSNA` never pushed. A reload resumed at whatever two bytes
+happened to sit under SP.
+
+The push is now modelled the way the Z80 does it, on a copy of the
+affected banks so a save cannot mutate the snapshot it was handed. Bytes
+that land below $4000 fall in ROM and are discarded, as on hardware.
+
+### A `.z80` written by File → Save always set bit 7 of R
+
+**Fixed.** The format splits R across two bytes, with bit 7 travelling in
+bit 0 of the flags byte. `saveZ80` seeded that byte with `0x01` before
+OR-ing the real bit in, so bit 0 was set whatever R held and every reload
+came back with `R|0x80`. The old round-trip test used `R = 0x80`, which
+cannot see the fault.
+
+### A Pentagon snapshot from another emulator loaded as 48K
+
+**Fixed.** `loadSZX` classified Pentagon 128, +3e, Scorpion,
+Pentagon 512/1024 and the SE in its default branch as 48K, so only banks
+5/2/0 were placed and paging was left off — the program crashed on
+resume. Every one of them pages banks 0-7 through `$7FFD` the way a 128K
+does, whatever else it adds, and all are classified as 128K now. The
+`.z80` reader gained the v3 hardware modes it was missing (6 = 128K+MGT,
+9 = Pentagon 128, 10 = Scorpion 256). One existing test pinned the
+Pentagon bug; it was corrected.
+
+### File → Save Snapshot raced the emulation goroutine
+
+**Fixed.** The copy walked the CPU registers and eight banks with the
+emulation goroutine still running, so a save could take PC from one
+instruction and the registers from the next and reload as a crash. It
+pauses first now, which F2 and the RZX capture already did.
+
+### Machine → Reboot could still take a pending NMI
+
+**Fixed.** `CPU.Reset` cleared the registers, IFF, IM and the T-state
+counter but left `PendingNMI`, `IRQPending` and `eiDelay` latched. An NMI
+raised by F8 / F12 just before a reboot survived it: the machine ran the
+first instruction at `$0000` and then jumped to `$0066` as if the button
+were still down — on a Next that opened the NMI Browser in the middle of
+bootrom, and with a Multiface it paged the MF ROM in over the fresh
+machine. A hardware /RESET drops the request lines with everything else.
+
+### 128K / Next beeper and tape audio were mixed on a 48K frame
+
+**Fixed.** The mixer hard-coded 69888 T-states. A 128K frame is 70908 and
+a Pentagon's is 71680, so 128K beeper music ran about 1.4% fast and every
+event in the last ~1020 T of each frame was dropped; on a Next at 28 MHz,
+where the CPU burns `SpeedMultiplier` times as many T-states inside one
+50 Hz frame, most of the frame went with it. The length now comes from
+the model and the speed multiplier.
+
+### A Timex hi-res mode survived reboot
+
+**Fixed.** `ULA.Reset` cleared the border, MIC, speaker, flash and AY but
+not `timexVideoMode`, so a reboot out of a 64-column NextZXOS screen kept
+drawing a 640-wide scrambled picture until something wrote `$FF` again.
+The NextReg `$68` ULA-output disable, the ULA scroll offsets and the
+`$123B` read-back shadow went the same way; all four reset to zero on the
+FPGA and now do here.
+
+### A typed symbol could stick after focus loss or reboot
+
+**Fixed.** `TypeRune` injects a SYMBOL-SHIFT combination as a brief
+overlay on the physical matrix. `ReleaseAll` — which focus loss and
+reboot both call — cleared only the physical matrix, and `Scan` went on
+ANDing the overlay while its frame counter ran, so BASIC typed a run of
+the same symbol after every key had been let go.
+
+### NextZXOS writes to the SD card landed on the wrong sector
+
+**Fixed.** The card advertises SDSC, whose command argument is a BYTE
+address. Only the read path divided it back to a block number: CMD24,
+CMD25 and the CMD32/33 erase range passed the raw argument through as if
+it were already an LBA, so a write addressed at sector 2 landed at offset
+2 rather than 1024 and CMD25 stepped 512 sectors between consecutive
+blocks. All five paths go through one conversion now. Four existing tests
+passed raw block numbers, which was only correct under the bug.
+
+### Next DAC port `$5F` (and SpecDrum `$DF`) never reached the bank
+
+**Fixed.** The live decode was missing `$5F` — channel D in SounDrive mode
+1 and in stereo A/D — and `$DF`, the SpecDrum mono A+D pair, so the
+right-hand pair stayed at mid-scale and a hard-panned right DAC was
+silent. Both are decoded now, per the FPGA's `port_dac_A..D` map.
+
+The classic SpecDrum / Covox dispatch moved ahead of the internal bank in
+the process: both decode `$DF` and `$FB`, and an add-on the user has
+explicitly enabled should win the port.
+
+### Layer 2 ignored its clip window (NextReg `$18`)
+
+**Fixed.** Sprites (`$19`), the ULA (`$1A`) and the tilemap (`$1B`) each
+had their window pushed into the layer that renders with it. Layer 2's was
+stored in the wire layer and never arrived, so Layer 2 drew full-frame
+however the guest clipped it.
+
+`Layer2` gained `SetClip` and applies `layer2_clip_en` in both the address
+model and the render path, with the FPGA's 2-pixel X scaling in the wide
+resolutions and its $00/$FF/$00/$BF reset window. The GHDL golden passes
+on every captured vector once the fixture sets the window its testbench
+tied wide open.
+
+Found on the way and fixed with it: `ClipWindows.LoadState` restored the
+register copies but never pushed them down, so a rewind across a clip
+change put the registers back and left all three layers drawing the
+rectangle the running program had set.
+
+### Load Tape, Open File, RZX and Kempston crashed on the SAM
+
+**Fixed.** The file-load guard covered only the ZX80/ZX81, so a `.tap`,
+`.tzx`, `.rzx` or snapshot opened on the SAM went straight through to the
+nil `emu.ula`. The extension check is split out as `admitFileForMachine`,
+both so the SAM is covered and so the guard is reachable from a test —
+the loader itself is a closure over the whole menu-construction scope.
+
+Machine → Joystick → Kempston wrote `emu.ula.KempstonEnabled`
+unconditionally; the other joystick types go through the keyboard matrix
+and were already fine.
+
+### F11 BREAK release lifted CAPS SHIFT and SPACE even if they were held
+
+**Fixed.** BREAK asserts both keys, and releasing it ORed both back on
+without looking at the live state — so a physically-held Shift or Space
+was lifted out of the matrix with it and stayed up until the user
+released and pressed that key again. The release now lifts only what
+BREAK itself put down.
+
+### Port `$FF` Timex hi-res was honoured on 48K / 128K / +3
+
+**Fixed.** Only a machine with an SCLD decodes that register. A Sinclair
+ULA drives `$FF` as the floating bus and ignores writes to it, but every
+write was stored regardless — so an ordinary `OUT (C),r` with C = `$FF`
+from a Spectrum program switched the emulator into a 640-wide Timex
+frame. The decode is now gated on the Next.
+
+### Z80N `JP (C)` jumped from BC, not from `IN (C)`
+
+**Fixed.** The FPGA core drives IORQ on M-cycle 2 with the address set to
+BC and then takes the jump target from the byte that comes back
+(`cpu/t80n.vhd:979-983`): `PC = (PC & $C000) | (IN(C) << 6)`, landing on
+one of 256 64-byte slots in the current 16K page. We used BC directly and
+never read the port, so keyboard and UART jump tables went to the wrong
+handler. Two existing tests pinned the wrong formula; both corrected.
+
+### SAM pokes, hexdump and the visual debugger looked at a dummy 48K
+
+**Fixed.** `newSamEmulator` installs a stand-in 48K memory so the
+Spectrum-shaped menus have something non-nil to talk to, and the live
+machine's RAM sits behind the SAM itself. Every memory tool read the
+stand-in: Enter Poke reported success and changed nothing, the hex view
+showed a blank 48K Spectrum whatever the SAM was doing, and `read $addr`
+breakpoint conditions tested the wrong bytes.
+
+`pkg/debugger`'s memory is an interface now, which the Spectrum's
+`memory.Memory` satisfies directly and a small SAM adapter fills in: the
+SAM's four 16K sections are a page map of the same shape, LMPR and HMPR
+occupy the two paging-latch slots, and VMPR gives the screen page.
+
+### GUI Debugger Step never delivered INT or NMI
+
+**Fixed.** The Step callback called `StepInstruction`, which only fetches
+and executes, so HALT never ended, IM 1 / IM 2 handlers never ran and
+F8 / F12 did nothing while single-stepping. It uses the IRQ-aware path
+now, as telnet `step` already did, and so does Step Over's non-call
+fall-through.
+
+The IRQ-aware path had its own fault: a hardcoded 70908-T frame. The
+SAM's frame is 119808 with INT at 99840, so single-stepping a SAM never
+latched the frame interrupt at all. `CPU.FrameTStates` carries the
+machine's frame length now.
+
+### Copper write cursor was an instruction index, not a byte address
+
+**Fixed.** `nr_copper_addr` is an 11-bit BYTE address and NR$60 writes
+each byte straight into its own half of the addressed word — there is no
+two-byte staging latch. We modelled a 10-bit instruction index with a
+hi/lo pairing latch, so an address written to NR$61 landed at twice its
+intended word, the top 1 KB of copper RAM was unreachable, and a read of
+NR$61 after two NR$60 writes returned 1 instead of 2.
+
+NR$62 carries three address bits, not two, and its read-back packs three.
+The program counter restarts only when the mode actually CHANGES to 01 or
+11, so setting the cursor's high bits — which has to go through the same
+register — no longer rewinds a running list. Running off the end wraps:
+the address counter has no terminal condition, where we stopped the
+copper. The GHDL copper golden passes on the new model.
+
+### Palette NextReg `$44` half-pair survived `$40` / `$41` / `$43`
+
+**Fixed.** The FPGA clears `nr_palette_sub_idx` on NR$40, NR$41 and NR$43
+as well as at the end of a pair. We cleared it only after a completed
+NR$44 pair, so an odd write followed by a change of index or palette left
+the latch armed: the next `$44` was taken as the second byte of a pair the
+guest thought it had abandoned, and every colour after it landed one write
+out of step.
+
+### Tilemap nibble 0 dropped the palette offset
+
+**Fixed.** The FPGA assembles a tilemap pixel as the attribute's palette
+offset in the high nibble and the tile's pixel nibble in the low one,
+unconditionally, and decides transparency downstream by comparing the low
+nibble against NR$4C (reset `$F`). We special-cased nibble 0 to a bare 0
+and threw the offset away, so a background tile drawn with a non-zero
+offset came out as `palette[0]`.
+
+The compositor's matching approximation — "transparent over ULA when
+`on_top` is off and the nibble is 0" — is replaced by the real per-pixel
+`pixel_below_o` plane: `(attr bit 0 or mode_512) and not on_top`.
+
+### +3 / DISCiPLE DSK tracks were stored by the Track-Info C/H labels
+
+**Fixed.** The DSK track-size table IS the physical order, but tracks were
+filed under their Track-Info C/H labels whenever those were in range. The
+labels are IDs written into the format for the FDC to match, not a
+position, and copy protection and bad dumps mislabel them freely — a disk
+tagged `C=0` throughout piled every track into one slot and left the rest
+of the image empty. The labels are still carried on the track, because the
+FDC matches an ID field's C against the command's cylinder.
+
+### SAM FORMAT reported success and wrote nothing
+
+**Fixed.** The WD1772's `$E` and `$F` commands fell into a "complete
+benignly" branch: INTRQ raised, no error reported, not one byte moved.
+SAMDOS said the disk was formatted and every old sector was still there.
+
+WRITE TRACK now collects the host's track image through DRQ and parses the
+IDAM/DAM framing into sectors, and READ TRACK synthesises a track image
+with the same framing so the two round-trip. A new command or a FORCE
+INTERRUPT mid-format commits what already streamed past the head, as on
+the real part. The image is a flat geometry store, so a format lays fresh
+data over the track rather than moving or resizing sectors, and an
+out-of-geometry ID is skipped.
+
+### A SAM reboot left the SAA1099 running
+
+**Fixed.** `Machine.Reset` cleared the CPU, paging, border, line interrupt
+and beeper but not the sound chip, so music from the previous program kept
+playing over the copyright screen.
 
 ### Snapshot rewind did not restore a +D or Opus Discovery disk interface
 
