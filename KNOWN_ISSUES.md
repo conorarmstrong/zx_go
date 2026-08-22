@@ -168,9 +168,12 @@ actually doing. Both latches now come from `GetPortState`.
 
 Two related faults went with it. `$1FFD` was absent from
 `snapshot.MemoryState` and the SZX writer put a literal 0 in its slot, so
-a +2A/+3 save lost special paging and ROM 2/3; it is now part of the wire
-format, round-tripped through SZX and read from a 55-byte `.z80` v3
-extended header. And the restore ran through `PageMemory`, the
+a +2A/+3 save lost special paging and ROM 2/3. It is now part of the wire
+format and round-trips through both SZX and `.z80`: a snapshot carrying a
+non-zero latch goes out as a 55-byte v3 header tagged +3, and the reader
+takes offset 86 only from the machines that define it, because on
+anything else that byte is undefined and acting on it would switch the
+guest into special paging. And the restore ran through `PageMemory`, the
 guest-facing port write, which no-ops once a title has locked paging with
 `$7FFD` bit 5 — a restore after that changed nothing at all. Restores go
 through `RestorePagingLatches` now: placing a machine into a state is not
@@ -211,8 +214,14 @@ Pentagon bug; it was corrected.
 
 **Fixed.** The copy walked the CPU registers and eight banks with the
 emulation goroutine still running, so a save could take PC from one
-instruction and the registers from the next and reload as a crash. It
-pauses first now, which F2 and the RZX capture already did.
+instruction and the registers from the next and reload as a crash.
+
+Capture now takes `coreMu`, which the emulation goroutine holds for a
+whole frame. Setting the pause flag is not enough on its own — nothing
+acknowledges it, so a goroutine already inside `ExecuteFrame` finishes
+the frame regardless — which is why the load path had always used the
+lock. Two callers run inside that frame, the RZX autosave and the
+snapshot-on-breakpoint hook, and use a `Locked` variant.
 
 ### Machine → Reboot could still take a pending NMI
 
@@ -265,7 +274,14 @@ passed raw block numbers, which was only correct under the bug.
 **Fixed.** The live decode was missing `$5F` — channel D in SounDrive mode
 1 and in stereo A/D — and `$DF`, the SpecDrum mono A+D pair, so the
 right-hand pair stayed at mid-scale and a hard-panned right DAC was
-silent. Both are decoded now, per the FPGA's `port_dac_A..D` map.
+silent.
+
+The decode is now the FPGA's whole port-to-channel table
+(`zxnext.vhd:2652-2655`), which also corrected `$FB`: it is a mono A+D
+port like `$DF`, not channel D alone, so a Covox or mono program writing
+there came out hard-panned right for exactly the same reason. `$3F` and
+`$B3` are in the table too. Taking part of the table was worse than
+taking none of it.
 
 The classic SpecDrum / Covox dispatch moved ahead of the internal bank in
 the process: both decode `$DF` and `$FB`, and an add-on the user has
@@ -284,10 +300,19 @@ resolutions and its $00/$FF/$00/$BF reset window. The GHDL golden passes
 on every captured vector once the fixture sets the window its testbench
 tied wide open.
 
-Found on the way and fixed with it: `ClipWindows.LoadState` restored the
-register copies but never pushed them down, so a rewind across a clip
-change put the registers back and left all three layers drawing the
-rectangle the running program had set.
+A clipped pixel is reported through the FPGA's per-pixel `layer2_en`
+plane rather than as index 0. The compositor decides Layer 2 transparency
+by comparing a pixel's COLOUR against NR$14, so a zero index is an
+ordinary opaque black to it: signalling "no pixel" that way painted the
+clipped region solid black over the layers beneath instead of letting
+them through. Worst case was a 320x256 program that never writes NR$18,
+where the FPGA's `$BF` reset window covers only the first 192 rows.
+
+Found on the way and fixed with them: `ClipWindows.LoadState` restored
+the register copies but never pushed them down, and the NextReg reset
+handler pushed three of the four windows and left Layer 2's behind — so
+a rewind or a reboot across a clip change put the registers back and left
+the layers drawing the rectangle the running program had set.
 
 ### Load Tape, Open File, RZX and Kempston crashed on the SAM
 
@@ -309,6 +334,14 @@ was lifted out of the matrix with it and stayed up until the user
 released and pressed that key again. The release now lifts only what
 BREAK itself put down.
 
+The converse held too: the modifier and base-key release paths cleared
+the same two bits without consulting BREAK, so letting go of Shift or
+Space while F11 was still down dropped half the combination and the guest
+stopped seeing BREAK. Those releases are now recorded against the BREAK
+bookkeeping instead of clearing the bit, so releasing F11 afterwards
+still lifts it rather than leaving it stuck down for a key nobody is
+holding.
+
 ### Port `$FF` Timex hi-res was honoured on 48K / 128K / +3
 
 **Fixed.** Only a machine with an SCLD decodes that register. A Sinclair
@@ -325,6 +358,11 @@ BC and then takes the jump target from the byte that comes back
 one of 256 64-byte slots in the current 16K page. We used BC directly and
 never read the port, so keyboard and UART jump tables went to the wrong
 handler. Two existing tests pinned the wrong formula; both corrected.
+
+The byte is used whether or not the ULA claims the port, the same as
+every other IN in the core: an unclaimed port returns the floating-bus
+value, which is what the FPGA's `DI_Reg` latches and what chooses the
+slot.
 
 ### SAM pokes, hexdump and the visual debugger looked at a dummy 48K
 
@@ -351,7 +389,9 @@ fall-through.
 The IRQ-aware path had its own fault: a hardcoded 70908-T frame. The
 SAM's frame is 119808 with INT at 99840, so single-stepping a SAM never
 latched the frame interrupt at all. `CPU.FrameTStates` carries the
-machine's frame length now.
+machine's frame length now, in the units that machine's own T-state
+counter accumulates at its base clock: 3.5 MHz on a Spectrum, 6 MHz on
+the SAM, with the turbo multiplier scaling from there.
 
 ### Copper write cursor was an instruction index, not a byte address
 
@@ -368,6 +408,19 @@ The program counter restarts only when the mode actually CHANGES to 01 or
 register — no longer rewinds a running list. Running off the end wraps:
 the address counter has no terminal condition, where we stopped the
 copper. The GHDL copper golden passes on the new model.
+
+Allowing the wrap exposed a budget the caller had never charged
+correctly. `Step` returned only the MOVE count, which the ULA subtracts
+from one shared per-scanline budget, so NOOPs and re-tested WAITs were
+free and a wrapping list lapped itself many times a line. `Step` now
+charges in copper clocks — a MOVE costs two, one to raise `copper_dout_s`
+and one to clear it, and everything else costs one — and the caller
+budgets in the same unit.
+
+The captured state carries a version with it. The write cursor changed
+meaning rather than name, and gob does not police a schema: an older
+capture would have restored silently at half its intended position and
+assembled every instruction after it from the wrong offset.
 
 ### Palette NextReg `$44` half-pair survived `$40` / `$41` / `$43`
 
@@ -390,6 +443,13 @@ offset came out as `palette[0]`.
 The compositor's matching approximation — "transparent over ULA when
 `on_top` is off and the nibble is 0" — is replaced by the real per-pixel
 `pixel_below_o` plane: `(attr bit 0 or mode_512) and not on_top`.
+
+Dropping the nibble-0 rule needed a second plane with it. A palette index
+is a colour — nibble 0 is an ordinary opaque `$00`, `$10`, `$20` … once
+the offset is kept — so "no pixel here" cannot be signalled in the index,
+and every pixel the renderer skips would otherwise paint as `palette[0]`
+over the ULA. The renderer now also carries `pixel_en_s`, which is clear
+outside the NR$1B clip window and off the tilemap's rows.
 
 ### +3 / DISCiPLE DSK tracks were stored by the Track-Info C/H labels
 
@@ -414,6 +474,12 @@ INTERRUPT mid-format commits what already streamed past the head, as on
 the real part. The image is a flat geometry store, so a format lays fresh
 data over the track rather than moving or resizing sectors, and an
 out-of-geometry ID is skipped.
+
+A commit driven by a new command does not raise INTRQ, because the
+interrupt belongs to the command that is starting: signalling there let a
+host polling the line between the command write and the first DRQ read
+"finished" and abandon the transfer. A FORCE INTERRUPT still signals,
+which is what it is for.
 
 ### A SAM reboot left the SAA1099 running
 
