@@ -82,8 +82,13 @@ func (f *WD1772) WriteCommand(cmd byte) {
 	// the track that had already streamed past the head. FORCE INTERRUPT
 	// does its own commit below, so exclude it here to avoid doing it
 	// twice.
+	//
+	// signalDone is false because the interrupt belongs to the command
+	// that is starting, not to the format being abandoned: raising it
+	// here let a host polling INTRQ between the command write and the
+	// first DRQ read "finished" and abandon the transfer.
 	if f.formatting && cmd>>4 != 0xD {
-		f.commitWriteTrack()
+		f.commitWriteTrack(false)
 	}
 	switch cmd >> 4 {
 	case 0x0: // RESTORE
@@ -148,10 +153,17 @@ func (f *WD1772) writeTrackCmd() {
 // track, which is exactly what SAMDOS's FORMAT is for. An ID whose
 // cylinder/sector falls outside the image's geometry is skipped rather
 // than folded somewhere else.
-func (f *WD1772) commitWriteTrack() {
+// signalDone says whether the format's own completion should be
+// reported. It is true when the format ends on its own terms (the track
+// streamed in full, or a FORCE INTERRUPT terminated it) and false when
+// the commit is a side effect of the host issuing a different command,
+// whose status and interrupt belong to it.
+func (f *WD1772) commitWriteTrack(signalDone bool) {
 	f.formatting = false
 	if f.disk == nil {
-		f.endIO(wdRNF)
+		if signalDone {
+			f.endIO(wdRNF)
+		}
 		return
 	}
 	for _, sec := range parseFormatStream(f.buffer) {
@@ -160,7 +172,11 @@ func (f *WD1772) commitWriteTrack() {
 		}
 		f.disk.WriteSector(f.cyl, f.side, int(sec.r), sec.data)
 	}
-	f.endIO(0)
+	if signalDone {
+		f.endIO(0)
+	} else {
+		f.writing = false
+	}
 }
 
 // formatSector is one record recovered from a WRITE TRACK stream.
@@ -347,7 +363,7 @@ func (f *WD1772) forceInterrupt() {
 	// so whatever arrived before the abort is already on the disk: commit
 	// what we collected rather than discarding it.
 	if f.formatting {
-		f.commitWriteTrack()
+		f.commitWriteTrack(true)
 	}
 	// FORCE INTERRUPT terminates any command and reverts the status register to
 	// Type I reporting (head position / spin-up), as on the WD1772. SAMDOS reads
@@ -401,7 +417,7 @@ func (f *WD1772) WriteData(val byte) {
 	f.drqReads = 0
 	if f.bufPos >= len(f.buffer) {
 		if f.formatting {
-			f.commitWriteTrack()
+			f.commitWriteTrack(true)
 			return
 		}
 		f.disk.WriteSector(f.cyl, f.side, int(f.sector), f.buffer)

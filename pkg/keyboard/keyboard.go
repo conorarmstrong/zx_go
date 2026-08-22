@@ -118,7 +118,7 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 		if isPressed {
 			k.matrix[0] &= ^byte(0x01) // Activate CAPS SHIFT
 		} else {
-			k.matrix[0] |= byte(0x01) // Deactivate CAPS SHIFT
+			k.releaseMatrix(0, 0x01) // Deactivate CAPS SHIFT
 		}
 	}
 
@@ -127,7 +127,7 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 		if isPressed {
 			k.matrix[7] &= ^byte(0x02) // Activate SYMBOL SHIFT
 		} else {
-			k.matrix[7] |= byte(0x02) // Deactivate SYMBOL SHIFT
+			k.releaseMatrix(7, 0x02) // Deactivate SYMBOL SHIFT
 		}
 	}
 
@@ -137,7 +137,7 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 			if isPressed {
 				k.matrix[m.row] &= ^m.mask
 			} else {
-				k.matrix[m.row] |= m.mask
+				k.releaseMatrix(int(m.row), m.mask)
 			}
 		}
 	} else {
@@ -189,6 +189,32 @@ func (k *Keyboard) ReleaseAll() {
 	k.breakPressed = false
 	k.breakHeldCaps, k.breakHeldSpace = false, false
 	k.matrixMu.Unlock()
+}
+
+// releaseMatrix lifts the given matrix bits, except the two BREAK is
+// holding down.
+//
+// F11 asserts CAPS SHIFT (row 0 bit 0) and SPACE (row 7 bit 0) for as
+// long as it is held, and the modifier and base-key release paths clear
+// the same bits: letting go of a host Shift or Space mid-BREAK used to
+// drop half the combination, and the guest stopped seeing BREAK while
+// the user was still pressing it.
+//
+// The physical key really is up, though, so the release is recorded
+// against the BREAK bookkeeping instead. Releasing F11 then lifts the
+// bit rather than leaving it stuck down for a key nobody is holding.
+func (k *Keyboard) releaseMatrix(row int, mask byte) {
+	if k.breakPressed {
+		if row == 0 && mask&0x01 != 0 {
+			k.breakHeldCaps = false
+			mask &^= 0x01
+		}
+		if row == 7 && mask&0x01 != 0 {
+			k.breakHeldSpace = false
+			mask &^= 0x01
+		}
+	}
+	k.matrix[row] |= mask
 }
 
 // Scan reads the keyboard matrix for a given port address.

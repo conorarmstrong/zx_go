@@ -50,7 +50,9 @@ func (d *remoteDebugger) snapshotOnBPHit(pc uint16, reason string) {
 	dir := *p
 	n := snapshotOnBPCounter.Add(1)
 	path := filepath.Join(dir, fmt.Sprintf("bp_%04X_%04d.szx", pc, n))
-	snap, err := createSnapshotFromEmulator(d.emu)
+	// The Locked variant: this fires from a CPU pre-fetch hook, inside
+	// the frame the emulation goroutine is already holding coreMu for.
+	snap, err := createSnapshotFromEmulatorLocked(d.emu)
 	if err != nil {
 		slog.Warn("snapshot-on-bp: build failed", "err", err, "path", path)
 		return

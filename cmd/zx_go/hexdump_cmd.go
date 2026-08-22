@@ -54,9 +54,12 @@ func (d *remoteDebugger) cmdHexDump(args []string) string {
 	if n > 1024 {
 		n = 1024
 	}
+	// Hoisted: resolving the address space per byte re-runs the machine
+	// check and allocates a fresh adapter for every read.
+	mem := d.emu.debugMemory()
 	data := make([]byte, n)
 	for i := uint16(0); i < n; i++ {
-		data[i] = d.emu.debugMemory().Read(addr + i)
+		data[i] = mem.Read(addr + i)
 	}
 	return strings.TrimRight("OK\r\n"+formatHexDump(addr, data), "\r\n")
 }

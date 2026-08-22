@@ -144,28 +144,36 @@ func (b *Bank) Level(c Channel) byte {
 // handled), false otherwise — the caller (ULA's port dispatcher)
 // uses this as a fall-through signal.
 func (b *Bank) WritePort(port uint16, val byte) bool {
-	// Port to channel per the FPGA's port_dac_A..D decode
-	// (zxnext.vhd:2658-2664), taking the union of the DAC modes: the
-	// NR$82-85 internal_port_enable bits that gate them on hardware are
-	// not plumbed here, and this decode already took the union for the
-	// ports it knew about. $5F (channel D in SounDrive mode 1 and in
-	// stereo A/D) and $DF (the SpecDrum mono A+D pair) were missing, so
-	// the right-hand pair stayed at mid-scale and a hard-panned right
-	// DAC was silent. See SounDrive for the mode-gated reference; $3F
-	// and $B3 stay out of this map because both alias decodes the ULA
-	// dispatcher already owns.
+	// Port to channel, straight off the FPGA's own table
+	// (zxnext.vhd:2652-2655, the comment above port_dac_A..D):
+	//
+	//	A  -   FB  DF  1F  F1  -  3F
+	//	B  B3  -   -   0F  F3  0F -
+	//	C  B3  -   -   4F  F9  4F -
+	//	D  -   FB  DF  5F  FB  -  5F
+	//
+	// This takes the union of every DAC mode, because the NR$82-85
+	// internal_port_enable bits that gate them on hardware are not
+	// plumbed here. Anything less than the whole table is worse than
+	// either: $5F and $DF were missing entirely, so a hard-panned right
+	// DAC was silent, and $FB drove only channel D, so a Covox or mono
+	// program came out hard-panned right for the same reason. See
+	// SounDrive for the mode-gated reference.
 	switch port & 0xFF {
-	case 0x1F, 0xF1:
+	case 0x1F, 0xF1, 0x3F:
 		b.levels[ChannelA] = val
 	case 0x0F, 0xF3:
 		b.levels[ChannelB] = val
 	case 0x4F, 0xF9:
 		b.levels[ChannelC] = val
-	case 0x5F, 0xFB:
+	case 0x5F:
 		b.levels[ChannelD] = val
-	case 0xDF: // mono_AD
+	case 0xFB, 0xDF: // port_dac_mono_AD
 		b.levels[ChannelA] = val
 		b.levels[ChannelD] = val
+	case 0xB3: // port_dac_mono_BC
+		b.levels[ChannelB] = val
+		b.levels[ChannelC] = val
 	default:
 		return false
 	}

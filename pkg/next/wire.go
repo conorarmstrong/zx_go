@@ -1112,9 +1112,10 @@ func WireClipWindows(d *nextregs.Dispatcher, tmLayer *tilemap.Tilemap, sprites *
 		for _, c := range all {
 			c.reset()
 		}
-		pushTM()
-		pushSpr()
-		cw.pushULA()
+		// Every window, including Layer 2's. Pushing three of the four
+		// left a reboot out of a program that had clipped Layer 2 still
+		// drawing the old rectangle — the same fault LoadState had.
+		cw.pushAll()
 	})
 	return cw
 }

@@ -64,8 +64,8 @@ func TestStartFromZeroRunsProgram(t *testing.T) {
 	c.SetRegWriter(rw)
 	// Start from zero (mode 1).
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
-	// maxInstr=2 lets MOVE then HALT both execute in one Step.
-	c.Step(0, 0, 2)
+	// Three clocks: the MOVE costs two, the HALT one.
+	c.Step(0, 0, 3)
 
 	if len(rw.writes) != 1 || rw.writes[0].reg != 0x07 || rw.writes[0].val != 0x02 {
 		t.Errorf("MOVE not executed: writes = %+v", rw.writes)

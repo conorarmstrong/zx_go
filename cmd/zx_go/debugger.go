@@ -1845,7 +1845,8 @@ func (d *remoteDebugger) cmdDisasm(args []string) string {
 			}
 		}
 	}
-	read := func(a uint16) byte { return d.emu.debugMemory().Read(a) }
+	mem := d.emu.debugMemory()
+	read := func(a uint16) byte { return mem.Read(a) }
 	lines := debugger.Disassemble(read, addr, count)
 	var b strings.Builder
 	b.WriteString(head)

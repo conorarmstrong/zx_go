@@ -1000,3 +1000,28 @@ func TestZ80NOpcodesGatedByVariant(t *testing.T) {
 		t.Errorf("Z80 variant: ED 0x30 should cost 8T (unknown), got %d", cpu.tstates-startT)
 	}
 }
+
+// JP (C) uses the byte the ULA returns whether or not it claims the
+// port, like every other IN in this core: an unclaimed port hands back
+// the floating-bus value, which is what the FPGA's DI_Reg latches.
+// Discarding it and using 0xFF sent the jump to a fixed slot instead of
+// the one the bus selected.
+func TestZ80N_JPC_UsesAnUnclaimedPortsValue(t *testing.T) {
+	cpu, _ := createZ80NTestCPU()
+	cpu.ula = unhandledULA{val: 0x2A}
+	cpu.PC = 0x8123
+	cpu.setBC(0x1234)
+
+	_ = cpu.executeZ80NEDInstruction(0x98)
+
+	if cpu.PC != 0x8A80 {
+		t.Errorf("JP (C) with an unclaimed port: PC = %#x, want 0x8A80", cpu.PC)
+	}
+}
+
+// unhandledULA returns a byte and reports the port as not decoded, which
+// is what pkg/ula does for the floating bus.
+type unhandledULA struct{ val byte }
+
+func (u unhandledULA) ReadPort(uint16) (byte, bool) { return u.val, false }
+func (u unhandledULA) WritePort(uint16, byte)       {}

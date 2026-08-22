@@ -51,7 +51,8 @@ func TestLongMoveListRetiresWithinOneScanline(t *testing.T) {
 	c.SetRegWriter(rw)
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
-	c.Step(0, 511, InstructionsPerScanline(456))
+	// The budget is in copper clocks, and a MOVE costs two of them.
+	c.Step(0, 511, ClocksPerScanline(456))
 
 	if len(rw.writes) != moves {
 		t.Errorf("retired %d MOVEs in one scanline, want %d", len(rw.writes), moves)

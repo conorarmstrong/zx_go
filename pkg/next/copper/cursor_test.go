@@ -97,3 +97,43 @@ func TestChangingTheModeToStartFromZeroRestartsTheProgram(t *testing.T) {
 		t.Errorf("PC = %d after a mode change to 01, want 0", got)
 	}
 }
+
+// Step's return value is the caller's budget decrement, so it has to
+// count what the copper actually spends. Counting only MOVEs left NOOPs
+// and re-tested WAITs free, and the ULA drives Step 33 times per
+// scanline against one shared budget — so a list dominated by anything
+// other than MOVEs never drew that budget down and ran many times the
+// hardware's throughput. Wrapping at the end of the list (the FPGA
+// address counter has no terminal condition) made that visible: a list
+// padded with zero words re-ran its MOVEs on every lap.
+func TestOneScanlineOfStepsRunsAtMostOnePassOfTheList(t *testing.T) {
+	c := New()
+	// One MOVE, then NOOPs to the end of the 1024-word list.
+	c.SetWritePtrLow(0)
+	c.WriteData(0x16) // MOVE NR$16,$01
+	c.WriteData(0x01)
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+
+	rw := &countingWriter{}
+	c.SetRegWriter(rw)
+
+	// The ULA's loop: one shared budget for the whole line, drawn down
+	// by whatever each Step reports spending.
+	budget := ClocksPerScanline(224)
+	for x := 0; x < 256 && budget > 0; x += 8 {
+		budget -= c.Step(0, uint16(x), budget)
+	}
+	if budget > 0 {
+		c.Step(0, 511, budget)
+	}
+
+	// The list is 1024 slots and a scanline is ~896 copper clocks, so
+	// one line cannot finish even a single pass. Certainly not 33.
+	if rw.n != 1 {
+		t.Errorf("MOVEs executed across one scanline = %d, want 1", rw.n)
+	}
+}
+
+type countingWriter struct{ n int }
+
+func (w *countingWriter) WriteReg(byte, byte) { w.n++ }

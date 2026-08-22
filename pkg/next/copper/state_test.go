@@ -403,3 +403,41 @@ func TestLoadStateRejectsRubbishWithoutHalfApplying(t *testing.T) {
 		})
 	}
 }
+
+// The write cursor changed meaning: it was a 10-bit instruction-word
+// index and is now the FPGA's 11-bit byte address. gob does not police a
+// schema — it decodes what it recognises and zero-fills the rest — so a
+// capture written under the old meaning would silently restore at half
+// the intended cursor and assemble every later instruction from the
+// wrong offset. The wire form carries a version so such a capture is
+// refused instead.
+func TestLoadStateRefusesAnOlderWireFormat(t *testing.T) {
+	c := primed()
+	blob := c.SaveState()
+
+	// Re-encode with the version field cleared, which is what an older
+	// capture decodes to.
+	var s copperState
+	if err := gob.NewDecoder(bytes.NewReader(blob)).Decode(&s); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	s.Version = 0
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if err := New().LoadState(buf.Bytes()); err == nil {
+		t.Error("LoadState accepted a state with no version: an older capture's cursor means something else")
+	}
+}
+
+func TestSaveStateStampsTheCurrentVersion(t *testing.T) {
+	var s copperState
+	if err := gob.NewDecoder(bytes.NewReader(primed().SaveState())).Decode(&s); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if s.Version != copperStateVersion {
+		t.Errorf("Version = %d, want %d", s.Version, copperStateVersion)
+	}
+}

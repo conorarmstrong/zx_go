@@ -214,12 +214,11 @@ func (c *CPU) executeZ80NEDInstruction(opcode byte) bool {
 		// in the current 16K page. Using BC directly and never reading
 		// the port sent keyboard and UART jump tables to the wrong
 		// handler.
-		var in byte = 0xFF
-		if c.ula != nil {
-			if v, handled := c.ula.ReadPort(c.bc()); handled {
-				in = v
-			}
-		}
+		// The value is used whether or not the ULA claims the port, the
+		// same as every other IN in this core: an unclaimed port returns
+		// the floating-bus byte, which is what the FPGA's DI_Reg latches
+		// and what chooses the slot.
+		in, _ := c.ula.ReadPort(c.bc())
 		c.PC = (c.PC & 0xC000) | (uint16(in) << 6)
 		c.tstates += 13
 		return true

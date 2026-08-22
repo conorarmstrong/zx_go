@@ -144,8 +144,15 @@ func (s *Snapshot) loadZ80(file io.Reader) error {
 		// A v3 header written for a +2A/+3 is 55 bytes and carries
 		// $1FFD in its last one (header offset 86). Without it a +3
 		// snapshot loses special paging and the ROM 2/3 selection.
+		//
+		// The byte is defined only for those machines: on anything else
+		// its contents are undefined, and taking it anyway could switch
+		// a guest into special paging and remap all four 16K slots.
 		if len(extHeader) > 54 {
-			s.Memory.Port1FFD = extHeader[54]
+			switch hwMode {
+			case Z80_HW_PLUS3, Z80_HW_PLUS3_BUG, Z80_HW_PLUS2A:
+				s.Memory.Port1FFD = extHeader[54]
+			}
 		}
 
 		// Read memory blocks
@@ -389,8 +396,19 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 		return fmt.Errorf("failed to write Z80 header: %w", err)
 	}
 
-	// Create extended header for version 3
+	// Create extended header for version 3.
+	//
+	// $1FFD only exists on the +2A/+3, and only a 55-byte header has a
+	// slot for it (offset 86). A 128K or +2 has no such port and its
+	// latch reads 0, so a non-zero value can only have come from a
+	// +2A/+3: write the longer header and tag it as a +3 so the value
+	// survives the round trip. A +3 whose latch happens to be 0 loses
+	// nothing by going out as a plain 128K, because 0 is what the
+	// reader would install anyway.
 	extHeaderLen := uint16(54) // Version 3 additional header length
+	if s.Memory.Port1FFD != 0 {
+		extHeaderLen = 55
+	}
 	if err := binary.Write(file, binary.LittleEndian, extHeaderLen); err != nil {
 		return fmt.Errorf("failed to write extended header length: %w", err)
 	}
@@ -402,6 +420,10 @@ func (s *Snapshot) saveZ80(file io.Writer) error {
 	if s.Memory.Is128K {
 		extHeader[2] = Z80_HW_128K
 		extHeader[3] = s.Memory.Port7FFD
+		if len(extHeader) > 54 {
+			extHeader[2] = Z80_HW_PLUS3
+			extHeader[54] = s.Memory.Port1FFD
+		}
 	} else {
 		extHeader[2] = Z80_HW_48K
 	}

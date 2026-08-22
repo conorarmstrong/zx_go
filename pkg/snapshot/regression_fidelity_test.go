@@ -185,3 +185,62 @@ func TestZ80V3ReadsPort1FFD(t *testing.T) {
 		t.Errorf("Port7FFD: got %#02x, want %#02x", s.Memory.Port7FFD, 0x02)
 	}
 }
+
+// The load side recovers $1FFD; the save side has to write it, or a
+// +2A/+3 save-then-reload still loses special paging and ROM 2/3.
+func TestZ80RoundTripsPort1FFD(t *testing.T) {
+	s := New()
+	s.Memory.Is128K = true
+	s.Memory.Port7FFD = 0x02
+	s.Memory.Port1FFD = 0x05 // special paging, config 2
+	s.CPU.PC = 0x8000
+
+	var buf bytes.Buffer
+	if err := s.saveZ80(&buf); err != nil {
+		t.Fatalf("saveZ80: %v", err)
+	}
+	got := New()
+	if err := got.loadZ80(bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatalf("loadZ80: %v", err)
+	}
+	if got.Memory.Port1FFD != 0x05 {
+		t.Errorf("Port1FFD: got %#02x, want %#02x", got.Memory.Port1FFD, 0x05)
+	}
+	if got.Memory.Port7FFD != 0x02 {
+		t.Errorf("Port7FFD: got %#02x, want %#02x", got.Memory.Port7FFD, 0x02)
+	}
+}
+
+// Offset 86 of a v3 header is defined only for the +2A/+3. On any other
+// machine its contents are undefined, so reading it there could switch a
+// guest into special paging and remap all four slots.
+func TestZ80IgnoresPort1FFDOnMachinesThatHaveNoSuchPort(t *testing.T) {
+	for _, mode := range []byte{Z80_HW_128K, Z80_HW_PENTAGON, Z80_HW_SCORPION} {
+		buf := make([]byte, Z80_V1_HEADER_SIZE) // PC = 0 selects v2/v3
+		ext := make([]byte, 2+55)
+		ext[0] = 55
+		ext[2+2] = mode
+		ext[2+54] = 0x07 // whatever happens to be there
+		s := New()
+		_ = s.loadZ80(bytes.NewReader(append(buf, ext...)))
+		if s.Memory.Port1FFD != 0 {
+			t.Errorf("hardware mode %d: Port1FFD = %#02x, want 0 (the byte is undefined there)",
+				mode, s.Memory.Port1FFD)
+		}
+	}
+}
+
+func TestZ80ReadsPort1FFDOnThePlus3(t *testing.T) {
+	for _, mode := range []byte{Z80_HW_PLUS3, Z80_HW_PLUS3_BUG, Z80_HW_PLUS2A} {
+		buf := make([]byte, Z80_V1_HEADER_SIZE)
+		ext := make([]byte, 2+55)
+		ext[0] = 55
+		ext[2+2] = mode
+		ext[2+54] = 0x07
+		s := New()
+		_ = s.loadZ80(bytes.NewReader(append(buf, ext...)))
+		if s.Memory.Port1FFD != 0x07 {
+			t.Errorf("hardware mode %d: Port1FFD = %#02x, want 0x07", mode, s.Memory.Port1FFD)
+		}
+	}
+}

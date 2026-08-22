@@ -139,7 +139,13 @@ func (t *Tilemap) Clip() (x1, x2, y1, y2 byte) {
 // pixels and stop. Out-of-mode / disabled returns all zeros so the
 // compositor's transparency-or-replace path works correctly.
 func (t *Tilemap) RenderScanline(y int, dst []byte) {
-	t.RenderScanlineBelow(y, dst, nil)
+	t.RenderScanlineFlags(y, dst, nil, nil)
+}
+
+// RenderScanlineBelow is RenderScanlineFlags without the pixel-present
+// plane, for callers that only need the below bit.
+func (t *Tilemap) RenderScanlineBelow(y int, dst, below []byte) {
+	t.RenderScanlineFlags(y, dst, nil, below)
 }
 
 // RenderScanlineBelow is RenderScanline with the per-pixel "below ULA"
@@ -152,11 +158,16 @@ func (t *Tilemap) RenderScanline(y int, dst []byte) {
 //
 // That is: the per-tile attribute's bit 0 ("ULA over tilemap"), forced
 // on in 512-tile mode where the same bit is the tile index's 9th bit
-// instead, and suppressed entirely while tm_on_top is set. below may be
-// nil, and is only as long as the caller made it.
-func (t *Tilemap) RenderScanlineBelow(y int, dst, below []byte) {
+// instead, and suppressed entirely while tm_on_top is set.
+//
+// Either plane may be nil, and each is only as long as the caller made
+// it.
+func (t *Tilemap) RenderScanlineFlags(y int, dst, en, below []byte) {
 	for i := range dst {
 		dst[i] = 0
+	}
+	for i := range en {
+		en[i] = 0
 	}
 	for i := range below {
 		below[i] = 0
@@ -269,6 +280,9 @@ func (t *Tilemap) RenderScanlineBelow(y int, dst, below []byte) {
 			defAddr := (tilesOffsetBase + int(tileIdx)*8 + pixelRow) & 0x3FFF
 			bit := (tilesBuf[defAddr] >> (7 - uint(pixelInTile))) & 1
 			dst[x] = (attr & 0xFE) | bit
+			if x < len(en) {
+				en[x] = 1
+			}
 			if x < len(below) {
 				below[x] = 0
 				if (attr&0x01 != 0 || mode512) && !onTop {
@@ -316,6 +330,9 @@ func (t *Tilemap) RenderScanlineBelow(y int, dst, below []byte) {
 		// background tile drawn with a non-zero offset came out as
 		// palette[0].
 		dst[x] = (paletteOffset << 4) | nibble
+		if x < len(en) {
+			en[x] = 1
+		}
 		if x < len(below) {
 			// pixel_below_o (video/tilemap.vhd:388).
 			below[x] = 0

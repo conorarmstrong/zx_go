@@ -68,7 +68,16 @@ const ClocksPerHCount = 4
 // The copper is clocked from the video domain, so this is independent of the
 // CPU speed: a caller must NOT scale it by the Z80 clock.
 func InstructionsPerScanline(hcountPerLine int) int {
-	return hcountPerLine * ClocksPerHCount / 2
+	return ClocksPerScanline(hcountPerLine) / 2
+}
+
+// ClocksPerScanline is the copper's whole clock budget for one scanline
+// of hcountPerLine columns. This is the unit Step charges in and the
+// unit a per-scanline caller should budget in: a MOVE costs two clocks
+// and everything else one, so a budget counted in MOVEs alone let a list
+// of NOOPs or unreleased WAITs run without ever drawing it down.
+func ClocksPerScanline(hcountPerLine int) int {
+	return hcountPerLine * ClocksPerHCount
 }
 
 // RegWriter is the contract Copper uses to write NextRegs when
@@ -216,18 +225,21 @@ func Decode(w uint16) Instruction {
 // (device/copper.vhd:94).
 func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 
-// Step advances the copper by at most maxInstr instructions
-// against the supplied raster position. Returns the number of
-// MOVE instructions actually executed. MOVE writes go through
-// the RegWriter; WAITs that haven't been satisfied leave pc
-// parked and stop the step. HALT stops the copper.
+// Step advances the copper against the supplied raster position,
+// spending at most maxClocks copper clocks. Returns the number of clocks
+// actually spent, which is what a caller subtracts from a shared budget.
 //
-// maxInstr lets callers spread instruction execution across
-// scanlines as real hardware does (one Copper cycle per CPU
-// cycle, roughly). Pass 1 from a per-scanline render loop and
-// the copper executes at most one instruction per call. Passing
-// a larger number is useful for tests that want to "fast-forward"
-// to a stable state.
+// A MOVE costs two clocks — one to raise copper_dout_s and one to clear
+// it (device/copper.vhd:88-108) — and every other outcome costs one:
+// a NOOP, a WAIT that releases, and a WAIT that does not. Returning only
+// the MOVE count left the other three free, so a list dominated by them
+// never drew the caller's budget down; with the end-of-list wrap that
+// meant such a list lapped itself many times per scanline.
+//
+// maxClocks lets callers spread execution across scanlines as the
+// hardware does. Pass ClocksPerScanline from a per-scanline render loop.
+// Passing a larger number is useful for tests that want to
+// "fast-forward" to a stable state.
 //
 // Re-entry guard: if a MOVE writes to NextRegs that mutate the
 // Copper's own state (0x60-0x62), the writes are buffered through
@@ -240,7 +252,7 @@ func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 // hcount_i carries; a WAIT releases at hcount >= (x<<3)+12 on its target
 // line (see WaitHThreshold). A per-scanline caller passes the end-of-line
 // hcount (>= 511) so every WAIT on the line releases on that line.
-func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
+func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 	// VBL auto-restart: in StartOnVBL the program counter resets to 0 at
 	// the start of each frame, i.e. when the raster wraps back to the top.
 	if c.mode == StartOnVBL && scanline < c.lastScanline {
@@ -250,8 +262,8 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 	if c.stopped {
 		return 0
 	}
-	executed := 0
-	for n := 0; n < maxInstr && c.pc < MaxInstructions; n++ {
+	spent := 0
+	for spent < maxClocks && c.pc < MaxInstructions {
 		inst := Decode(c.program[c.pc])
 		switch inst.Op {
 		case OpMOVE:
@@ -259,7 +271,7 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 				c.regs.WriteReg(inst.Reg, inst.Val)
 			}
 			c.pc++
-			executed++
+			spent += 2 // dout raised, then cleared
 		case OpWAIT:
 			// Release when the raster reaches the target line and the
 			// horizontal threshold: hcount >= (X<<3)+12 on line Y
@@ -271,15 +283,18 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 			if scanline > inst.Y ||
 				(scanline == inst.Y && hcount >= WaitHThreshold(inst.X)) {
 				c.pc++
+				spent++
 				continue
 			}
-			// Not yet — park here.
-			return executed
+			// Not yet — park here. The clock that tested the condition
+			// is spent whether or not it released.
+			return spent + 1
 		case OpHALT:
 			c.stopped = true
-			return executed
+			return spent + 1
 		case OpNOOP:
 			c.pc++
+			spent++
 		}
 	}
 	// Run off the end and the address counter wraps: copper_list_addr_s
@@ -290,5 +305,5 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxInstr int) int {
 	if c.pc >= MaxInstructions {
 		c.pc = 0
 	}
-	return executed
+	return spent
 }

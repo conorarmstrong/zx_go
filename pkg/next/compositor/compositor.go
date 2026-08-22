@@ -128,8 +128,10 @@ type Compositor struct {
 	// allocator. Single goroutine assumption: the ULA's render
 	// loop is the only caller.
 	l2Scratch      [Width]byte
+	l2Enabled      [Width]byte // per-pixel layer2_en plane for the same row
 	spriteScratch  [FullWidth]byte // full 320-wide row in FRAME coordinates (sprite X/Y are frame-relative; paper starts at 32,32)
 	tilemapScratch [FullWidth]byte // sized for full 320-wide row; ComposeScanline takes the centred 256 pixels
+	tilemapEn      [FullWidth]byte // per-pixel pixel_en_s plane for the same row
 	tilemapBelow   [FullWidth]byte // per-pixel pixel_below_o plane for the same row
 }
 
@@ -172,14 +174,18 @@ func (c *Compositor) ComposeWideTilemapRow(tilemapY int, dst []byte) {
 		return
 	}
 	var scan [2 * FullWidth]byte // 640 pixels = 80 tiles × 8px
+	var en [2 * FullWidth]byte
 	var below [2 * FullWidth]byte
-	c.tilemap.RenderScanlineBelow(tilemapY, scan[:], below[:])
+	c.tilemap.RenderScanlineFlags(tilemapY, scan[:], en[:], below[:])
 	tmTransparentNibble := c.tilemapTrans
 	n := len(dst) / 4
 	if n > len(scan) {
 		n = len(scan)
 	}
 	for x := 0; x < n; x++ {
+		if en[x] == 0 {
+			continue // pixel_en_s: no tilemap pixel here
+		}
 		idx := scan[x]
 		if idx&0x0F == tmTransparentNibble {
 			continue
@@ -228,8 +234,15 @@ func (c *Compositor) ComposeWideLayer2Row(y int, dst []byte) {
 		return
 	}
 	var scan [2 * FullWidth]byte // up to 640 indices
-	c.l2.RenderScanline(y, scan[:w])
+	var en [2 * FullWidth]byte
+	c.l2.RenderScanlineEnabled(y, scan[:w], en[:w])
 	for x := 0; x < w; x++ {
+		// layer2_en: the layer contributes nothing here, so whatever
+		// is beneath shows through. A zero index is a real colour, so
+		// this cannot be inferred from scan.
+		if en[x] == 0 {
+			continue
+		}
 		idx := scan[x]
 		if c.l2Transparent(l2Pal, idx) {
 			continue
@@ -489,6 +502,7 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 
 	// Pre-fetch active layers' scanlines + their palettes.
 	var l2Scanline []byte
+	var l2Enabled []byte
 	var l2Pal *palette.Palette
 	if doL2 {
 		// PaletteForLayer reads the per-layer "first/second"
@@ -501,10 +515,12 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 			doL2 = false
 		} else {
 			l2Scanline = c.l2Scratch[:]
-			c.l2.RenderScanline(y, l2Scanline)
+			l2Enabled = c.l2Enabled[:]
+			c.l2.RenderScanlineEnabled(y, l2Scanline, l2Enabled)
 		}
 	}
 	var tilemapScan []byte
+	var tilemapEn []byte
 	var tilemapBelow []byte
 	var tilemapPal *palette.Palette
 	if doTilemap {
@@ -528,8 +544,9 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 			// 320-pixel video framing — tilemap is anchored to the
 			// full screen including the 32-px border, not to the
 			// inner 256-wide rectangle.
-			c.tilemap.RenderScanlineBelow(y, c.tilemapScratch[:], c.tilemapBelow[:])
+			c.tilemap.RenderScanlineFlags(y, c.tilemapScratch[:], c.tilemapEn[:], c.tilemapBelow[:])
 			tilemapScan = c.tilemapScratch[BorderOffsetX : BorderOffsetX+Width]
+			tilemapEn = c.tilemapEn[BorderOffsetX : BorderOffsetX+Width]
 			tilemapBelow = c.tilemapBelow[BorderOffsetX : BorderOffsetX+Width]
 		}
 	}
@@ -597,8 +614,17 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 		}
 		paintULA(off)
 	}
+	// l2Off reports that Layer 2 contributes nothing at column x: the
+	// layer is disabled, or the FPGA's per-pixel layer2_en is clear —
+	// outside the NR$18 clip window, or off-screen. A zero palette index
+	// is a real colour, so this cannot be inferred from l2Scanline: doing
+	// so painted opaque black over the layers beneath wherever a program
+	// clipped Layer 2.
+	l2Off := func(x int) bool {
+		return !doL2 || x >= len(l2Enabled) || l2Enabled[x] == 0
+	}
 	paintL2 := func(off, x int) {
-		if !doL2 {
+		if l2Off(x) {
 			return
 		}
 		if idx := l2Scanline[x]; !c.l2Transparent(l2Pal, idx) {
@@ -614,7 +640,7 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 	// Layer 2 normally sits below the ULA (zxnext.vhd:7123). A no-op when
 	// the pixel is transparent or lacks the priority bit.
 	paintL2Priority := func(off, x int) {
-		if !doL2 {
+		if l2Off(x) {
 			return
 		}
 		idx := l2Scanline[x]
@@ -670,6 +696,12 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 	tmTransparentNibble := c.tilemapTrans
 	paintTilemapOnULA := func(off, x int) {
 		if !doTilemap {
+			return
+		}
+		// pixel_en_s: the tilemap produced no pixel here at all
+		// (outside the NR$1B window, or off the tilemap). A zero index
+		// is a real colour, so this cannot be inferred from idx.
+		if x >= len(tilemapEn) || tilemapEn[x] == 0 {
 			return
 		}
 		idx := tilemapScan[x]
@@ -745,7 +777,7 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 			}
 		}
 		paintBlend := func(off, x int) {
-			if !doL2 {
+			if l2Off(x) {
 				return
 			}
 			idx := l2Scanline[x]
@@ -763,7 +795,7 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 			dst[off+2], dst[off+3] = expand3(mix(lb, ub)), 0xFF
 		}
 		paintBlendPriority := func(off, x int) {
-			if !doL2 || !l2Pal.HasPriority(l2Scanline[x]) {
+			if l2Off(x) || !l2Pal.HasPriority(l2Scanline[x]) {
 				return
 			}
 			paintBlend(off, x)

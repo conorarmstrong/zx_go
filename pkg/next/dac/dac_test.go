@@ -26,7 +26,7 @@ func TestWritePortRoutesPerChannel(t *testing.T) {
 		{"B 0xF3", 0xF3, ChannelB},
 		{"C 0x4F", 0x4F, ChannelC},
 		{"C 0xF9", 0xF9, ChannelC},
-		{"D 0xFB", 0xFB, ChannelD},
+		{"D 0x5F", 0x5F, ChannelD},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestTheOutputLevelsAreTheirOwnPairsMean(t *testing.T) {
 	b.WritePort(0x1F, 100) // A, left
 	b.WritePort(0x0F, 200) // B, left
 	b.WritePort(0x4F, 40)  // C, right
-	b.WritePort(0xFB, 60)  // D, right
+	b.WritePort(0x5F, 60)  // D, right
 
 	if got := b.LevelL(); got != 150 {
 		t.Errorf("LevelL = %d, want 150 (the mean of A=100 and B=200)", got)
@@ -106,7 +106,7 @@ func TestMixIntoSilenceAtCenter(t *testing.T) {
 	b.WritePort(0x0F, 0x80)
 	b.WritePort(0x1F, 0x80)
 	b.WritePort(0xF9, 0x80)
-	b.WritePort(0xFB, 0x80)
+	b.WritePort(0x5F, 0x80)
 	buf := []int16{100, 200, 300, -400}
 	want := []int16{100, 200, 300, -400}
 	b.MixIntoStereo(buf)
@@ -125,7 +125,7 @@ func TestMixIntoPositiveContribution(t *testing.T) {
 	b.WritePort(0x0F, 0xFF)
 	b.WritePort(0x1F, 0xFF)
 	b.WritePort(0xF9, 0xFF)
-	b.WritePort(0xFB, 0xFF)
+	b.WritePort(0x5F, 0xFF)
 	buf := []int16{0, 0, 0, 0}
 	b.MixIntoStereo(buf)
 	const wantContrib int16 = 8128
@@ -142,7 +142,7 @@ func TestMixIntoPositiveContribution(t *testing.T) {
 // bank at rest sits at 0x80 rather than at 0.
 func TestMixIntoNegativeContribution(t *testing.T) {
 	b := New()
-	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0xFB} {
+	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0x5F} {
 		b.WritePort(p, 0x00)
 	}
 	buf := []int16{0, 0}
@@ -163,7 +163,7 @@ func TestMixIntoAccumulates(t *testing.T) {
 	b.WritePort(0x0F, 0xC0) // raises mean toward positive
 	b.WritePort(0x1F, 0xC0)
 	b.WritePort(0xF9, 0xC0)
-	b.WritePort(0xFB, 0xC0)
+	b.WritePort(0x5F, 0xC0)
 	// MixedLevel = 0xC0 = 192. Centred = 192 - 128 = 64. Contrib = 64 * 64 = 4096.
 	buf := []int16{1000, -500}
 	b.MixIntoStereo(buf)
@@ -181,7 +181,7 @@ func TestMixIntoSaturatesAtPositiveLimit(t *testing.T) {
 	b.WritePort(0x0F, 0xFF) // max positive contribution: +8128
 	b.WritePort(0x1F, 0xFF)
 	b.WritePort(0xF9, 0xFF)
-	b.WritePort(0xFB, 0xFF)
+	b.WritePort(0x5F, 0xFF)
 	buf := []int16{30000, 32767, 20000, 20000}
 	b.MixIntoStereo(buf)
 	want := []int16{32767, 32767, 28128, 28128}
@@ -198,7 +198,7 @@ func TestMixIntoSaturatesAtPositiveLimit(t *testing.T) {
 func TestMixIntoSaturatesAtNegativeLimit(t *testing.T) {
 	b := New()
 	// All channels driven to 0 → contribution -8192.
-	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0xFB} {
+	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0x5F} {
 		b.WritePort(p, 0x00)
 	}
 	buf := []int16{-30000, -32768, -20000, -20000}

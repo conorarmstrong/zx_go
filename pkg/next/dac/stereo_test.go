@@ -30,7 +30,7 @@ func TestTheChannelsSplitLeftAndRight(t *testing.T) {
 		{"channel A is left", 0x1F, true, false},
 		{"channel B is left", 0x0F, true, false},
 		{"channel C is right", 0x4F, false, true},
-		{"channel D is right", 0xFB, false, true},
+		{"channel D is right", 0x5F, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := New()
@@ -57,7 +57,7 @@ func TestAHardPannedPairSurvives(t *testing.T) {
 	b.WritePort(0x1F, 0xFF) // A: left at full scale
 	b.WritePort(0x0F, 0xFF) // B: left at full scale
 	b.WritePort(0x4F, 0x00) // C: right at the negative rail
-	b.WritePort(0xFB, 0x00) // D: right at the negative rail
+	b.WritePort(0x5F, 0x00) // D: right at the negative rail
 
 	buf := []int16{0, 0}
 	b.MixIntoStereo(buf)
@@ -158,7 +158,7 @@ func TestEachSideKeepsItsOwnEventTimeline(t *testing.T) {
 // signal, and must get one at the same level on both sides.
 func TestDrivingAllFourChannelsIsCentred(t *testing.T) {
 	b := New()
-	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0xFB} {
+	for _, p := range []uint16{0x1F, 0x0F, 0x4F, 0x5F} {
 		b.WritePort(p, 0xC0)
 	}
 	buf := []int16{0, 0}

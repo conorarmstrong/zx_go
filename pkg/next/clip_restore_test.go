@@ -56,3 +56,36 @@ func TestLoadStateRestoresTheWindowsIntoTheLayers(t *testing.T) {
 		t.Errorf("tilemap clip after restore = %d,%d,%d,%d, want 0,159,0,255", x1, x2, y1, y2)
 	}
 }
+
+// A NextReg reset restores the default windows, and those have to reach
+// the layers too. The reset handler pushed the tilemap, sprite and ULA
+// windows and left Layer 2's behind, so a reboot out of a program that
+// had clipped Layer 2 came up still clipped to the old rectangle.
+func TestResetPushesEveryWindowIntoItsLayer(t *testing.T) {
+	d := nextregs.New()
+	l2 := layer2.New(&clipFakeBank{data: make([]byte, 0x4000)})
+	spr := sprite.New()
+	tm := tilemap.New(&clipFakeBank{data: make([]byte, 0x4000)})
+	WireClipWindows(d, tm, spr, l2)
+
+	for _, reg := range []byte{0x18, 0x19, 0x1B} {
+		for _, v := range []byte{20, 40, 30, 60} {
+			d.WriteReg(reg, v)
+		}
+	}
+	if x1, _, _, _ := l2.Clip(); x1 != 20 {
+		t.Fatalf("setup: layer 2 clip x1 = %d, want 20", x1)
+	}
+
+	d.Reset()
+
+	if x1, x2, y1, y2 := l2.Clip(); x1 != 0x00 || x2 != 0xFF || y1 != 0x00 || y2 != 0xBF {
+		t.Errorf("layer 2 clip after reset = %d,%d,%d,%d, want 0,255,0,191", x1, x2, y1, y2)
+	}
+	if x1, x2, y1, y2, _ := spr.Clip(); x1 != 0x00 || x2 != 0xFF || y1 != 0x00 || y2 != 0xBF {
+		t.Errorf("sprite clip after reset = %d,%d,%d,%d, want 0,255,0,191", x1, x2, y1, y2)
+	}
+	if x1, x2, y1, y2 := tm.Clip(); x1 != 0x00 || x2 != 0x9F || y1 != 0x00 || y2 != 0xFF {
+		t.Errorf("tilemap clip after reset = %d,%d,%d,%d, want 0,159,0,255", x1, x2, y1, y2)
+	}
+}

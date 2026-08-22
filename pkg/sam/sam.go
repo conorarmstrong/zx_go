@@ -91,6 +91,10 @@ func New(rom0, rom1 []byte) *Machine {
 	m.CPU = z80.New(m.Mem, m)
 	// Maskable frame interrupt as a narrow pulse (the SAM ASIC pulses int_ula
 	// once per frame, held ~128 cycles), reusing the shared Z80 timing hooks.
+	// CyclesPerFrame is already in the SAM CPU's own 6 MHz cycles, which
+	// is the base clock its tstates counter accumulates and the unit
+	// CPU.FrameTStates asks for. The SAM has no turbo mode, so
+	// SpeedMultiplier stays 1.
 	m.CPU.FrameTStates = CyclesPerFrame
 	m.CPU.IntAssertTstate = samFrameIntTstate
 	m.CPU.IntPulseTstates = samIntActiveCycles

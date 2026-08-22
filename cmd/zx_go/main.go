@@ -1410,7 +1410,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							slog.Error("RZX record StoreFrame", "err", err)
 						}
 						if recorder.AutosaveDue() {
-							if snap, err := createSnapshotFromEmulator(e); err == nil {
+							if snap, err := createSnapshotFromEmulatorLocked(e); err == nil {
 								if block, err := rzx.EncodeSnapshot(snap, rzx.SnapshotFormatSZX, true); err == nil {
 									recorder.AddAutosave(block, uint32(e.cpu.Tstates()))
 								}
@@ -1905,6 +1905,22 @@ func (e *emulator) admitFileForMachine(ext string) error {
 
 // createSnapshotFromEmulator creates a snapshot from the current emulator state
 func createSnapshotFromEmulator(emu *emulator) (*snapshot.Snapshot, error) {
+	emu.coreMu.Lock()
+	defer emu.coreMu.Unlock()
+	return createSnapshotFromEmulatorLocked(emu)
+}
+
+// createSnapshotFromEmulatorLocked is the body. The caller must hold
+// coreMu, which the emulation goroutine holds for a whole frame: setting
+// the pause flag is not enough on its own, because a goroutine already
+// inside ExecuteFrame finishes the frame while the copy walks the CPU
+// registers and eight RAM banks, and the snapshot comes out with PC from
+// one instruction and the registers from the next.
+//
+// Two callers run INSIDE that frame and must use this variant: the RZX
+// autosave in the frame loop, and the snapshot-on-breakpoint hook, which
+// fires from a CPU pre-fetch hook.
+func createSnapshotFromEmulatorLocked(emu *emulator) (*snapshot.Snapshot, error) {
 	if err := emu.spectrumOnlyFeature(); err != nil {
 		return nil, err
 	}
@@ -2040,8 +2056,9 @@ func (e *emulator) stopRZXPlayback() {
 // startRZXRecording opens a new recording session that will be saved
 // to filename when stopRZXRecording is called. The current emulator
 // state is captured as the initial snapshot so playback starts from
-// this point. Pauses the emulation goroutine during snapshot capture
-// so the CPU state isn't sampled mid-frame.
+// this point. createSnapshotFromEmulator takes coreMu, which the
+// emulation goroutine holds for a whole frame, so the CPU state cannot
+// be sampled mid-frame.
 func (e *emulator) startRZXRecording(filename string, competition bool) error {
 	if e.rzxPlayback.Load() != nil {
 		return fmt.Errorf("cannot start recording while playback is active")
@@ -2073,8 +2090,8 @@ func (e *emulator) startRZXRecording(filename string, competition bool) error {
 
 // stopRZXRecording finalises the in-progress recording (if any) and
 // writes it out. The Recording is cleared even on write failure so the
-// user can retry; pauses the emulation goroutine while sampling the
-// final snapshot so the CPU state isn't read mid-frame.
+// user can retry; the final snapshot is taken under coreMu so the CPU
+// state cannot be read mid-frame.
 func (e *emulator) stopRZXRecording() error {
 	rec := e.rzxRecord.Swap(nil)
 	if rec == nil {
@@ -3560,18 +3577,10 @@ func main() {
 						}
 						slog.Info("snapshot save location selected", "path", writer.URI().Path())
 
-						// Create snapshot from current emulator state.
-						// Pause first: the copy walks the CPU registers and
-						// eight banks, and without this the emulation
-						// goroutine ran underneath it, so a save could take
-						// PC from one instruction and the registers from the
-						// next. F2 and the RZX capture already paused.
-						var snap *snapshot.Snapshot
-						err = emu.withEmulationPaused(func() error {
-							s, err := createSnapshotFromEmulator(emu)
-							snap = s
-							return err
-						})
+						// createSnapshotFromEmulator takes coreMu, which the
+						// emulation goroutine holds for a whole frame, so the
+						// copy cannot be torn across an instruction boundary.
+						snap, err := createSnapshotFromEmulator(emu)
 						if err != nil {
 							dialog.ShowError(fmt.Errorf("failed to create snapshot: %w", err), w)
 							_ = writer.Close()
@@ -4503,7 +4512,8 @@ func main() {
 				// reusing the same call-detection as telnet step-over.
 				dbg.SetStepOver(func() {
 					c := emu.cpu
-					read := func(a uint16) byte { return emu.debugMemory().Read(a) }
+					dm := emu.debugMemory()
+					read := func(a uint16) byte { return dm.Read(a) }
 					lines := debugger.Disassemble(read, c.PC, 1)
 					if len(lines) == 0 || len(lines[0].Bytes) == 0 ||
 						!isCallLike(lines[0].Bytes[0], lines[0].Bytes) {

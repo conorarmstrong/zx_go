@@ -169,3 +169,42 @@ func TestForceInterruptCommitsAPartialFormat(t *testing.T) {
 		t.Errorf("sector 1 after aborted format: % x, want 77...", got[:8])
 	}
 }
+
+// A new command ends a format in progress, and the commit must not raise
+// INTRQ for the command that just started: a host polling the line
+// between the command write and the first DRQ would read "finished" and
+// abandon the transfer.
+func TestANewCommandAfterAFormatDoesNotSignalCompletion(t *testing.T) {
+	d := blankMGTDisk(t)
+	f := NewWD1772()
+	f.InsertDisk(d)
+	f.seekTo(2)
+
+	f.WriteCommand(0xF0)
+	f.WriteData(0xFE)
+
+	f.WriteSector(1)
+	f.WriteCommand(0x80) // READ SECTOR
+	if f.intrq {
+		t.Error("INTRQ raised by the command that just started")
+	}
+	if f.status&wdDRQ == 0 {
+		t.Errorf("READ SECTOR did not raise DRQ: status %#02x", f.status)
+	}
+}
+
+// FORCE INTERRUPT is the one command that should end with INTRQ raised,
+// because that is what it is for.
+func TestForceInterruptAfterAFormatStillSignals(t *testing.T) {
+	d := blankMGTDisk(t)
+	f := NewWD1772()
+	f.InsertDisk(d)
+	f.seekTo(2)
+
+	f.WriteCommand(0xF0)
+	f.WriteData(0xFE)
+	f.WriteCommand(0xD0)
+	if !f.intrq {
+		t.Error("FORCE INTERRUPT did not raise INTRQ")
+	}
+}

@@ -141,13 +141,18 @@ type CPU struct {
 	IntAssertTstate uint64
 	IntPulseTstates uint64
 
-	// FrameTStates is the length of one machine frame in 3.5 MHz-reference
-	// T-states, used by StepInstructionWithIRQ to place the frame-interrupt
-	// boundary while the debugger single-steps. Zero means the 70908 the
-	// Spectrum 128K family and the Next run at, which is the default.
+	// FrameTStates is the length of one machine frame in the units this
+	// CPU's own tstates counter accumulates at its BASE clock — the clock
+	// SpeedMultiplier returns 1 for. StepInstructionWithIRQ places the
+	// frame-interrupt boundary at FrameTStates × SpeedMultiplier, so a
+	// turbo mode multiplies the machine's own base-clock frame rather
+	// than some fixed reference.
 	//
-	// The SAM Coupé's frame is 119808 with its INT at 99840, so a hardcoded
-	// 70908 meant single-stepping a SAM never latched the frame interrupt:
+	// On a Spectrum the base clock is 3.5 MHz, and zero here means the
+	// 70908 the 128K family and the Next run at, which is the default. On
+	// the SAM Coupé the base clock is 6 MHz and a frame is 119808 of its
+	// cycles, with the INT at 99840 — so the hardcoded 70908 meant
+	// single-stepping a SAM never latched the frame interrupt at all:
 	// HALT never ended and IM 1 handlers never ran.
 	FrameTStates uint64
 	frameIntFired   bool // narrow-pulse: pulse raised this frame
@@ -1150,8 +1155,8 @@ const stepFrameBudget = uint64(70908)
 // Use this from the debugger's single-step path. Conformance tests
 // (Zexdoc / Zexall) keep using the plain StepInstruction because
 // they expect IRQs to stay off during the test.
-// frameBudgetTstates is the machine's frame length at the 3.5 MHz
-// reference, defaulting to the 70908 the 128K family and the Next run at.
+// frameBudgetTstates is the machine's frame length at its base clock,
+// defaulting to the 70908 the 128K family and the Next run at.
 func (c *CPU) frameBudgetTstates() uint64 {
 	if c.FrameTStates > 0 {
 		return c.FrameTStates
@@ -1161,7 +1166,7 @@ func (c *CPU) frameBudgetTstates() uint64 {
 
 func (c *CPU) StepInstructionWithIRQ() {
 	narrowPulse := c.IntPulseTstates > 0
-	// One ULA frame is stepFrameBudget T-states at the 3.5 MHz reference,
+	// One ULA frame is frameBudgetTstates at the machine's base clock,
 	// but T-states accumulate on the CPU clock — at 7/14/28 MHz the CPU
 	// burns SpeedMultiplier× more T-states per ULA frame. Scale the frame
 	// boundary by SpeedMultiplier so the maskable INT fires exactly once

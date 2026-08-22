@@ -92,3 +92,65 @@ func TestBelowPlaneIsForcedIn512TileMode(t *testing.T) {
 		t.Errorf("512-tile mode: below = %d, want 1", below[0])
 	}
 }
+
+// A palette index is a colour, so "no pixel here" cannot be signalled in
+// the index plane: nibble 0 is an ordinary opaque index $00, $10, $20 …
+// once the offset is kept. The FPGA carries pixel_en_s beside each pixel
+// (video/tilemap.vhd:424) and it is clear outside the NR$1B clip window
+// and outside the tilemap's rows.
+//
+// Without that plane, dropping the old "nibble 0 is transparent" rule
+// made every pixel the renderer skipped paint as opaque palette[0] over
+// the ULA.
+func TestRenderScanlineReportsWhichPixelsExist(t *testing.T) {
+	tm := newNibbleFixture(0x30)
+	tm.SetClip(2, 4, 0, 0xFF) // X in 2-pixel units: columns 4..9
+
+	dst := make([]byte, 256)
+	en := make([]byte, 256)
+	below := make([]byte, 256)
+	tm.RenderScanlineFlags(0, dst, en, below)
+
+	for x, want := range map[int]byte{3: 0, 4: 1, 9: 1, 10: 0} {
+		if en[x] != want {
+			t.Errorf("x=%d: pixel-present = %d, want %d", x, en[x], want)
+		}
+	}
+}
+
+// A row outside the vertical clip window produces nothing at all.
+func TestRenderScanlineReportsNoPixelsOnAClippedRow(t *testing.T) {
+	tm := newNibbleFixture(0x30)
+	tm.SetClip(0, 0x9F, 10, 20)
+
+	dst := make([]byte, 256)
+	en := make([]byte, 256)
+	below := make([]byte, 256)
+	for i := range en {
+		en[i] = 0xFF
+	}
+	tm.RenderScanlineFlags(5, dst, en, below)
+	for x := range en {
+		if en[x] != 0 {
+			t.Fatalf("row 5 is above the clip window but x=%d reports a pixel", x)
+		}
+	}
+}
+
+// A disabled tilemap produces nothing.
+func TestRenderScanlineReportsNoPixelsWhenDisabled(t *testing.T) {
+	tm := newNibbleFixture(0x30)
+	tm.SetEnabled(false)
+	dst := make([]byte, 256)
+	en := make([]byte, 256)
+	below := make([]byte, 256)
+	for i := range en {
+		en[i] = 0xFF
+	}
+	tm.RenderScanlineFlags(0, dst, en, below)
+	for x := range en {
+		if en[x] != 0 {
+			t.Fatalf("x=%d reports a pixel on a disabled tilemap", x)
+		}
+	}
+}

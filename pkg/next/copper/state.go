@@ -55,6 +55,17 @@ import (
 // adding a field to Copper without adding it here is the failure this package's
 // tests are built to catch.
 type copperState struct {
+	// Version is the meaning of the fields below, not the framing (the
+	// machinestate container carries that). It exists because WritePtr
+	// changed from a 10-bit instruction-word index to the FPGA's 11-bit
+	// byte address, and gob does not police a schema: it decodes what it
+	// recognises and zero-fills the rest, so a capture written under the
+	// old meaning would have restored silently at half the intended
+	// cursor and assembled every later instruction from the wrong
+	// offset. Bump it whenever a field's meaning changes rather than its
+	// name.
+	Version int
+
 	Program [MaxInstructions]uint16
 
 	WritePtr uint16
@@ -66,6 +77,10 @@ type copperState struct {
 	LastScanline uint16
 }
 
+// copperStateVersion is the current meaning of copperState's fields.
+// Version 1 introduced the byte-address write cursor.
+const copperStateVersion = 1
+
 // StateID identifies the copper in a captured machine state.
 func (c *Copper) StateID() string { return "next.copper" }
 
@@ -73,6 +88,7 @@ func (c *Copper) StateID() string { return "next.copper" }
 func (c *Copper) SaveState() []byte {
 	s := copperState{
 		Program:      c.program,
+		Version:      copperStateVersion,
 		WritePtr:     c.writePtr,
 		Mode:         byte(c.mode),
 		Pc:           c.pc,
@@ -105,6 +121,11 @@ func (c *Copper) LoadState(b []byte) error {
 	var s copperState
 	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
 		return fmt.Errorf("copper: decoding state: %w", err)
+	}
+
+	if s.Version != copperStateVersion {
+		return fmt.Errorf("copper: state version %d, want %d: the write cursor changed from an instruction index to a byte address, so an older capture would restore at half its intended position",
+			s.Version, copperStateVersion)
 	}
 
 	c.program = s.Program

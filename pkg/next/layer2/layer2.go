@@ -347,6 +347,27 @@ func (l *Layer2) LineHeight() int {
 // 128..191 in 256 mode. fpgaFrameAddr/fpgaSramAddr supply the exact coordinate
 // math including scroll (NR$16/$17/$71) and the 192-row / 320-column wraps.
 func (l *Layer2) RenderScanline(y int, dst []byte) {
+	l.RenderScanlineEnabled(y, dst, nil)
+}
+
+// RenderScanlineEnabled is RenderScanline with the per-pixel enable plane
+// the FPGA carries beside each pixel (video/layer2.vhd:175):
+//
+//	layer2_en <= '1' when layer2_en_q = '1' and layer2_clip_en = '1'
+//	                  and layer2_addr_eff(21) = '0' else '0';
+//
+// en[x] is 1 where Layer 2 contributes a pixel and 0 where it does not:
+// the layer disabled, the pixel outside the NR$18 clip window or the
+// on-screen wrap region, or its bank absent.
+//
+// This cannot be folded into dst. A palette index is a colour — index 0
+// is an ordinary opaque black on a default palette — so a renderer that
+// signals "no pixel" with a zero index makes the compositor paint black
+// over the layers beneath. en may be nil.
+func (l *Layer2) RenderScanlineEnabled(y int, dst, en []byte) {
+	for i := range en {
+		en[i] = 0
+	}
 	w := l.LineWidth()
 	if y < 0 || y >= l.LineHeight() || len(dst) < w {
 		return
@@ -380,6 +401,9 @@ func (l *Layer2) RenderScanline(y int, dst []byte) {
 			}
 			return
 		}
+		for i := 0; i < Width && i < len(en); i++ {
+			en[i] = 1
+		}
 		if l.paletteOffset == 0 {
 			copy(dst[:Width], page[bankOff:bankOff+Width])
 			return
@@ -408,6 +432,9 @@ func (l *Layer2) RenderScanline(y int, dst []byte) {
 			continue
 		}
 		dst[x] = l.fpgaPixel(data, sc1)
+		if x < len(en) {
+			en[x] = 1
+		}
 	}
 }
 

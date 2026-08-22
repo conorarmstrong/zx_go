@@ -1803,8 +1803,8 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		return
 	}
 
-	// Spectrum Next DAC ports (0x0F / 0x1F / 0x4F / 0x5F / 0xDF / 0xF1 /
-	// 0xF3 / 0xF9 / 0xFB on the low byte). The bank returns true if the
+	// Spectrum Next DAC ports (0x0F / 0x1F / 0x3F / 0x4F / 0x5F / 0xB3 /
+	// 0xDF / 0xF1 / 0xF3 / 0xF9 / 0xFB on the low byte). The bank returns true if the
 	// port was a DAC channel — when handled, fall through to the
 	// rest of the dispatch is unnecessary (DAC ports don't alias
 	// classic ULA ports). When the port wasn't a DAC port the bank
@@ -1934,6 +1934,11 @@ func (u *ULA) Close() {
 // well within budget per the §13.5 performance estimate. The
 // row scratch buffers (compositorScan / compositorComposed /
 // compositorRow) are allocated once and reused across frames.
+// copperClocksPerHCount mirrors copper.ClocksPerHCount: hcount ticks at
+// the 7 MHz pixel clock and the copper is clocked at 28 MHz, so four
+// copper clocks pass per column.
+const copperClocksPerHCount = 4
+
 func (u *ULA) applyNextCompositor() {
 	const w = 256
 	const h = 192
@@ -1943,10 +1948,13 @@ func (u *ULA) applyNextCompositor() {
 	// the copper gets four clocks per column. The earlier budget of 64 was
 	// derived from CPU T-states and starved any list with more than 64
 	// instructions on one line.
-	// Mirrors copper.InstructionsPerScanline, which pkg/ula cannot import
-	// (the copper reaches the ULA through the NextCopper interface to keep
-	// the dependency one-way).
-	copperInstrPerScanline := TStatesPerLineFor(u.mem.GetCurrentModel()) * 2 * 4 / 2
+	// Mirrors copper.ClocksPerScanline, which pkg/ula cannot import (the
+	// copper reaches the ULA through the NextCopper interface to keep the
+	// dependency one-way). The budget is in copper CLOCKS, the unit Step
+	// charges in: a MOVE costs two and everything else one. Budgeting in
+	// MOVEs alone left NOOPs and unreleased WAITs free, so a list made of
+	// them never drew the budget down and lapped itself many times a line.
+	copperClocksPerScanline := TStatesPerLineFor(u.mem.GetCurrentModel()) * 2 * copperClocksPerHCount
 	if u.compositorScan == nil {
 		u.compositorScan = make([]byte, w*4)
 		u.compositorComposed = make([]byte, w*4)
@@ -1989,7 +1997,7 @@ func (u *ULA) applyNextCompositor() {
 		//
 		// The whole line still shares one instruction budget, so segmenting
 		// cannot let the Copper run faster than the hardware does.
-		budget := copperInstrPerScanline
+		budget := copperClocksPerScanline
 		if u.nextCopper != nil {
 			for x := 0; x < w; x += copperSegmentPixels {
 				if budget > 0 {
