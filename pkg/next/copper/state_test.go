@@ -296,11 +296,13 @@ func TestStateIDIsStable(t *testing.T) {
 // it started and a lost restore of it would be invisible here. Completing the
 // pair moves the latched byte AND leaves the phase false, so both differ.
 //
-// Order matters for the rest. The mode write resets pc and stopped, so it has
-// to precede the step that parks them; the cursor work has to follow the step,
-// because SetWritePtrLow clears the very phase this is trying to move.
+// Order matters for the rest. The first mode write resets pc, so it has to
+// precede the step that parks it; the cursor work has to follow the step,
+// because SetWritePtrLow clears the very phase this is trying to move; and the
+// stop comes last because it is a second mode write, which leaves the cursor's
+// low byte — and so the phase — alone.
 func driveEverything(c *Copper) {
-	// A different list, ending in a HALT so the copper stops itself.
+	// A different list, ending in the $FFFF terminator so the copper parks.
 	c.SetWritePtrLow(0)
 	for _, w := range []uint16{0x2A05, 0x2B06, 0xFFFF} {
 		c.WriteData(byte(w >> 8))
@@ -310,16 +312,21 @@ func driveEverything(c *Copper) {
 	// A different start mode, running from the top of the new list.
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
-	// One step retires both MOVEs and then the HALT, so pc parks at 2 (primed()
-	// left it at 1), stopped goes true (primed() left it false), and the raster
-	// lands on a line other than the captured 40.
+	// One step retires both MOVEs and parks on the terminator, so pc lands at 2
+	// (primed() left it at 1) and the raster lands on a line other than the
+	// captured 40.
 	c.Step(97, 511, 8)
 
-	// Finally the cursor and the pairing phase: a different index, a different
-	// latched high byte, and the pair completed so the phase itself differs.
+	// The cursor and the pairing phase: a different index, a different latched
+	// high byte, and the pair completed so the phase itself differs.
 	c.SetWritePtrLow(9)
 	c.WriteData(0x3C)
 	c.WriteData(0x4D)
+
+	// And stopped. The copper has no halt instruction: NR$62 mode 00 is its
+	// only stop (device/copper.vhd:112-115), so the field is moved off
+	// primed()'s false by writing that mode, which moves the mode with it.
+	c.SetWritePtrHighAndMode(byte(StartStop) << 6)
 }
 
 func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {

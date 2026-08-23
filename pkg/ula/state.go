@@ -99,6 +99,12 @@ type ulaState struct {
 	FEReadCount uint64
 	Port123BVal byte
 
+	// CopperDebt is the copper clocks a MOVE spent past the end of the column
+	// it began in, owed to the next one. It is at most one clock, a quarter of
+	// a pixel, but the copper's clock never restarts (zxnext.vhd:43,3944) so a
+	// restore that dropped it would hand the copper that quarter-pixel back.
+	CopperDebt int
+
 	Palette [16]color.RGBA
 }
 
@@ -158,6 +164,7 @@ func (u *ULA) SaveState() []byte {
 		FastLoad:    u.fastLoad,
 		FEReadCount: u.feReadCount,
 		Port123BVal: u.port123BVal,
+		CopperDebt:  u.copperDebt,
 
 		Palette: u.palette,
 	}
@@ -220,6 +227,7 @@ func (u *ULA) LoadState(b []byte) error {
 	u.fastLoad = s.FastLoad
 	u.feReadCount = s.FEReadCount
 	u.port123BVal = s.Port123BVal
+	u.copperDebt = s.CopperDebt
 
 	u.palette = s.Palette
 	return nil

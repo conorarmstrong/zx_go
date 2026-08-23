@@ -215,11 +215,13 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 	disp.Select(0x62)
 	disp.WriteData(0x00) // cursor high = 0, mode = Stop
 	disp.Select(0x60)
-	disp.WriteData(0xFF) // start the two-byte HALT
+	disp.WriteData(0xFF) // start the two-byte list terminator
 	disp.WriteData(0xFF)
-	// Verify instruction 0 = HALT
-	if got := cop.Instruction(0); got.Op != copper.OpHALT {
-		t.Errorf("Copper instruction 0 = %+v, want HALT", got)
+	// Verify instruction 0 = the $FFFF terminator, which is WAIT x=63, y=511:
+	// the copper has no halt opcode, a list is ended by parking it on a WAIT
+	// its raster never satisfies.
+	if got := cop.Instruction(0); got.Op != copper.OpWAIT || got.X != 63 || got.Y != 511 {
+		t.Errorf("Copper instruction 0 = %+v, want WAIT x=63 y=511", got)
 	}
 
 	// 0x10 / 0x11: RTC i2c lines. Storage-only — just confirm

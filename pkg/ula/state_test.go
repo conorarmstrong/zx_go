@@ -652,6 +652,10 @@ func driveEverything(u *ULA, ts *uint64) {
 	// still filter state and still restored, so it is moved by hand — the only
 	// way it can be made to differ between capture and restore.
 	u.dc.SetLimit(int32(beeperHigh) / 3)
+	// The copper straddle debt is only ever moved by a Copper stepped through
+	// applyNextCompositor, which this 48K fixture has none of, so it is set by
+	// hand for the same reason the DC clamp above is.
+	u.copperDebt = 1
 }
 
 func TestEveryCapturedFieldSurvivesARoundTrip(t *testing.T) {
@@ -719,6 +723,7 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"FastLoad", before.FastLoad == after.FastLoad},
 		{"FEReadCount", before.FEReadCount == after.FEReadCount},
 		{"Port123BVal", before.Port123BVal == after.Port123BVal},
+		{"CopperDebt", before.CopperDebt == after.CopperDebt},
 		{"Palette", before.Palette == after.Palette},
 	} {
 		if f.same {

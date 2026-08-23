@@ -4,10 +4,11 @@ import "testing"
 
 // Instruction encodings, per device/copper.vhd: MOVE is bit 15 clear with the
 // 7-bit register in 14-8 and the value in 7-0; a zero register field is NOOP;
-// HALT is the reserved all-ones word.
+// the all-ones word is the idiomatic list terminator, a WAIT for line 511 that
+// parks (there is no halt opcode).
 const (
 	noop uint16 = 0x0000
-	halt uint16 = 0xFFFF
+	park uint16 = 0xFFFF
 )
 
 func move(reg, val byte) uint16 { return uint16(reg)<<8 | uint16(val) }
@@ -36,13 +37,13 @@ func TestExecutingIsTrueDuringAMove(t *testing.T) {
 	w := &recordingWriter{c: c}
 	c.SetRegWriter(w)
 
-	// Two MOVEs then a HALT, loaded high-byte-first as NR$60 delivers them.
-	for _, inst := range []uint16{move(0x12, 0x34), move(0x56, 0x78), halt} {
+	// Two MOVEs then the terminator, loaded high-byte-first as NR$60 delivers them.
+	for _, inst := range []uint16{move(0x12, 0x34), move(0x56, 0x78), park} {
 		c.WriteData(byte(inst >> 8))
 		c.WriteData(byte(inst & 0xFF))
 	}
 	c.SetWritePtrLow(0)
-	c.SetWritePtrHighAndMode(byte(StartFromZero)<<6)
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
 	c.Step(0, 511, 64)
 
@@ -69,10 +70,10 @@ func TestExecutingIsFalseOutsideAMove(t *testing.T) {
 	inst := move(0x12, 0x34)
 	c.WriteData(byte(inst >> 8))
 	c.WriteData(byte(inst & 0xFF))
-	c.WriteData(byte(halt >> 8))
-	c.WriteData(byte(halt & 0xFF))
+	c.WriteData(byte(park >> 8))
+	c.WriteData(byte(park & 0xFF))
 	c.SetWritePtrLow(0)
-	c.SetWritePtrHighAndMode(byte(StartFromZero)<<6)
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 	c.Step(0, 511, 64)
 
 	if c.Executing() {
@@ -88,12 +89,12 @@ func TestPCDuringMoveNamesTheMoveItself(t *testing.T) {
 	w := &recordingWriter{c: c}
 	c.SetRegWriter(w)
 
-	for _, inst := range []uint16{noop, move(0x12, 0x34), halt} {
+	for _, inst := range []uint16{noop, move(0x12, 0x34), park} {
 		c.WriteData(byte(inst >> 8))
 		c.WriteData(byte(inst & 0xFF))
 	}
 	c.SetWritePtrLow(0)
-	c.SetWritePtrHighAndMode(byte(StartFromZero)<<6)
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
 	c.Step(0, 511, 64)
 

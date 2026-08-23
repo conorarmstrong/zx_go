@@ -1,6 +1,12 @@
 // Package copper implements the Spectrum Next's Copper
-// coprocessor: 1024 16-bit instructions, MOVE / WAIT / NOOP /
-// HALT, four start modes.
+// coprocessor: 1024 16-bit instructions, MOVE / WAIT / NOOP,
+// four start modes.
+//
+// There is no halt. A list is ended by parking it on a WAIT its raster never
+// satisfies — idiomatically $FFFF, which is simply WAIT x=63, y=511 and parks
+// because vcount never reaches 511. device/copper.vhd:91-98 has one WAIT
+// branch and no other stop condition, so a list in mode 11 runs again at every
+// frame start however it was terminated.
 //
 // Implemented:
 //
@@ -9,16 +15,27 @@
 //     into a current instruction-memory cursor
 //   - NextReg 0x61 / 0x62 control: 10-bit cursor index + 2-bit
 //     start mode
-//   - Decoded MOVE / WAIT / NOOP / HALT opcodes
-//   - Step(scanline, hpos) that walks the program against the
+//   - Decoded MOVE / WAIT / NOOP opcodes
+//   - Step(scanline, hcount, maxClocks) that walks the program against the
 //     supplied raster position, executing MOVE writes through a
 //     callback and respecting WAIT
 //   - VBL auto-restart (StartOnVBL resets the program counter at
 //     the top of each frame)
 //
-// Not implemented: tight raster-precise execution against per-T-state CPU
-// stepping — the execution model uses a scanline+hpos quantum instead, so
-// it is functional but not cycle-accurate.
+// Timing. The copper is clocked from i_CLK_28 while its hcount ticks at
+// i_CLK_7 (zxnext.vhd:43,46,3944), so a raster column is four copper clocks:
+// see ClocksPerHCount. A MOVE costs two of them (device/copper.vhd:87,105) and
+// everything else one, which Step charges for and returns, so a caller stepping
+// column by column reproduces the hardware's real throughput of one instruction
+// per quarter-pixel and one MOVE per half-pixel. hcount is hc_ula, whose origin
+// sits twelve columns before displayed pixel 0: see HCountOrigin.
+//
+// What that leaves. A quarter-pixel is below what a 256-pixel raster can
+// represent, so Step is charged per column rather than per clock and a MOVE's
+// effect is reported against the pixel its column generates (see Wrote). The
+// hardware then takes a further two or three 28 MHz clocks to push the write
+// through the NextReg arbiter (zxnext.vhd:4709,4729,4775), which is again under
+// one pixel and is not modelled.
 package copper
 
 // Instruction is one decoded copper opcode.
@@ -30,14 +47,13 @@ type Instruction struct {
 	X   byte   // for WAIT: target hpos / 8
 }
 
-// Op identifies the four copper opcodes.
+// Op identifies the three copper opcodes.
 type Op int
 
 const (
 	OpNOOP Op = iota
 	OpMOVE
 	OpWAIT
-	OpHALT
 )
 
 // StartMode is the 2-bit selector in NextReg 0x62.
@@ -72,10 +88,14 @@ func InstructionsPerScanline(hcountPerLine int) int {
 }
 
 // ClocksPerScanline is the copper's whole clock budget for one scanline
-// of hcountPerLine columns. This is the unit Step charges in and the
-// unit a per-scanline caller should budget in: a MOVE costs two clocks
-// and everything else one, so a budget counted in MOVEs alone let a list
-// of NOOPs or unreleased WAITs run without ever drawing it down.
+// of hcountPerLine columns: a MOVE costs two clocks and everything else one,
+// so a budget counted in MOVEs alone let a list of NOOPs or unreleased WAITs
+// run without ever drawing it down.
+//
+// It is the line's total, not a quantum to hand Step. A render loop pays the
+// copper per column, ClocksPerHCount at a time, because a line's worth of
+// clocks given at once lets a burst of MOVEs retire before the first pixel is
+// generated when on hardware it occupies half a pixel each.
 func ClocksPerScanline(hcountPerLine int) int {
 	return hcountPerLine * ClocksPerHCount
 }
@@ -113,6 +133,12 @@ type Copper struct {
 	// Dispatcher.WriteReg and a MOVE reported against the Z80's PC would
 	// name an instruction that had nothing to do with the write.
 	executing bool
+	// wrote records whether the LAST Step raised the MOVE write pulse. It is
+	// the model's copper_dout_s, sampled per call instead of per clock: a
+	// render loop stepping the copper column by column uses it to split the
+	// row's composition at the pixel a MOVE actually wrote in, rather than
+	// assuming the write landed at a segment boundary.
+	wrote bool
 }
 
 // New returns an empty copper.
@@ -193,6 +219,15 @@ func (c *Copper) PC() uint16 { return c.pc }
 // that sees it false was called by the CPU (or by a reset, or by wiring).
 func (c *Copper) Executing() bool { return c.executing }
 
+// Wrote reports whether the most recent Step raised a MOVE's NextReg write
+// pulse. It describes that one call, not the copper's history, so a caller
+// stepping per raster column learns which column the write landed in.
+//
+// A MOVE whose 7-bit register field is zero does not count: the hardware
+// suppresses the pulse on that field alone (device/copper.vhd:104), which
+// Decode already reports as OpNOOP.
+func (c *Copper) Wrote() bool { return c.wrote }
+
 // Instruction returns the decoded instruction at index i. Indexes
 // past MaxInstructions return a NOOP.
 func (c *Copper) Instruction(i uint16) Instruction {
@@ -209,17 +244,14 @@ func (c *Copper) Instruction(i uint16) Instruction {
 //     bits 7-0 = value byte.
 //   - WAIT: bit 15 = 1; bits 14-9 = horizontal position (0..63, in
 //     8-pixel columns); bits 8-0 = vertical scanline (0..511).
-//   - HALT: special-case WAIT 0xFFFF (waits for line 511, hpos 63
-//     — never reached).
+//     $FFFF is not a separate opcode: it is WAIT x=63, y=511, the
+//     idiomatic list terminator, and it parks on the line test alone.
 //   - NOOP: a MOVE whose NextReg index (bits 14-8) is zero. The
 //     hardware suppresses the write pulse purely on the register
 //     field being zero (copper.vhd:104 — "MOVE 0,0" / NOP test is
 //     on copper_list_data_i(14 downto 8), the value byte is NOT
 //     considered), so MOVE reg 0 with any value is a NOOP.
 func Decode(w uint16) Instruction {
-	if w == 0xFFFF {
-		return Instruction{Op: OpHALT}
-	}
 	if w&0x8000 == 0 {
 		reg := byte((w >> 8) & 0x7F)
 		val := byte(w & 0xFF)
@@ -234,12 +266,43 @@ func Decode(w uint16) Instruction {
 	return Instruction{Op: OpWAIT, X: x, Y: y}
 }
 
-// WaitHThreshold is the horizontal raster counter (hcount, 0..511 in
-// pixels) at or above which a WAIT with column field x releases on its
-// target scanline. The hardware compares hcount_i >= (x << 3) + 12, i.e.
-// the 6-bit column is taken as 8-pixel units with a fixed +12 pixel offset
-// (device/copper.vhd:94).
-func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
+// HCountOrigin is the hcount at which the display generates its first pixel.
+// The copper's hcount_i is hc_ula (zxnext.vhd:3949, fed from o_hc_ula at
+// zxnext.vhd:6737), which is reset at c_min_hactive - 12
+// (video/zxula_timing.vhd:423-424), so its zero point is twelve columns before
+// the 256-pixel active area. video/zxula.vhd:44-46 says it plainly: the
+// practical counter's pixel 0 "corresponds to ULA count i_hc = 0xC".
+//
+// It is not decoration. Handing Step a raw display x treats hcount 0 as pixel
+// 0 and so releases every WAIT twelve pixels late.
+const HCountOrigin = 12
+
+// HCountForPixel maps a displayed pixel (0..255 across the 256-pixel active
+// area) to the hcount the copper sees while that pixel is being generated.
+// Callers driving Step from a render loop must pass this, not the raw x.
+func HCountForPixel(p int) uint16 { return uint16(p + HCountOrigin) }
+
+// WaitHThreshold is the horizontal raster counter (hcount) at or above which a
+// WAIT with column field x releases on its target scanline. The hardware
+// compares hcount_i >= (x << 3) + 12 (device/copper.vhd:94): the 6-bit column
+// is taken as 8-pixel units, and the +12 is exactly HCountOrigin, so a WAIT for
+// column X releases at displayed pixel 8X — for every column but the last.
+//
+// The add is NINE bits wide and WRAPS. copper.vhd:94 writes
+// `unsigned(copper_list_data_i(14 downto 9)&"000") + 12`, whose left operand is
+// the 6-bit column concatenated with three zeros, and numeric_std's "+" returns
+// a result the width of its left operand. Column 63 therefore gives
+// 63*8+12 = 516, which truncates to 4, and that WAIT releases four columns into
+// the line rather than never. Columns 0..62 top out at 508 and do not wrap.
+// Confirmed under GHDL against the real device/copper.vhd
+// (_tools/copper-vhdl-test, "wait-col63-wraps" against its "wait-col62-parks"
+// control).
+//
+// Thresholds still land past the end of a line for a caller whose line is
+// shorter than 512 columns — a full line is 448 (48K) or 456 (128K) columns
+// (video/zxula_timing.vhd:160,196) — and those WAITs do not release, which is
+// the hardware's behaviour and not a modelling limit.
+func WaitHThreshold(x byte) uint16 { return HCountForPixel(int(x)*8) & 0x1FF }
 
 // Step advances the copper against the supplied raster position,
 // spending at most maxClocks copper clocks. Returns the number of clocks
@@ -252,9 +315,13 @@ func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 // never drew the caller's budget down; with the end-of-list wrap that
 // meant such a list lapped itself many times per scanline.
 //
-// maxClocks lets callers spread execution across scanlines as the
-// hardware does. Pass ClocksPerScanline from a per-scanline render loop.
-// Passing a larger number is useful for tests that want to
+// maxClocks lets callers spread execution across the raster as the hardware
+// does. A render loop walking the line column by column passes ClocksPerHCount,
+// less anything a MOVE begun in the previous column already spent past its end:
+// spent can exceed maxClocks by one clock, because an instruction that has
+// started runs to completion, and the caller carries that as a debt against the
+// next column rather than letting it gain a quarter-pixel on every WAIT
+// release. Passing a larger number is useful for tests that want to
 // "fast-forward" to a stable state.
 //
 // Re-entry guard: if a MOVE writes to NextRegs that mutate the
@@ -263,12 +330,17 @@ func WaitHThreshold(x byte) uint16 { return uint16(x)<<3 + 12 }
 // pc / writePtr fields mid-loop, so a re-entrant mutation only takes
 // effect on the NEXT Step call.
 //
-// scanline is the raster line (vcount, 0..511). hcount is the raster
-// horizontal counter (0..511 in pixels) — the same units the FPGA's
-// hcount_i carries; a WAIT releases at hcount >= (x<<3)+12 on its target
-// line (see WaitHThreshold). A per-scanline caller passes the end-of-line
-// hcount (>= 511) so every WAIT on the line releases on that line.
+// scanline is the raster line (vcount). hcount is the raster horizontal
+// counter in the same units the FPGA's hcount_i carries, which is hc_ula: a
+// render loop converts a displayed pixel to it with HCountForPixel, and a WAIT
+// releases at hcount >= (x<<3)+12 on its target line (see WaitHThreshold).
+// A caller that walks only part of the line leaves any WAIT beyond its last
+// column parked, which is right for the columns past the end of the line and
+// wrong for the ones it skipped.
 func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
+	// Wrote describes this call and no other, so clear it before anything can
+	// return early.
+	c.wrote = false
 	// VBL auto-restart: in StartOnVBL the program counter resets to 0 at
 	// the start of each frame, i.e. when the raster wraps back to the top.
 	if c.mode == StartOnVBL && scanline < c.lastScanline {
@@ -283,6 +355,10 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 		inst := Decode(c.program[c.pc])
 		switch inst.Op {
 		case OpMOVE:
+			// copper_dout_s rises for any MOVE with a non-zero register field
+			// (device/copper.vhd:104), whether or not anything is wired to
+			// receive it, so this does not depend on regs.
+			c.wrote = true
 			if c.regs != nil {
 				// Raised across the write only, and cleared before the pc
 				// moves on, so a trace callback reads the MOVE's own index.
@@ -293,24 +369,21 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 			c.pc++
 			spent += 2 // dout raised, then cleared
 		case OpWAIT:
-			// Release when the raster reaches the target line and the
-			// horizontal threshold: hcount >= (X<<3)+12 on line Y
-			// (device/copper.vhd:94). The scanline > Y branch is the
-			// functional-model fallback for a per-scanline caller that has
-			// already advanced past the target line (the hardware, clocked
-			// every pixel, releases exactly on line Y; a caller stepping each
-			// line hits Y exactly, so this only matters if a line is skipped).
-			if scanline > inst.Y ||
-				(scanline == inst.Y && hcount >= WaitHThreshold(inst.X)) {
+			// Release when the raster is ON the target line and at or past the
+			// horizontal threshold (device/copper.vhd:94). The vertical test is
+			// an EQUALITY there — `vcount_i = unsigned(...)` — so a WAIT whose
+			// line is already behind the raster parks until that line comes
+			// round again next frame; it does not release late. A "scanline > Y"
+			// fallback used to cover a caller that skipped lines, but the render
+			// loop presents every line and every column, so all it did was run
+			// a list's later WAITs a frame early.
+			if scanline == inst.Y && hcount >= WaitHThreshold(inst.X) {
 				c.pc++
 				spent++
 				continue
 			}
 			// Not yet — park here. The clock that tested the condition
 			// is spent whether or not it released.
-			return spent + 1
-		case OpHALT:
-			c.stopped = true
 			return spent + 1
 		case OpNOOP:
 			c.pc++

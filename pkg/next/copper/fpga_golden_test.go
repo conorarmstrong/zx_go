@@ -126,8 +126,8 @@ func TestCopperMatchesFPGAGolden(t *testing.T) {
 	}
 	flush()
 
-	if prog < 6 {
-		t.Fatalf("expected the full golden replay (>=6 programs), only saw %d", prog)
+	if prog < 11 {
+		t.Fatalf("expected the full golden replay (>=11 programs), only saw %d", prog)
 	}
 }
 
@@ -148,7 +148,10 @@ func TestCopperMatchesFPGAGolden(t *testing.T) {
 // Driven coverage: stop / run-once-from-0 / continue / run+restart-at-vbl
 // modes; the address reset on entering modes 01 and 11; the vcount==0,hcount==0
 // VBL restart; WAIT line+column gating with the +12 offset; the reg-field-only
-// NOP suppression; and ordered multi-MOVE execution.
+// NOP suppression; ordered multi-MOVE execution; the nine-bit wrap of the
+// column-63 WAIT threshold against its column-62 control; the $FFFF list
+// terminator re-running at every frame start in mode 11; and a WAIT whose
+// target line is already behind the raster parking rather than releasing.
 //
 // Coverage gaps (not driven, honest):
 //   - Mid-program live re-arming of copper_en_i (a mode change WHILE a list is

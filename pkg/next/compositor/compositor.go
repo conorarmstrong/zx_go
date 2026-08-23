@@ -477,10 +477,17 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 // ComposeScanlineRange composes pixels [x0, x1) of the row.
 //
 // The range exists so the caller can interleave Copper steps with
-// compositing. The Copper's WAIT column field is 6 bits taken as 8-pixel
-// units (copper.vhd:94), so its horizontal resolution IS 8 pixels: stepping
-// and composing in 8-pixel segments reproduces mid-line MOVEs exactly at the
-// granularity the hardware itself resolves, without per-pixel rendering.
+// compositing. The Copper's write pulse lands on a single 28 MHz clock
+// (copper.vhd:102-104) — a quarter of a pixel, and a MOVE retires every half
+// pixel — so its writes fall wherever they fall across the line and not on any
+// grid. The caller therefore composes the row once and re-composes its tail
+// from the exact pixel each write landed in. An earlier note here claimed the
+// Copper resolved to 8 pixels because its WAIT column field is in 8-pixel
+// units; that is the resolution of a WAIT's release, not of a MOVE's effect.
+//
+// x0 and x1 must satisfy 0 <= x0 <= x1 <= Width: the paint loop below indexes
+// dst at x*4 without checking, so a range outside the row is an out-of-range
+// panic and not a clipped draw.
 func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
 	if len(dst) < Width*4 {
 		return

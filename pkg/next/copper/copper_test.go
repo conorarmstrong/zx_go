@@ -27,12 +27,6 @@ func TestDecodeWAIT(t *testing.T) {
 	}
 }
 
-func TestDecodeHALT(t *testing.T) {
-	if Decode(0xFFFF).Op != OpHALT {
-		t.Errorf("0xFFFF should decode as HALT")
-	}
-}
-
 func TestDecodeNOOP(t *testing.T) {
 	if Decode(0x0000).Op != OpNOOP {
 		t.Errorf("0x0000 should decode as NOOP")
@@ -56,7 +50,8 @@ func TestStartFromZeroRunsProgram(t *testing.T) {
 	c.SetWritePtrLow(0)
 	c.WriteData(0x07)
 	c.WriteData(0x02)
-	// HALT at index 1.
+	// The $FFFF list terminator at index 1: WAIT x=63, y=511, which parks
+	// because line 511 never arrives.
 	c.WriteData(0xFF)
 	c.WriteData(0xFF)
 
@@ -64,14 +59,19 @@ func TestStartFromZeroRunsProgram(t *testing.T) {
 	c.SetRegWriter(rw)
 	// Start from zero (mode 1).
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
-	// Three clocks: the MOVE costs two, the HALT one.
+	// Three clocks: the MOVE costs two, the WAIT test one.
 	c.Step(0, 0, 3)
 
 	if len(rw.writes) != 1 || rw.writes[0].reg != 0x07 || rw.writes[0].val != 0x02 {
 		t.Errorf("MOVE not executed: writes = %+v", rw.writes)
 	}
-	if !c.stopped {
-		t.Errorf("HALT should stop the copper")
+	if c.PC() != 1 {
+		t.Errorf("pc = %d after the MOVE, want 1 (parked on the terminator)", c.PC())
+	}
+	// Parked, not stopped: only NR$62 mode 00 stops the copper
+	// (device/copper.vhd:112-115).
+	if c.stopped {
+		t.Errorf("the $FFFF terminator must park the copper, not stop it")
 	}
 }
 
@@ -164,7 +164,8 @@ func (r *reentrantWriter) WriteReg(reg, val byte) {
 
 func TestMOVEIntoCopperOwnRegistersDoesNotCrash(t *testing.T) {
 	c := New()
-	// Program at index 0: MOVE 0x60, 0xAB (re-enters); HALT.
+	// Program at index 0: MOVE 0x60, 0xAB (re-enters); then the $FFFF
+	// terminator, which parks the list.
 	c.WriteData(0x60)
 	c.WriteData(0xAB)
 	c.WriteData(0xFF)
@@ -177,8 +178,8 @@ func TestMOVEIntoCopperOwnRegistersDoesNotCrash(t *testing.T) {
 	// which calls c.WriteData (mutating writePtr) — does NOT
 	// disturb the outer Step's pc.
 	c.Step(0, 0, 4)
-	if !c.stopped {
-		t.Errorf("Copper should have run MOVE then HALT and stopped")
+	if c.PC() != 1 {
+		t.Errorf("pc = %d, want 1: the MOVE ran and the list parked on the terminator", c.PC())
 	}
 }
 
@@ -220,15 +221,8 @@ func TestDecodeWAIT_AllZeroXY(t *testing.T) {
 
 // TestDecodeWAIT_MaxX verifies bits 14:9 (6 bits) decode 0..63.
 func TestDecodeWAIT_MaxX(t *testing.T) {
-	// x=63, y=511 — the HALT-encoded WAIT 0xFFFF.
-	got := Decode(0xFFFF)
-	// 0xFFFF is explicitly HALT.
-	if got.Op != OpHALT {
-		t.Errorf("$FFFF Op = %v, want HALT (encoded WAIT max)", got.Op)
-	}
-	// x=63, y=510 → not HALT.
 	w := uint16(0x8000) | (uint16(63) << 9) | 510
-	got = Decode(w)
+	got := Decode(w)
 	if got.Op != OpWAIT || got.X != 63 || got.Y != 510 {
 		t.Errorf("Decode max-x = %+v, want WAIT 63/510", got)
 	}

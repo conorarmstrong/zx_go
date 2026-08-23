@@ -2,13 +2,11 @@ package copper
 
 import "testing"
 
-// TestEndOfLineHcountReleasesScanlineWaits: stepping at the end-of-line hcount
-// (>=511) releases a WAIT targeting any column on that scanline, so a
-// per-scanline caller doesn't release such WAITs one scanline late (as hcount
-// below the WAIT threshold would). The WAIT release threshold is
-// hcount >= (X<<3)+12 (device/copper.vhd:94); for X=30 that is 252, so a
-// mid-line hcount of 0 parks but the end-of-line hcount of 511 releases.
-func TestEndOfLineHcountReleasesScanlineWaits(t *testing.T) {
+// TestWaitReleasesOnlyPastItsColumnThreshold: on the WAIT's own scanline the
+// horizontal gate alone decides, and it is hcount >= (X<<3)+12
+// (device/copper.vhd:94). For X=30 that is 252, so an hcount of 0 parks the
+// list and any hcount at or past 252 releases it.
+func TestWaitReleasesOnlyPastItsColumnThreshold(t *testing.T) {
 	c := New()
 	c.SetWritePtrLow(0)
 	wait := uint16(0x8000) | (uint16(30) << 9) | 5 // WAIT Y=5, X=30 (col)
@@ -25,21 +23,27 @@ func TestEndOfLineHcountReleasesScanlineWaits(t *testing.T) {
 	if len(rw.writes) != 0 {
 		t.Fatalf("hcount=0: WAIT(5,30) must not release on scanline 5; writes=%v", rw.writes)
 	}
-	// Scanline 5, hcount 511 (end of line): threshold cleared → MOVE fires.
-	c.Step(5, 511, 4)
+	// One column short of the threshold: still parked.
+	c.Step(5, 251, 4)
+	if len(rw.writes) != 0 {
+		t.Fatalf("hcount=251: WAIT(5,30) must not release below its threshold; writes=%v", rw.writes)
+	}
+	// Scanline 5, hcount 252: threshold cleared → MOVE fires.
+	c.Step(5, 252, 4)
 	if len(rw.writes) != 1 || rw.writes[0].val != 0xAA {
-		t.Errorf("hcount=511: WAIT(5,30) must release on scanline 5; writes=%v", rw.writes)
+		t.Errorf("hcount=252: WAIT(5,30) must release on scanline 5; writes=%v", rw.writes)
 	}
 }
 
 // TestWaitHThresholdMatchesFPGA pins the exact horizontal release threshold
-// formula taken from the FPGA copper: hcount >= (X<<3)+12.
+// formula taken from the FPGA copper: hcount >= (X<<3)+12, computed in the
+// nine bits copper.vhd:94 computes it in — so column 63 wraps to 4.
 func TestWaitHThresholdMatchesFPGA(t *testing.T) {
 	cases := []struct {
 		x    byte
 		want uint16
 	}{
-		{0, 12}, {1, 20}, {2, 28}, {7, 68}, {30, 252}, {63, 516},
+		{0, 12}, {1, 20}, {2, 28}, {7, 68}, {30, 252}, {62, 508}, {63, 4},
 	}
 	for _, tc := range cases {
 		if got := WaitHThreshold(tc.x); got != tc.want {
