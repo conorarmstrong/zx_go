@@ -40,6 +40,68 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The Copper is paced per raster column, and three fictions are gone.** Its
+  `hcount_i` is `hc_ula`, whose origin sits twelve columns before displayed
+  pixel 0, but the ULA passed the raw display x, so every `WAIT` released
+  twelve pixels late, rounded to sixteen by the old eight-pixel grid; the whole
+  line's clock budget was also handed to the step at pixel 0, letting a burst
+  of `MOVE`s retire before the first pixel existed. The row is now walked
+  column by column over the real line length, each column paid exactly four
+  Copper clocks, with a `MOVE` straddling a boundary paid out of the next
+  column and that debt carried across line and frame boundaries. Compose ranges
+  split at the pixel a `MOVE` wrote in. The Copper is clocked on every line of
+  the frame, not only the 192 displayed ones. The three fictions, each
+  disproved under GHDL against the real `copper.vhd` before being changed:
+  `WAIT` column 63 does not park for ever, because `(x<<3)+12` is a 9-bit add
+  and 516 wraps to 4; there is no HALT opcode, `$FFFF` being `WAIT x=63,y=511`,
+  so a list terminated the standard way ran once here and every frame on
+  hardware; and a `WAIT` whose target line is behind the raster parks rather
+  than releasing. Not done: NR$03 machine timing is not consulted, so a program
+  selecting 48K or Pentagon timing still gets 456 columns and 311 lines.
+
+- **zxnDMA bus arbitration is now modelled.** A block holds the bus for its
+  bytes at each port's programmed cycle length and charges that to the CPU;
+  burst mode gives the bus back only where the FPGA does, in `WAITING_CYCLES`,
+  which is reachable only with a prescaler; the `dma_delay_i` pin parks a block
+  in `START_DMA` and resumes it with the pointers where they stand; and `$83`
+  Disable DMA abandons a block in flight, so end-of-block never latches and
+  auto-restart never reloads. The Z80 DMA's interrupt and match logic is
+  deliberately still absent, because the FPGA does not implement it either:
+  no interrupt output, no daisy-chain pins, the mask/match and
+  interrupt-control registers commented out, and the five WR6 interrupt
+  commands decoding into empty branches.
+
+- **A command streamed into the DMA's own port can no longer corrupt the block
+  carrying it.** An IO endpoint may be aimed at `$6B`, so a transferred byte
+  can be a command, and `$83` or `$C3` arriving that way took the transfer FSM
+  to IDLE while the block loop carried on to its epilogue. The block would then
+  latch end-of-block, reload under auto-restart and charge the CPU for bytes it
+  never moved, and a `$C3` would leave a freshly reset controller reporting a
+  finished block. Both the synchronous and the interleaved-burst paths now stop
+  where the hardware stops. The byte counter and `status_atleastone` were also
+  moved to the sides of the write cycle the FPGA sets them on.
+
+### Fixed
+
+- **`TestHardwareResetClearsTheWedge` was not testing the wedge.** Its fixture
+  transferred `$A0 $A1 $A2` to `$6000` before the reset and then asserted the
+  same three bytes at the same address afterwards, so a still-wedged controller
+  that swallowed the entire post-reset command stream passed it. The
+  post-reset transfer now targets an address the fixture has not written.
+
+- **The bus acquisition is no longer charged to the CPU.** Its three cycles are
+  correct per the FPGA, but a whole block reaches the CPU as one jump of the
+  T-state counter, which is also what schedules the frame interrupt, so the
+  size of that jump decides which side of the interrupt window a block lands
+  on. Charging the acquisition was on its own enough to stop a working title
+  booting. The constant stays derived and documented, and a test pins that it
+  is deliberately excluded. See ROADMAP item 2 for this and the three other
+  time-model defects the arbitration work uncovered.
+
+- **Four VHDL citations in `pkg/next/dma` pointed at the wrong lines.** The WR4
+  base-byte ladder is `dma.vhd:603-611` and its R4_BYTE_2 arm `:607-608`, not
+  `:800-811` and `:807-808`; the register read path is `:895`, not `:864`.
+
 - **The reason SBT was unsupported was wrong twice over, and SBT now works.**
   v1.11.0 said the format was not published anywhere the project could use. That
   was corrected, in this file, to "`BOOT` loads directory slot 1 as the DOS, so

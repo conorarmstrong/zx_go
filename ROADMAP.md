@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-19 — v1.10.2, plus unreleased work)
+## CURRENT STATE (2026-08-23 — v1.11.0, plus unreleased work)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -276,22 +276,70 @@ TX-1696's own entry records why it needed its assets at the card root: it
 opens `C:/common/...` by absolute path. That is unrelated to the working
 directory and is not an emulator fault.
 
-That is what items 2 and 4 were waiting on, and the answer it gives is
-"no evidence either is needed": eighteen Next programs run without the zxnDMA
-interrupt/match logic or exact Copper MOVE timing being modelled — the 12
-`.nex`, the 5 NextBASIC programs and NEXTipede. Neither is now blocked; both
-are simply unmotivated.
+That corpus is what the old zxnDMA and Copper items were waiting on. Copper
+MOVE timing is now done. The zxnDMA half split in two on inspection:
+the interrupt/match logic turned out not to be implementable at all, and the
+arbitration work that replaced it uncovered four real timing defects, which are
+item 2 below.
 
-### 2. [correctness] zxnDMA interrupt / match logic and bus arbitration
+### 2. [correctness] zxnDMA timing defects
 
-**Unblocked, and unmotivated.** The transfer engine, prescaler and cycle
-timing are complete and spec-checked. Not modelled: the interrupt/match logic
-and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`).
+Bus arbitration is now modelled: a block holds the bus for its bytes
+and charges the CPU, burst yields the bus only in `WAITING_CYCLES` as the FPGA
+does, `dma_delay_i` parks and resumes a block, and `$83` abandons one where it
+stands. Building it surfaced four defects in the surrounding time model. None
+is known to affect a title on the SD card, where all 12 still render, so they
+are recorded rather than rushed.
 
-The Next corpus now exists — all 12 SD `.nex` games driven through NEXLOAD, all
-12 rendering (`TestNexloadSDGames`, re-run green 2026-08-16) — and none of them
-needs this. That is the evidence the item was waiting for, and it argues for
-leaving it alone until a title actually demands it.
+**a. The prescaler period is 4× to 32× too short.** `perByteCycles`
+(`pkg/next/dma/dma.go:838`) uses the raw prescaler byte as a T-state count. The
+FPGA waits until `DMA_timer_s(13 downto 5) >= prescaler` (`dma.vhd:424`, `:451`)
+and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 / 14 /
+28 MHz (`dma.vhd:250-254`), so the real period is `prescaler × 32 ÷ increment`
+CPU T-states: 4× the prescaler at 3.5 MHz, rising to 32× at 28 MHz. The
+`max(byte cycles, prescaler)` *shape* is right, because `DMA_timer_s` is
+zeroed at `TRANSFERING_READ_1` (`dma.vhd:309`) and the wait therefore overlaps
+the byte's own cycles rather than following them. Only the scale is wrong. This is the
+largest of the four: DMA-streamed audio plays far too fast.
+
+**b. The bus-hold reaches the CPU as one lump.** A whole block is charged to
+`cpu.Tstates` in a single jump (`cmd/zx_go/next.go`, `cpu.SetTstates`), and
+that counter is also what the frame-interrupt window is scheduled from, so
+there are no sample points anywhere inside the stall. On hardware the stall is
+spread across the transfer with the raster running through it. The practical
+consequence is that the *size* of the lump decides which side of the interrupt
+window a block lands on: adding the three cycles of a correct bus acquisition
+(`busAcquisitionCycles`, derived at `pkg/next/dma/dma.go:277`) is on its own
+enough to stop TX-1696 booting. The constant is therefore documented and *not*
+charged, pinned by `TestBusAcquisitionIsDerivedButNotCharged`. Fixing (b) is
+the precondition for charging it.
+
+**c. An interleaved burst charges the CPU nothing.** `Step`
+(`pkg/next/dma/dma.go:749`) pumps bytes without ever calling `cycleSink`, so a
+burst+prescaler transfer is free. The FPGA only releases the bus inside
+`WAITING_CYCLES` (`dma.vhd:441-449`); the read and write cycles around each
+pumped byte still hold it, and the CPU is still stopped for them.
+
+**d. `$C3` resets more than the FPGA's `$C3`.** `command`
+(`pkg/next/dma/dma.go:543`) rebuilds the whole struct. The FPGA's `$C3` branch
+assigns exactly eight signals (`dma.vhd:638-645`): the FSM to IDLE, both status
+bits, both port timings, the prescaler, `ce_wait` and auto-restart. The byte
+counter, the transfer mode, the read mask and its cursor, and every latched
+address, length, direction and port mode survive it. Only the reset *pin*
+clears those (`dma.vhd:211-245`), which is what `Reset()` already models.
+
+Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
+match logic**. The FPGA does not have it. The entity has no interrupt output
+and no IEI/IEO pins (`dma.vhd:29-61`); R3's interrupt-enable, stop-on-match and
+mask/match registers are declared and commented out (`dma.vhd:87-90`,
+`:582-583`, `:802-813`); R4's interrupt-control, pulse-control and vector
+registers and the three states that would read them are commented out too
+(`dma.vhd:94-96`, `:835-857`); and the five WR6 interrupt commands
+`$AF/$AB/$A3/$B7/$B3` decode into empty branches (`dma.vhd:679-686`, `:722`).
+The daisy chain is inert on the machine side as well: `bus_busreq_n_i` is tied
+high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
+time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
+hardware.
 
 ### 3. [product] Windows ARM64: the core is proven, the GUI is not
 
@@ -436,16 +484,6 @@ canonical ordering so two captures of an unchanged machine compare equal.
   T-state counter every frame and schedules the frame INT differently from the
   single-step path), and any change made from outside the CPU during the window
   (`write-memory`, a key press, a disk arriving).
-
-### 5. [research] Copper cycle accuracy
-
-**Unblocked, and unmotivated.** Since v1.6.4 the Copper is stepped in 8-pixel
-segments, which is exact for `WAIT` — the hardware threshold is `x<<3 + 12`,
-so 8 pixels *is* its resolution. What remains is `MOVE` landing mid-segment
-(`pkg/next/copper/copper.go:19`).
-
-The 12 Next `.nex` games now screened render correctly without it, so there is
-still no observed case where it matters. Leave it until one appears.
 
 ---
 

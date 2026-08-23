@@ -9,8 +9,9 @@
 // pattern both selects the register group and flags which extra
 // "follow" bytes come next — or one of those announced follow bytes, or
 // (for WR6) a command byte: RESET / LOAD / ENABLE / .... A memory
-// transfer runs when an ENABLE command arrives after a LOAD has latched
-// the configured addresses.
+// transfer runs when an ENABLE command arrives; a LOAD before it latches
+// the configured addresses into the live pointers, but nothing requires
+// one (dma.vhd:724 has no armed flag to test).
 //
 // The command stream is variable-length: which follow bytes appear
 // depends on the bits set in the preceding base byte, so a fixed-size
@@ -30,8 +31,36 @@
 //
 // Memory<->memory transfers run synchronously to completion; IO-port
 // endpoints and burst+prescaler transfers interleave with the CPU via
-// Step. Not modelled: the interrupt/match logic and DMA-vs-CPU bus
-// contention.
+// Step.
+//
+// Bus arbitration is modelled: a block holds the bus for its bytes and charges
+// that to the CPU, burst mode gives the bus back only where the FPGA does
+// (WAITING_CYCLES, so only with a prescaler), the dma_delay_i pin parks and
+// resumes a block (SetBusDelay), and $83 abandons one where it stands. The
+// per-block bus acquisition is derived but not charged; see
+// busAcquisitionCycles.
+//
+// The Z80 DMA's interrupt and match logic is deliberately absent, because the
+// FPGA does not implement it either. The entity has no interrupt output and no
+// IEI/IEO daisy-chain pins (dma.vhd:29-61); R3's interrupt-enable,
+// stop-on-match and mask/match registers are declared and commented out
+// (dma.vhd:87-90, :582-583, :802-813), so WR3's mask and match follow bytes are
+// consumed and discarded; R4's interrupt-control, pulse-control and vector
+// registers and the three states that would read them are commented out too
+// (dma.vhd:94-96, :835-857); and the five WR6 interrupt commands $AF/$AB/$A3/
+// $B7/$B3 decode into empty branches (dma.vhd:679-686, :722). On the machine
+// side the daisy chain is inert as well: bus_busreq_n_i is tied high and
+// cpu_bao_n is left open, "no dma controller on the expansion bus at this time"
+// (zxnext.vhd:1787, :1791, :1822). dma_delay_i is the only interrupt-related
+// pin that does anything, and it is an interrupt pausing the DMA rather than
+// the DMA raising one.
+//
+// Two things the FPGA does that this model cannot express, both of which need
+// a cycle-stepped engine rather than a block-at-a-time one: auto-restart never
+// returns to IDLE, so the hardware holds the bus indefinitely and reports
+// status $1B (dma.vhd:473-495); and wait_n_i stalls the transfer states
+// (dma.vhd:342, :410), so a real bus hold stretches under ULA contention and
+// SPI waits (zxnext.vhd:1844).
 package dma
 
 import (
@@ -83,7 +112,6 @@ type DMA struct {
 	bMode      byte   // WR2: port B address mode
 	aIsIO      bool   // WR1 D3: port A is an IO endpoint (else memory)
 	bIsIO      bool   // WR2 D3: port B is an IO endpoint (else memory)
-	loaded     bool   // a LOAD command has latched the addresses
 
 	// zMode is the FPGA's dma_mode input: false = zxn dma, true = Z80-DMA
 	// compatible. The access port selects it — $6B = zxn, $0B = z80
@@ -128,10 +156,13 @@ type DMA struct {
 	readMask byte
 	readReg  int
 
-	// cycleSink, when set, is called with a continuous-mode transfer's T-state
-	// duration so the emulator can charge it to the CPU clock (the DMA stalls
-	// the CPU for that long). Burst mode does not charge — the CPU keeps
-	// running while the DMA waits between bytes.
+	// cycleSink, when set, is called with a block's T-state duration so the
+	// emulator can charge it to the CPU clock: while the DMA holds the bus the
+	// CPU is frozen outright (zxnext.vhd:1824-1835). Every block that runs
+	// end to end is charged, in burst mode as much as in continuous. The only
+	// state that gives the bus back mid-block is WAITING_CYCLES, which needs a
+	// prescaler (dma.vhd:424, :441-449), and that is the interleaved path
+	// Step() runs instead.
 	cycleSink func(uint64)
 
 	// clock returns the current CPU T-state count. When set, a burst-mode
@@ -140,7 +171,10 @@ type DMA struct {
 	// gaps (so DMA-streamed audio is paced across the CPU timeline).
 	clock func() uint64
 
-	// Active interleaved-burst state.
+	// Transfer-engine position. remaining is the bytes the current block still
+	// owes, which outlives the call that started the block in two cases: an
+	// interleaved burst (activeBurst, with nextDue the absolute T-state the next
+	// byte falls due) and a block parked by the bus delay (see stalled).
 	activeBurst bool
 	remaining   int
 	nextDue     uint64
@@ -155,6 +189,38 @@ type DMA struct {
 	// already sitting in its transfer state, so an ENABLE arriving mid-block
 	// is not a second transfer. This flag reproduces that.
 	inTransfer bool
+
+	// atLeastOne mirrors the chip's status_atleastone bit, status byte bit 0.
+	// The FPGA raises it in TRANSFERING_WRITE_4 (dma.vhd:412), after the first
+	// byte of the block has been written rather than at the ENABLE, and clears it
+	// again in IDLE (dma.vhd:265), on $C3 (dma.vhd:640) and on $8B
+	// (dma.vhd:692). A driver polling the status register while an interleaved
+	// burst streams sees it set for the whole of the block.
+	atLeastOne bool
+
+	// busDelay is the FPGA's dma_delay_i input pin. On the Next it is
+	// im2_dma_delay (zxnext.vhd:1785, :2001-2010): an IM2 peripheral whose
+	// NR$CC/$CD/$CE dma-int-enable bit is set and whose FSM is out of idle
+	// (im2_device.vhd:151, im2_control.vhd:238), an NMI with NR$CC bit 7, or a
+	// RETI pop still in progress. It is an interrupt holding the DMA off the
+	// bus so the CPU can be serviced, not the DMA raising one; this device has
+	// no interrupt output at all (dma.vhd:29-61 has no INT pin and no IEI/IEO).
+	//
+	// stalled is the transfer FSM sitting in START_DMA because of it, with the
+	// block part done and the bus handed back. It is a position no register can
+	// describe: the pointers and the byte counter say where the block got to,
+	// but only this says the block is still going.
+	busDelay bool
+	stalled  bool
+
+	// wedged is the FPGA's register-write sequencer parked in R4_BYTE_2, a state
+	// whose case branch is one of the commented-out interrupt-control ones
+	// (dma.vhd:835-844). A WR4 byte with D4 set and D2/D3 clear sends it there
+	// (dma.vhd:607-608) and nothing brings it back: dma.vhd:891's
+	// "when others => null" swallows every subsequent command byte, and the only
+	// assignment of IDLE outside the sequencer's own IDLE branch is under the
+	// reset pin (dma.vhd:229). So even a $C3 RESET is swallowed; see Reset().
+	wedged bool
 
 	// pending holds the follow bytes the most recent base byte announced;
 	// each subsequent WriteCommand consumes one.
@@ -172,18 +238,17 @@ type DMA struct {
 type pendingOp byte
 
 const (
-	opIgnore           pendingOp = iota // announced, accepted, discarded
-	opPortALow                          // WR0 port A start address, low byte
-	opPortAHigh                         // WR0 port A start address, high byte
-	opBlockLenLow                       // WR0 block length, low byte
-	opBlockLenHigh                      // WR0 block length, high byte
-	opPortBLow                          // WR4 port B start address, low byte
-	opPortBHigh                         // WR4 port B start address, high byte
-	opATiming                           // WR1 port A variable-timing byte
-	opBTiming                           // WR2 port B variable-timing byte
-	opPrescaler                         // zxnDMA fixed-time prescaler byte
-	opInterruptControl                  // WR4 interrupt-control byte
-	opReadMask                          // WR6 $BB read-mask byte
+	opIgnore       pendingOp = iota // announced, accepted, discarded
+	opPortALow                      // WR0 port A start address, low byte
+	opPortAHigh                     // WR0 port A start address, high byte
+	opBlockLenLow                   // WR0 block length, low byte
+	opBlockLenHigh                  // WR0 block length, high byte
+	opPortBLow                      // WR4 port B start address, low byte
+	opPortBHigh                     // WR4 port B start address, high byte
+	opATiming                       // WR1 port A variable-timing byte
+	opBTiming                       // WR2 port B variable-timing byte
+	opPrescaler                     // zxnDMA fixed-time prescaler byte
+	opReadMask                      // WR6 $BB read-mask byte
 )
 
 // opLast bounds the valid codes, so a decoded state carrying a code this build
@@ -196,9 +261,30 @@ const (
 	modeBurst
 )
 
+// busAcquisitionCycles is what one trip around the bus costs on top of the
+// bytes: START_DMA asserting cpu_busreq_n_s (dma.vhd:267-283), WAITING_ACK
+// latching the source address while the acknowledge arrives (dma.vhd:285-305),
+// and FINISH_DMA before the return to IDLE that releases the bus again
+// (dma.vhd:469-495, :260-265). The DMA owns the bus in all three, so the CPU
+// is stopped for them.
+//
+// It is derived, recorded, and NOT charged. The block's whole cost reaches the
+// CPU as one jump of the T-state counter, which is also the clock the frame
+// interrupt is scheduled from, so the size of that jump decides which side of
+// the interrupt window the block lands on. Until the stall is spread across the
+// timeline, adding a correct cost to it is a phase lottery rather than an
+// improvement. TestBusAcquisitionIsDerivedButNotCharged pins this.
+const busAcquisitionCycles = 3
+
+// resetCycleLen is the per-port cycle length both ports come up with and go
+// back to. The reset pin and the $C3 command both write "01" into the two
+// timing registers (dma.vhd:233-234, :641-642), and the transfer FSM decodes
+// "01" as three cycles (dma.vhd:314, :321).
+const resetCycleLen = 3
+
 // New returns a fresh DMA with no transfer queued.
 func New(mem MemoryBus) *DMA {
-	return &DMA{mem: mem, aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
+	return &DMA{mem: mem, aCycleLen: resetCycleLen, bCycleLen: resetCycleLen, readMask: 0x7F}
 }
 
 // SetIOBus attaches the port bus used for IO endpoints. Optional.
@@ -210,20 +296,88 @@ func (d *DMA) SetIOBus(io IOBus) { d.io = io }
 // port read or write).
 func (d *DMA) SetZ80Mode(on bool) { d.zMode = on }
 
-// SetCycleSink attaches the callback used to charge a continuous-mode
-// transfer's T-state duration to the CPU clock. Optional.
+// SetCycleSink attaches the callback used to charge a block's T-state duration
+// to the CPU clock, which is what the CPU loses to the DMA holding the bus.
+// Optional.
 func (d *DMA) SetCycleSink(sink func(uint64)) { d.cycleSink = sink }
+
+// SetBusDelay drives the controller's dma_delay_i pin (zxnext.vhd:1785). While
+// it is high the DMA will not ask for the bus, and a block already in flight
+// parks itself in START_DMA with its pointers where they stand; dropping it
+// resumes that block from exactly there.
+//
+// It is an injectable input rather than a wire to the IM2 daisy chain because
+// the source is not connected on our side yet: pkg/next.IM2DaisyChain is an
+// unwired reference model and NR$CC/$CD/$CE are stored-only.
+func (d *DMA) SetBusDelay(on bool) {
+	d.busDelay = on
+	if !on && d.stalled {
+		d.stalled = false
+		d.runBlock()
+	}
+}
+
+// BusRequested reports whether the DMA is holding the CPU off the bus right
+// now: cpu_busreq_n_s asserted and the bus acknowledged, which on the Next
+// freezes the CPU outright (zxnext.vhd:1824-1835, :1842).
+//
+// It reads as true only from inside a transfer: an IO endpoint's port
+// callback, which is the one place the rest of the machine is re-entered
+// mid-block, because everything between the request and the release happens
+// inside one call here. A stalled block is NOT holding the bus: START_DMA
+// deasserts the request while dma_delay_i is high (dma.vhd:269-273).
+func (d *DMA) BusRequested() bool { return d.inTransfer }
 
 // SetClock attaches a CPU-T-state source. With it, burst-mode + prescaler
 // transfers interleave with the CPU via Step(). Optional — without it, burst
 // transfers run to completion at ENABLE.
 func (d *DMA) SetClock(clock func() uint64) { d.clock = clock }
 
+// Reset drives the controller's reset pin, the FPGA's reset_i, whose branch is
+// dma.vhd:211-245. It is not the $C3 RESET command: $C3 is decoded inside the
+// register-write sequencer and clears a strict subset (dma.vhd:637-645), and a
+// sequencer wedged in R4_BYTE_2 never decodes it at all.
+//
+// The branch restores the transfer FSM and the register-write sequencer to
+// IDLE, both port timings to "01" (3 cycles), the prescaler to zero, the
+// transfer mode to continuous, auto-restart off, the read mask to all seven
+// registers with the read sequence back at the status byte, the byte counter to
+// zero and both status bits to their idle values. What it does NOT name
+// survives: the latched port A / port B addresses, the block length, the
+// direction and both ports' address / memory-or-IO modes, and the live transfer
+// pointers dma_src_s / dma_dest_s.
+func (d *DMA) Reset() {
+	d.wedged = false
+	d.pending = nil
+	d.activeBurst = false
+	d.inTransfer = false
+	d.remaining = 0
+	d.nextDue = 0
+	d.counter = 0
+	d.aCycleLen = resetCycleLen
+	d.bCycleLen = resetCycleLen
+	d.prescaler = 0
+	d.mode = modeContinuous
+	d.autoRestart = false
+	d.readMask = 0x7F
+	d.readReg = 0
+	d.endOfBlock = false
+	d.atLeastOne = false
+	d.stalled = false
+}
+
 // WriteCommand accepts one byte of the port-0x6B command stream. Wired
 // via ULA.SetNextDMA / the routing in ULA.WritePort.
 func (d *DMA) WriteCommand(val byte) {
 	if dmaTrace {
 		dmaLog(val)
+	}
+	if d.wedged {
+		// The register-write sequencer is parked in R4_BYTE_2, so the byte falls
+		// through dma.vhd:891's "when others => null" and nothing at all happens.
+		// The read path is a separate branch of the same process (dma.vhd:895
+		// "elsif cs_rd_v = ..."), so read-back keeps working.
+		return
 	}
 	if len(d.pending) > 0 {
 		op := d.pending[0]
@@ -260,13 +414,6 @@ func (d *DMA) applyPending(op pendingOp, val byte) {
 		}
 	case opPrescaler:
 		d.prescaler = val
-	case opInterruptControl: // D3 / D4 announce pulse offset and vector
-		if val&0x08 != 0 {
-			d.pending = append(d.pending, opIgnore)
-		}
-		if val&0x10 != 0 {
-			d.pending = append(d.pending, opIgnore)
-		}
 	case opReadMask:
 		d.readMask = val & 0x7F
 		d.readReg = d.firstReadReg()
@@ -333,6 +480,14 @@ func (d *DMA) decodeBase(val byte) {
 			p = append(p, opIgnore)
 		}
 		d.pending = p
+		// D6 is a second ENABLE. The FPGA latches it into R3_dma_en_s and, when
+		// it is set, drops the transfer FSM into START_DMA (dma.vhd:576-580),
+		// the same state $87 jumps to (dma.vhd:724). R3_dma_en_s itself is
+		// written at :576 and read nowhere, so it is dead state: a WR3 byte with
+		// D6 clear starts nothing and stops nothing.
+		if val&0x40 != 0 {
+			d.Trigger()
+		}
 	case 0x01: // WR4 — port B address + transfer mode
 		switch (val >> 5) & 0x03 {
 		case 0x02: // 10 = burst
@@ -347,8 +502,18 @@ func (d *DMA) decodeBase(val byte) {
 		if val&0x08 != 0 {
 			p = append(p, opPortBHigh)
 		}
-		if val&0x10 != 0 { // interrupt-control byte (with its own follows)
-			p = append(p, opInterruptControl)
+		// D4 announces the Z80 DMA's interrupt-control byte, and the FPGA never
+		// reads it: R4_BYTE_1 returns unconditionally to IDLE (dma.vhd:826-833)
+		// and the R4_BYTE_2 branch that would have consumed it is commented out
+		// (dma.vhd:835-844), as are R4_interrupt_control_s / pulse_control_s /
+		// interrupt_vector_s themselves (dma.vhd:94-96). The byte the guest
+		// meant as interrupt control is decoded as the next base byte.
+		//
+		// Unless it is the only follow byte announced. The decode is an elsif
+		// ladder (dma.vhd:603-611), so D4 without D2 or D3 selects R4_BYTE_2, the
+		// state whose branch is commented out, and the sequencer wedges.
+		if len(p) == 0 && val&0x10 != 0 {
+			d.wedged = true
 		}
 		d.pending = p
 	case 0x02: // WR5 — ready/wait/auto-restart (no follow bytes)
@@ -358,16 +523,19 @@ func (d *DMA) decodeBase(val byte) {
 	}
 }
 
-// cycleLen decodes a timing byte's D1:D0 into a read/write cycle count:
-// 00=4, 01=3, 10=2 (11 "do not use" → treated as 2).
+// cycleLen decodes a timing byte's D1:D0 into a read/write cycle count. The
+// FPGA's decode is a case statement over the two bits with an explicit arm for
+// 00, 01 and 10 and a "when others" for the rest, and that last arm goes to the
+// four-cycle state (dma.vhd:314-317, :321-324). So the Z80 DMA's "do not use"
+// code 11 is not undefined here: it is four cycles, the same as 00.
 func cycleLen(v byte) byte {
 	switch v & 0x03 {
-	case 0x00:
-		return 4
 	case 0x01:
 		return 3
-	default:
+	case 0x02:
 		return 2
+	default: // 00, and 11 through the FPGA's "when others" arm
+		return 4
 	}
 }
 
@@ -375,24 +543,31 @@ func cycleLen(v byte) byte {
 func (d *DMA) command(val byte) {
 	switch val {
 	case 0xC3: // RESET — clear configuration + state machine (keep the buses;
-		// dma_mode lives outside the core in the FPGA, so it survives too)
+		// dma_mode and dma_delay_i are pins outside the core in the FPGA, so
+		// they survive too)
 		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink, clock: d.clock,
-			zMode: d.zMode, aCycleLen: 2, bCycleLen: 2, readMask: 0x7F}
+			zMode: d.zMode, busDelay: d.busDelay,
+			aCycleLen: resetCycleLen, bCycleLen: resetCycleLen, readMask: 0x7F}
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
-		d.loaded = true
 		d.curA = d.portAStart
 		d.curB = d.portBStart
 		d.counter = d.counterInit()
 		d.endOfBlock = false // dma.vhd:654: LOAD clears status_endofblock_n='1'
 	case 0xD3: // CONTINUE — reseed the byte counter; a following ENABLE repeats
 		// the block from the CURRENT pointers (not the start addresses).
-		d.loaded = true
 		d.counter = d.counterInit()
 		d.endOfBlock = false // dma.vhd:671: Continue clears status_endofblock_n='1'
-	case 0x87: // ENABLE — run the configured transfer
-		if d.loaded {
-			d.Trigger()
-		}
+	case 0x87: // ENABLE is dma_seq_s <= START_DMA, unconditionally
+		// (dma.vhd:724-725). There is no armed flag in the device: an ENABLE
+		// with no LOAD behind it, or after a block has already ended, still
+		// enters the transfer loop, and the loop always writes one byte before
+		// it tests the counter against the block length (dma.vhd:426, :433).
+		d.Trigger()
+	case 0xC7: // RESET PORT A TIMING (dma.vhd:647-648): back to "01", 3 cycles
+		d.aCycleLen = resetCycleLen
+	case 0xCB: // RESET PORT B TIMING (dma.vhd:650-651). Per port, so it leaves
+		// port A's programmed timing alone.
+		d.bCycleLen = resetCycleLen
 	case 0xBB: // READ MASK FOLLOWS — next byte sets the read mask
 		d.pending = []pendingOp{opReadMask}
 	case 0xA7: // INITIATE READ SEQUENCE — reset the read cursor
@@ -400,19 +575,33 @@ func (d *DMA) command(val byte) {
 	case 0xBF: // READ STATUS BYTE (dma.vhd:687): the next port read returns
 		// the status register, wherever the sequence stood.
 		d.readReg = 0
-	case 0x8B: // REINITIALIZE STATUS BYTE (dma.vhd:690): endofblock_n='1'
+	case 0x8B: // REINITIALIZE STATUS BYTE (dma.vhd:691-692): endofblock_n='1'
+		// and atleastone='0'
 		d.endOfBlock = false
+		d.atLeastOne = false
+	case 0x83: // DISABLE DMA (dma.vhd:727-728) is one assignment: dma_seq_s <=
+		// IDLE. The transfer FSM leaves mid-flight, so the bytes still owed are
+		// abandoned and the bus request drops (dma.vhd:260-262). FINISH_DMA never
+		// runs, so end-of-block does not latch and auto-restart does not reload.
+		d.activeBurst = false
+		d.remaining = 0
+		d.stalled = false
+		d.inTransfer = false // no longer in the transfer states; see runBlock
+		d.atLeastOne = false // IDLE clears status_atleastone (dma.vhd:265)
 	default:
-		// $C7/$CB reset-timing, $83 disable, status-reinit commands need no
-		// state change for the transfers the zxnDMA actually runs.
+		// The remaining WR6 commands are the interrupt ones, and the FPGA
+		// decodes them into empty branches: $AF disable, $AB enable, $A3 reset
+		// and disable, $B7 enable after RETI (dma.vhd:679-686) and $B3 force
+		// ready (dma.vhd:722). There is no interrupt logic behind them to drive
+		// no interrupt output, no IEI/IEO, no vector (dma.vhd:29-61, :94-96).
 	}
 }
 
 // Trigger runs the configured transfer to completion from the current internal
 // pointers. Each byte is read from the source endpoint (memory or IO) and
 // written to the destination endpoint, advancing each port's pointer per its
-// address mode. On end of block the DMA either auto-restarts (reload start
-// addresses, stay armed) or clears its loaded flag.
+// address mode. On end of block the DMA either auto-restarts (reload the start
+// addresses and go round again) or returns to IDLE.
 //
 // The byte count mirrors the FPGA transfer loop (dma.vhd TRANSFERING_WRITE_1
 // increments the counter; TRANSFERING_WRITE_4 repeats while counter <
@@ -420,10 +609,12 @@ func (d *DMA) command(val byte) {
 // in z80 mode — so zxn moves exactly blockLen bytes and z80 moves blockLen+1.
 // The FSM always moves one byte before testing, so a zero length moves one.
 func (d *DMA) Trigger() {
-	if d.inTransfer || d.activeBurst {
+	if d.inTransfer || d.activeBurst || d.stalled {
 		// Re-entered from an IO endpoint pointed at our own command port, or
-		// an ENABLE arrived while an interleaved burst is still draining.
-		// The chip is already transferring; this is not a second block.
+		// an ENABLE arrived while an interleaved burst is still draining, or
+		// while a block sits in START_DMA waiting for the bus delay to drop.
+		// The chip is already in the middle of this block; $87 only re-enters
+		// START_DMA (dma.vhd:724), it does not start a second one.
 		return
 	}
 	moved := 0
@@ -438,6 +629,8 @@ func (d *DMA) Trigger() {
 		fmt.Fprintf(os.Stderr, "DMA xfer A=%04X B=%04X len=%d aIO=%v bIO=%v mode=%d presc=%d\n",
 			d.curA, d.curB, moved, d.aIsIO, d.bIsIO, d.mode, d.prescaler)
 	}
+	// busAcquisitionCycles is deliberately absent from this sum; see
+	// TestBusAcquisitionIsDerivedButNotCharged for why.
 	d.lastDuration = uint64(moved) * d.perByteCycles()
 
 	// Burst mode with a fixed-time prescaler interleaves with the CPU: defer
@@ -451,25 +644,76 @@ func (d *DMA) Trigger() {
 		return
 	}
 
+	d.remaining = moved
+	d.runBlock()
+}
+
+// runBlock moves the bytes the current block still owes, from START_DMA to
+// FINISH_DMA, unless the bus delay stops it.
+//
+// It is one call for a whole block because nothing in the FPGA's transfer loop
+// gives the bus back once it has it: WAITING_CYCLES is the only state that
+// deasserts cpu_busreq_n_s (dma.vhd:441-449) and it is reachable only with a
+// non-zero prescaler (dma.vhd:424), which is the interleaved path Step() runs
+// instead. So the CPU is stopped for the whole of this, in burst mode exactly
+// as much as in continuous, and the sink is charged once the block completes.
+func (d *DMA) runBlock() {
+	if d.busDelay {
+		// START_DMA holds cpu_busreq_n_s deasserted while dma_delay_i is high
+		// (dma.vhd:269-273): the DMA does not merely fail to win the bus, it
+		// does not ask for it. It sits here until the pin drops.
+		d.stalled = true
+		return
+	}
+	d.stalled = false
 	srcIsA := d.aToB // port A is the source when transferring A -> B
 	d.inTransfer = true
-	for remaining := moved; remaining > 0; remaining-- {
+	for d.remaining > 0 {
 		b := d.portRead(srcIsA)
-		d.portWrite(!srcIsA, b)
+		// The byte counter goes up in TRANSFERING_WRITE_1 (dma.vhd:361), the
+		// first of the write states, so it counts the byte before the write
+		// cycle it belongs to has finished.
 		d.counter++
+		d.remaining--
+		d.portWrite(!srcIsA, b)
+		if !d.inTransfer {
+			// The byte just written was a command that took the transfer FSM
+			// out of the transfer states: $83's dma_seq_s <= IDLE, or a $C3
+			// that rebuilt the device underneath us. Only an IO endpoint
+			// pointed at the DMA's own command port can reach this. Everything
+			// below is downstream of the transfer states -- status_atleastone,
+			// FINISH_DMA, end-of-block, auto-restart, the bus charge -- and
+			// IDLE reaches none of it (dma.vhd:260-265, :469-495).
+			return
+		}
+		// status_atleastone goes up in TRANSFERING_WRITE_4 (dma.vhd:412), the
+		// same state that drops dma_write_cycle: the byte's write cycle has
+		// completed. Whether it is visible to the target DURING that write is
+		// not a question the hardware can answer, because the CPU is frozen
+		// while the DMA holds the bus (zxnext.vhd:1824-1835) and only this
+		// model re-enters the machine from inside the write. What is answerable
+		// is that a read taken after a byte has moved sees it set.
+		d.atLeastOne = true
+		if d.busDelay && d.remaining > 0 {
+			// TRANSFERING_WRITE_4 goes back to START_DMA rather than on to the
+			// next byte when dma_delay_i is high (dma.vhd:427-428), so a delay
+			// raised mid-block parks the transfer and hands the bus back with
+			// the pointers where they stand.
+			d.inTransfer = false
+			d.stalled = true
+			return
+		}
 	}
 	d.inTransfer = false
-	// Continuous mode stalls the CPU for the whole transfer; charge the time
-	// to the CPU clock. Burst mode lets the CPU run, so it is not charged.
-	if d.mode == modeContinuous && d.cycleSink != nil {
+	if d.cycleSink != nil {
 		d.cycleSink(d.lastDuration)
 	}
 	d.finishBlock()
 }
 
 // finishBlock applies the auto-restart-or-stop policy after a transfer's last
-// byte: auto-restart reloads the start addresses and stays armed; otherwise the
-// loaded flag clears. Either way the end-of-block status bit latches (the FPGA
+// byte: auto-restart reloads the start addresses and goes round again;
+// otherwise the FSM returns to IDLE. Either way the end-of-block bit latches (the FPGA
 // sets status_endofblock_n='0' at FINISH_DMA, dma.vhd:471, regardless of the
 // auto-restart branch).
 func (d *DMA) finishBlock() {
@@ -478,8 +722,12 @@ func (d *DMA) finishBlock() {
 		d.curA = d.portAStart
 		d.curB = d.portBStart
 		d.counter = d.counterInit() // dma.vhd:482: z80 mode reloads -1
+		// status_atleastone stays set: FINISH_DMA under auto-restart goes to
+		// START_DMA or WAITING_ACK (dma.vhd:490-494), never to IDLE, so the bit
+		// IDLE would have cleared (dma.vhd:265) never gets cleared and the
+		// status register reads $1B for as long as the restarts continue.
 	} else {
-		d.loaded = false
+		d.atLeastOne = false // FINISH_DMA -> IDLE (dma.vhd:495, :265)
 	}
 }
 
@@ -502,6 +750,17 @@ func (d *DMA) Step(now uint64) {
 	if !d.activeBurst {
 		return
 	}
+	if d.busDelay {
+		// TRANSFERING_WRITE_4 and WAITING_CYCLES both hand a burst back to
+		// START_DMA while dma_delay_i is high (dma.vhd:427-428, :456-461), and
+		// START_DMA does not ask for the bus (dma.vhd:269-273). Nothing falls
+		// due until the pin drops. The due time follows `now` while it is
+		// parked because the fixed-time counter DMA_timer_s is cleared when the
+		// next read finally starts (dma.vhd:309), not while the DMA waits: a
+		// long pause leaves no backlog to dump in one go.
+		d.nextDue = now
+		return
+	}
 	per := d.perByteCycles()
 	srcIsA := d.aToB
 	// Same self-port re-entry hazard as Trigger: a pumped byte can land back
@@ -509,9 +768,15 @@ func (d *DMA) Step(now uint64) {
 	d.inTransfer = true
 	for d.remaining > 0 && now >= d.nextDue {
 		b := d.portRead(srcIsA)
-		d.portWrite(!srcIsA, b)
-		d.counter++
+		d.counter++ // dma.vhd:361, in TRANSFERING_WRITE_1
 		d.remaining--
+		d.portWrite(!srcIsA, b)
+		if !d.inTransfer {
+			// The pumped byte was a command that took the FSM to IDLE; see
+			// the same guard in runBlock.
+			return
+		}
+		d.atLeastOne = true // dma.vhd:412, in TRANSFERING_WRITE_4
 		d.nextDue += per
 	}
 	d.inTransfer = false
@@ -606,9 +871,10 @@ func (d *DMA) ByteCounter() uint16 { return d.counter }
 func (d *DMA) CurrentA() uint16    { return d.curA }
 func (d *DMA) CurrentB() uint16    { return d.curB }
 
-// Duration returns the T-state cost of the most recent transfer (per-byte cycle
-// cost × bytes moved). The emulator charges this to the CPU clock so a
-// continuous-mode transfer consumes the right amount of time.
+// Duration returns the T-state cost of the most recent transfer: the per-byte
+// cycle cost times the bytes moved, plus busAcquisitionCycles for the trip
+// around the bus that brackets them. The emulator charges this to the CPU
+// clock, because that is the time the CPU spent frozen.
 func (d *DMA) Duration() uint64 { return d.lastDuration }
 
 // Mode returns the transfer mode (continuous or burst) from the last WR4 write.
@@ -677,15 +943,18 @@ func (d *DMA) regValue(reg int) byte {
 //	bits 7:6 = 00
 //	bit 5    = status_endofblock_n (1 = not at end, 0 = block finished)
 //	bits 4:1 = 1101 (fixed)
-//	bit 0    = status_atleastone — set while a transfer is mid-flight, but the
-//	           FPGA clears it once the FSM returns to IDLE (dma.vhd:265). Our
-//	           transfers complete synchronously, so a read always observes the
-//	           idle state: 0.
+//	bit 0    = status_atleastone, raised after the block's first byte is
+//	           written (dma.vhd:412) and cleared again when the FSM returns to
+//	           IDLE (dma.vhd:265). A burst interleaved with the CPU is exactly
+//	           the case a driver can poll it in.
 func (d *DMA) statusByte() byte {
 	const fixed = 0x1A // bits 4:1 = 1101, bits 5/0 = 0
 	s := byte(fixed)
 	if !d.endOfBlock { // status_endofblock_n = 1
 		s |= 0x20
+	}
+	if d.atLeastOne {
+		s |= 0x01
 	}
 	return s
 }

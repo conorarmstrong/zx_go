@@ -78,7 +78,6 @@ type dmaState struct {
 	BMode      byte
 	AIsIO      bool
 	BIsIO      bool
-	Loaded     bool
 
 	// The DMA-mode latch. The ULA re-latches it from the access port on every
 	// DMA port access, but it decides what LOAD/CONTINUE seed the byte counter
@@ -97,6 +96,7 @@ type dmaState struct {
 	Mode         byte
 	AutoRestart  bool
 	EndOfBlock   bool
+	AtLeastOne   bool
 	LastDuration uint64
 
 	// Read-back register file: the mask and the sequence cursor.
@@ -109,6 +109,22 @@ type dmaState struct {
 	NextDue     uint64
 
 	InTransfer bool
+
+	// BusDelay is the dma_delay_i pin as this controller last saw it, and
+	// Stalled is the transfer FSM parked in START_DMA because of it. The pin is
+	// an input rather than a register, and it is captured for the same reason
+	// ZMode is: the source is outside this device, but what the DMA does next
+	// depends on the value it is holding, and a capture taken while a block is
+	// parked has to come back parked. Restore Stalled without BusDelay and the
+	// controller resumes a block the recorded machine had stopped.
+	BusDelay bool
+	Stalled  bool
+
+	// Wedged is the register-write sequencer parked in the FPGA's unimplemented
+	// R4_BYTE_2 state, where it swallows every command byte until the reset pin
+	// is driven. A rewind that restores it clear hands the guest a controller
+	// hardware would have left dead.
+	Wedged bool
 
 	// Pending is the follow-byte queue as pendingOp codes, widened to bytes so
 	// gob encodes it as one byte string.
@@ -129,7 +145,6 @@ func (d *DMA) SaveState() []byte {
 		BMode:      d.bMode,
 		AIsIO:      d.aIsIO,
 		BIsIO:      d.bIsIO,
-		Loaded:     d.loaded,
 
 		ZMode: d.zMode,
 
@@ -143,6 +158,7 @@ func (d *DMA) SaveState() []byte {
 		Mode:         d.mode,
 		AutoRestart:  d.autoRestart,
 		EndOfBlock:   d.endOfBlock,
+		AtLeastOne:   d.atLeastOne,
 		LastDuration: d.lastDuration,
 
 		ReadMask: d.readMask,
@@ -153,6 +169,10 @@ func (d *DMA) SaveState() []byte {
 		NextDue:     d.nextDue,
 
 		InTransfer: d.inTransfer,
+
+		BusDelay: d.busDelay,
+		Stalled:  d.stalled,
+		Wedged:   d.wedged,
 	}
 	// Copied, not aliased: the live queue is resliced as each follow byte
 	// arrives and appended to from inside one, so its backing array is reused
@@ -214,7 +234,6 @@ func (d *DMA) LoadState(b []byte) error {
 	d.bMode = s.BMode
 	d.aIsIO = s.AIsIO
 	d.bIsIO = s.BIsIO
-	d.loaded = s.Loaded
 
 	d.zMode = s.ZMode
 
@@ -228,6 +247,7 @@ func (d *DMA) LoadState(b []byte) error {
 	d.mode = s.Mode
 	d.autoRestart = s.AutoRestart
 	d.endOfBlock = s.EndOfBlock
+	d.atLeastOne = s.AtLeastOne
 	d.lastDuration = s.LastDuration
 
 	d.readMask = s.ReadMask
@@ -238,6 +258,9 @@ func (d *DMA) LoadState(b []byte) error {
 	d.nextDue = s.NextDue
 
 	d.inTransfer = s.InTransfer
+	d.busDelay = s.BusDelay
+	d.stalled = s.Stalled
+	d.wedged = s.Wedged
 	d.pending = pending
 	return nil
 }

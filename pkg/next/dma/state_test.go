@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
@@ -270,18 +271,16 @@ func TestConfigurationAloneDoesNotReproduceTheTransfer(t *testing.T) {
 // $08 stops being "block length, low" and becomes a WR2 write.
 //
 // Every byte boundary in a full command stream is tried, so the property holds
-// for every queue shape the stream passes through — including the two places
-// the queue grows from inside a follow byte (the WR2 timing byte announcing the
-// prescaler, and the WR4 interrupt-control byte announcing its pulse offset and
-// vector), which a restored queue has to be able to do after the capture.
+// for every queue shape the stream passes through, including the place the
+// queue grows from inside a follow byte (the WR2 timing byte announcing the
+// prescaler), which a restored queue has to be able to do after the capture.
 func TestReplayingResumesAHalfWrittenCommand(t *testing.T) {
 	stream := []byte{
 		0xC3,                         // RESET
 		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
 		0x54, 0x02, // WR1: port A memory increment, + timing byte
 		0x68, 0x22, 0x40, // WR2: port B IO fixed, + timing byte, + prescaler
-		0x9D, 0xDF, 0x00, // WR4: continuous, port B = $00DF, interrupt control follows
-		0x18, 0x00, 0x00, // ...which announces a pulse offset and a vector
+		0x8D, 0xDF, 0x00, // WR4: continuous, port B = $00DF
 		0xCF, 0x87, // LOAD, ENABLE
 	}
 
@@ -410,6 +409,14 @@ func driveEverything(r *burstRig) {
 	// pointers, the counter and the charged duration all take new values.
 	feed(r.d, reprogram)
 
+	// The interrupt controller then raises dma_delay: an IM2 peripheral out of
+	// idle with its dma-int-enable bit set (zxnext.vhd:2001-2010). The guest
+	// enables another block and it parks in START_DMA, without ever asking for
+	// the bus (dma.vhd:269-273). The pin and the parked position are both chip
+	// state a rewind has to land on; restored without them the block just runs.
+	r.d.SetBusDelay(true)
+	r.d.WriteCommand(0x87) // ENABLE: parks, because the pin is high
+
 	// ...and stops mid-command again, owing a different pair of follow bytes
 	// than the capture was owed. Ending on an empty queue would leave the
 	// restore of a non-empty one untested from the other direction.
@@ -455,7 +462,6 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"BMode", before.BMode == after.BMode},
 		{"AIsIO", before.AIsIO == after.AIsIO},
 		{"BIsIO", before.BIsIO == after.BIsIO},
-		{"Loaded", before.Loaded == after.Loaded},
 		{"ZMode", before.ZMode == after.ZMode},
 		{"CurA", before.CurA == after.CurA},
 		{"CurB", before.CurB == after.CurB},
@@ -466,6 +472,7 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"Mode", before.Mode == after.Mode},
 		{"AutoRestart", before.AutoRestart == after.AutoRestart},
 		{"EndOfBlock", before.EndOfBlock == after.EndOfBlock},
+		{"AtLeastOne", before.AtLeastOne == after.AtLeastOne},
 		{"LastDuration", before.LastDuration == after.LastDuration},
 		{"ReadMask", before.ReadMask == after.ReadMask},
 		{"ReadReg", before.ReadReg == after.ReadReg},
@@ -473,6 +480,8 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 		{"Remaining", before.Remaining == after.Remaining},
 		{"NextDue", before.NextDue == after.NextDue},
 		{"Pending", bytes.Equal(before.Pending, after.Pending)},
+		{"BusDelay", before.BusDelay == after.BusDelay},
+		{"Stalled", before.Stalled == after.Stalled},
 		// InTransfer is deliberately absent, and it is the one field no drive
 		// sequence can put here: it is true only between the first and last
 		// byte of a block, and this rig is driven from outside the transfer, so
@@ -493,6 +502,7 @@ func TestTheDriveSequenceChangesEveryCapturedField(t *testing.T) {
 	// unnoticed. Reflection makes the omission a failure instead of a silence.
 	named := map[string]bool{
 		"InTransfer": true, // covered by TestARoundTripFromInsideATransfer
+		"Wedged":     true, // covered by TestAWedgedControllerSurvivesARoundTrip
 	}
 	for _, f := range checks {
 		named[f.name] = true
@@ -605,5 +615,211 @@ func TestLoadStateRejectsImpossibleStateWithoutHalfApplying(t *testing.T) {
 				t.Error("a refused state was partly applied: the controller changed underneath it")
 			}
 		})
+	}
+}
+
+// The wedge is the second state no drive sequence can pass through, for the
+// obvious reason: once the register-write sequencer is parked in R4_BYTE_2
+// every later byte is swallowed, so a drive that reaches it cannot go on to
+// move anything else. It gets its own round trip instead, exactly as
+// inTransfer does.
+//
+// It has to be captured. A rewind that lands on a wedged controller and
+// restores it unwedged hands the guest a DMA that hardware would have left
+// dead until a machine reset, and the very next command byte reprograms a chip
+// that on the real machine could not hear it.
+func TestAWedgedControllerSurvivesARoundTrip(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 3; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	d := New(mem)
+	feed(d, []byte{
+		0xC3,                         // RESET
+		0x7D, 0x00, 0x40, 0x03, 0x00, // WR0: A->B, port A = $4000, length 3
+		0x14, 0x10, // WR1, WR2: both memory, incrementing
+		0x8D, 0x00, 0x60, // WR4: continuous, port B = $6000
+		0xCF, // LOAD: fully programmed and armed...
+	})
+	d.WriteCommand(0x91) // ...and then wedged by a WR4 with D4 alone
+
+	st := d.SaveState()
+
+	// Drive it somewhere else entirely: the reset pin clears the wedge, and the
+	// block the controller was holding runs.
+	d.Reset()
+	d.WriteCommand(0x87)
+	if mem[0x6000] != 0xA0 {
+		t.Fatalf("the drive sequence moved nothing, so this test cannot detect a lost restore")
+	}
+	for i := uint16(0); i < 3; i++ {
+		mem[0x6000+i] = 0
+	}
+
+	if err := d.LoadState(st); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := d.SaveState(); !bytes.Equal(got, st) {
+		t.Error("re-capturing after a restore did not reproduce the captured state")
+	}
+	d.WriteCommand(0x87) // a wedged controller swallows this
+	for i := uint16(0); i < 3; i++ {
+		if got := mem[0x6000+i]; got != 0 {
+			t.Errorf("dst[$%04X] = $%02X, want $00: the restored controller was not wedged",
+				0x6000+i, got)
+		}
+	}
+}
+
+// status_atleastone is chip state, and a rewind has to carry it. A driver
+// streaming samples polls the status register between instructions, which is
+// exactly where captures are taken; restore the bit clear and the very next
+// poll tells the driver its block has not started when half of it has already
+// gone out of the port.
+func TestTheAtLeastOneStatusBitSurvivesARoundTrip(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 0x40; i++ {
+		mem[0x4000+i] = byte(i + 1)
+	}
+	var now uint64
+	d := New(mem)
+	d.SetClock(func() uint64 { return now })
+	feed(d, burstStream(0x4000, 0x6000, 0x40, 10))
+
+	for now = 0; now < 50; now += 10 {
+		d.Step(now)
+	}
+	d.WriteCommand(0xBF)
+	if got := d.ReadCommand(); got != 0x3B {
+		t.Fatalf("fixture status = $%02X, want $3B: the bit is not set, so nothing is under test", got)
+	}
+
+	st := d.SaveState()
+
+	// Drive it past the end of the block, where IDLE clears the bit again.
+	for ; now <= 0x40*10+200; now += 10 {
+		d.Step(now)
+	}
+	d.WriteCommand(0xBF)
+	if got := d.ReadCommand(); got != 0x1A {
+		t.Fatalf("after the block ended status = $%02X, want $1A", got)
+	}
+
+	if err := d.LoadState(st); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	d.WriteCommand(0xBF)
+	if got := d.ReadCommand(); got != 0x3B {
+		t.Errorf("status after the restore = $%02X, want $3B: the at-least-one bit was not captured", got)
+	}
+}
+
+// The completeness claim checked from the other side. The guard in
+// TestTheDriveSequenceChangesEveryCapturedField proves every field dmaState
+// carries is moved by the drive sequence, but it cannot notice a field of the
+// running controller that dmaState never grew. That omission is the one that
+// actually loses a rewind, and it is silent: the round-trip test compares one
+// capture against another, so a field missing from both is missing from the
+// comparison too, and every test goes on passing while the device quietly
+// stops being rewindable.
+func TestEveryControllerFieldIsCaptured(t *testing.T) {
+	// The wiring to the rest of the machine, which is deliberately not this
+	// device's state: both buses and both callbacks into the CPU clock are
+	// installed by the emulator at construction, and a rewind must not re-point
+	// the controller at different objects. See the note at the top of state.go.
+	wiring := map[string]bool{"mem": true, "io": true, "cycleSink": true, "clock": true}
+
+	live := reflect.TypeOf(DMA{})
+	captured := reflect.TypeOf(dmaState{})
+	for i := 0; i < live.NumField(); i++ {
+		name := live.Field(i).Name
+		if wiring[name] {
+			continue
+		}
+		want := strings.ToUpper(name[:1]) + name[1:]
+		if _, ok := captured.FieldByName(want); !ok {
+			t.Errorf("DMA.%s is live controller state and dmaState has no %s to carry it: "+
+				"a rewind would restore the controller without it", name, want)
+		}
+	}
+}
+
+// A block parked by dma_delay_i is the third position no drive sequence can
+// pass through, and for the same reason as the wedge: while it is parked
+// nothing else the controller is asked to do can happen. It gets its own round
+// trip, covering both halves of that position: the FSM sitting in START_DMA
+// with the block part done, and the state of the pin holding it there.
+//
+// Both are needed. Without the parked FSM the block never resumes and the rest
+// of it is simply lost; without the pin, the controller comes back believing
+// the interrupt that stopped it has already gone away, and the next block runs
+// straight over the top of the service routine the delay exists to protect.
+func TestAStalledControllerSurvivesARoundTrip(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 8; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	d := New(mem)
+	var out []byte
+	moved := 0
+	d.SetIOBus(&hookBus{onWrite: func(_ uint16, v byte) {
+		out = append(out, v)
+		// Counted separately from out, which the test resets: the interrupt
+		// arrives once, part way through the fixture's block, and must not be
+		// re-raised by the replays that follow.
+		if moved++; moved == 3 {
+			d.SetBusDelay(true)
+		}
+	}})
+	stream := []byte{
+		0xC3,                         // RESET
+		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+		0x14,                     // WR1: port A memory, increment
+		wr2Byte(addrFixed, true), // WR2: port B IO, fixed
+		0x8D, 0xDF, 0x00,         // WR4: continuous, port B = IO $00DF
+		0xCF, 0x87, // LOAD, ENABLE
+	}
+	feed(d, stream)
+	if len(out) != 3 {
+		t.Fatalf("the fixture moved %d bytes before parking, want 3", len(out))
+	}
+
+	st := d.SaveState()
+
+	// Drive it somewhere else: the interrupt clears and the block finishes.
+	d.SetBusDelay(false)
+	if len(out) != 8 {
+		t.Fatalf("the drive sequence left %d bytes moved, want 8", len(out))
+	}
+
+	if err := d.LoadState(st); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := d.SaveState(); !bytes.Equal(got, st) {
+		t.Error("re-capturing after a restore did not reproduce the captured state")
+	}
+
+	// The parked FSM: dropping the pin resumes the block from where it stopped.
+	out = nil
+	d.SetBusDelay(false)
+	if got, want := string(out), string([]byte{0xA3, 0xA4, 0xA5, 0xA6, 0xA7}); got != want {
+		t.Errorf("the restored controller put out % X, want A3 A4 A5 A6 A7: "+
+			"the parked block did not resume from where it was captured", out)
+	}
+
+	// The pin: a restored controller is still being held off the bus, so a
+	// brand new block parks as well instead of running.
+	if err := d.LoadState(st); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	out = nil
+	d.WriteCommand(0x83)        // abandon the parked block
+	feed(d, []byte{0xCF, 0x87}) // LOAD, ENABLE for a fresh one
+	if len(out) != 0 {
+		t.Errorf("the restored controller moved %d bytes, want 0: dma_delay_i was not captured", len(out))
+	}
+	d.SetBusDelay(false)
+	if len(out) != 8 {
+		t.Errorf("after the pin dropped the fresh block moved %d bytes, want 8", len(out))
 	}
 }

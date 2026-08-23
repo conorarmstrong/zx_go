@@ -29,7 +29,8 @@ func withTiming(src, dst, length uint16, aCycCode, bCycCode byte, presc byte) []
 }
 
 // Without a prescaler, a transfer's duration is length × (read cycles + write
-// cycles). Cycle code 2 = 2 cycles, so 4 bytes at 2+2 = 16 T-states.
+// cycles). Cycle code 2 = 2 cycles, so 4 bytes at
+// 2+2 = 16 T-states.
 func TestTransferDurationCycleLength(t *testing.T) {
 	d := New(memMap{})
 	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0))
@@ -38,7 +39,7 @@ func TestTransferDurationCycleLength(t *testing.T) {
 	}
 }
 
-// A 4-cycle / 3-cycle pairing: 4 bytes at (4+3) = 28 T-states.
+// A 4-cycle / 3-cycle pairing: 4 bytes at (4+3) = 28.
 func TestTransferDurationMixedCycles(t *testing.T) {
 	d := New(memMap{})
 	feed(d, withTiming(0x4000, 0x6000, 4, 0x00 /*=4*/, 0x01 /*=3*/, 0))
@@ -48,7 +49,8 @@ func TestTransferDurationMixedCycles(t *testing.T) {
 }
 
 // A non-zero prescaler forces each byte to take at least that many cycles
-// (the fixed-time-transfer feature used for sampled audio): 8 bytes × 100 = 800.
+// (the fixed-time-transfer feature used for sampled audio): 8 bytes × 100,
+// = 800.
 func TestPrescalerDominatesDuration(t *testing.T) {
 	d := New(memMap{})
 	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 100))
@@ -86,17 +88,175 @@ func TestCycleSinkContinuousCharges(t *testing.T) {
 	}
 }
 
-func TestCycleSinkBurstDoesNotCharge(t *testing.T) {
+// Burst mode gives the CPU time back only where the FPGA actually deasserts
+// cpu_busreq_n_s: inside WAITING_CYCLES (dma.vhd:441-449), which is reachable
+// only with a non-zero prescaler (dma.vhd:424). That is the interleaved case,
+// and it is the one that must not charge the sink: the CPU is running in the
+// gaps, not stopped. (Burst with no prescaler never enters that state and does
+// charge; see TestBurstWithoutPrescalerChargesTheCPULikeContinuous.)
+func TestCycleSinkInterleavedBurstDoesNotCharge(t *testing.T) {
 	var charged uint64
+	var now uint64
 	d := New(memMap{})
 	d.SetCycleSink(func(n uint64) { charged += n })
-	// Burst-mode stream (WR4 0xCD = burst).
-	feed(d, []byte{0xC3, 0x7D, 0x00, 0x40, 0x08, 0x00, 0x14, 0x10,
-		0xCD, 0x00, 0x60, 0xCF, 0x87})
+	d.SetClock(func() uint64 { return now })
+	feed(d, burstStream(0x4000, 0x6000, 8, 50))
+	for ; now <= 8*50+50; now += 10 {
+		d.Step(now)
+	}
+	if d.ByteCounter() != 8 {
+		t.Fatalf("interleaved burst moved %d of 8 bytes; the fixture is not transferring", d.ByteCounter())
+	}
 	if charged != 0 {
-		t.Errorf("burst charged = %d, want 0 (CPU keeps running)", charged)
+		t.Errorf("interleaved burst charged = %d, want 0 (the CPU runs in the gaps)", charged)
 	}
 	if d.Duration() == 0 {
 		t.Error("Duration should still be computed in burst mode")
+	}
+}
+
+// Burst mode gives the CPU time only inside WAITING_CYCLES, and WAITING_CYCLES
+// is reachable only when the prescaler is non-zero (dma.vhd:424 enters it under
+// "R2_portB_preescaler_s > 0", and dma.vhd:441-449 is the only place that
+// raises cpu_busreq_n again mid-block). A burst block with no prescaler
+// therefore holds the bus from its single request edge all the way to
+// FINISH_DMA, exactly like a continuous one, and the CPU is frozen for the
+// whole of it (zxnext.vhd:1824-1835 freezes the CPU while the DMA holds the
+// bus). So it is charged.
+func TestBurstWithoutPrescalerChargesTheCPULikeContinuous(t *testing.T) {
+	var charged uint64
+	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
+	// Burst (WR4 $CD) with no WR2 timing byte, so no prescaler byte either.
+	feed(d, []byte{0xC3, 0x7D, 0x00, 0x40, 0x08, 0x00, 0x14, 0x10,
+		0xCD, 0x00, 0x60, 0xCF, 0x87})
+	if d.Duration() == 0 {
+		t.Fatal("the fixture computed no duration, so it moved nothing")
+	}
+	if charged != d.Duration() {
+		t.Errorf("burst without a prescaler charged %d, want %d: the bus is held for the whole block",
+			charged, d.Duration())
+	}
+}
+
+// Both port timings default to "01", and "01" is three cycles, not two. The
+// reset pin sets R1_portA_timming_byte_s and R2_portB_timming_byte_s to "01"
+// (dma.vhd:233-234), the $C3 command sets them to "01" again (dma.vhd:641-642),
+// and the transfer FSM decodes "01" as TRANSFERING_READ_3 / WRITE_3, three
+// cycles (dma.vhd:314, :321). A stream that sends no WR1 or WR2 timing byte
+// therefore runs at 3+3 per byte.
+func TestDefaultPortTimingIsThreeCycles(t *testing.T) {
+	const want = uint64(8 * (3 + 3))
+
+	// Power-up: nothing has been written to the controller at all.
+	d := New(memMap{})
+	feed(d, []byte{
+		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+		0x14, 0x10, // WR1, WR2: both memory, incrementing, no timing byte
+		0x8D, 0x00, 0x60, // WR4: continuous, port B = $6000
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+	if got := d.Duration(); got != want {
+		t.Errorf("power-up Duration = %d, want %d", got, want)
+	}
+
+	// And after a $C3, which restores the same two defaults.
+	d2 := New(memMap{})
+	feed(d2, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 0)) // program 2 cycles
+	feed(d2, []byte{
+		0xC3,                         // RESET
+		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+		0x14, 0x10,
+		0x8D, 0x00, 0x60,
+		0xCF, 0x87,
+	})
+	if got := d2.Duration(); got != want {
+		t.Errorf("Duration after $C3 = %d, want %d", got, want)
+	}
+}
+
+// The Z80 DMA calls timing code 11 "do not use", but the FPGA gives it a
+// definite meaning: the timing decode is a case statement whose "when others"
+// arm goes to TRANSFERING_READ_2 / TRANSFERING_WRITE_2, the four-cycle path
+// (dma.vhd:316, :323). So 11 behaves as 00 does, not as 10 does.
+func TestTimingCodeElevenIsFourCycles(t *testing.T) {
+	d := New(memMap{})
+	feed(d, withTiming(0x4000, 0x6000, 8, 0x03, 0x03, 0))
+	if got, want := d.Duration(), uint64(8*(4+4)); got != want {
+		t.Errorf("Duration at timing code 11/11 = %d, want %d", got, want)
+	}
+
+	// ...and the neighbouring code really is the two-cycle one, so the test
+	// above is pinning the 11 arm rather than the whole decode.
+	d2 := New(memMap{})
+	feed(d2, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 0))
+	if got, want := d2.Duration(), uint64(8*(2+2)); got != want {
+		t.Errorf("Duration at timing code 10/10 = %d, want %d", got, want)
+	}
+}
+
+// $C7 and $CB each write "01" back into one port's timing register
+// (dma.vhd:647-651), so they undo a programmed timing byte and put that port
+// back on three cycles. They are per port: $C7 is port A's, $CB is port B's.
+func TestResetPortTimingCommands(t *testing.T) {
+	// Both ports programmed to two cycles, then both reset.
+	block := func(after ...byte) []byte {
+		stream := []byte{
+			0xC3,                         // RESET
+			0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+			0x54, 0x02, // WR1: port A memory, increment, + timing byte: 2 cycles
+			0x50, 0x02, // WR2: port B memory, increment, + timing byte: 2 cycles
+		}
+		stream = append(stream, after...)
+		return append(stream, 0x8D, 0x00, 0x60, 0xCF, 0x87)
+	}
+
+	d := New(memMap{})
+	feed(d, block(0xC7, 0xCB))
+	if got, want := d.Duration(), uint64(8*(3+3)); got != want {
+		t.Errorf("Duration after $C7 $CB = %d, want %d", got, want)
+	}
+
+	// $C7 alone leaves port B where the guest put it, which is what makes these
+	// two separate commands rather than one.
+	dA := New(memMap{})
+	feed(dA, block(0xC7))
+	if got, want := dA.Duration(), uint64(8*(3+2)); got != want {
+		t.Errorf("Duration after $C7 alone = %d, want %d", got, want)
+	}
+
+	dB := New(memMap{})
+	feed(dB, block(0xCB))
+	if got, want := dB.Duration(), uint64(8*(2+3)); got != want {
+		t.Errorf("Duration after $CB alone = %d, want %d", got, want)
+	}
+}
+
+// The per-block bus acquisition is derived from the FPGA but deliberately not
+// charged, and this pins that so the deferral cannot quietly become an
+// oversight. busAcquisitionCycles records what the hardware spends; Duration
+// deliberately leaves it out.
+//
+// The reason is a defect one level up. The emulator charges a whole block to
+// the CPU T-state counter in a single jump (cmd/zx_go/next.go, cpu.SetTstates),
+// and that same counter is what the frame-interrupt window is scheduled from,
+// so there are no sample points anywhere inside a stall. On hardware the stall
+// is spread across the transfer with the raster running through it. Adding a
+// correct per-block cost to a lump that coarse changes which side of the
+// interrupt window a block lands on, and that is a phase lottery, not a timing
+// improvement: charging these three cycles is enough on its own to stop a
+// working title from booting. The constant stays derived and documented, and
+// goes into the arithmetic once the DMA stall is spread over the timeline it
+// belongs to. See ROADMAP "zxnDMA bus-hold time is charged as one lump".
+func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
+	if busAcquisitionCycles != 3 {
+		t.Errorf("busAcquisitionCycles = %d, want 3: START_DMA, WAITING_ACK and "+
+			"FINISH_DMA are one clock each (dma.vhd:267-305, :469-495)", busAcquisitionCycles)
+	}
+	d := New(memMap{})
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0))
+	if got, want := d.Duration(), uint64(4*(2+2)); got != want {
+		t.Errorf("Duration = %d, want %d: the acquisition must not be in the charge "+
+			"while a block is charged to the CPU as one lump", got, want)
 	}
 }
