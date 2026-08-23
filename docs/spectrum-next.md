@@ -82,8 +82,8 @@ subsystems cleanly.
 | Sprites (128) | ✅ position, pattern, palette, scale (1/2/4/8×), mirror, rotate, 8bpp, anchor groups (composite + unified), and the `$303B` status port (collision + max-per-line, clear-on-read) |
 | ULA scroll (NextReg 0x26 / 0x27) | ✅ horizontal (whole-character + sub-character pixel shift) and vertical (with the FPGA's 192-line fold). NR$68 bit 2 half-pixel is stored but needs a 2x-wide ULA render to show |
 | Compositor (NextReg 0x15) | ✅ all eight priority modes (SLU / LSU / SUL / LUS / USL / ULS + the two additive blend orderings), the per-pixel SUL "below" stencil + Layer 2 priority bit, and NR$14 / NR$4A transparency. The blend modes read NR$68's blend selection, which is wired (`cmd/zx_go/nr68.go`): bit 7 ULA output, bits 6:5 blend source, bit 2 half-pixel scroll and bit 0 the SLU stencil are all decoded and applied |
-| Copper coprocessor | ✅ instruction store / decode / per-line Step, driven by a per-T-state beam-position model so WAITs release on the correct scanline + hpos (full per-pixel hpos is the precision limit of a per-scanline renderer) |
-| zxnDMA (ports 0x6B / 0x0B) | ⚠️ the transfer engine is complete and spec-checked: memory↔memory and memory↔IO endpoints, the variable-length Z80-DMA WR-group protocol, per-byte prescaler and cycle-length timing (burst + prescaler transfers interleaved with the CPU), Continue / auto-restart and read-mask read-back. Not modelled: the interrupt / match logic and DMA-vs-CPU bus arbitration (`pkg/next/dma/dma.go`) |
+| Copper coprocessor | ✅ instruction store / decode, paced per raster column over the real line length: four copper clocks a column (28 MHz copper against a 7 MHz hcount), a `MOVE` that straddles a boundary paid out of the next column with the debt carried across line and frame boundaries, and compose ranges split at the pixel a `MOVE` wrote in. `WAIT` uses the FPGA's `hc_ula` origin, twelve columns before displayed pixel 0. Clocked on every line of the frame, not only the 192 displayed ones. NR$03 machine timing is not consulted, so a program selecting 48K or Pentagon timing still gets 456 columns and 311 lines |
+| zxnDMA (ports 0x6B / 0x0B) | ⚠️ the transfer engine is complete and spec-checked: memory↔memory and memory↔IO endpoints, the variable-length Z80-DMA WR-group protocol, per-byte prescaler and cycle-length timing (burst + prescaler transfers interleaved with the CPU), Continue / auto-restart and read-mask read-back. Bus arbitration is modelled: a block holds the bus for its bytes and charges the CPU, burst yields it only in `WAITING_CYCLES` as the FPGA does, the `dma_delay_i` pin parks and resumes a block, and `$83` abandons one where it stands. The interrupt / match logic is absent because the FPGA does not implement it either (no interrupt output, no daisy-chain pins, the mask/match and interrupt-control registers commented out). Four timing defects remain open, the prescaler period being the largest: see ROADMAP item 2 (`pkg/next/dma/dma.go`) |
 | RTC | ✅ host clock via the esxDOS M_GETDATE API **and** the i2c DS1307 bus on ports `$103B`/`$113B` (the NextZXOS date/time line renders) |
 | UART stub (NextReg 0xA8 / 0xA9) | ⚠️ AT / AT+ command set produces plausible responses; no real Wi-Fi, no socket emulation |
 | esxDOS file API | ✅ F_OPEN / F_CLOSE / F_READ / F_WRITE / F_SEEK / F_FSTAT / F_OPENDIR / F_READDIR / M_GETHANDLE / M_DRVAPI / M_GETDATE all wired and unit-tested via the RST 8 → dispatcher → host-directory mount path. Real-NextZXOS-program coverage is the next step (no contributor has scripted a NEXTBASIC program that exercises every call yet). |
@@ -108,12 +108,14 @@ history). Now working — items this doc previously listed as gaps:
   **zxnDMA** Z80-DMA protocol, **NR$14/$4A** transparency, and the
   classic/LoRes/Timex/ULAnext screen paths.
 
-Remaining work is **game compatibility**, not hardware-emulation gaps: see the
-open items in `ROADMAP.md`, where the two catalogued hardware gaps (the zxnDMA
-interrupt/match logic and Copper `MOVE` landing mid-segment) are both recorded
-as unblocked and unmotivated — no screened title needs either. Niche timing
-personalities (e.g. Pentagon) and the F8 hardware-NMI menu are best-effort;
-file an issue if a specific title needs them.
+Remaining work is mostly **game compatibility**: see the open items in
+`ROADMAP.md`. Of the two hardware gaps once catalogued there, Copper `MOVE`
+timing is now done, and the zxnDMA interrupt/match logic turned out not to be
+implementable, because the FPGA does not implement it. What that work did leave
+is four open zxnDMA timing defects, recorded as ROADMAP item 2; no screened
+title is known to need them. Niche timing personalities (e.g. Pentagon) and the
+F8 hardware-NMI menu are best-effort; file an issue if a specific title needs
+them.
 
 ## Loading a .NEX file
 

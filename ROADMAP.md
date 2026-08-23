@@ -485,6 +485,61 @@ canonical ordering so two captures of an unchanged machine compare equal.
   single-step path), and any change made from outside the CPU during the window
   (`write-memory`, a key press, a disk arriving).
 
+### 5. [correctness] Open defects from the 2026-08-23 review
+
+A review of the Copper and zxnDMA work found these in committed code. None is
+fixed. The two that a user can hit are written up in `KNOWN_ISSUES.md` instead
+(`watch-nextreg` nil-panicking on a non-Next machine, and a Copper write wiping
+the pixels to its left when it disables every overlay layer mid-row); the rest
+are here.
+
+- **The `pendingOp` codes were renumbered, and they are a wire format.**
+  Deleting `opInterruptControl` from the middle of the iota block moved
+  `opReadMask` from 11 to 10 (`pkg/next/dma/dma.go:241`). A savestate written by
+  an older build with a `$BB` read-mask byte pending now fails validation, and
+  one with a pending interrupt-control byte silently loads as a read-mask
+  follow, so the guest's next `$6B` byte is applied as the read mask. `opLast`
+  promises cross-build validation, so the codes cannot be renumbered in place.
+  This is the most serious of the set.
+- **Burst blocks are now charged to the CPU where they previously were not.**
+  The charge used to be gated on `modeContinuous`; it is now unconditional at
+  the end of `runBlock`. That follows the FPGA, which releases the bus only in
+  `WAITING_CYCLES`, but it means a burst block with no prescaler can add tens of
+  thousands of T-states at one instruction boundary. It lands squarely on defect
+  (b) above and should be reconsidered together with it.
+- **A wedged controller has no way back.** `DMA.Reset()` is the only escape and
+  nothing in production calls it: `rebootLocked` never touches `nextDMA`, so a
+  guest that wedges the sequencer leaves it dead for the life of the process.
+  The model-switch path does swap in a fresh controller, which is why this is
+  not permanent in every case.
+- **Two doc comments assert the opposite of the code.** `Duration()` says the
+  value includes `busAcquisitionCycles` when it deliberately does not, and
+  `Reset()` describes `$C3` as clearing "a strict subset" when `$C3` in fact
+  clears more, which is defect (d) above.
+- **`copperMaxFrameLine` is off by one.** It holds the frame's line *count*
+  (312) but is compared as a maximum line *number* (`cmd/zx_go/copper_disasm.go`),
+  so a `WAIT` for line 312, which can never release, is not recognised as a list
+  terminator and the trailing NOOPs are dumped. The constant also sits between
+  `formatCopperDisasm`'s doc comment and the function, so the function has no
+  godoc and the constant inherits a comment describing the `HALT` opcode that no
+  longer exists.
+- **Row composition is O(row × writes).** Every Copper write re-composes the
+  row's tail by re-rendering the full Layer 2, tilemap and sprite scanlines, so
+  a `MOVE`-heavy list multiplies the per-row cost by the number of writes.
+  Recording the write columns during the column walk and composing contiguous
+  segments once each would make it O(row) again.
+- **Copper `MOVE`s have two different lifetimes.** Those on displayed rows run
+  inside the raster journal's replay window and can be undone by `EndReplay`;
+  those on rows below the display run after it and persist.
+- **A test pins the opposite of what the debt mechanism does.**
+  `TestCopperIsPacedAtFourClocksPerColumn` asserts every step is offered four
+  clocks, which `stepCopperColumn` deliberately breaks when a `MOVE` straddles a
+  column boundary. It passes only because the fake never spends a clock.
+- **Two deliberate changes worth a second look**, both argued from the VHDL and
+  covered by tests: a bare `$87` with no `LOAD` now runs a block from zeroed
+  pointers (`dma.vhd:724` has no armed flag), and `sbtMapLen` is referenced only
+  by tests, so the SAM allocation-map bound is not enforced where it is written.
+
 ---
 
 ## Catalogued — deliberately not doing

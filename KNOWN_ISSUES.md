@@ -122,6 +122,50 @@ than dropped.
 
 ---
 
+### `watch-nextreg` crashes the emulator on a non-Next machine
+
+**Affects:** every machine except the Spectrum Next, from the version that
+introduced the command.
+
+**What you see.** In the telnet debugger, `watch-nextreg 43` (or any register)
+on a 48K / 128K / +2 / +3 / Pentagon / SAM / ZX80 / ZX81 session kills the
+process with a nil-pointer panic instead of returning an error.
+
+**Cause.** NextRegs only exist on the Next, and `cmd/zx_go/next.go` sets
+`e.nextRegs` to `nil` for every other model. `cmdWatchNextReg` calls
+`ensureNRWatchHook` with no guard, and that reaches
+`d.emu.nextRegs.GetTracer()` (`cmd/zx_go/nrwatch_cmd.go:190`) on the nil
+pointer. The command is inherently Next-only, so the fix is to refuse it with a
+message rather than to make it work elsewhere.
+
+**Workaround:** do not issue `watch-nextreg` unless the session is a Next.
+`nr-trace` has the same Next-only precondition and should be checked with it.
+
+---
+
+### A Copper write can wipe the pixels to its left on the same row
+
+**Affects:** the Spectrum Next only, and only a row where a Copper `MOVE`
+turns off *every* overlay layer partway across.
+
+**What you see.** The part of the scanline generated before the write loses its
+Layer 2, sprite and tilemap pixels and falls back to bare ULA content, instead
+of keeping what it was composed with.
+
+**Cause.** A Copper write splits the row so each part keeps the state it was
+generated under, which means re-composing only the tail. When the write leaves
+no active layer, `ComposeScanlineRange`'s fast path copies the whole row and
+ignores the `x0`/`x1` bounds it was given
+(`pkg/next/compositor/compositor.go:505`), so the tail re-compose overwrites the
+head as well. The fast path needs to honour the range like every other path in
+that function.
+
+**Workaround:** none. No title on the SD card is known to hit it; it needs a
+Copper list that clears the Layer 2, sprite and tilemap enables together in
+mid-row.
+
+---
+
 ## Recently fixed
 
 ### SAM `.sbt` files could not be loaded, for a reason that was wrong

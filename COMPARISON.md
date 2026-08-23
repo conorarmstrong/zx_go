@@ -112,9 +112,11 @@ interrupts. `--sam` or **Machine → SAM Coupé**. See `docs/sam-coupe.md`.
 ⁷ MAME implements the collision bit; the "max sprites per line" status bit is a
 documented TODO. zx_go implements collision and the max-per-line status flag;
 the per-line *bandwidth* render limit is visual-only and deferred.
-⁸ Copper in zx_go is driven from a per-T-state beam-position model but rendered
-per-scanline (full per-pixel hpos deferred). CSpect/ZEsarUX Copper timing is
-documented as sub-scanline-imprecise.
+⁸ Copper in zx_go is paced per raster column over the real line length, four
+copper clocks a column, with a MOVE straddling a boundary paid out of the next
+column and compose ranges split at the pixel it wrote in, so hpos is no longer
+rounded to a scanline. CSpect/ZEsarUX Copper timing is documented as
+sub-scanline-imprecise.
 ⁹ ULANext palette handling in zx_go is wired for the static-palette paths the OS
 boot exercises; per-scanline ULA palette writes are deferred.
 
@@ -204,9 +206,14 @@ signing/verification.
 ²³ zx_go persists battery-backed RTC NVRAM to disk.
 ²⁴ zx_go implements the zxnDMA's memory↔memory and memory↔IO transfers
 (sprite/Layer 2/DAC port endpoints), per-byte prescaler + cycle-length timing
-(continuous-mode duration charged to the CPU clock; burst-mode + prescaler
-transfers interleaved with the CPU so DMA-streamed audio is paced across the CPU
-timeline), Continue / auto-restart, and read-mask register read-back.
+(burst-mode + prescaler transfers interleaved with the CPU so DMA-streamed audio
+is paced across the CPU timeline), Continue / auto-restart, and read-mask
+register read-back. Bus arbitration is modelled: every block that runs end to
+end is charged to the CPU clock, burst as much as continuous, because the FPGA
+gives the bus back only in WAITING_CYCLES, which needs a prescaler. The
+interrupt/match logic is absent because the FPGA does not implement it either.
+Four timing defects are open, the prescaler period being the largest: see
+ROADMAP item 2.
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
