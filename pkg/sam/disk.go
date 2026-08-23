@@ -97,8 +97,10 @@ func (d *Disk) WriteSector(cyl, head, sector int, buf []byte) bool {
 // both carry a header — and by size otherwise, since MGT is a bare sector dump
 // with nothing to identify it.
 //
-// SBT is not handled here. The obstacle is a DOS image rather than the
-// format; docs/sam-coupe.md records what a bootable disk has to carry.
+// SBT is not handled here, and cannot be: it is a single SAM CODE file rather
+// than an image, so it carries no signature and its size says nothing (an
+// 819200-byte one would look exactly like an MGT). LoadSBT builds a disk around
+// one, and the caller picks it by file extension.
 func LoadDisk(data []byte) (*Disk, error) {
 	if len(data) >= len(sadSignature) && string(data[:len(sadSignature)]) == sadSignature {
 		return loadSAD(data)
@@ -159,7 +161,8 @@ func loadSAD(data []byte) (*Disk, error) {
 	return d, nil
 }
 
-// blankMGT builds an empty 800K MGT disk (used by tests and formatting).
+// blankMGT builds an empty 800K MGT disk (the starting point for LoadSBT, and
+// for tests).
 func blankMGT() *Disk {
 	return loadMGT(make([]byte, mgt800KSize), mgt800KSectors)
 }

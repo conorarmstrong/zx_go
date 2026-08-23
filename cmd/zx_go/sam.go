@@ -4,6 +4,8 @@ import (
 	"image/png"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -120,4 +122,34 @@ func runSAMHeadless(f *cliFlags) {
 		}
 		slog.Info("sam: wrote screenshot", "path", f.saveScreen)
 	}
+}
+
+// samDiskExtensions is what the SAM disk file picker offers.
+var samDiskExtensions = []string{".mgt", ".sad", ".dsk", ".img", ".sbt"}
+
+// samDiskFromFile turns a chosen file into a SAM disk.
+//
+// An SBT is not a disk image and cannot be recognised as one: it has no
+// signature, and a 819200-byte SBT would be indistinguishable from an MGT. The
+// extension is the only thing that separates them, so the dispatch happens here
+// rather than inside sam.LoadDisk, which keeps its size-and-signature rules.
+func samDiskFromFile(path string, data []byte) (*sam.Disk, error) {
+	if strings.EqualFold(filepath.Ext(path), ".sbt") {
+		return sam.LoadSBT(data, filepath.Base(path))
+	}
+	return sam.LoadDisk(data)
+}
+
+// samBootHint is what to tell the user after a disk goes into a SAM drive.
+//
+// BOOT reads drive 1 and only drive 1: samcoupe.rom:0x591E loads DE with track
+// 4 / sector 1 and the seek loop that follows polls drive 1's status port, so a
+// disk in drive 2 is never looked at. Offering "type BOOT" for drive 2 sent the
+// user at an instruction that cannot reach the disk they just inserted.
+func samBootHint(drive int) string {
+	if drive == 0 {
+		return "From SAM BASIC, boot it with:  BOOT  (or load with LOAD)."
+	}
+	return "From SAM BASIC, load from it with LOAD. BOOT reads drive 1 only, " +
+		"so put the disk in drive 1 to boot it."
 }

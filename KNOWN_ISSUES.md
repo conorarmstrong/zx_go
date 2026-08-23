@@ -120,27 +120,55 @@ than dropped.
 
 **Workaround:** close the process from Task Manager, and use `--headless`.
 
-### SAM SBT files cannot be loaded
-
-**Affects:** File → Load SAM Disk with an `.sbt` name. MGT, SAD and
-EDSK disk images all load.
-
-**What you see.** The file is refused as an unknown format.
-
-**Cause.** An SBT is not a disk image. It is a single SAM CODE file
-meant to be written onto a disk and booted, so loading one means
-building a disk around it. Building the disk is the easy half. What
-stops it is that `BOOT` loads **directory slot 1 as the DOS**, so a
-disk carrying only the user's file has no DOS on it and the ROM
-answers `53 No DOS`. We have no DOS image to place in that slot.
-
-`docs/sam-coupe.md` carries the full write-up, including why the
-file-type byte does not identify the DOS and what the two routes to
-a DOS image are.
-
 ---
 
 ## Recently fixed
+
+### SAM `.sbt` files could not be loaded, for a reason that was wrong
+
+**Fixed.** An SBT is not a disk image. It is the raw content of a single SAM
+CODE file meant to be written onto a disk and booted, so loading one means
+building a disk around it. That much was right.
+
+The stated obstacle was not. This file, and `docs/sam-coupe.md`, both said
+`BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
+user's file had no DOS on it and the ROM answered `53 No DOS` — and that we
+therefore needed a DOS image we did not have and could not establish the
+redistribution status of. The ROM disproves all of it. `BOOT` never reads the
+directory:
+
+| | |
+| --- | --- |
+| `$591E` | `LD DE,$0401` — track 4, sector 1 |
+| `$5939` | `DI` / `LD C,$80` (READ SECTOR) / `LD HL,$8000` |
+| `$5967` | compare the four bytes at `$8100` against the literal at `$FB94` (`42 4F 4F D4`), under `AND $5F` |
+| `$5976` | `RST $08` / `DEFB $35` — error 53 |
+| `$597B` | `JP $8009` |
+
+Error 53 is that four-byte comparison failing, and nothing else: the whole 32K
+ROM contains exactly one `CF 35`, at `$5976`. The `AND $5F` is why case and the
+BASIC keyword-terminator bit do not matter. No DOS is read, needed, or bundled.
+
+So an `.sbt` now builds an 800K MGT disk in memory: the file at cylinder 4 head
+0 sector 1 behind a 9-byte CODE header, then a sector chain carrying 501 bytes
+in the first sector and 510 in each one after it, because the bootstrap reloads
+two bytes back over the previous sector's tail. Those two bytes are the next
+track and sector, with bit 7 of the track byte selecting side 1, and a zero pair
+ends the chain. A SAMDOS-shaped directory entry goes in so a DOS booted from the
+disk does not overwrite the file.
+
+A file that does not carry the signature the ROM checks is refused by name, so
+it fails as "not a bootable SBT" rather than as the machine's `53 No DOS`.
+
+Two details were measured against a real SAMDOS rather than taken from folklore,
+because the first attempt at them was wrong: the CODE header's byte 7 is the
+length divided by 16384, and byte 8 is the start page plus a fixed bias
+(SAMDOS 2 wrote `$5F`, `$60`, `$61` for pages 0, 1 and 2). `$5F` is not a page
+this machine can page in, which is a further reason to treat it as an opaque
+stored field.
+
+**Known limit.** `BOOT` reads drive 1 only, so an `.sbt` loaded into drive 2
+can be read with `LOAD` but not booted. The load dialog says so.
 
 ### File → Save / Load Snapshot crashed on the SAM, ZX80 and ZX81
 

@@ -848,8 +848,9 @@ func ejectOPDDisk(emu *emulator, w fyne.Window, drive int) {
 		}, w)
 }
 
-// loadSAMDisk shows an MGT/SAD/DSK file picker and inserts the chosen image into
-// the given SAM Coupé drive (0 = drive 1, 1 = drive 2). SAM-only.
+// loadSAMDisk shows an MGT/SAD/DSK/SBT file picker and inserts the chosen file
+// into the given SAM Coupé drive (0 = drive 1, 1 = drive 2). SAM-only. An SBT
+// is not a disk image, so samDiskFromFile builds a bootable disk around it.
 func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 	if emu.sam == nil {
 		dialog.ShowInformation("Load SAM Disk",
@@ -872,7 +873,7 @@ func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 			dialog.ShowError(fmt.Errorf("failed to read disk: %w", readErr), w)
 			return
 		}
-		disk, derr := sam.LoadDisk(data)
+		disk, derr := samDiskFromFile(path, data)
 		if derr != nil {
 			dialog.ShowError(fmt.Errorf("failed to load SAM disk: %w", derr), w)
 			return
@@ -883,11 +884,10 @@ func loadSAMDisk(emu *emulator, w fyne.Window, drive int) {
 		})
 		slog.Info("disk inserted", "interface", "SAM", "drive", drive+1, "path", path)
 		dialog.ShowInformation("Disk Loaded",
-			fmt.Sprintf("Inserted %s into SAM drive %d.\n"+
-				"From SAM BASIC, boot it with:  BOOT  (or load with LOAD).",
-				filepath.Base(path), drive+1), w)
+			fmt.Sprintf("Inserted %s into SAM drive %d.\n%s",
+				filepath.Base(path), drive+1, samBootHint(drive)), w)
 	}, w)
-	fd.SetFilter(storage.NewExtensionFileFilter([]string{".mgt", ".sad", ".dsk", ".img"}))
+	fd.SetFilter(storage.NewExtensionFileFilter(samDiskExtensions))
 	showFileDialog(fd, w)
 }
 
@@ -3764,10 +3764,10 @@ func main() {
 				fyne.NewMenuItem("Eject TR-DOS Disk B", func() {
 					emu.ejectTRD(1)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad/.dsk)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 1 (.mgt/.sad/.dsk/.sbt)...", func() {
 					loadSAMDisk(emu, w, 0)
 				}),
-				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad/.dsk)...", func() {
+				fyne.NewMenuItem("Load SAM Disk 2 (.mgt/.sad/.dsk/.sbt)...", func() {
 					loadSAMDisk(emu, w, 1)
 				}),
 				fyne.NewMenuItem("Save Disk A (DSK)...", func() {

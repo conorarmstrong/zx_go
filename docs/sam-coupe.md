@@ -46,6 +46,29 @@ redistribution in 2008 — so nothing needs installing (see
   every sector after the odd track at the wrong offset. Real games boot — load
   the disk, then type `BOOT` at the SAM BASIC prompt (verified end to end with
   Manic Miner and Tetris booting to their title screens).
+- **SBT files** — supported. An SBT is not a disk image: it is the raw content
+  of a single SAM CODE file, meant to be written onto a disk and booted, so
+  zx_go builds an 800K MGT disk around it in memory when you load one.
+
+  No DOS is involved. `BOOT` does not read the directory and does not need one.
+  It seeks drive 1 to track 4, reads sector 1 of side 0 to $8000, compares the
+  four bytes at $8100 with its own copy of the word `BOOT` under `AND $5F` (so
+  case and the keyword terminator bit are ignored), and jumps to $8009. Error
+  `53 No DOS` is that comparison failing, and nothing else: the whole ROM holds
+  exactly one `CF 35`, at $5976. The ROM addresses are $591E (`LD DE,$0401`),
+  $5939 (read to $8000), $5967 (the compare, against the literal at $FB94),
+  $5976 (the error) and $597B (`JP $8009`).
+
+  The layout follows from that. The first sector carries a 9-byte SAM CODE
+  header then 501 bytes of the file; every later sector carries 510, because
+  the bootstrap reloads two bytes back over the previous sector's last two.
+  Those last two are the next track and sector, with bit 7 set in the track byte
+  for side 1, and a zero pair ends the chain. A SAMDOS-shaped directory entry is
+  written too, so a DOS booted from the disk lists the file rather than
+  overwriting it.
+
+  `BOOT` reads **drive 1 only**, so an SBT loaded into drive 2 can be read with
+  `LOAD` but not booted.
 - **Interrupts:** the 50 Hz frame interrupt and the programmable line interrupt,
   with the active-low STATUS register.
 - **ASIC contention:** the SAM's heavy memory/IO contention (it makes the 6 MHz
@@ -62,27 +85,6 @@ redistribution in 2008 — so nothing needs installing (see
 
 ## Current limitations / in progress
 
-- **SBT files** — not supported, and the obstacle is a **DOS image**, not the
-  format. An SBT is not a disk image: it is a single SAM CODE file meant to be
-  copied onto a disk and booted, so handling one means building a disk around
-  it.
-
-  Building the disk is the easy half and is well understood. What stops it is
-  that `BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
-  user's file has no DOS on it and the ROM answers `53 No DOS`. A real bootable
-  SAM disk shows the arrangement: SAMDOS occupies slot 1, the title's own files
-  the next few slots, and the auto-run file a later one. Note that the file-type
-  byte does not identify the DOS — SAMDOS and the title's code files share a
-  base type of 19 (CODE), differing only in the hidden/protected flags — so it
-  is the **slot position** that matters.
-
-  Emulators that support SBT do it by supplying a DOS of their own and injecting
-  it. We have no DOS image to place in slot 1. Bundling one would need its
-  redistribution status established: the notice in `LICENSES/` covers "all my
-  SAM Coupé titles (including ROMs)", which may or may not reach SAMDOS
-  depending on its authorship, and nobody here has checked. Copying a DOS out of
-  a disk the user already owns is the other route, and is a design decision
-  rather than a detail.
 - **SAM-specific debugger views** — planned.
 
 ## Notes

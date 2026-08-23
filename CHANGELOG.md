@@ -8,6 +8,18 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **SAM Coupé `.sbt` files now load.** An SBT is not a disk image but the raw
+  content of a single SAM CODE file, so zx_go builds a bootable 800K MGT disk
+  around it: the file at cylinder 4 head 0 sector 1 behind a 9-byte CODE header,
+  a 501-then-510 byte sector chain with next-track/next-sector links, and a
+  SAMDOS-shaped directory entry with its allocation map, so a DOS booted from
+  the disk lists the file rather than overwriting it. No DOS is bundled or
+  needed. A file that does not carry the boot signature the ROM checks is
+  refused by name rather than left to fail as the machine's cryptic
+  `53 No DOS`. `File → Load SAM Disk 1/2` now offers `.sbt`; `BOOT` reads
+  drive 1 only, and the load dialog now says so instead of telling drive 2
+  users to type `BOOT`.
+
 - **`watch-nextreg` halts on a write to a named NextReg.** Neither existing
   half could do it. `nr-trace` names registers and logs their writes without
   stopping; `watch-port` stops, but a NextReg write is a select on `$243B`
@@ -28,13 +40,16 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The reason SBT is unsupported was wrong, and is corrected**
-  (`docs/sam-coupe.md`). v1.11.0 said the format was not published anywhere the
-  project could use. The format was never the obstacle: an SBT is a single SAM
-  CODE file and building a disk around it is straightforward. What stops it is
-  that `BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
-  user's file has no DOS on it and the ROM answers `53 No DOS`. The missing
-  piece is a DOS image to put in slot 1, not a specification.
+- **The reason SBT was unsupported was wrong twice over, and SBT now works.**
+  v1.11.0 said the format was not published anywhere the project could use. That
+  was corrected, in this file, to "`BOOT` loads directory slot 1 as the DOS, so
+  we need a DOS image we do not have and cannot establish the redistribution
+  status of". That was wrong too. The ROM never reads the directory and never
+  needs a DOS: `$591E` targets track 4 sector 1, `$5939` reads it to `$8000`,
+  `$5967` compares the four bytes at `$8100` against the literal at `$FB94`
+  under `AND $5F`, `$5976` raises error 53, and `$597B` jumps to `$8009`. The
+  whole 32K ROM holds exactly one `CF 35`, so `53 No DOS` has that single
+  origin. See the Added entry above.
 
 ## [v1.11.0]
 
