@@ -248,7 +248,19 @@ const (
 	opATiming                       // WR1 port A variable-timing byte
 	opBTiming                       // WR2 port B variable-timing byte
 	opPrescaler                     // zxnDMA fixed-time prescaler byte
-	opReadMask                      // WR6 $BB read-mask byte
+
+	// opRetiredInterruptControl is code 10, which the WR4 interrupt-control
+	// follow byte used to occupy. Nothing queues it any more: the FPGA never
+	// reads that byte, so WR4's D4 no longer announces one. The slot is kept
+	// rather than closed up because these codes are a wire format -- SaveState
+	// writes them into dmaState.Pending and LoadState validates them against
+	// opLast -- so closing the gap would renumber every code above it and make
+	// an older capture mean something different. An older capture carrying this
+	// one still has to swallow the byte it announced, which applyPending's
+	// discard arm does. TestPendingOpCodesAreAStableWireFormat pins the numbers.
+	opRetiredInterruptControl
+
+	opReadMask // WR6 $BB read-mask byte
 )
 
 // opLast bounds the valid codes, so a decoded state carrying a code this build
@@ -334,9 +346,17 @@ func (d *DMA) BusRequested() bool { return d.inTransfer }
 func (d *DMA) SetClock(clock func() uint64) { d.clock = clock }
 
 // Reset drives the controller's reset pin, the FPGA's reset_i, whose branch is
-// dma.vhd:211-245. It is not the $C3 RESET command: $C3 is decoded inside the
-// register-write sequencer and clears a strict subset (dma.vhd:637-645), and a
+// dma.vhd:211-245. It is not the $C3 RESET command. On the FPGA, $C3 is decoded
+// inside the register-write sequencer and assigns exactly eight signals
+// (dma.vhd:638-645) -- the FSM to IDLE, both status bits, both port timings, the
+// prescaler, ce_wait and auto-restart -- a strict subset of this branch, and a
 // sequencer wedged in R4_BYTE_2 never decodes it at all.
+//
+// That subset relationship does not hold in this model yet: command()'s $C3
+// rebuilds the whole struct, so it clears the byte counter, the transfer mode,
+// the read mask and its cursor, and every latched address, length, direction
+// and port mode, all of which the FPGA's $C3 leaves standing. Recorded as
+// ROADMAP item 2d.
 //
 // The branch restores the transfer FSM and the register-write sequencer to
 // IDLE, both port timings to "01" (3 cycles), the prescaler to zero, the
@@ -872,9 +892,10 @@ func (d *DMA) CurrentA() uint16    { return d.curA }
 func (d *DMA) CurrentB() uint16    { return d.curB }
 
 // Duration returns the T-state cost of the most recent transfer: the per-byte
-// cycle cost times the bytes moved, plus busAcquisitionCycles for the trip
-// around the bus that brackets them. The emulator charges this to the CPU
-// clock, because that is the time the CPU spent frozen.
+// cycle cost times the bytes moved. The emulator charges this to the CPU clock,
+// because that is the time the CPU spent frozen. It does NOT include the
+// per-block bus acquisition, which is derived but deliberately not charged; see
+// busAcquisitionCycles and TestBusAcquisitionIsDerivedButNotCharged.
 func (d *DMA) Duration() uint64 { return d.lastDuration }
 
 // Mode returns the transfer mode (continuous or burst) from the last WR4 write.

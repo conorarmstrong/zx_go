@@ -89,6 +89,12 @@ func (d *remoteDebugger) cmdNRTrace(args []string) string {
 		}
 		d.nrTraces.add(byte(v & 0xFF))
 	}
+	// The tracer hangs off the NextReg dispatcher, and only the Next has one
+	// (cmd/zx_go/next.go nils it for every other model). Listing and clearing
+	// above are pure bookkeeping and stay usable anywhere.
+	if d.emu.nextRegs == nil {
+		return "ERR nr-trace: this machine has no NextRegs (Next-only command)"
+	}
 	d.ensureNRTraceHook()
 	return "OK nr-trace=" + strings.Join(args, ",")
 }

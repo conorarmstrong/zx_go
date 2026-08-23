@@ -22,17 +22,19 @@ func copperModeName(m copper.StartMode) string {
 	}
 }
 
+// copperReachableLines is the number of scanlines in the longest frame any
+// supported timing runs: 312 on the 48K, 311 on the 128K family
+// (video/zxula_timing.vhd c_max_vc). Lines are numbered from zero, so the
+// highest the raster ever reaches is one below this, and a WAIT for this line
+// or any line above it can never release. That is how a copper list ends, and
+// why the idiomatic terminator $FFFF (WAIT x=63, y=511) parks.
+const copperReachableLines = 312
+
 // formatCopperDisasm disassembles the Copper program. ins(i) returns
 // the decoded instruction at index i; cursor/mode come from the live
-// Copper. Rendering stops at the first HALT (the program terminator)
-// so trailing NOOPs aren't dumped, or after count instructions. Pure
-// function (instruction reader injected) for unit testing.
-// copperMaxFrameLine is the highest scanline any supported timing reaches: the
-// 48K frame is 312 lines, the 128K family 311 (video/zxula_timing.vhd c_max_vc).
-// A WAIT for a line above it can never release, which is how a copper list ends
-// and why the idiomatic terminator $FFFF (WAIT x=63, y=511) parks.
-const copperMaxFrameLine = 312
-
+// Copper. Rendering stops at the first WAIT that can never release (the
+// program terminator) so trailing NOOPs aren't dumped, or after count
+// instructions. Pure function (instruction reader injected) for unit testing.
 func formatCopperDisasm(ins func(uint16) copper.Instruction, cursor uint16, mode copper.StartMode, count int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OK Copper  cursor=$%03X  mode=%s\r\n", cursor, copperModeName(mode))
@@ -53,7 +55,7 @@ func formatCopperDisasm(ins func(uint16) copper.Instruction, cursor uint16, mode
 			// opcode to render instead (device/copper.vhd), and rendering one
 			// implied a stop the silicon does not perform: in mode 3 the list
 			// restarts at every VBL and runs again.
-			if in.Y > copperMaxFrameLine {
+			if in.Y >= copperReachableLines {
 				b.WriteString("   ; parks here (end of list)\r\n")
 				return b.String()
 			}

@@ -1597,6 +1597,14 @@ func (e *emulator) rebootLocked() {
 	if e.nextRegs != nil {
 		e.nextRegs.Reset()
 	}
+	// Drive the zxnDMA's reset pin. It is the only thing that clears a
+	// register-write sequencer wedged in the FPGA's unimplemented R4_BYTE_2
+	// state, which swallows every command byte including $C3 RESET, so without
+	// this a guest could leave the DMA dead for the rest of the process and a
+	// reboot would hand the next program broken hardware.
+	if e.nextDMA != nil {
+		e.nextDMA.Reset()
+	}
 	// The palette bank carries the NR$44 two-byte write latch
 	// (pending9/have9). nextRegs.Reset's Phase 1 zero-pass writes a
 	// single 0 byte to NR$44 which leaves the latch in "got high,

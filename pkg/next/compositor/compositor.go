@@ -503,7 +503,11 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 	// path, so the 320-pixel inner pass skips it here.
 	doTilemap := c.tilemap != nil && c.tilemap.Enabled() && c.pal != nil && !c.tilemap.Is80Col()
 	if !doL2 && !doSprites && !doTilemap {
-		copy(dst[:Width*4], ulaRGBA[:Width*4])
+		// Bounded like the paint loop below: this is still a range compose, and
+		// the caller re-composes only the tail after a Copper write. Copying the
+		// whole row here would erase the head, which was composed under the
+		// layer state in force before the write turned those layers off.
+		copy(dst[x0*4:x1*4], ulaRGBA[x0*4:x1*4])
 		return
 	}
 

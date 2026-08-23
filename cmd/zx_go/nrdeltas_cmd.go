@@ -144,6 +144,12 @@ func (d *remoteDebugger) cmdTraceNRDeltas(args []string) string {
 		d.nrDeltas.set.mu.Unlock()
 		return "OK trace-nextreg-deltas cleared"
 	}
+	// Both arming paths below hang a tracer off the NextReg dispatcher, and only
+	// the Next has one (cmd/zx_go/next.go nils it for every other model).
+	// Clearing above is pure bookkeeping and stays usable anywhere.
+	if d.emu.nextRegs == nil {
+		return "ERR trace-nextreg-deltas: this machine has no NextRegs (Next-only command)"
+	}
 	if strings.EqualFold(args[0], "all") {
 		d.nrDeltas.set.addAll()
 		d.ensureNRDeltasHook()

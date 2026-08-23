@@ -823,3 +823,75 @@ func TestAStalledControllerSurvivesARoundTrip(t *testing.T) {
 		t.Errorf("after the pin dropped the fresh block moved %d bytes, want 8", len(out))
 	}
 }
+
+// The pendingOp codes are a wire format, not an internal enum. SaveState writes
+// them into dmaState.Pending as raw bytes and LoadState validates them against
+// opLast, so a build that renumbers them reads an older capture as something
+// else: a queue entry that meant "the next byte is the read mask" becomes
+// whatever now sits at that number, and the guest's next $6B byte is applied to
+// the wrong register.
+//
+// So the numbers are pinned here rather than left to iota. Adding a code is
+// fine; moving one is not, and a code that stops being produced has to keep its
+// slot. Deleting opInterruptControl from the middle of the block once moved
+// opReadMask from 11 to 10, which is exactly what this prevents.
+func TestPendingOpCodesAreAStableWireFormat(t *testing.T) {
+	for _, c := range []struct {
+		op   pendingOp
+		code byte
+		name string
+	}{
+		{opIgnore, 0, "opIgnore"},
+		{opPortALow, 1, "opPortALow"},
+		{opPortAHigh, 2, "opPortAHigh"},
+		{opBlockLenLow, 3, "opBlockLenLow"},
+		{opBlockLenHigh, 4, "opBlockLenHigh"},
+		{opPortBLow, 5, "opPortBLow"},
+		{opPortBHigh, 6, "opPortBHigh"},
+		{opATiming, 7, "opATiming"},
+		{opBTiming, 8, "opBTiming"},
+		{opPrescaler, 9, "opPrescaler"},
+		{opRetiredInterruptControl, 10, "opRetiredInterruptControl"},
+		{opReadMask, 11, "opReadMask"},
+	} {
+		if byte(c.op) != c.code {
+			t.Errorf("%s = %d, want %d: these codes are persisted in savestates "+
+				"and cannot be renumbered", c.name, byte(c.op), c.code)
+		}
+	}
+	if byte(opLast) != 11 {
+		t.Errorf("opLast = %d, want 11: it bounds the codes a capture may carry", byte(opLast))
+	}
+}
+
+// The retired code still has to be accepted from an older capture, and the byte
+// it announces still has to be swallowed. The FPGA never reads the WR4
+// interrupt-control byte (dma.vhd:826-844), so discarding it is what the live
+// decoder would do with it anyway.
+func TestARetiredFollowByteCodeIsAcceptedAndDiscarded(t *testing.T) {
+	mem := memMap{}
+	mem[0x4000] = 0xAA
+	d := New(mem)
+	// Reach a state with a pending queue, then hand it the retired code as an
+	// older build would have written it.
+	s := d.SaveState()
+	var st dmaState
+	if err := gob.NewDecoder(bytes.NewReader(s)).Decode(&st); err != nil {
+		t.Fatalf("decoding a fresh capture: %v", err)
+	}
+	st.Pending = []byte{byte(opRetiredInterruptControl)}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(&st); err != nil {
+		t.Fatalf("re-encoding: %v", err)
+	}
+	if err := d.LoadState(buf.Bytes()); err != nil {
+		t.Fatalf("LoadState refused a capture carrying the retired code: %v", err)
+	}
+	// The announced byte is consumed as a follow byte, not decoded as a base
+	// byte: a $7D swallowed here must NOT reprogram WR0.
+	d.WriteCommand(0x7D)
+	if len(d.pending) != 0 {
+		t.Errorf("pending queue = %v after the announced byte, want empty: the "+
+			"retired code must consume exactly one byte", d.pending)
+	}
+}

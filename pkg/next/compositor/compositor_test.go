@@ -762,3 +762,56 @@ func TestComposeSpriteBorderRow(t *testing.T) {
 		t.Errorf("uncovered border px @ X200 was painted")
 	}
 }
+
+// ComposeScanlineRange's contract is that it paints [x0, x1) and leaves the
+// rest of the row alone: the caller composes the row once and re-composes only
+// the tail from the pixel a Copper write landed in, so the head has to keep
+// what it was generated under.
+//
+// The layered paint loop honours that. The "no active layers" shortcut did not:
+// it copied the whole row from the ULA scanline and ignored both bounds, so a
+// Copper write that disabled every overlay layer mid-row made the tail
+// re-compose erase the sprite, Layer 2 and tilemap pixels to its left.
+func TestComposeScanlineRangeWithNoLayersLeavesTheHeadAlone(t *testing.T) {
+	c := New(nil, nil) // no Layer 2, no sprites, no tilemap: the shortcut path
+	ula := make([]byte, Width*4)
+	for i := range ula {
+		ula[i] = 0x11
+	}
+	dst := make([]byte, Width*4)
+	for i := range dst {
+		dst[i] = 0x99 // stands in for what the head was composed with
+	}
+
+	const x0 = 100
+	c.ComposeScanlineRange(0, ula, dst, x0, Width)
+
+	for x := 0; x < x0; x++ {
+		if got := dst[x*4]; got != 0x99 {
+			t.Fatalf("dst[%d] = $%02X, want $99: pixels before x0 must be untouched, "+
+				"they were composed for the part of the row before the write", x, got)
+		}
+	}
+	for x := x0; x < Width; x++ {
+		if got := dst[x*4]; got != 0x11 {
+			t.Fatalf("dst[%d] = $%02X, want $11: pixels in [x0, x1) must be repainted", x, got)
+		}
+	}
+}
+
+// And the bounded copy still has to handle the whole-row case identically, so
+// the ordinary full-width call is unaffected.
+func TestComposeScanlineRangeWithNoLayersPaintsAFullRow(t *testing.T) {
+	c := New(nil, nil)
+	ula := make([]byte, Width*4)
+	for i := range ula {
+		ula[i] = 0x22
+	}
+	dst := make([]byte, Width*4)
+	c.ComposeScanlineRange(0, ula, dst, 0, Width)
+	for x := 0; x < Width; x++ {
+		if got := dst[x*4]; got != 0x22 {
+			t.Fatalf("dst[%d] = $%02X, want $22", x, got)
+		}
+	}
+}

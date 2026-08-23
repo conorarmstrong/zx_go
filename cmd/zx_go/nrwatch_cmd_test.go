@@ -310,3 +310,64 @@ func TestWatchNextReg_IsDispatchedAndAdvertised(t *testing.T) {
 		t.Error("help does not list watch-nextreg")
 	}
 }
+
+// NextRegs exist only on the Next, and cmd/zx_go/next.go nils e.nextRegs for
+// every other model. watch-nextreg has to say so rather than dereference it:
+// the command is inherently Next-only, so there is nothing to make work
+// elsewhere, but a debugger command must not be able to kill the emulator.
+func TestCmdWatchNextRegRefusesANonNextMachine(t *testing.T) {
+	d := &remoteDebugger{emu: &emulator{}} // no nextRegs, as on a 48K session
+	got := d.cmdWatchNextReg([]string{"43"})
+	if !strings.HasPrefix(got, "ERR") {
+		t.Errorf("watch-nextreg on a non-Next machine = %q, want an ERR: "+
+			"NextRegs do not exist there", got)
+	}
+	if !strings.Contains(got, "Next") {
+		t.Errorf("watch-nextreg refusal = %q, want it to say the command is "+
+			"Next-only, so the user knows it is the machine and not the syntax", got)
+	}
+}
+
+// The same guard has to hold for the paths that reach the hook without adding a
+// watch, so listing and clearing stay usable on any machine.
+func TestCmdWatchNextRegListAndClearAreSafeOnANonNextMachine(t *testing.T) {
+	d := &remoteDebugger{emu: &emulator{}}
+	if got := d.cmdWatchNextReg(nil); !strings.HasPrefix(got, "OK") {
+		t.Errorf("no-arg listing on a non-Next machine = %q, want OK", got)
+	}
+	if got := d.cmdWatchNextReg([]string{"off"}); !strings.HasPrefix(got, "OK") {
+		t.Errorf("watch-nextreg off on a non-Next machine = %q, want OK", got)
+	}
+}
+
+// nr-trace and trace-nextreg-deltas arm the same NextReg tracer chain and had
+// the same unguarded dereference. Both are Next-only for the same reason, and
+// both are documented in DEBUGGER.md as refusing rather than crashing.
+func TestNextRegTracerCommandsRefuseANonNextMachine(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		run  func(*remoteDebugger) string
+	}{
+		{"nr-trace", func(d *remoteDebugger) string { return d.cmdNRTrace([]string{"43"}) }},
+		{"trace-nextreg-deltas", func(d *remoteDebugger) string {
+			return d.cmdTraceNRDeltas([]string{"43"})
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := &remoteDebugger{emu: &emulator{}}
+			got := c.run(d)
+			if !strings.HasPrefix(got, "ERR") {
+				t.Errorf("%s on a non-Next machine = %q, want an ERR", c.name, got)
+			}
+		})
+	}
+}
+
+// trace-nextreg-deltas has two arming paths, and "all" is the one that skips
+// the register-parsing loop, so it needs the same guard.
+func TestTraceNRDeltasAllRefusesANonNextMachine(t *testing.T) {
+	d := &remoteDebugger{emu: &emulator{}}
+	if got := d.cmdTraceNRDeltas([]string{"all"}); !strings.HasPrefix(got, "ERR") {
+		t.Errorf("trace-nextreg-deltas all on a non-Next machine = %q, want an ERR", got)
+	}
+}

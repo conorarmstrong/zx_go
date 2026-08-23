@@ -83,6 +83,41 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Three NextReg debugger commands crashed the emulator on a non-Next
+  machine.** `watch-nextreg`, `nr-trace` and `trace-nextreg-deltas` all arm a
+  tracer on the NextReg dispatcher, which exists only on the Next, and none of
+  them checked for it first, so issuing one on a 48K session nil-panicked
+  instead of returning an error. Their siblings `nextreg-read`, `nr-panel` and
+  `layer-state` already had the guard. `trace-nextreg-deltas` needed it on both
+  of its arming paths. Clearing and listing never touched the dispatcher and
+  still work on any machine.
+
+- **A Copper write could wipe the pixels to its left on the same row.** A write
+  splits the row so each part keeps the layer state it was generated under,
+  which means re-composing only the tail. When the write left no active overlay
+  layer, the compositor's shortcut copied the whole row and ignored the bounds
+  it was given, erasing the Layer 2, sprite and tilemap pixels in the head.
+
+- **A wedged zxnDMA survived a reboot.** A WR4 byte with D4 set and D2/D3 clear
+  parks the register-write sequencer in the FPGA's unimplemented `R4_BYTE_2`
+  state, where it swallows every later command byte including `$C3` RESET. Only
+  the reset pin clears it, and the reboot path never drove that pin, so a guest
+  could leave the DMA dead for the rest of the process.
+
+- **The zxnDMA follow-byte codes were renumbered, and they are a savestate wire
+  format.** Retiring the WR4 interrupt-control code from the middle of the block
+  moved the read-mask code from 11 to 10, so an older capture with a read-mask
+  byte pending failed to load and one with an interrupt-control byte pending
+  loaded as a read-mask follow, applying the guest's next `$6B` byte to the
+  wrong place. The retired code keeps its slot, and the numbers are now pinned
+  by a test.
+
+- **The Copper disassembler did not stop at the lowest unreachable `WAIT`
+  line.** Its bound held the frame's line count but was compared as a maximum
+  line number, so a `WAIT` for line 312, which parks exactly as surely as the
+  idiomatic `$FFFF`, was printed as an ordinary instruction and the trailing
+  NOOPs it exists to suppress were dumped after it.
+
 - **`TestHardwareResetClearsTheWedge` was not testing the wedge.** Its fixture
   transferred `$A0 $A1 $A2` to `$6000` before the reset and then asserted the
   same three bytes at the same address afterwards, so a still-wedged controller

@@ -122,51 +122,36 @@ than dropped.
 
 ---
 
-### `watch-nextreg` crashes the emulator on a non-Next machine
-
-**Affects:** every machine except the Spectrum Next, from the version that
-introduced the command.
-
-**What you see.** In the telnet debugger, `watch-nextreg 43` (or any register)
-on a 48K / 128K / +2 / +3 / Pentagon / SAM / ZX80 / ZX81 session kills the
-process with a nil-pointer panic instead of returning an error.
-
-**Cause.** NextRegs only exist on the Next, and `cmd/zx_go/next.go` sets
-`e.nextRegs` to `nil` for every other model. `cmdWatchNextReg` calls
-`ensureNRWatchHook` with no guard, and that reaches
-`d.emu.nextRegs.GetTracer()` (`cmd/zx_go/nrwatch_cmd.go:190`) on the nil
-pointer. The command is inherently Next-only, so the fix is to refuse it with a
-message rather than to make it work elsewhere.
-
-**Workaround:** do not issue `watch-nextreg` unless the session is a Next.
-`nr-trace` has the same Next-only precondition and should be checked with it.
-
----
-
-### A Copper write can wipe the pixels to its left on the same row
-
-**Affects:** the Spectrum Next only, and only a row where a Copper `MOVE`
-turns off *every* overlay layer partway across.
-
-**What you see.** The part of the scanline generated before the write loses its
-Layer 2, sprite and tilemap pixels and falls back to bare ULA content, instead
-of keeping what it was composed with.
-
-**Cause.** A Copper write splits the row so each part keeps the state it was
-generated under, which means re-composing only the tail. When the write leaves
-no active layer, `ComposeScanlineRange`'s fast path copies the whole row and
-ignores the `x0`/`x1` bounds it was given
-(`pkg/next/compositor/compositor.go:505`), so the tail re-compose overwrites the
-head as well. The fast path needs to honour the range like every other path in
-that function.
-
-**Workaround:** none. No title on the SD card is known to hit it; it needs a
-Copper list that clears the Layer 2, sprite and tilemap enables together in
-mid-row.
-
----
-
 ## Recently fixed
+
+### `watch-nextreg` crashed the emulator on a non-Next machine
+
+NextRegs exist only on the Next, and `cmd/zx_go/next.go` nils `nextRegs` for
+every other model, so `watch-nextreg 43` on a 48K session nil-panicked inside
+the hook installer instead of returning an error. Its siblings `nextreg-read`,
+`nr-panel` and `layer-state` had all been written with the guard; this command
+and two others had not. `nr-trace` and `trace-nextreg-deltas` had the same
+crash, through the same tracer chain, and `trace-nextreg-deltas` had it on both
+of its arming paths. All three now refuse with a message naming the machine as
+the reason. Clearing and listing never touched the dispatcher and still work
+anywhere.
+
+### A Copper write could wipe the pixels to its left on the same row
+
+A Copper write splits the row so each part keeps the state it was generated
+under, which means re-composing only the tail. When the write left no active
+overlay layer, `ComposeScanlineRange`'s shortcut copied the whole row from the
+ULA scanline and ignored the `x0`/`x1` bounds it was handed, so the tail
+re-compose erased the Layer 2, sprite and tilemap pixels in the head. The
+shortcut is now bounded like the paint loop it stands in for.
+
+### A wedged zxnDMA survived a reboot
+
+A WR4 byte with D4 set and D2/D3 clear parks the register-write sequencer in the
+FPGA's unimplemented `R4_BYTE_2` state, where it swallows every later command
+byte including `$C3` RESET. Only the reset pin clears it, and `rebootLocked`
+never drove that pin, so a guest could leave the DMA dead for the rest of the
+process and Machine → Reboot handed the next program broken hardware.
 
 ### SAM `.sbt` files could not be loaded, for a reason that was wrong
 

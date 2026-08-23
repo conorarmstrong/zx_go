@@ -125,6 +125,14 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 		return strings.TrimRight(b.String(), "\r\n")
 	}
 
+	// Arming a watch needs the NextReg dispatcher to hang the hook on, and only
+	// the Next has one: cmd/zx_go/next.go nils nextRegs for every other model.
+	// Refuse rather than dereference it. Clearing and listing above are pure
+	// bookkeeping and stay usable on any machine.
+	if d.emu.nextRegs == nil {
+		return "ERR watch-nextreg: this machine has no NextRegs (Next-only command)"
+	}
+
 	// Parse REG[,REG…] [=VAL]. "=" may be glued onto either side. A value
 	// match applies to every register in the list, which is what "watch
 	// these three for the moment any of them goes to $00" wants.
