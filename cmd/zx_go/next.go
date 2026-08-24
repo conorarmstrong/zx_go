@@ -1431,6 +1431,13 @@ func wireNextSubsystems(e *emulator) error {
 	// DMA-streamed audio is paced across the CPU timeline (and the CPU runs in
 	// the gaps). No-op unless such a transfer is in flight.
 	dmaEngine.SetClock(func() uint64 { return cpu.Tstates() })
+	// The fixed-time prescaler's period is a fixed wall time, not a fixed
+	// T-state count: DMA_timer_s advances by 8/4/2/1 per CPU clock at
+	// 3.5/7/14/28 MHz against a fixed compare (dma.vhd:250-254), so the same
+	// prescaler value costs 4x its value in T-states at 3.5 MHz and 32x at
+	// 28 MHz. Without this the controller paces every fixed-time transfer as if
+	// the machine were at 3.5 MHz.
+	dmaEngine.SetSpeedMultiplier(cpu.SpeedMultiplier)
 	cpu.AddPreFetchHook("zxndma-step", func(uint16) { dmaEngine.Step(cpu.Tstates()) })
 	// i2c DS1307 RTC on ports $103B/$113B (zxnext.vhd:2630/3234) —
 	// NextZXOS bit-bangs this bus for the menu's date/time line; with

@@ -60,7 +60,7 @@ func TestDisableDMAAbortsABlockInFlight(t *testing.T) {
 
 	d.WriteCommand(0x83) // Disable DMA
 
-	for ; now <= 0x40*10+200; now += 10 {
+	for ; now <= 0x40*prescalerPeriod(10)+200; now += 10 {
 		d.Step(now)
 	}
 	if got := d.ByteCounter(); got != stopped {
@@ -217,7 +217,7 @@ func TestBusDelayPausesAnInterleavedBurst(t *testing.T) {
 			"the fixed-time pacing did not survive the pause", got-paused)
 	}
 
-	for ; now <= 1000+0x40*10+200; now += 10 {
+	for ; now <= 1000+0x40*prescalerPeriod(10)+200; now += 10 {
 		d.Step(now)
 	}
 	for i := uint16(0); i < 0x40; i++ {
@@ -275,7 +275,7 @@ func TestStatusAtLeastOneClearsAtEndOfBlock(t *testing.T) {
 	d.SetClock(func() uint64 { return now })
 	feed(d, burstStream(0x4000, 0x6000, 0x40, 10))
 
-	for now = 0; now <= 0x40*10+200; now += 10 {
+	for now = 0; now <= 0x40*prescalerPeriod(10)+200; now += 10 {
 		d.Step(now)
 	}
 	if got := d.ByteCounter(); got != 0x40 {

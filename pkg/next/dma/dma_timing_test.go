@@ -49,13 +49,13 @@ func TestTransferDurationMixedCycles(t *testing.T) {
 }
 
 // A non-zero prescaler forces each byte to take at least that many cycles
-// (the fixed-time-transfer feature used for sampled audio): 8 bytes × 100,
-// = 800.
+// (the fixed-time-transfer feature used for sampled audio). A prescaler of 100
+// is a period of 4*100 T-states at 3.5 MHz, so 8 bytes cost 8*400.
 func TestPrescalerDominatesDuration(t *testing.T) {
 	d := New(memMap{})
 	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 100))
-	if got := d.Duration(); got != 8*100 {
-		t.Errorf("Duration with prescaler = %d, want %d", got, 8*100)
+	if got, want := d.Duration(), 8*prescalerPeriod(100); got != want {
+		t.Errorf("Duration with prescaler = %d, want %d", got, want)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestCycleSinkInterleavedBurstDoesNotCharge(t *testing.T) {
 	d.SetCycleSink(func(n uint64) { charged += n })
 	d.SetClock(func() uint64 { return now })
 	feed(d, burstStream(0x4000, 0x6000, 8, 50))
-	for ; now <= 8*50+50; now += 10 {
+	for ; now <= 8*prescalerPeriod(50)+prescalerPeriod(50); now += 10 {
 		d.Step(now)
 	}
 	if d.ByteCounter() != 8 {
@@ -263,5 +263,73 @@ func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
 	if got, want := d.Duration(), uint64(4*(2+2)); got != want {
 		t.Errorf("Duration = %d, want %d: the acquisition must not be in the charge "+
 			"while a block is charged to the CPU as one lump", got, want)
+	}
+}
+
+// The zxnDMA's fixed-time prescaler is not a T-state count. The FPGA holds the
+// transfer in WAITING_CYCLES until DMA_timer_s(13 downto 5) reaches the
+// prescaler (dma.vhd:424, :451), and DMA_timer_s advances by 8, 4, 2 or 1 per
+// CPU clock at 3.5, 7, 14 and 28 MHz (dma.vhd:250-254). Comparing bits 13:5 is
+// a divide by 32, so the wait ends when the timer reaches prescaler*32, which
+// takes prescaler*32/increment ticks of the CPU clock:
+//
+//	3.5 MHz  increment 8   ->  4 x prescaler T-states
+//	7   MHz  increment 4   ->  8 x prescaler
+//	14  MHz  increment 2   -> 16 x prescaler
+//	28  MHz  increment 1   -> 32 x prescaler
+//
+// which is 4 x prescaler x the speed multiplier throughout, and therefore a
+// constant wall-clock period, which is the point of scaling the increment.
+//
+// The model used the prescaler byte directly, so every fixed-time transfer ran
+// 4x too fast at 3.5 MHz and 32x too fast at 28 MHz. DMA-streamed audio is the
+// obvious use of this register, and it played at the wrong pitch.
+func TestPrescalerPeriodScalesWithTheCPUClock(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		multiplier int
+		presc      byte
+		want       uint64
+	}{
+		{"3.5MHz", 1, 10, 4 * 10 * 1},
+		{"7MHz", 2, 10, 4 * 10 * 2},
+		{"14MHz", 4, 10, 4 * 10 * 4},
+		{"28MHz", 8, 10, 4 * 10 * 8},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := New(memMap{})
+			d.SetSpeedMultiplier(func() int { return c.multiplier })
+			// 8 bytes at 2+2 cycles: 4 per byte, far below the prescaler
+			// period, so the prescaler is what sets the pace.
+			feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, c.presc))
+			if got := d.Duration(); got != 8*c.want {
+				t.Errorf("Duration = %d, want %d (8 bytes at %d T-states each)",
+					got, 8*c.want, c.want)
+			}
+		})
+	}
+}
+
+// The prescaler only sets the pace when it is slower than the bytes themselves.
+// DMA_timer_s is cleared at TRANSFERING_READ_1 (dma.vhd:309), so the wait
+// overlaps the byte's own read and write cycles rather than following them.
+func TestAByteSlowerThanThePrescalerSetsItsOwnPace(t *testing.T) {
+	d := New(memMap{})
+	d.SetSpeedMultiplier(func() int { return 1 })
+	// 4+4 cycles a byte against a prescaler period of 4*1*1 = 4.
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x00, 0x00, 1))
+	if got, want := d.Duration(), uint64(4*(4+4)); got != want {
+		t.Errorf("Duration = %d, want %d: the byte's own cycles are the slower of "+
+			"the two and should set the pace", got, want)
+	}
+}
+
+// With no speed source attached the controller assumes 3.5 MHz, which is the
+// FPGA's turbo "00" and the only speed the classic machines have.
+func TestPrescalerDefaultsToTheUnturboedClock(t *testing.T) {
+	d := New(memMap{})
+	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 10))
+	if got, want := d.Duration(), uint64(8*4*10); got != want {
+		t.Errorf("Duration with no speed source = %d, want %d (4 x prescaler)", got, want)
 	}
 }

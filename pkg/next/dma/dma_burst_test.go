@@ -5,6 +5,14 @@ import "testing"
 // burstStream builds an A->B mem transfer in BURST mode with a fixed-time
 // prescaler, so the transfer interleaves with the CPU (one byte per prescaler
 // cycles) instead of completing instantly.
+
+// prescalerPeriod is the fixed-time prescaler's period in CPU T-states at the
+// unturboed 3.5 MHz: 4 x the prescaler byte. The fixtures pace against it, and
+// they say so rather than carrying the number, because the relationship is what
+// they depend on. See TestPrescalerPeriodScalesWithTheCPUClock for the
+// derivation from dma.vhd:250-254 and :424.
+func prescalerPeriod(p byte) uint64 { return 4 * uint64(p) }
+
 func burstStream(src, dst, length uint16, presc byte) []byte {
 	return []byte{
 		0xC3,
@@ -28,16 +36,16 @@ func TestBurstInterleavesWithClock(t *testing.T) {
 	var now uint64
 	d := New(mem)
 	d.SetClock(func() uint64 { return now })
-	feed(d, burstStream(0x4000, 0x6000, 4, 50)) // prescaler 50 → byte every 50 T
+	feed(d, burstStream(0x4000, 0x6000, 4, 50)) // prescaler 50: a byte every prescalerPeriod(50)
 
 	// Deferred: nothing transferred at ENABLE.
 	if d.ByteCounter() != 0 {
 		t.Fatalf("burst transferred %d bytes at ENABLE, want 0 (deferred)", d.ByteCounter())
 	}
 
-	// Byte i becomes due at now = i*50. Step in 10-T increments.
+	// Byte i becomes due at now = i*prescalerPeriod(50). Step in 10-T increments.
 	transferredBy := map[uint16]uint64{}
-	for now = 0; now <= 4*50; now += 10 {
+	for now = 0; now <= 4*prescalerPeriod(50); now += 10 {
 		before := d.ByteCounter()
 		d.Step(now)
 		for b := before; b < d.ByteCounter(); b++ {

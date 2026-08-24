@@ -54,7 +54,7 @@ func TestWR3DisableDoesNotStopABlockInFlight(t *testing.T) {
 
 	d.WriteCommand(0x80) // WR3, D6 clear
 
-	for ; now <= 0x40*10+200; now += 10 {
+	for ; now <= 0x40*prescalerPeriod(10)+200; now += 10 {
 		d.Step(now)
 	}
 	for i := uint16(0); i < 0x40; i++ {

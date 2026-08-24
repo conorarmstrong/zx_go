@@ -37,9 +37,11 @@ var _ machinestate.Device = (*DMA)(nil)
 // then leaves no trace in the source image, so a replay from a captured state
 // runs against exactly the same input the first pass saw, and the output is the
 // write log rather than a memory image that would have to be rolled back too.
-// The per-port cycle lengths are 4 and 3 against a prescaler of 5, so the pace
-// of the transfer comes from the cycle lengths rather than the prescaler — the
-// prescaler is only a floor. A prescaler large enough to dominate (which is the
+// The per-port cycle lengths are 4 and 3 against a prescaler period of 4, so the
+// pace of the transfer comes from the cycle lengths rather than the prescaler:
+// the prescaler is only a floor. That period is 4 x the prescaler byte, so the
+// byte has to be 1 to stay below 4+3; it used to be 5, back when the model
+// wrongly took the byte itself as the T-state count. A prescaler large enough to dominate (which is the
 // usual sampled-audio case) hides both cycle lengths from every observable the
 // chip has, and a test written over one of those cannot tell whether they were
 // restored at all.
@@ -99,7 +101,7 @@ func newBurstRig() *burstRig {
 	r.d.SetIOBus(r.io)
 	r.d.SetClock(func() uint64 { return r.now })
 	r.d.SetZ80Mode(true) // the byte counter seeds at -1, so a block moves length+1
-	feed(r.d, burstToIO(0x4000, 0x20, 0x00DF, 5))
+	feed(r.d, burstToIO(0x4000, 0x20, 0x00DF, 1))
 
 	// Bytes fall due every 7 T-states; stop with the block part moved.
 	r.advance(100)
@@ -697,7 +699,7 @@ func TestTheAtLeastOneStatusBitSurvivesARoundTrip(t *testing.T) {
 	st := d.SaveState()
 
 	// Drive it past the end of the block, where IDLE clears the bit again.
-	for ; now <= 0x40*10+200; now += 10 {
+	for ; now <= 0x40*prescalerPeriod(10)+200; now += 10 {
 		d.Step(now)
 	}
 	d.WriteCommand(0xBF)
@@ -724,10 +726,14 @@ func TestTheAtLeastOneStatusBitSurvivesARoundTrip(t *testing.T) {
 // stops being rewindable.
 func TestEveryControllerFieldIsCaptured(t *testing.T) {
 	// The wiring to the rest of the machine, which is deliberately not this
-	// device's state: both buses and both callbacks into the CPU clock are
+	// device's state: both buses and the three callbacks into the CPU are
 	// installed by the emulator at construction, and a rewind must not re-point
 	// the controller at different objects. See the note at the top of state.go.
-	wiring := map[string]bool{"mem": true, "io": true, "cycleSink": true, "clock": true}
+	// speedMul reads the CPU's current speed rather than remembering one, so
+	// like the clock it is a window onto the machine, not a field of the chip.
+	wiring := map[string]bool{
+		"mem": true, "io": true, "cycleSink": true, "clock": true, "speedMul": true,
+	}
 
 	live := reflect.TypeOf(DMA{})
 	captured := reflect.TypeOf(dmaState{})

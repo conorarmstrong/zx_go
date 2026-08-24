@@ -109,41 +109,51 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 3. [correctness] CTC and IM2 are built, verified, and unreachable
+### 3. [correctness] IM2 interrupts are not delivered
 
-`pkg/next/ctc` and `pkg/next/im2.go` are both complete and both pinned by
-golden vectors captured from the FPGA VHDL under GHDL. Neither is constructed
-anywhere outside its own tests: nothing imports `pkg/next/ctc`, `IM2DaisyChain`
-is referenced only inside the file that defines it, and no CTC port is decoded
-in `pkg/ula` or `pkg/next/wire.go`. NR$C0, NR$CC, NR$CD and NR$CE are
-stored-only.
+**Half done.** The CTC is wired: eight channels at ports `$183B`..`$1F3B`
+(`zxnext.vhd:2690`), ticked on the CPU clock, so a guest can program a channel
+and read its live down-counter. What remains is that no interrupt any of them
+raises reaches the CPU.
 
-So the Next's whole vectored-interrupt and timer path is unreachable by a guest,
-which is precisely what a developer writing interrupt-driven or timer-driven
-code would reach for first. This is the largest gap between what the project has
-built and what anyone can use, and until now the backlog recorded it only as a
-footnote inside a DMA entry.
+`pkg/next/im2.go` models the daisy chain faithfully and is pinned by golden
+vectors captured from `peripherals.vhd` under GHDL. It is not connected, and the
+blocker is not the chain. It is a per-clock FSM whose stimulus is the Z80's bus:
+`IM2Inputs` wants `/M1`, `/IORQ`, `i_im2_mode` and the RETI decode and seen
+pulses, every clock. Our CPU is instruction-granular. It executes RETI but
+signals it to nobody, and interrupt acceptance happens atomically inside
+`interrupt()` with no INT-acknowledge cycle an observer can see.
 
-The work is integration rather than new hardware modelling, because the hard
-part is done and verified. Wiring it also closes the `dma_delay_i` gap below for
-free.
+So the work in order is:
 
-### 4. [correctness] zxnDMA prescaler period is 4x to 32x too short
+1. **Give the CPU observable bus events.** At minimum an INT-acknowledge hook
+   that lets a device present a vector, and a RETI notification. That is the
+   real prerequisite and it belongs to `pkg/z80`.
+2. **Feed the chain.** `ctc_zc_to` from the eight channels, `ula_int_pulse`, and
+   the two UART sources, at the priority order in `zxnext.vhd:1936`.
+3. **Plumb the enables.** NR$C0 bit 0 selects pulse versus hardware IM2 mode and
+   its bits 7:5 are the programmable vector upper bits, currently unmodelled;
+   NR$C4, NR$C6 and NR$CC/$CD/$CE carry the per-source enables and are
+   stored-only.
 
-`perByteCycles`
-(`pkg/next/dma/dma.go:838`) uses the raw prescaler byte as a T-state count. The
-FPGA waits until `DMA_timer_s(13 downto 5) >= prescaler` (`dma.vhd:424`, `:451`)
-and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 / 14 /
-28 MHz (`dma.vhd:250-254`), so the real period is `prescaler × 32 ÷ increment`
-CPU T-states: 4× the prescaler at 3.5 MHz, rising to 32× at 28 MHz. The
-`max(byte cycles, prescaler)` *shape* is right, because `DMA_timer_s` is
-zeroed at `TRANSFERING_READ_1` (`dma.vhd:309`) and the wait therefore overlaps
-the byte's own cycles rather than following them. Only the scale is wrong. This is the
-largest of the four: DMA-streamed audio plays far too fast.
+Do not approximate this. Driving a per-clock FSM from instruction boundaries
+would produce interrupt timing that is not the FPGA's, and an unfaithful IM2
+would be worse than none: a developer would trust it. The enables all reset to
+zero, so nothing about the current state is unsafe, only incomplete.
 
-For the audience this backlog is ordered around, this is a first-afternoon bug:
-DMA-streamed audio is the obvious use of the prescaler and it plays far too
-fast. The fix is small and the evidence is already gathered.
+### 4. [correctness] zxnDMA prescaler period — DONE
+
+Fixed. `perByteCycles` took the prescaler byte as a T-state count. The FPGA
+waits until `DMA_timer_s(13 downto 5)` reaches the prescaler (`dma.vhd:424`,
+`:451`) and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 /
+14 / 28 MHz (`dma.vhd:250-254`), so the period is `prescaler * 32 / increment`
+CPU T-states, which is `4 * prescaler * multiplier` throughout: a constant wall
+time, which is the point of scaling the increment. Every fixed-time transfer ran
+4x too fast at 3.5 MHz and 32x too fast at 28 MHz, so DMA-streamed audio played
+at the wrong pitch at every speed.
+
+The controller now takes the CPU's speed multiplier and the fixtures state the
+period relationship rather than carrying a literal.
 
 ### 5. [efficiency] Row composition is O(row x writes)
 

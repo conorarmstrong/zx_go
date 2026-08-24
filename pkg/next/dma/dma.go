@@ -182,6 +182,14 @@ type DMA struct {
 	// gaps (so DMA-streamed audio is paced across the CPU timeline).
 	clock func() uint64
 
+	// speedMul returns the CPU's speed multiplier: 1, 2, 4 or 8 for 3.5, 7, 14
+	// and 28 MHz. The prescaler needs it because its period is a fixed wall
+	// time, not a fixed T-state count: DMA_timer_s advances by 8/4/2/1 per CPU
+	// clock across those speeds (dma.vhd:250-254) against a fixed compare, so
+	// the same prescaler value costs 4x its value in T-states at 3.5 MHz and
+	// 32x at 28 MHz. Nil means 3.5 MHz, the FPGA's turbo "00".
+	speedMul func() int
+
 	// Transfer-engine position. remaining is the bytes the current block still
 	// owes, which outlives the call that started the block in two cases: an
 	// interleaved burst (activeBurst, with nextDue the absolute T-state the next
@@ -366,6 +374,28 @@ func (d *DMA) BusRequested() bool { return d.inTransfer }
 // transfers interleave with the CPU via Step(). Optional — without it, burst
 // transfers run to completion at ENABLE.
 func (d *DMA) SetClock(clock func() uint64) { d.clock = clock }
+
+// SetSpeedMultiplier attaches the CPU's speed multiplier (1, 2, 4 or 8).
+// Without it the controller paces its prescaler as if the CPU were at 3.5 MHz.
+func (d *DMA) SetSpeedMultiplier(m func() int) { d.speedMul = m }
+
+// prescalerTStates is the fixed-time prescaler's period in CPU T-states.
+//
+// The FPGA waits until DMA_timer_s(13 downto 5) reaches the prescaler
+// (dma.vhd:424, :451). Comparing bits 13:5 divides by 32, so the wait ends when
+// the timer reaches prescaler*32, and DMA_timer_s advances by 8/4/2/1 per CPU
+// clock at 3.5/7/14/28 MHz (dma.vhd:250-254). That is prescaler*32/increment
+// ticks of the CPU clock, which is 4*prescaler*multiplier in every case: a
+// constant wall-clock period, which is what scaling the increment is for.
+func (d *DMA) prescalerTStates() uint64 {
+	mul := 1
+	if d.speedMul != nil {
+		if m := d.speedMul(); m > 0 {
+			mul = m
+		}
+	}
+	return 4 * uint64(d.prescaler) * uint64(mul)
+}
 
 // Reset drives the controller's reset pin, the FPGA's reset_i, whose branch is
 // dma.vhd:211-245. It is not the $C3 RESET command. On the FPGA, $C3 is decoded
@@ -592,7 +622,7 @@ func (d *DMA) command(val byte) {
 		// dma_mode and dma_delay_i are pins outside the core in the FPGA, so
 		// they survive too)
 		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink, clock: d.clock,
-			zMode: d.zMode, busDelay: d.busDelay,
+			speedMul: d.speedMul, zMode: d.zMode, busDelay: d.busDelay,
 			aCycleLen: resetCycleLen, bCycleLen: resetCycleLen, readMask: 0x7F}
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
 		d.curA = d.portAStart
@@ -887,8 +917,11 @@ func (d *DMA) perByteCycles() uint64 {
 		srcCyc, dstCyc = d.bCycleLen, d.aCycleLen
 	}
 	per := uint64(srcCyc) + uint64(dstCyc)
-	if uint64(d.prescaler) > per {
-		per = uint64(d.prescaler)
+	// DMA_timer_s is cleared at TRANSFERING_READ_1 (dma.vhd:309), so the
+	// prescaler wait overlaps the byte's own cycles rather than following them:
+	// the slower of the two sets the pace.
+	if p := d.prescalerTStates(); p > per {
+		per = p
 	}
 	return per
 }
