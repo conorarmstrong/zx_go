@@ -121,17 +121,28 @@ type Copper struct {
 	// word and left the top 1 KB unreachable.
 	writePtr uint16
 	mode     StartMode
-	// lastMode is the FPGA's last_state_s (copper.vhd:50): the mode as of the
-	// previous clock. The device compares it against copper_en_i on every clock
-	// and acts on the difference, so a mode change is noticed by the running
-	// engine rather than applied by whatever wrote it. That distinction matters
-	// because a MOVE can write NextReg $62 (pkg/next/wire.go routes it to
-	// SetWritePtrHighAndMode), so a list can change its own mode from inside its
-	// own execution.
-	lastMode StartMode
-	pc       uint16 // execution pointer
-	stopped  bool
-	regs     RegWriter
+	// restartPending is what survives between a mode write and the clock that
+	// acts on it: the fact that copper_en_i changed to a restarting mode, not
+	// the mode it changed to.
+	//
+	// The device compares last_state_s against copper_en_i on every 28 MHz clock
+	// (copper.vhd:70-76) and restarts the list when they differ and the new mode
+	// is 01 or 11. Remembering the previous mode and comparing at Step time
+	// cannot reproduce that, because Step runs once per raster column while the
+	// CPU runs a whole frame between passes: the standard stop-then-restart
+	// idiom writes 00 then 01 with no clock in between, so both writes are
+	// already applied by the time anything looks, the two modes agree, and the
+	// restart is lost. Recording the transition at the write catches every one
+	// of them, in any order.
+	//
+	// It has to be the engine that acts on it rather than the setter, because a
+	// MOVE can write NextReg $62 (pkg/next/wire.go routes it here), so a list
+	// can change its own mode from inside its own execution and the restart must
+	// not land in the middle of the instruction that caused it.
+	restartPending bool
+	pc             uint16 // execution pointer
+	stopped        bool
+	regs           RegWriter
 	// lastScanline tracks the previous Step's raster line so a wrap back
 	// to the top of the frame can trigger the StartOnVBL program restart.
 	lastScanline uint16
@@ -202,7 +213,15 @@ func (c *Copper) SetWritePtrLow(b byte) {
 // and a MOVE to $62 then had its own pc++ applied on top of the reset.
 func (c *Copper) SetWritePtrHighAndMode(b byte) {
 	c.writePtr = (c.writePtr & 0xFF) | (uint16(b&0x07) << 8)
-	c.mode = StartMode((b >> 6) & 0x03)
+	newMode := StartMode((b >> 6) & 0x03)
+	// A change into 01 or 11 arms the restart. Writing the same mode again is
+	// not a change, which is why guest code that only moves the cursor's high
+	// bits, and has to come through this register to do it, does not rewind its
+	// own running list.
+	if newMode != c.mode && (newMode == StartFromZero || newMode == StartOnVBL) {
+		c.restartPending = true
+	}
+	c.mode = newMode
 	c.stopped = c.mode == StartStop
 }
 
@@ -214,7 +233,7 @@ func (c *Copper) SetWritePtrHighAndMode(b byte) {
 // for them one column at a time. It is deliberately false while a mode change
 // is pending, because that change is the engine's to notice and the clock that
 // notices it is the one that restarts the list.
-func (c *Copper) Idle() bool { return c.stopped && c.lastMode == c.mode }
+func (c *Copper) Idle() bool { return c.stopped && !c.restartPending }
 
 // Cursor returns the current write cursor (for debugging / tests).
 func (c *Copper) Cursor() uint16 { return c.writePtr }
@@ -363,14 +382,12 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 	spent := 0
 	for spent < maxClocks && c.pc < MaxInstructions {
 		// First arm of the device's per-clock chain (copper.vhd:70-76): the
-		// mode has changed since the previous clock. Latch it, restart the
-		// address for the two modes that restart, and fall through to the end
-		// of the clock. Nothing executes on it.
-		if c.lastMode != c.mode {
-			c.lastMode = c.mode
-			if c.mode == StartFromZero || c.mode == StartOnVBL {
-				c.pc = 0
-			}
+		// mode changed since the previous clock into one that restarts. Reset
+		// the address and fall through to the end of the clock. Nothing
+		// executes on it, which is why enabling the Copper costs a clock.
+		if c.restartPending {
+			c.restartPending = false
+			c.pc = 0
 			spent++
 			continue
 		}

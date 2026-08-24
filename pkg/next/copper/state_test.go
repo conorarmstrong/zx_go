@@ -485,11 +485,9 @@ func TestAVersion1CaptureIsMigratedRatherThanRefused(t *testing.T) {
 	if c.mode != StartOnVBL {
 		t.Errorf("mode = %d, want %d", c.mode, StartOnVBL)
 	}
-	if c.lastMode != c.mode {
-		t.Errorf("lastMode = %d, want it to match mode (%d): a migrated capture "+
-			"must not look like a pending mode change, or the restored Copper "+
-			"performs a restart the recorded machine had already done",
-			c.lastMode, c.mode)
+	if c.restartPending {
+		t.Error("a migrated capture came back with a restart armed: the restored " +
+			"Copper would rewind a list the recorded machine was running")
 	}
 	if c.pc != 7 {
 		t.Errorf("pc = %d, want 7: the rest of the v1 fields must survive", c.pc)
@@ -500,7 +498,7 @@ func TestAVersion1CaptureIsMigratedRatherThanRefused(t *testing.T) {
 }
 
 // And the migrated Copper must not restart on its next clock, which is the
-// whole point of carrying lastMode.
+// whole point of carrying the pending-restart flag.
 func TestAMigratedCaptureDoesNotRestartOnItsNextClock(t *testing.T) {
 	v1 := copperState{Version: 1, Mode: byte(StartFromZero), Pc: 5}
 	var buf bytes.Buffer
@@ -514,7 +512,7 @@ func TestAMigratedCaptureDoesNotRestartOnItsNextClock(t *testing.T) {
 	c.Step(0, 0, 1)
 	if c.PC() == 0 {
 		t.Error("the restored Copper restarted its list on the first clock: the " +
-			"migration left lastMode disagreeing with mode")
+			"migration armed a restart that was never pending")
 	}
 }
 

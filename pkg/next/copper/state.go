@@ -80,22 +80,23 @@ type copperState struct {
 	Pc      uint16
 	Stopped bool
 
-	// LastMode is the device's last_state_s (copper.vhd:50), the mode as of the
-	// previous clock. It has to be captured because it is half of a comparison
-	// the engine makes on every clock: a restore that leaves it disagreeing with
-	// Mode makes the restored Copper perform a restart the recorded machine had
-	// already done, rewinding a running list back to instruction 0.
-	LastMode byte
+	// RestartPending is a mode change into 01 or 11 that the engine has not yet
+	// acted on, which is the device's last_state_s comparison (copper.vhd:50,
+	// :70-76) reduced to what survives between a write and the next clock. It
+	// has to be captured: a restore that invents one rewinds a running list to
+	// instruction 0, and a restore that loses one leaves a list that the
+	// recorded machine was about to restart running on from where it stood.
+	RestartPending bool
 
 	LastScanline uint16
 }
 
 // copperStateVersion is the current meaning of copperState's fields.
 // Version 1 introduced the byte-address write cursor.
-// Version 2 added LastMode. A version 1 capture is migrated rather than
-// refused: it does not record what the mode was on the previous clock, but that
-// differed from Mode only inside one copper clock, so assuming they agreed is
-// wrong only for a capture taken inside that window. See LoadState.
+// Version 2 added RestartPending. A version 1 capture is migrated rather than
+// refused: it cannot have one armed that matters, because the window between a
+// mode write and the clock that acts on it is a single 28 MHz tick. See
+// LoadState.
 const copperStateVersion = 2
 
 // StateID identifies the copper in a captured machine state.
@@ -104,14 +105,14 @@ func (c *Copper) StateID() string { return "next.copper" }
 // SaveState captures the complete copper state.
 func (c *Copper) SaveState() []byte {
 	s := copperState{
-		Program:      c.program,
-		Version:      copperStateVersion,
-		WritePtr:     c.writePtr,
-		Mode:         byte(c.mode),
-		LastMode:     byte(c.lastMode),
-		Pc:           c.pc,
-		Stopped:      c.stopped,
-		LastScanline: c.lastScanline,
+		Program:        c.program,
+		Version:        copperStateVersion,
+		WritePtr:       c.writePtr,
+		Mode:           byte(c.mode),
+		RestartPending: c.restartPending,
+		Pc:             c.pc,
+		Stopped:        c.stopped,
+		LastScanline:   c.lastScanline,
 	}
 
 	var buf bytes.Buffer
@@ -146,22 +147,22 @@ func (c *Copper) LoadState(b []byte) error {
 			s.Version, copperStateVersion)
 	}
 
-	// Version 1 predates LastMode. Assume it agreed with Mode, which it did
-	// except inside the single copper clock between a mode write and the engine
-	// noticing it (copper.vhd:70-76). Refusing the capture instead would not
-	// lose the Copper's share of an old snapshot: one device's error aborts and
-	// rolls back the whole machine restore, so it would lose the snapshot
-	// entirely, and every rewind buffer with it. A one-clock window is the far
-	// smaller error.
-	lastMode := StartMode(s.LastMode)
+	// Version 1 predates RestartPending, and false is the right assumption: a
+	// capture taken with one armed is a capture taken between a mode write and
+	// the very next copper clock, which is a single 28 MHz tick wide. Refusing
+	// the capture instead would not lose the Copper's share of an old snapshot:
+	// one device's error aborts and rolls back the whole machine restore, so it
+	// would lose the snapshot entirely, and every rewind buffer with it. A
+	// one-clock window is the far smaller error.
+	restartPending := s.RestartPending
 	if s.Version < 2 {
-		lastMode = StartMode(s.Mode)
+		restartPending = false
 	}
 
 	c.program = s.Program
 	c.writePtr = s.WritePtr
 	c.mode = StartMode(s.Mode)
-	c.lastMode = lastMode
+	c.restartPending = restartPending
 	c.pc = s.Pc
 	c.stopped = s.Stopped
 	c.lastScanline = s.LastScanline

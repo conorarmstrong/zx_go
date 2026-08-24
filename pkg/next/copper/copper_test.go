@@ -437,3 +437,52 @@ func TestIdleIsFalseWhileAModeChangeIsPending(t *testing.T) {
 		t.Error("Idle stayed false after the Copper stopped and latched the mode")
 	}
 }
+
+// The standard way to load a new list is to stop the Copper, write the list,
+// then restart it: two OUTs to NextReg $62, mode 00 then mode 01 or 11. Both
+// land between two Steps, because the CPU runs a whole frame before the render
+// pass clocks the Copper at all.
+//
+// Latching the mode inside Step and comparing it against the previous clock's
+// value cannot see that: at Step time the mode is 01 and the remembered mode is
+// 01, so nothing looks changed and the list carries on from wherever it was.
+// The FPGA compares last_state_s every 28 MHz clock and the two OUTs are far
+// more than one clock apart, so it sees mode 00 in between and restarts.
+//
+// What has to survive between the write and the clock is therefore the fact
+// that a change happened, not the mode it changed to.
+func TestStopThenRestartRestartsTheList(t *testing.T) {
+	c := New()
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+	c.Step(0, 0, 1) // the enabling clock
+	c.pc = 500
+
+	c.SetWritePtrHighAndMode(byte(StartStop) << 6)     // stop
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6) // ...and restart
+	c.Step(0, 0, 1)                                    // exactly the restart clock
+
+	if c.PC() != 0 {
+		t.Errorf("pc after stop-then-restart = %d, want 0: the list must restart, "+
+			"and both writes landed before this Step", c.PC())
+	}
+}
+
+// The reverse order too: a restart followed by a stop leaves the Copper stopped
+// with its list rewound, which is what the hardware's two clocks produce.
+func TestRestartThenStopLeavesTheListRewoundAndStopped(t *testing.T) {
+	c := New()
+	c.SetWritePtrHighAndMode(byte(StartContinue) << 6)
+	c.Step(0, 0, 1)
+	c.pc = 500
+
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+	c.SetWritePtrHighAndMode(byte(StartStop) << 6)
+	c.Step(0, 0, 4) // the restart clock, then the stopped arm returns
+
+	if c.PC() != 0 {
+		t.Errorf("pc = %d, want 0: the restart still happened", c.PC())
+	}
+	if !c.Idle() {
+		t.Error("the Copper is not idle after being stopped")
+	}
+}
