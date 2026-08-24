@@ -24,13 +24,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Three zxnDMA behaviours had no test.** A `$C3` arriving mid-block used to be
-  covered by accident: the old whole-struct rebuild zeroed the transfer position
-  as a side effect, so no test ever asked for it, and the explicit assignments
-  that replaced it could all have been deleted without a failure. `$CF` LOAD and
-  `$D3` CONTINUE clearing end-of-block (`dma.vhd:654`, `:671`), which is what
-  lets a driver poll for the NEXT block finishing rather than the last one, were
-  never covered at all.
+- **Four zxnDMA behaviours had no test.** `$C3` must leave the controller able
+  to START a block, not merely stop the current one: `Trigger` refuses while
+  `inTransfer` or `activeBurst` is set, so a reset that stops the bytes without
+  clearing those wedges the device, and every later block silently moves
+  nothing. `$CF` LOAD, `$D3` CONTINUE and `$8B` REINITIALIZE STATUS clearing the
+  status bits (`dma.vhd:654`, `:671`, `:691-692`), which is what lets a driver
+  poll for the NEXT block finishing rather than the last one, were never covered
+  at all.
 
 - **An interleaved zxnDMA burst charged the CPU nothing.** A burst transfer with
   a prescaler is the one case where the device gives the bus back mid-block, and

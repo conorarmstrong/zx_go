@@ -347,10 +347,59 @@ func TestResetCommandAbandonsABurstInFlight(t *testing.T) {
 		t.Errorf("byte counter went %d -> %d after $C3: the block kept running, but "+
 			"dma_seq_s <= IDLE abandons it where it stands", moved, got)
 	}
-	for i := uint16(moved); i < 0x20; i++ {
+	for i := moved; i < 0x20; i++ {
 		if got := mem[0x6000+i]; got != 0 {
 			t.Errorf("dst[$%04X] = $%02X, want $00: bytes moved after the reset",
 				0x6000+i, got)
+		}
+	}
+
+}
+
+// The other half, and the one that needs care to observe: $C3 must leave the
+// controller able to START a block, not merely stop the current one.
+//
+// Trigger() refuses while inTransfer, activeBurst or stalled is set
+// (dma.go's guard), so a $C3 that stops the bytes without clearing those wedges
+// the device: every later block returns at the guard and moves nothing,
+// silently. That is worse than the transfer the command was meant to stop.
+//
+// It has to be checked with no Step() in between. Step clears activeBurst
+// itself once the block is drained, so pumping the clock after the $C3 hides
+// exactly the bug this is looking for.
+func TestResetCommandLeavesTheControllerAbleToStart(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 0x20; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	var now uint64
+	d := New(mem)
+	d.SetClock(func() uint64 { return now })
+	feed(d, burstStream(0x4000, 0x6000, 0x20, 10))
+	for now = 0; now < 3*prescalerPeriod(10); now += 10 {
+		d.Step(now)
+	}
+	if d.ByteCounter() == 0 {
+		t.Fatal("fixture never started the burst")
+	}
+
+	d.WriteCommand(0xC3)
+
+	// A fresh block, programmed with no second $C3 and started with no Step in
+	// between, so only the first $C3's own clearing can have unwedged it.
+	for i := uint16(0); i < 4; i++ {
+		mem[0x7000+i] = byte(0x50 + i)
+	}
+	feed(d, []byte{
+		0x7D, 0x00, 0x70, 0x04, 0x00, // WR0: A->B, port A = $7000, length 4
+		0x14, 0x10, // WR1, WR2: both memory, incrementing
+		0x8D, 0x00, 0x78, // WR4: continuous, port B = $7800
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+	for i := uint16(0); i < 4; i++ {
+		if got, want := mem[0x7800+i], byte(0x50+i); got != want {
+			t.Errorf("dst[$%04X] = $%02X, want $%02X: the controller was wedged by "+
+				"the $C3 and never ran another block", 0x7800+i, got, want)
 		}
 	}
 }
@@ -416,5 +465,38 @@ func TestResetCommandUnparksABlockTheDelayPinStopped(t *testing.T) {
 			t.Errorf("dst[$%04X] = $%02X, want $00: the reset block resumed",
 				0x6000+i, got)
 		}
+	}
+
+}
+
+// $8B REINITIALIZE STATUS BYTE clears both status bits (dma.vhd:691-692). It
+// had no test at all: both of its assignments could be deleted with the package
+// green. It is the same defect class as the $CF/$D3 gap, three cases below it
+// in the same switch.
+func TestReinitializeStatusByteClearsBothStatusBits(t *testing.T) {
+	mem := memMap{0x4000: 0xAA}
+	d := New(mem)
+	// Auto-restart on, so FINISH_DMA goes to START_DMA rather than IDLE and
+	// status_atleastone survives the block (dma.vhd:490-495, :265). After a
+	// plain block IDLE clears it and only end-of-block would be left to see.
+	feed(d, []byte{
+		0x7D, 0x00, 0x40, 0x01, 0x00, // WR0: A->B, port A = $4000, length 1
+		0x14, 0x10, // WR1, WR2: both memory, incrementing
+		0x8D, 0x00, 0x60, // WR4: continuous, port B = $6000
+		0xA2,       // WR5: auto-restart
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+
+	d.WriteCommand(0xBF)
+	if got := d.ReadCommand(); got != 0x1B {
+		t.Fatalf("status after a finished block = $%02X, want $1B (end-of-block "+
+			"latched, at-least-one set)", got)
+	}
+
+	d.WriteCommand(0x8B)
+	d.WriteCommand(0xBF)
+	if got := d.ReadCommand(); got != 0x3A {
+		t.Errorf("status after $8B = $%02X, want $3A: it clears both "+
+			"status_endofblock_n and status_atleastone", got)
 	}
 }

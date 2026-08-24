@@ -404,11 +404,10 @@ func (d *DMA) prescalerTStates() uint64 {
 // prescaler, ce_wait and auto-restart -- a strict subset of this branch, and a
 // sequencer wedged in R4_BYTE_2 never decodes it at all.
 //
-// That subset relationship does not hold in this model yet: command()'s $C3
-// rebuilds the whole struct, so it clears the byte counter, the transfer mode,
-// the read mask and its cursor, and every latched address, length, direction
-// and port mode, all of which the FPGA's $C3 leaves standing. Recorded as
-// ROADMAP item 4.
+// The model now matches that: command()'s $C3 assigns those eight signals and
+// nothing else, so the byte counter, the transfer mode, the read mask and its
+// cursor, and every latched address, length, direction and port mode survive it
+// here as they do on the FPGA.
 //
 // The branch restores the transfer FSM and the register-write sequencer to
 // IDLE, both port timings to "01" (3 cycles), the prescaler to zero, the
@@ -638,12 +637,28 @@ func (d *DMA) command(val byte) {
 		// branch was told about it. Assigning what the FPGA assigns cannot
 		// develop that problem.
 		// dma_seq_s <= IDLE. Four fields say "not transferring" between them,
-		// and for observable behaviour they are redundant: clearing remaining
-		// alone stops every reachable path, so a mutation sweep finds none of
-		// them individually. They are all cleared anyway because three of the
-		// four are captured in the savestate, and a restore that carries
-		// "a block is parked here" into a controller with no block is a state
-		// no sequence of commands could otherwise produce.
+		// and they are not equally load-bearing.
+		//
+		// inTransfer and activeBurst are. Trigger() refuses to start a block
+		// while either is set, so a $C3 that stops the bytes without clearing
+		// them wedges the controller: every later block returns at that guard
+		// and moves nothing, silently, which is worse than the transfer this
+		// command was meant to stop. Both are pinned by tests, and deleting
+		// either fails the suite.
+		//
+		// remaining and stalled are not observable. Every reader of remaining is
+		// gated behind activeBurst and Trigger recomputes it; and every path
+		// that would let a block run after a parked $C3 clears stalled on the
+		// way, while dma_delay_i being high blocks everything until it does.
+		// They are cleared anyway, because all four are captured in the
+		// savestate and a restore carrying "a block is parked here, still owing
+		// bytes" into a controller with no block is a state no command sequence
+		// could otherwise produce.
+		//
+		// Two earlier versions of this comment got the split wrong, the second
+		// exactly backwards, which would have invited deleting the two that
+		// matter. The division above is from a mutation sweep run against these
+		// four lines specifically.
 		d.inTransfer = false
 		d.activeBurst = false
 		d.remaining = 0
