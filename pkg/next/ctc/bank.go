@@ -21,7 +21,9 @@ const NumChannels = 4
 //
 // So the low byte is $3B and the top five address bits are 00011, which puts
 // the group in the $18xx..$1Fxx pages. The three bits below that, a10..a8,
-// select the channel, giving $183B for channel 0 up to $1F3B for channel 7.
+// select the channel. Only the first four reach one, so $183B is channel 0 up
+// to $1B3B for channel 3, and $1C3B..$1F3B decode as the CTC's and select
+// nothing. See NumChannels.
 const (
 	portLow      = 0x3B
 	portPageBase = 0x18
@@ -33,7 +35,7 @@ const (
 	portPageChannel = portPageBase + NumChannels - 1
 )
 
-// Bank is the Next's group of eight CTC channels together with the port decode
+// Bank is the Next's group of four CTC channels together with the port decode
 // that reaches them.
 //
 // It exists so the emulator constructs, ticks and routes to one thing. The
@@ -46,7 +48,7 @@ type Bank struct {
 	ch [NumChannels]*Channel
 }
 
-// NewBank returns eight hard-reset channels.
+// NewBank returns four hard-reset channels.
 func NewBank() *Bank {
 	b := &Bank{}
 	for i := range b.ch {
@@ -56,8 +58,16 @@ func NewBank() *Bank {
 }
 
 // Channel returns one channel by index, for wiring its trigger input or reading
-// its interrupt state.
-func (b *Bank) Channel(i int) *Channel { return b.ch[i] }
+// its interrupt state, and nil for an index that names no channel.
+//
+// Nil rather than a panic because PortChannel reports -1 for the four decoded
+// addresses that select nothing, and the two are meant to be used together.
+func (b *Bank) Channel(i int) *Channel {
+	if i < 0 || i >= NumChannels {
+		return nil
+	}
+	return b.ch[i]
+}
 
 // PortChannel reports which channel a port address selects, and whether the
 // address belongs to the CTC at all.

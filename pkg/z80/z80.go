@@ -154,9 +154,9 @@ type CPU struct {
 	// cycles, with the INT at 99840 — so the hardcoded 70908 meant
 	// single-stepping a SAM never latched the frame interrupt at all:
 	// HALT never ended and IM 1 handlers never ran.
-	FrameTStates uint64
-	frameIntFired   bool // narrow-pulse: pulse raised this frame
-	frameIntDeasct  bool // narrow-pulse: pulse withdrawn this frame (one-shot)
+	FrameTStates   uint64
+	frameIntFired  bool // narrow-pulse: pulse raised this frame
+	frameIntDeasct bool // narrow-pulse: pulse withdrawn this frame (one-shot)
 
 	// WZ is the Z80's internal "MEMPTR" register. It's updated by
 	// most operations that compute a 16-bit memory address (LD with

@@ -50,6 +50,17 @@ func TestEngineFieldsAreSafeAcrossGoroutines(t *testing.T) {
 			if i%128 == 0 {
 				e.Reset()
 			}
+			// The snapshot path reaches exactly the same fields, and a rewind
+			// or a savestate load happens on this goroutine while audio plays.
+			// Leaving it out of this test is how the first attempt at the fix
+			// locked engine.go and left enginestate.go racing.
+			if i%64 == 0 {
+				blob := e.SaveState()
+				if err := e.LoadState(blob); err != nil {
+					t.Errorf("LoadState: %v", err)
+					return
+				}
+			}
 		}
 		close(stop)
 	}()

@@ -107,3 +107,34 @@ func TestPortsAboveTheLastChannelAreClaimedButSelectNothing(t *testing.T) {
 		}
 	}
 }
+
+// PortChannel reports -1 for the four decoded addresses that select no channel,
+// so the natural pairing of the two accessors must not panic:
+//
+//	if i, ok := b.PortChannel(addr); ok { b.Channel(i)... }
+//
+// That is exactly how the inter-channel trigger wiring will reach them.
+func TestChannelIsSafeForEveryPortChannelResult(t *testing.T) {
+	b := NewBank()
+	for page := uint16(0x18); page <= 0x1F; page++ {
+		addr := page<<8 | 0x3B
+		i, ok := b.PortChannel(addr)
+		if !ok {
+			t.Fatalf("port $%04X is not the CTC's", addr)
+		}
+		got := b.Channel(i)
+		if i < 0 && got != nil {
+			t.Errorf("Channel(%d) for $%04X returned a channel, want nil: that "+
+				"address selects none", i, addr)
+		}
+		if i >= 0 && got == nil {
+			t.Errorf("Channel(%d) for $%04X returned nil", i, addr)
+		}
+	}
+	// And out of range in either direction, rather than panicking.
+	for _, i := range []int{-2, NumChannels, 99} {
+		if b.Channel(i) != nil {
+			t.Errorf("Channel(%d) returned a channel, want nil", i)
+		}
+	}
+}

@@ -48,10 +48,15 @@ func (e *Engine) SaveState() []byte {
 			return nil
 		}
 	}
+	// Under the lock for the same reason MixIntoStereo reads them under it: a
+	// capture is taken on the emulator goroutine while the audio callback is
+	// mixing.
+	e.mu.Lock()
 	s.Selected = e.selected
 	s.Disabled = e.disabled
 	s.ACB = e.acb
 	s.MonoMask = e.monoMask
+	e.mu.Unlock()
 
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(s); err != nil {
@@ -87,12 +92,15 @@ func (e *Engine) LoadState(b []byte) error {
 	for i := range staged {
 		e.chips[i].apply(staged[i])
 	}
+	e.mu.Lock()
 	e.selected = s.Selected
 	e.disabled = s.Disabled
 	e.acb = s.ACB
 	e.monoMask = s.MonoMask
+	e.mu.Unlock()
 	// Push the restored panning back down, since apply() rebuilds each chip
-	// from its own blob and the mode is not part of it.
+	// from its own blob and the mode is not part of it. Outside the lock:
+	// applyPanning takes it itself, and sync.Mutex is not reentrant.
 	e.applyPanning()
 	return nil
 }

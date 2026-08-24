@@ -95,11 +95,12 @@ func LoadSBT(content []byte, name string) (*Disk, error) {
 			sec[mgtSectorSize-1] = byte(ns)
 		}
 		cyl, head, sector := dataSectorAddr(i)
-		// WriteSector refuses an out-of-range address or a write-protected
-		// disk. Neither can happen to a disk this function just built, so a
-		// refusal means the geometry or the blank's defaults changed underneath
-		// it. Saying so beats handing back a half-written disk that boots into
-		// the ROM's cryptic error 53 with nothing to explain it.
+		// WriteSector reports whether it wrote. Checking it is not defensive
+		// padding: dataSectorAddr derives the address from the file's own
+		// length, so a file long enough to run past the disk is a real input
+		// this function has to answer for, and the alternative is handing back
+		// a half-written disk that boots into the ROM's cryptic error 53 with
+		// nothing to explain it.
 		if !d.WriteSector(cyl, head, sector, sec) {
 			return nil, fmt.Errorf("sam: writing sector %d of %d to cyl %d head %d sector %d",
 				i+1, total, cyl, head, sector)

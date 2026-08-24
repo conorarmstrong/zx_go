@@ -93,11 +93,14 @@ type copperState struct {
 
 // copperStateVersion is the current meaning of copperState's fields.
 // Version 1 introduced the byte-address write cursor.
-// Version 2 added RestartPending. A version 1 capture is migrated rather than
-// refused: it cannot have one armed that matters, because the window between a
-// mode write and the clock that acts on it is a single 28 MHz tick. See
-// LoadState.
-const copperStateVersion = 2
+// Version 2 added a LastMode byte. Version 3 replaced it with RestartPending,
+// which is a change of MEANING rather than of name, and gob ignores fields it
+// does not recognise, so a version 2 blob decodes cleanly against the version 3
+// struct with RestartPending false and no error. Leaving the number at 2 would
+// have made the two formats indistinguishable on the wire; hence 3.
+//
+// Versions 1 and 2 are both migrated rather than refused. See LoadState.
+const copperStateVersion = 3
 
 // StateID identifies the copper in a captured machine state.
 func (c *Copper) StateID() string { return "next.copper" }
@@ -147,16 +150,29 @@ func (c *Copper) LoadState(b []byte) error {
 			s.Version, copperStateVersion)
 	}
 
-	// Version 1 predates RestartPending, and false is the right assumption: a
-	// capture taken with one armed is a capture taken between a mode write and
-	// the very next copper clock, which is a single 28 MHz tick wide. Refusing
-	// the capture instead would not lose the Copper's share of an old snapshot:
-	// one device's error aborts and rolls back the whole machine restore, so it
-	// would lose the snapshot entirely, and every rewind buffer with it. A
-	// one-clock window is the far smaller error.
+	// Neither older version can supply RestartPending: version 1 predates the
+	// field and version 2's LastMode is no longer in the struct to read. False
+	// is the right assumption for both, because a capture with one armed is a
+	// capture taken between a mode write and the very next copper clock, which
+	// is a single 28 MHz tick wide. Refusing them instead would not lose the
+	// Copper's share of an old snapshot: one device's error aborts and rolls
+	// back the whole machine restore, so it would lose the snapshot entirely,
+	// and every rewind buffer with it. A one-clock window is the far smaller
+	// error.
 	restartPending := s.RestartPending
-	if s.Version < 2 {
+	if s.Version < 3 {
 		restartPending = false
+	}
+
+	// The version says which fields exist, not that their values are possible.
+	// A truncated or corrupted blob decodes to something gob is happy with and
+	// this is not: a mode outside 0..3 leaves Mode() reporting a value no switch
+	// handles, and a program counter past the end indexes nothing.
+	if s.Mode > byte(StartOnVBL) {
+		return fmt.Errorf("copper: state has mode %d, want 0..%d", s.Mode, StartOnVBL)
+	}
+	if int(s.Pc) >= MaxInstructions {
+		return fmt.Errorf("copper: state has pc %d, want below %d", s.Pc, MaxInstructions)
 	}
 
 	c.program = s.Program

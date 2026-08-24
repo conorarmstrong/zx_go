@@ -13,10 +13,14 @@ package next
 // number IS the vector index (im2_device i_vec = to_unsigned(I-1,VEC_BITS),
 // peripherals.vhd:121). On the Next those indices are:
 //
-//	 0 = line          7..  3 = ctc 0..7 are 3..10
-//	 1 = uart0 rx       11 = ula (frame INT)
-//	 2 = uart1 rx       12 = uart0 tx
-//	 3..10 = ctc 0..7   13 = uart1 tx
+//	 0 = line           11 = ula (frame INT)
+//	 1 = uart0 rx       12 = uart0 tx
+//	 2 = uart1 rx       13 = uart1 tx
+//	 3..10 = ctc 0..7
+//
+// The chain reserves eight CTC slots, but the live instantiation gives it four
+// (zxnext.vhd:4067 NUM_CTC => 4) and ties slots 7..10 off at :4092-4093. Reading
+// this map as a channel count is what once wired an eight-channel CTC.
 //
 // The full Z80 IM2 vector byte placed on the bus during INT ack is
 // `nr_c0_im2_vector & vector & '0'` (zxnext.vhd:1999): the programmable upper

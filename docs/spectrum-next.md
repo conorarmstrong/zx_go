@@ -69,7 +69,10 @@ model exists and matches the hardware, but nothing in the emulator constructs or
 drives it, so no program can exercise it. That distinction is deliberate. A
 subsystem nobody can reach is not a feature, and it looks identical to a working
 one unless the table says otherwise. `pkg/next/reachability_test.go` fails the
-build if a package moves between those states without this table being updated.
+build if a package under `pkg/next` moves between those states without its own
+declared list being updated. It checks that list, not this table: keeping the
+two in step is still a human step, and the test's error message names the
+documents to change.
 
 | Subsystem | Status |
 |---|---|

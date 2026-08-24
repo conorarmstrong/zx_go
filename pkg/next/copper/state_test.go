@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -525,5 +526,95 @@ func TestAnUnknownStateVersionIsRefused(t *testing.T) {
 	}
 	if err := New().LoadState(buf.Bytes()); err == nil {
 		t.Error("a capture from a newer build was accepted")
+	}
+}
+
+// Version 2 carried a LastMode byte. Replacing it with RestartPending changed
+// what version 2 MEANS while leaving the number alone, and gob ignores fields
+// it does not recognise, so the two are indistinguishable on the wire: an old
+// v2 blob decodes cleanly with RestartPending false and no error. The struct's
+// own doc states the rule that breaks: bump the version whenever a field's
+// meaning changes rather than its name.
+//
+// Version 3 is that bump. Both older formats still load, because refusing them
+// costs the whole machine snapshot and every rewind buffer, and neither can
+// carry a pending restart that matters: the window between a mode write and the
+// clock that acts on it is a single 28 MHz tick.
+func TestOlderStateVersionsLoadWithNoRestartArmed(t *testing.T) {
+	for _, v := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
+			old := copperState{Version: v, Mode: byte(StartFromZero), Pc: 5}
+			var buf bytes.Buffer
+			if err := gob.NewEncoder(&buf).Encode(old); err != nil {
+				t.Fatalf("encoding: %v", err)
+			}
+			c := New()
+			if err := c.LoadState(buf.Bytes()); err != nil {
+				t.Fatalf("a version %d capture was refused: %v", v, err)
+			}
+			if c.restartPending {
+				t.Error("a migrated capture came back with a restart armed")
+			}
+			if c.pc != 5 {
+				t.Errorf("pc = %d, want 5", c.pc)
+			}
+		})
+	}
+}
+
+// A blob that decodes but describes a state this build cannot represent is
+// refused rather than applied. LoadState's version check was narrowed to the
+// version field alone when it gained version tolerance, and the fields it
+// stopped checking are the ones a truncated or corrupted capture corrupts.
+func TestAStateWithImpossibleFieldsIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		s    copperState
+	}{
+		{"mode out of range", copperState{Version: copperStateVersion, Mode: 7}},
+		{"pc past the program", copperState{Version: copperStateVersion, Pc: MaxInstructions}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := gob.NewEncoder(&buf).Encode(c.s); err != nil {
+				t.Fatalf("encoding: %v", err)
+			}
+			if err := New().LoadState(buf.Bytes()); err == nil {
+				t.Errorf("accepted a capture with %s", c.name)
+			}
+		})
+	}
+}
+
+// copperState is a wire format, and gob identifies its fields by name: it
+// ignores one it does not recognise and leaves a missing one zero, both without
+// an error. So changing the set of fields changes what a version number means
+// while the number itself keeps saying otherwise, which is exactly how version
+// 2 came to mean two different things.
+//
+// This pins the field set against the version. Adding, removing or renaming a
+// field fails it, and the fix is to bump copperStateVersion and teach LoadState
+// how to migrate the older shape, then update the list here.
+func TestTheCapturedFieldSetMatchesTheStateVersion(t *testing.T) {
+	const version = 3
+	want := []string{
+		"Version", "Program", "WritePtr", "Mode", "Pc", "Stopped",
+		"RestartPending", "LastScanline",
+	}
+
+	if copperStateVersion != version {
+		t.Fatalf("copperStateVersion = %d, but this test describes version %d. "+
+			"If the format changed, update both together.", copperStateVersion, version)
+	}
+
+	typ := reflect.TypeOf(copperState{})
+	var got []string
+	for i := 0; i < typ.NumField(); i++ {
+		got = append(got, typ.Field(i).Name)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("copperState fields changed without the version changing.\n got: %v\nwant: %v\n"+
+			"gob matches fields by name, so this silently reinterprets every capture "+
+			"written by a build that had the old set.", got, want)
 	}
 }

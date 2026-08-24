@@ -18,7 +18,12 @@ type Engine struct {
 	// SelectChip, the panning setters and Reset run on the emulator goroutine.
 	// A NextReg $06 write, or a machine reboot driving the whole register file
 	// through Reset, therefore raced every audio buffer. The critical sections
-	// are per-buffer rather than per-sample, so the cost is not on the hot path.
+	// are per-buffer rather than per-sample.
+	//
+	// It guards selected, disabled, acb and monoMask, and NOT chips: that array
+	// is written only by SetChip during construction, before the engine becomes
+	// the audio source. Re-chipping at runtime would need this lock extending
+	// to cover it.
 	mu sync.Mutex
 
 	chips    [3]*AY
@@ -71,15 +76,23 @@ func (e *Engine) SelectChip(idx byte) {
 func (e *Engine) Selected() byte {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.selected
+	return e.selectedLocked()
 }
+
+// selectedLocked and disabledLocked are the readers for code that already holds
+// mu, so that no method inside this package reaches shared state through a
+// locking accessor. sync.Mutex is not reentrant: without these, the first
+// method that holds mu and calls Selected() or Disabled() deadlocks the audio
+// callback goroutine with no error to show for it.
+func (e *Engine) selectedLocked() byte { return e.selected }
+func (e *Engine) disabledLocked() bool { return e.disabled }
 
 // Disabled reports whether AY output is suppressed (NextReg 0x06 bits 1-0 == 11,
 // "hold all AY in reset").
 func (e *Engine) Disabled() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.disabled
+	return e.disabledLocked()
 }
 
 // Active returns the currently-selected chip. Port writes through
@@ -196,6 +209,9 @@ func (e *Engine) MixIntoStereo(buf []int16) {
 // Reset reinitialises all three chips and selects chip 0.
 func (e *Engine) Reset() {
 	for _, c := range e.chips {
+		if c == nil {
+			continue // as MixInto, MixIntoStereo and applyPanning all do
+		}
 		c.Reset()
 	}
 	e.mu.Lock()
