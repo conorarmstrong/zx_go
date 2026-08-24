@@ -6,6 +6,21 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.2]
+
+**A regression test for a v1.12.0 fix that shipped without one.**
+
+### Fixed
+
+- **Nothing stopped the Copper's off-screen writes going back into the raster
+  journal.** v1.12.0 fixed that asymmetry, and the fix was only tested at the
+  `rasterlog` level, where it proves the suspension API works rather than that
+  the ULA uses it. Deleting the call broke no test. It now fails one: the Copper
+  is clocked on 53,760 columns below the last display row, and a journalled
+  write there is undone by the next frame's replay and only redone after every
+  row has been composed, so a `MOVE` on a border line would mis-colour the whole
+  following frame.
+
 ## [v1.12.1]
 
 **Fixes found by reviewing v1.12.0's own changes.** Two of them are incomplete
