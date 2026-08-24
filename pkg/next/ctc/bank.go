@@ -23,7 +23,8 @@ const (
 //
 // It exists so the emulator constructs, ticks and routes to one thing. The
 // channels were complete and pinned against the FPGA VHDL long before anything
-// could reach them, which is exactly the state ROADMAP item 1 is about: a
+// could reach them, which is exactly the state the reachability invariant in
+// ROADMAP's "Key invariants" is about: a
 // verified model that no guest could use looked, from the outside, identical to
 // a working feature.
 type Bank struct {

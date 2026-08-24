@@ -22,7 +22,7 @@ import (
 // So an ordinary Copper list is affordable and a saturated one is not: at one
 // MOVE per column the compositor alone needs twice the frame budget, and a MOVE
 // costs two of a column's four copper clocks, so twice that density is
-// reachable. See ROADMAP item 5.
+// reachable. See ROADMAP item 3.
 func benchCompositor(b *testing.B) (*Compositor, []byte, []byte) {
 	b.Helper()
 	pal := palette.NewBank()

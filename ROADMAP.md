@@ -37,48 +37,25 @@ Every claim has to be traceable to the VHDL, which this project already does
 well. And no claim may outrun what is actually wired up, which is where the
 real gaps are.
 
-**The two honest weak points are Next game compatibility** (exactly as
-`README.md` says: blocks being faithful in isolation has not yet been converted
-into "arbitrary `.NEX` titles run") **and the distance between modelled and
-reachable**. Several subsystems are complete and verified against the VHDL and
-cannot be reached by a guest at all. That gap is invisible from the outside,
-which for a reference emulator is the more damaging of the two.
+**The honest weak point is Next game compatibility**, exactly as `README.md`
+says: blocks being faithful in isolation has not yet been converted into
+"arbitrary `.NEX` titles run".
+
+The second weak point, the distance between modelled and reachable, is now
+measured rather than assumed. `pkg/next/reachability_test.go` fails the build if
+a subsystem under `pkg/next` is neither wired nor declared unwired, and the
+declared list is empty. What remains unreachable is finer-grained than a
+package: IM2 interrupt delivery (item 2) and the zxnDMA's `dma_delay_i` pin,
+which depends on it.
 
 ---
 
 ## Open work (ordered)
 
 Ordered by what the reference-emulator goal above is worth, not by size. Items
-1 to 5 are that reordering; 6 to 8 are the pre-existing product work, unchanged
-in substance.
+1 to 4 are correctness against the FPGA; 5 to 7 are product work.
 
-### 1. [correctness] Say what is reachable, not only what is modelled
-
-**This is the precondition for the rest.** A coverage claim that conflates
-"we have modelled this" with "a guest can use this" makes every other claim in
-the document unreliable, because the reader cannot tell which kind they are
-looking at.
-
-It is not hypothetical. In August 2026 the zxnDMA's bus arbitration was written
-up as "modelled" in `CHANGELOG.md`, `ROADMAP.md` and `docs/spectrum-next.md` on
-the strength of a green test suite, when nothing in the emulator drives the pin
-it depends on. That was found by review rather than by the documents. The same
-conflation is why items 3 below went unnoticed for so long.
-`VHDL_CONFORMANCE.md` currently gives NR$C0 a tick for a reset value it stores
-and never acts on.
-
-The fix is a third axis wherever coverage is claimed:
-
-- **implemented**: the model exists
-- **verified**: it is pinned against the FPGA VHDL, by golden vectors or by
-  citation
-- **reachable**: a guest running on this emulator can actually exercise it
-
-A subsystem that is implemented and verified but not reachable is not a feature.
-It says so in `docs/spectrum-next.md`, `COMPARISON.md` and
-`VHDL_CONFORMANCE.md`, or the tables are misleading by omission.
-
-### 2. [correctness] TX-1696 is balanced on a timing edge
+### 1. [correctness] TX-1696 is balanced on a timing edge
 
 **This item previously said the wrong thing, and the correction matters more
 than the original claim.** It said the DMA's bus-hold reaching the CPU as one
@@ -109,7 +86,7 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 3. [correctness] IM2 interrupts are not delivered
+### 2. [correctness] IM2 interrupts are not delivered
 
 **Half done.** The CTC is wired: eight channels at ports `$183B`..`$1F3B`
 (`zxnext.vhd:2690`), ticked on the CPU clock, so a guest can program a channel
@@ -141,21 +118,7 @@ would produce interrupt timing that is not the FPGA's, and an unfaithful IM2
 would be worse than none: a developer would trust it. The enables all reset to
 zero, so nothing about the current state is unsafe, only incomplete.
 
-### 4. [correctness] zxnDMA prescaler period: DONE
-
-Fixed. `perByteCycles` took the prescaler byte as a T-state count. The FPGA
-waits until `DMA_timer_s(13 downto 5)` reaches the prescaler (`dma.vhd:424`,
-`:451`) and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 /
-14 / 28 MHz (`dma.vhd:250-254`), so the period is `prescaler * 32 / increment`
-CPU T-states, which is `4 * prescaler * multiplier` throughout: a constant wall
-time, which is the point of scaling the increment. Every fixed-time transfer ran
-4x too fast at 3.5 MHz and 32x too fast at 28 MHz, so DMA-streamed audio played
-at the wrong pitch at every speed.
-
-The controller now takes the CPU's speed multiplier and the fixtures state the
-period relationship rather than carrying a literal.
-
-### 5. [efficiency] Row composition is O(row x writes)
+### 3. [efficiency] Row composition is O(row x writes)
 
 **Measured.** `ComposeScanlineRange` re-renders the whole Layer 2, tilemap and
 sprite scanline before it consults `x0`/`x1`, so only the paint loop is bounded,
@@ -186,22 +149,27 @@ So the work is: enumerate, per layer, which NextRegs its scanline render reads;
 turn that into an invalidation set; then cache. That enumeration is the
 deliverable, not the caching.
 
-### 6. [correctness] Remaining zxnDMA defects
+### 4. [correctness] Remaining zxnDMA defects
 
 **An interleaved burst charges the CPU nothing.** `Step`
-(`pkg/next/dma/dma.go:749`) pumps bytes without ever calling `cycleSink`, so a
+(`pkg/next/dma/dma.go:825`) pumps bytes without ever calling `cycleSink`, so a
 burst+prescaler transfer is free. The FPGA only releases the bus inside
 `WAITING_CYCLES` (`dma.vhd:441-449`); the read and write cycles around each
 pumped byte still hold it, and the CPU is still stopped for them.
 
 **`$C3` resets more than the FPGA's `$C3`.** `command`
-(`pkg/next/dma/dma.go:543`) rebuilds the whole struct. The FPGA's `$C3` branch
-assigns exactly eight signals (`dma.vhd:638-645`): the FSM to IDLE, both status
-bits, both port timings, the prescaler, `ce_wait` and auto-restart. The byte
-counter, the transfer mode, the read mask and its cursor, and every latched
-address, length, direction and port mode survive it. Only the reset *pin*
-clears those (`dma.vhd:211-245`), which is what `Reset()` already models.
+(`pkg/next/dma/dma.go:619`) rebuilds the whole struct, preserving only the
+wiring the branch was written to know about. That list is a maintenance hazard
+in itself: adding the CPU speed source for the prescaler fix silently lost it
+across a `$C3` until the branch was told about it, which is the same defect
+biting the next thing added.
 
+The FPGA's `$C3` branch assigns exactly eight signals (`dma.vhd:638-645`): the
+FSM to IDLE, both status bits, both port timings, the prescaler, `ce_wait` and
+auto-restart. The byte counter, the transfer mode, the read mask and its cursor,
+and every latched address, length, direction and port mode survive it on
+hardware, and do not here. Only the reset *pin* clears those
+(`dma.vhd:211-245`), which is what `Reset()` already models.
 
 Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
 match logic**. The FPGA does not have it. The entity has no interrupt output
@@ -216,7 +184,7 @@ high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
 time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
 hardware.
 
-### 7. [product] Next game compatibility
+### 5. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **158 title rows: 11 Works, 20 Works
 (caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6
@@ -461,7 +429,7 @@ the interrupt/match logic turned out not to be implementable at all, and the
 arbitration work that replaced it uncovered four real timing defects, which are
 item 2 below.
 
-### 8. [product] Windows ARM64: the core is proven, the GUI is not
+### 6. [product] Windows ARM64: the core is proven, the GUI is not
 
 **Run 2026-08-14 against v1.8.23 on Windows 11 Pro ARM64 (Build 28000).**
 Two of the three checks pass outright; the third could not be reached.
@@ -523,7 +491,7 @@ to leave it stalled, not to work around it here.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 9. [product] Time travel
+### 7. [product] Time travel
 
 Three mechanisms, deliberately separate.
 
@@ -701,12 +669,21 @@ Solved problems whose answers were expensive to find.
 - **No hacks.** `zxnext.vhd` + the t80n VHDL are the oracle for every Next
   hardware question. Where behaviour is ambiguous, the VHDL wins over
   folklore and over other emulators.
+- **Modelled is not reachable, and coverage must say which.** A tick in
+  `docs/spectrum-next.md`, `COMPARISON.md` or `VHDL_CONFORMANCE.md` means
+  implemented, pinned against the VHDL **and** exercisable by a guest; NOT WIRED
+  means the first two without the third. `pkg/next/reachability_test.go` enforces
+  the package-level half and fails in both directions, so a subsystem cannot
+  quietly stop being wired and a declared-unreachable one cannot stay on the list
+  after it is wired. The rule exists because the zxnDMA bus arbitration was
+  published as "modelled" in three documents while nothing drove the pin it
+  needs, and review found that rather than the documents.
 - **Bootable SD must be FAT32** — either a real card image at
   `roms/next/sd.img`, or the FAT32 image built in memory from
   `roms/next/sd` at runtime. Case-only 8.3 aliases matter: the firmware
   resolves `menu.ini` by short name.
 - **`ZX_GO_RTC_FIXED=<RFC3339>` freezes the guest clock**
-  (`cmd/zx_go/next.go:843`). Required for deterministic menu-interaction
+  (`cmd/zx_go/next.go:841`). Required for deterministic menu-interaction
   tests — a wall-clock RTC makes the menu's clock-tick phase
   nondeterministic.
 - **Never write to the real install directory from tests.** Use

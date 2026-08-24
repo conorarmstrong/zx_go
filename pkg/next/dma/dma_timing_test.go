@@ -252,7 +252,7 @@ func TestResetPortTimingCommands(t *testing.T) {
 //
 // So this stays deferred to avoid knowingly regressing a title while the
 // marginality is unexplained, and the marginality is the real defect. See
-// ROADMAP item 2.
+// ROADMAP item 1.
 func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
 	if busAcquisitionCycles != 3 {
 		t.Errorf("busAcquisitionCycles = %d, want 3: START_DMA, WAITING_ACK and "+

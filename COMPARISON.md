@@ -217,7 +217,7 @@ dma_delay_i pin that would let an interrupt hold the DMA off the bus is modelled
 but not driven, its source being an unwired reference model. The
 interrupt/match logic is absent because the FPGA does not implement it either.
 Four timing defects are open, the prescaler period being the largest: see
-ROADMAP items 2, 4 and 6.
+ROADMAP items 1 and 4.
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
