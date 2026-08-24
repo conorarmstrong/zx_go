@@ -1,5 +1,7 @@
 package ay
 
+import "sync"
+
 // Engine is a multi-AY chip bank. The ZX Spectrum Next ships
 // three AY-3-8912 instances visible through the classic
 // 0xFFFD / 0xBFFD ports — guest code picks which chip the port
@@ -10,6 +12,15 @@ package ay
 // have one) continue to use the existing AY type directly.
 // Engine is the ModelNext-only wrapper.
 type Engine struct {
+	// mu guards the scalar fields below. The chips behind them carry their own
+	// mutex (see AY), and the wrapper's own state did not, which left a real
+	// race: MixIntoStereo runs on the audio callback goroutine while Select,
+	// SelectChip, the panning setters and Reset run on the emulator goroutine.
+	// A NextReg $06 write, or a machine reboot driving the whole register file
+	// through Reset, therefore raced every audio buffer. The critical sections
+	// are per-buffer rather than per-sample, so the cost is not on the hot path.
+	mu sync.Mutex
+
 	chips    [3]*AY
 	selected byte // 0..2
 	disabled bool // NextReg 0x06 bit 2: AY chip disable
@@ -39,6 +50,8 @@ func NewEngine() *Engine {
 // must be ignored here or that boot-time write would wrongly silence AY
 // output.
 func (e *Engine) Select(val byte) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.disabled = val&0x03 == 0x03
 }
 
@@ -49,19 +62,29 @@ func (e *Engine) SelectChip(idx byte) {
 	if idx > 2 {
 		idx = 2
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.selected = idx
 }
 
 // Selected returns the active chip index (0..2).
-func (e *Engine) Selected() byte { return e.selected }
+func (e *Engine) Selected() byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.selected
+}
 
 // Disabled reports whether AY output is suppressed (NextReg 0x06 bits 1-0 == 11,
 // "hold all AY in reset").
-func (e *Engine) Disabled() bool { return e.disabled }
+func (e *Engine) Disabled() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.disabled
+}
 
 // Active returns the currently-selected chip. Port writes through
 // 0xFFFD / 0xBFFD on ModelNext route through this.
-func (e *Engine) Active() *AY { return e.chips[e.selected] }
+func (e *Engine) Active() *AY { return e.chips[e.Selected()] }
 
 // Chip returns the chip at index i (0..2), or nil if i is out
 // of range.
@@ -92,7 +115,9 @@ func (e *Engine) SetChip(i int, c *AY) {
 // SetStereoMode applies NR$08 bit 5: clear selects ABC, set selects ACB
 // (zxnext.vhd:5177). It is one bit for all three PSGs.
 func (e *Engine) SetStereoMode(acb bool) {
+	e.mu.Lock()
 	e.acb = acb
+	e.mu.Unlock()
 	e.applyPanning()
 }
 
@@ -102,7 +127,9 @@ func (e *Engine) SetStereoMode(acb bool) {
 // the field lands on the high index. The mask is taken whole, so passing the
 // NR$09 byte is safe — the other bits are not ours.
 func (e *Engine) SetMonoMask(nr09 byte) {
+	e.mu.Lock()
 	e.monoMask = (nr09 >> 5) & 0x07
+	e.mu.Unlock()
 	e.applyPanning()
 }
 
@@ -112,14 +139,17 @@ func (e *Engine) SetMonoMask(nr09 byte) {
 // all three of PSG n's mux conditions, so a chip held mono is unreachable by
 // stereo_mode_i.
 func (e *Engine) applyPanning() {
+	e.mu.Lock()
+	acb, mask := e.acb, e.monoMask
+	e.mu.Unlock()
 	for i, c := range e.chips {
 		if c == nil {
 			continue
 		}
 		switch {
-		case e.monoMask&(1<<uint(i)) != 0:
+		case mask&(1<<uint(i)) != 0:
 			c.SetStereoMode(StereoMono)
-		case e.acb:
+		case acb:
 			c.SetStereoMode(StereoACB)
 		default:
 			c.SetStereoMode(StereoABC)
@@ -138,7 +168,7 @@ func (e *Engine) applyPanning() {
 // Engine itself rather than a chip held elsewhere — otherwise it would mix a
 // chip the guest never writes to.
 func (e *Engine) MixInto(buf []int16) {
-	if e.disabled {
+	if e.Disabled() {
 		return
 	}
 	for _, c := range e.chips {
@@ -153,7 +183,7 @@ func (e *Engine) MixInto(buf []int16) {
 // (audio.AYSource); it mirrors pcm_ay_L_o / pcm_ay_R_o, which turbosound.vhd
 // forms by adding all three PSGs' panned pairs (turbosound.vhd:334-335).
 func (e *Engine) MixIntoStereo(buf []int16) {
-	if e.disabled {
+	if e.Disabled() {
 		return
 	}
 	for _, c := range e.chips {
@@ -168,6 +198,8 @@ func (e *Engine) Reset() {
 	for _, c := range e.chips {
 		c.Reset()
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.selected = 0
 	e.disabled = false
 }
