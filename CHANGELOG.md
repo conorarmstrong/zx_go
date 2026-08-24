@@ -8,6 +8,15 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An interleaved zxnDMA burst charged the CPU nothing.** A burst transfer with
+  a prescaler is the one case where the device gives the bus back mid-block, and
+  `dma.vhd:441-447` gives it back for the prescaler GAP, not for the byte: the
+  read and write cycles inside `WAITING_CYCLES` hold the bus like any other
+  transfer. `Step` charged nothing at all, so the audio-streaming case, which is
+  the whole reason the prescaler exists, was free. Each pumped byte now costs
+  the CPU its own read and write cycles, and the gaps still cost it nothing,
+  because that is where it runs.
+
 - **`$C3` RESET cleared far more of the zxnDMA than the hardware does.** The
   command assigns exactly eight signals (`dma.vhd:637-645`): the transfer FSM to
   IDLE, both status bits, both port timings, the prescaler, `ce_wait` and

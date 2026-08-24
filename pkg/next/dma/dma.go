@@ -883,6 +883,12 @@ func (d *DMA) Step(now uint64) {
 			return
 		}
 		d.atLeastOne = true // dma.vhd:412, in TRANSFERING_WRITE_4
+		// The byte held the bus for its own cycles. The prescaler gap that
+		// follows does not: burst mode hands the bus back for it, which is the
+		// only place in the device that ever does.
+		if d.cycleSink != nil {
+			d.cycleSink(d.byteCycles())
+		}
 		d.nextDue += per
 	}
 	d.inTransfer = false
@@ -942,11 +948,7 @@ func (d *DMA) endpointWrite(isIO bool, addr uint16, val byte) {
 // if it is larger (zxnDMA "the transfer takes at least <prescaler> cycles per
 // byte" — the sampled-audio feature).
 func (d *DMA) perByteCycles() uint64 {
-	srcCyc, dstCyc := d.aCycleLen, d.bCycleLen
-	if !d.aToB { // B is the source
-		srcCyc, dstCyc = d.bCycleLen, d.aCycleLen
-	}
-	per := uint64(srcCyc) + uint64(dstCyc)
+	per := d.byteCycles()
 	// DMA_timer_s is cleared at TRANSFERING_READ_1 (dma.vhd:309), so the
 	// prescaler wait overlaps the byte's own cycles rather than following them:
 	// the slower of the two sets the pace.
@@ -954,6 +956,19 @@ func (d *DMA) perByteCycles() uint64 {
 		per = p
 	}
 	return per
+}
+
+// byteCycles is what one byte's read and write cycles cost, with no prescaler
+// in it. That is what the CPU is actually held off the bus for: the prescaler
+// period is the gap around it, and in burst mode the gap is where the CPU runs
+// (dma.vhd:441-447 releases cpu_busreq_n_s inside WAITING_CYCLES, and only
+// while the period is still running).
+func (d *DMA) byteCycles() uint64 {
+	srcCyc, dstCyc := d.aCycleLen, d.bCycleLen
+	if !d.aToB { // B is the source
+		srcCyc, dstCyc = d.bCycleLen, d.aCycleLen
+	}
+	return uint64(srcCyc) + uint64(dstCyc)
 }
 
 func stepAddr(a uint16, mode byte) uint16 {

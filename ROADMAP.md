@@ -159,14 +159,7 @@ So the work is: enumerate, per layer, which NextRegs its scanline render reads;
 turn that into an invalidation set; then cache. That enumeration is the
 deliverable, not the caching.
 
-### 4. [correctness] An interleaved burst charges the CPU nothing
-
-`Step` (`pkg/next/dma/dma.go`) pumps bytes without ever calling `cycleSink`, so
-a burst+prescaler transfer is free. The FPGA releases the bus only inside
-`WAITING_CYCLES` and only in burst mode (`dma.vhd:441-449`); the read and write
-cycles around each pumped byte still hold it, and the CPU is still stopped for
-them. What a pumped byte should cost is the byte's own cycles, not the whole
-prescaler period, because the period is the gap the CPU runs in.
+### 4. [correctness] zxnDMA: nothing outstanding except the interrupt logic
 
 Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
 match logic**. The FPGA does not have it. The entity has no interrupt output
@@ -180,6 +173,9 @@ The daisy chain is inert on the machine side as well: `bus_busreq_n_i` is tied
 high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
 time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
 hardware.
+
+The `dma_delay_i` pin is modelled and cannot be driven until the IM2 chain is
+wired; that is tracked as part of item 2 rather than here.
 
 ### 5. [product] Next game compatibility
 

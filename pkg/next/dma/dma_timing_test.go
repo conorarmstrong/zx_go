@@ -89,12 +89,17 @@ func TestCycleSinkContinuousCharges(t *testing.T) {
 }
 
 // Burst mode gives the CPU time back only where the FPGA actually deasserts
-// cpu_busreq_n_s: inside WAITING_CYCLES (dma.vhd:441-449), which is reachable
-// only with a non-zero prescaler (dma.vhd:424). That is the interleaved case,
-// and it is the one that must not charge the sink: the CPU is running in the
-// gaps, not stopped. (Burst with no prescaler never enters that state and does
-// charge; see TestBurstWithoutPrescalerChargesTheCPULikeContinuous.)
-func TestCycleSinkInterleavedBurstDoesNotCharge(t *testing.T) {
+// cpu_busreq_n_s: inside WAITING_CYCLES (dma.vhd:441-447), which is reachable
+// only with a non-zero prescaler (dma.vhd:424). That is the interleaved case.
+//
+// What it hands back is the GAP, not the byte. This used to assert that an
+// interleaved burst charges nothing at all, on the reasoning that the CPU is
+// running rather than stopped, which is true of the prescaler period and false
+// of the read and write cycles inside it: those hold the bus like any other
+// transfer. So the charge is the bytes' own cycles and no more. (Burst with no
+// prescaler never enters WAITING_CYCLES and charges the whole block; see
+// TestBurstWithoutPrescalerChargesTheCPULikeContinuous.)
+func TestCycleSinkInterleavedBurstChargesOnlyTheBytes(t *testing.T) {
 	var charged uint64
 	var now uint64
 	d := New(memMap{})
@@ -107,8 +112,9 @@ func TestCycleSinkInterleavedBurstDoesNotCharge(t *testing.T) {
 	if d.ByteCounter() != 8 {
 		t.Fatalf("interleaved burst moved %d of 8 bytes; the fixture is not transferring", d.ByteCounter())
 	}
-	if charged != 0 {
-		t.Errorf("interleaved burst charged = %d, want 0 (the CPU runs in the gaps)", charged)
+	if want := uint64(8 * (resetCycleLen + 2)); charged != want {
+		t.Errorf("interleaved burst charged = %d, want %d: the eight bytes' own "+
+			"cycles, and none of the prescaler gaps the CPU runs in", charged, want)
 	}
 	if d.Duration() == 0 {
 		t.Error("Duration should still be computed in burst mode")
@@ -331,5 +337,50 @@ func TestPrescalerDefaultsToTheUnturboedClock(t *testing.T) {
 	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 10))
 	if got, want := d.Duration(), uint64(8*4*10); got != want {
 		t.Errorf("Duration with no speed source = %d, want %d (4 x prescaler)", got, want)
+	}
+}
+
+// A burst transfer with a prescaler is the one case where the DMA gives the bus
+// back mid-block, and it gives it back for the WAIT, not for the byte.
+// dma.vhd:441-447 releases cpu_busreq_n_s inside WAITING_CYCLES and only while
+// the prescaler period is still running; the byte's own read and write cycles
+// hold the bus like any other transfer.
+//
+// So each pumped byte costs the CPU its own cycles, and the gap between bytes
+// costs it nothing because that is where it runs. Step charged nothing at all,
+// which made a burst+prescaler transfer free: the audio-streaming case, and the
+// one shape of transfer where the CPU and the DMA are genuinely interleaved.
+func TestAnInterleavedBurstChargesTheCPUForEachByte(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 4; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	var now, charged uint64
+	d := New(mem)
+	d.SetClock(func() uint64 { return now })
+	d.SetCycleSink(func(n uint64) { charged += n })
+	// Burst, prescaler 10, both ports at cycle code 2 = 2 cycles each.
+	feed(d, burstStream(0x4000, 0x6000, 4, 10))
+
+	if charged != 0 {
+		t.Fatalf("charged %d T-states at ENABLE, want 0: a burst defers to Step", charged)
+	}
+
+	for now = 0; now <= 4*prescalerPeriod(10); now += 10 {
+		d.Step(now)
+	}
+	if d.ByteCounter() != 4 {
+		t.Fatalf("moved %d of 4 bytes; the fixture is not transferring", d.ByteCounter())
+	}
+
+	// Four bytes at 3+2 cycles each: burstStream sends no WR1 timing byte, so
+	// port A keeps the reset default of three cycles while port B is set to
+	// two. NOT four prescaler periods: that time is the CPU's, which is the
+	// whole point of burst mode.
+	if want := uint64(4 * (resetCycleLen + 2)); charged != want {
+		t.Errorf("charged %d T-states for four pumped bytes, want %d (the bytes' own "+
+			"cycles). Charging %d would mean the CPU was stopped for the prescaler "+
+			"gaps too, which is exactly what burst mode releases the bus for",
+			charged, want, 4*prescalerPeriod(10))
 	}
 }
