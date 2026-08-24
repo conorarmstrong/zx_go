@@ -6,6 +6,21 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`$C3` RESET cleared far more of the zxnDMA than the hardware does.** The
+  command assigns exactly eight signals (`dma.vhd:637-645`): the transfer FSM to
+  IDLE, both status bits, both port timings, the prescaler, `ce_wait` and
+  auto-restart. Everything it does not name survives, which is most of the
+  device. This model rebuilt the whole struct and kept a hand-written list of
+  exceptions, so it wrongly cleared the latched addresses, block length,
+  direction, port modes, live pointers, byte counter, transfer mode, read mask
+  and read cursor. A driver that programs the controller, issues `$C3` to clear
+  the state machine and then LOADs would transfer from `$0000` with a length of
+  zero. The exception list was also a trap in its own right: it had to name
+  every dependency the device grew, and the CPU speed source added for the
+  prescaler went missing across a `$C3` until the branch was told about it.
+
 ## [v1.12.2]
 
 **A regression test for a v1.12.0 fix that shipped without one.**
