@@ -114,14 +114,21 @@ The port decode and the four channels are modelled and pinned
 T-state across four channels is a real per-instruction cost, so it wants a
 divider or a deadline model rather than a naive loop.
 
-**IM2 delivery** is blocked on the CPU. `IM2Inputs` is a per-clock FSM wanting
-`/M1`, `/IORQ`, `i_im2_mode` and the RETI decode and seen pulses every clock;
-ours is instruction-granular, executes RETI without telling anyone, and accepts
-interrupts atomically inside `interrupt()` with no acknowledge cycle an observer
-can see. So the order is: give `pkg/z80` an interrupt-acknowledge hook and a
-RETI notification; then feed the chain from `ctc_zc_to`, `ula_int_pulse` and the
-two UART sources at the priority order in `zxnext.vhd:1936`; then plumb NR$C0
-bit 0, its bits 7:5, NR$C4, NR$C5 and NR$C6.
+**IM2 delivery.** The CPU side is done: `SetINTAckHook` lets a peripheral answer
+the acknowledge cycle and drive its vector onto the bus, and `SetRETISeenHook`
+reports the end-of-interrupt. Both are pinned against the FPGA, including that
+the IM2 controller matches `$4D` exactly (`im2_control.vhd:135`) where the
+existing RETN hook fires for every mirror of both instructions.
+
+One signal the CPU still cannot give: `o_reti_decode` (`im2_control.vhd:233`),
+high for the single T-state between the `ED` prefix and its second byte. That is
+a sub-instruction window and a peripheral needing it to arbitrate needs a
+cycle-stepped CPU. Nothing in this chain does today, but it is the first thing
+to check if the arbitration comes out wrong.
+
+What remains: feed the chain from `ctc_zc_to`, `ula_int_pulse` and the two UART
+sources at the priority order in `zxnext.vhd:1936`, then plumb NR$C0 bit 0, its
+bits 7:5, NR$C4, NR$C5 and NR$C6, all of which are stored-only.
 
 Do not approximate either. Driving a per-clock FSM from instruction boundaries
 produces timing that is not the FPGA's, and an unfaithful CTC or IM2 is worse

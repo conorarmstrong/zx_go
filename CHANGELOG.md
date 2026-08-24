@@ -6,6 +6,22 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+### Added
+
+- **The Z80 exposes the two bus events a vectored-interrupt daisy chain needs.**
+  `SetINTAckHook` is the acknowledge cycle, where the peripheral that won
+  arbitration drives its vector onto the data bus: it fires in every interrupt
+  mode, because the acknowledge is what moves the winning device into its
+  in-service state, and only IM2 reads the byte back. A device that declines
+  leaves `IM2Vector` standing, which is the `$FF` a Spectrum's floating bus
+  supplies. `SetRETISeenHook` is the end-of-interrupt, and is deliberately
+  narrower than the existing RETN hook: that one fires for every mirror of both
+  RETI and RETN because the T80N asserts `I_RETN` for all of them and the divMMC
+  wants exactly that, while the IM2 controller matches `$4D` exactly
+  (`im2_control.vhd:135`), so `$5D`, `$6D` and `$7D` are the same instruction and
+  not this signal.
+
 ### Fixed
 
 - **An interleaved zxnDMA burst charged the CPU nothing.** A burst transfer with

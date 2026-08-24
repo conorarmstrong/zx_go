@@ -192,6 +192,12 @@ type CPU struct {
 	// retnHook fires after RETN/RETI — see SetRETNHook.
 	retnHook func()
 
+	// retiSeenHook fires after ED $4D only, and intAckHook fires when an
+	// interrupt is accepted. Both are the Z80 bus events a vectored-interrupt
+	// daisy chain is built on; see SetRETISeenHook and SetINTAckHook.
+	retiSeenHook func()
+	intAckHook   func() (byte, bool)
+
 	// Memory and ULA interfaces
 	mem Memory
 	ula ULA
@@ -639,6 +645,39 @@ func (c *CPU) SpeedMultiplier() int {
 //
 // SetRETNHook installs it; pass nil to remove.
 func (c *CPU) SetRETNHook(fn func()) { c.retnHook = fn }
+
+// SetRETISeenHook installs an observer of RETI, the end-of-interrupt a Z80
+// vectored-interrupt daisy chain waits for before it releases the in-service
+// slot and lets a lower-priority peripheral through.
+//
+// It is deliberately narrower than SetRETNHook. That one fires for every mirror
+// of both RETI and RETN, because the T80N asserts I_RETN for all of them
+// (t80n_mcode.vhd:660) and the divMMC wants exactly that. The IM2 controller
+// decodes the opcode byte itself and matches $4D exactly
+// (im2_control.vhd:135, :172-173, :234), so $5D, $6D and $7D execute the same
+// instruction and are not this signal.
+//
+// What this cannot reproduce is o_reti_decode (im2_control.vhd:233), which is
+// high for the single T-state between the ED prefix and its second byte. That
+// is a sub-instruction window, and a peripheral that needs it to arbitrate
+// needs a cycle-stepped CPU rather than this hook.
+//
+// Pass nil to remove.
+func (c *CPU) SetRETISeenHook(fn func()) { c.retiSeenHook = fn }
+
+// SetINTAckHook installs the device that answers the interrupt acknowledge
+// cycle: the peripheral that won the daisy chain puts its vector on the data
+// bus while /M1 and /IORQ are both low.
+//
+// It fires whenever an interrupt is accepted, in every interrupt mode, because
+// the acknowledge is what tells the winning peripheral its interrupt was taken
+// and moves it into its in-service state. Only the VECTOR is IM2-specific: fn
+// returns the byte and whether anything drove the bus at all, and a false
+// leaves the CPU with IM2Vector, which is the $FF a ZX Spectrum's floating bus
+// supplies when nothing is listening.
+//
+// Pass nil to remove.
+func (c *CPU) SetINTAckHook(fn func() (byte, bool)) { c.intAckHook = fn }
 
 // SetSpeedSelect installs the NextReg 0x07 speed selector. Only
 // the low 2 bits are honoured; other bits are ignored. A no-op once
@@ -2918,6 +2957,11 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 	// ED $45/$55/$65/$75 are all RETN mirrors. Each takes 14 t and
 	// performs the same pop + IFF restoration.
 	case 0x4D, 0x5D, 0x6D, 0x7D: // RETI mirrors
+		if opcode == 0x4D && c.retiSeenHook != nil {
+			// The daisy chain matches the opcode byte exactly, so the mirrors
+			// are not an end-of-interrupt to it. See SetRETISeenHook.
+			c.retiSeenHook()
+		}
 		c.PC = c.pop()
 		c.WZ = c.PC // per Sean Young §3.4: RETI sets MEMPTR = popped PC
 		// RETI restores IFF1 from IFF2 — faithful Z80 behaviour
@@ -4709,6 +4753,17 @@ func (c *CPU) interrupt() {
 	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
 	c.instructionCount++
 
+	// The acknowledge cycle: /M1 and /IORQ low together, which is what tells
+	// the peripheral that won the daisy chain its interrupt was taken, and is
+	// when it drives its vector onto the data bus. It happens in every
+	// interrupt mode; only IM2 reads the byte back off the bus.
+	vector := c.IM2Vector
+	if c.intAckHook != nil {
+		if v, present := c.intAckHook(); present {
+			vector = v
+		}
+	}
+
 	switch c.IM {
 	case 0:
 		// IM0: Execute RST 38h (like RST instruction)
@@ -4721,9 +4776,11 @@ func (c *CPU) interrupt() {
 		c.PC = 0x38
 		c.tstates += 13
 	case 2:
-		// IM2: Indirect jump using I register and data bus value.
-		// On the ZX Spectrum, the ULA places 0xFF on the bus during INTA.
-		addr := uint16(c.I)<<8 | uint16(c.IM2Vector)
+		// IM2: Indirect jump using I register and data bus value. With nothing
+		// on the daisy chain the bus floats, and on a ZX Spectrum the ULA makes
+		// that 0xFF; a peripheral that answered the acknowledge above supplies
+		// its own vector instead.
+		addr := uint16(c.I)<<8 | uint16(vector)
 		low := c.mem.Read(addr)
 		high := c.mem.Read(addr + 1)
 		c.push(c.PC)
