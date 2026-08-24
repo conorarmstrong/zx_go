@@ -37,7 +37,7 @@ func TestWaitReleasesOnlyPastItsColumnThreshold(t *testing.T) {
 
 // TestWaitHThresholdMatchesFPGA pins the exact horizontal release threshold
 // formula taken from the FPGA copper: hcount >= (X<<3)+12, computed in the
-// nine bits copper.vhd:94 computes it in — so column 63 wraps to 4.
+// nine bits copper.vhd:94 computes it in, so column 63 wraps to 4.
 func TestWaitHThresholdMatchesFPGA(t *testing.T) {
 	cases := []struct {
 		x    byte

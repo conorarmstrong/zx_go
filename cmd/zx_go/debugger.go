@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"log/slog"
 	"net"
 	"sort"
@@ -289,14 +290,18 @@ type remoteDebugger struct {
 	// nrTraces is the runtime-mutable NextReg trace set. Pairs
 	// with ensureNRTraceHook which chains a dispatcher tracer on
 	// top of any pre-existing one.
-	nrTraces         nrTraceSet
-	nrTraceInstalled bool
+	nrTraces nrTraceSet
+	// nrTraceHookedOn is the dispatcher ensureNRTraceHook last installed on,
+	// not a bare "installed" flag. A model switch replaces emu.nextRegs, and a
+	// hook remembered against a flag then sits on a dispatcher nobody uses: the
+	// traces still list as armed and silently never fire again.
+	nrTraceHookedOn *nextregs.Dispatcher
 
 	// nrWatches is the live set of NextReg-write watchpoints, the halting
 	// counterpart to nrTraces. Same chaining rule: ensureNRWatchHook wraps
 	// whatever tracer is already installed rather than replacing it.
-	nrWatches        nrWatchSet
-	nrWatchInstalled bool
+	nrWatches       nrWatchSet
+	nrWatchHookedOn *nextregs.Dispatcher
 
 	// catchIRQ halts the CPU at the next interrupt-taken event.
 	// Cheap when off (one atomic read at the head of cpu.interrupt

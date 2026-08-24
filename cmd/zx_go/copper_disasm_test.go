@@ -21,7 +21,7 @@ func TestFormatCopperDisasm(t *testing.T) {
 		{Op: copper.OpMOVE, Reg: 0x40, Val: 0x07},
 		{Op: copper.OpWAIT, Y: 192, X: 0},
 		{Op: copper.OpWAIT, Y: 511, X: 63},        // $FFFF: the end-of-list terminator
-		{Op: copper.OpMOVE, Reg: 0x12, Val: 0xFF}, // past it — must NOT render
+		{Op: copper.OpMOVE, Reg: 0x12, Val: 0xFF}, // past it: must NOT render
 	}
 	rd := func(i uint16) copper.Instruction {
 		if int(i) < len(prog) {
@@ -30,7 +30,7 @@ func TestFormatCopperDisasm(t *testing.T) {
 		return copper.Instruction{Op: copper.OpNOOP}
 	}
 
-	out := formatCopperDisasm(rd, 0x00A, copper.StartOnVBL, 64)
+	out := formatCopperDisasm(rd, 0x00A, copper.StartOnVBL, 64, 312)
 
 	for _, want := range []string{
 		"Copper", "$00A", "VBL", // header: title, cursor, decoded mode
@@ -42,7 +42,7 @@ func TestFormatCopperDisasm(t *testing.T) {
 			t.Errorf("disasm missing %q\n---\n%s", want, out)
 		}
 	}
-	// Must stop at the terminator — the MOVE to NR$12 after it must not appear.
+	// Must stop at the terminator: the MOVE to NR$12 after it must not appear.
 	if strings.Contains(out, "NR$12") {
 		t.Errorf("disasm continued past the end-of-list WAIT (rendered NR$12):\n%s", out)
 	}
@@ -74,12 +74,45 @@ func TestDisasmStopsAtTheLowestUnreachableWaitLine(t *testing.T) {
 		}
 		return copper.Instruction{Op: copper.OpNOOP}
 	}
-	out := formatCopperDisasm(ins, 0, copper.StartFromZero, 64)
+	out := formatCopperDisasm(ins, 0, copper.StartFromZero, 64, 312)
 
 	if !strings.Contains(out, "parks") {
 		t.Errorf("WAIT line=312 was not reported as parking:\n%s", out)
 	}
 	if strings.Contains(out, "$41") || strings.Contains(out, "$42") {
 		t.Errorf("disassembly continued past a WAIT that can never release:\n%s", out)
+	}
+}
+
+// The terminator threshold has to follow the running machine, not the largest
+// frame across models. A 128K-timing frame is 311 lines, numbered 0..310, so a
+// WAIT for line 311 parks on it; a 48K frame is 312 lines and 311 is an
+// ordinary reachable line there. Using the maximum across models made the
+// disassembler blind to the Next's own terminator, which is the machine the
+// Copper exists on.
+func TestDisasmTerminatorThresholdFollowsTheMachine(t *testing.T) {
+	prog := []copper.Instruction{
+		{Op: copper.OpWAIT, Y: 311, X: 0},
+		{Op: copper.OpMOVE, Reg: 0x41, Val: 0x02},
+	}
+	ins := func(i uint16) copper.Instruction {
+		if int(i) < len(prog) {
+			return prog[i]
+		}
+		return copper.Instruction{Op: copper.OpNOOP}
+	}
+
+	next := formatCopperDisasm(ins, 0, copper.StartFromZero, 64, 311)
+	if !strings.Contains(next, "parks") {
+		t.Errorf("on 311-line timing, WAIT line=311 must park:\n%s", next)
+	}
+	if strings.Contains(next, "$41") {
+		t.Errorf("on 311-line timing, disassembly continued past a parking WAIT:\n%s", next)
+	}
+
+	fortyEight := formatCopperDisasm(ins, 0, copper.StartFromZero, 64, 312)
+	if strings.Contains(fortyEight, "parks") {
+		t.Errorf("on 312-line timing, line 311 is reachable and must not be "+
+			"reported as parking:\n%s", fortyEight)
 	}
 }

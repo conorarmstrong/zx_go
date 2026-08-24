@@ -93,6 +93,10 @@ func TestChangingTheModeToStartFromZeroRestartsTheProgram(t *testing.T) {
 	c.SetWritePtrHighAndMode(0xC0) // mode 11
 	c.pc = 7
 	c.SetWritePtrHighAndMode(0x40) // mode 01: a real change
+	// The write records the mode. The device performs the restart on the clock
+	// it notices last_state_s differ (copper.vhd:70-76), and that clock runs no
+	// instruction, so one clock is all it takes and pc lands on 0.
+	c.Step(0, 0, 1)
 	if got := c.pc; got != 0 {
 		t.Errorf("PC = %d after a mode change to 01, want 0", got)
 	}

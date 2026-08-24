@@ -80,12 +80,22 @@ type copperState struct {
 	Pc      uint16
 	Stopped bool
 
+	// LastMode is the device's last_state_s (copper.vhd:50), the mode as of the
+	// previous clock. It has to be captured because it is half of a comparison
+	// the engine makes on every clock: a restore that leaves it disagreeing with
+	// Mode makes the restored Copper perform a restart the recorded machine had
+	// already done, rewinding a running list back to instruction 0.
+	LastMode byte
+
 	LastScanline uint16
 }
 
 // copperStateVersion is the current meaning of copperState's fields.
 // Version 1 introduced the byte-address write cursor.
-const copperStateVersion = 1
+// Version 2 added LastMode. A version 1 capture cannot be upgraded: it does not
+// record what the mode was on the previous clock, and guessing it either
+// invents a restart or suppresses a real one.
+const copperStateVersion = 2
 
 // StateID identifies the copper in a captured machine state.
 func (c *Copper) StateID() string { return "next.copper" }
@@ -97,6 +107,7 @@ func (c *Copper) SaveState() []byte {
 		Version:      copperStateVersion,
 		WritePtr:     c.writePtr,
 		Mode:         byte(c.mode),
+		LastMode:     byte(c.lastMode),
 		Pc:           c.pc,
 		Stopped:      c.stopped,
 		LastScanline: c.lastScanline,
@@ -137,6 +148,7 @@ func (c *Copper) LoadState(b []byte) error {
 	c.program = s.Program
 	c.writePtr = s.WritePtr
 	c.mode = StartMode(s.Mode)
+	c.lastMode = StartMode(s.LastMode)
 	c.pc = s.Pc
 	c.stopped = s.Stopped
 	c.lastScanline = s.LastScanline

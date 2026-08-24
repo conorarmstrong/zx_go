@@ -14,8 +14,14 @@ func TestStartOnVBLRestartsEachFrame(t *testing.T) {
 
 	rw := &fakeRegWriter{}
 	c.SetRegWriter(rw)
-	// Start-on-VBL (mode 3); mode-set resets pc to 0.
+	// Start-on-VBL (mode 3). The restart is the engine's, on the clock it sees
+	// last_state_s differ from copper_en_i (copper.vhd:70-76), and that clock
+	// executes nothing, so enabling costs one clock before the list runs.
 	c.SetWritePtrHighAndMode(byte(StartOnVBL) << 6)
+	c.Step(0, 0, 1)
+	if len(rw.writes) != 0 {
+		t.Fatalf("the enabling clock executed %d MOVEs, want 0", len(rw.writes))
+	}
 
 	// Frame 1: the MOVE runs once.
 	c.Step(0, 0, 1)

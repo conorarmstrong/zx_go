@@ -164,6 +164,27 @@ func (l *Log) ApplyThrough(row int) {
 	}
 }
 
+// SuspendRecording stops Record capturing until the returned function is
+// called. It is not a replay: nothing is rewound and nothing is re-applied.
+//
+// It exists for work that writes registers on the machine's own behalf rather
+// than the guest's, which is what this log is for. BeginReplay already covers
+// the Copper writes made inside the display loop; the Copper also runs below
+// the last display row, outside that window, and those writes must be kept out
+// of the log for the same two reasons: they would grow it without bound for a
+// Copper-heavy list, and a later frame's replay would undo them.
+//
+// Resuming restores whatever the window was before, so this nests safely inside
+// BeginReplay/EndReplay rather than closing a window it did not open.
+func (l *Log) SuspendRecording() (resume func()) {
+	if l == nil {
+		return func() {}
+	}
+	was := l.replaying
+	l.replaying = true
+	return func() { l.replaying = was }
+}
+
 // Replaying reports whether a rewind or replay is in progress. Observers can
 // use it to skip bookkeeping that only makes sense for real guest writes.
 func (l *Log) Replaying() bool { return l != nil && l.replaying }

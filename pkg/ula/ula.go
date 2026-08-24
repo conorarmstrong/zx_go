@@ -43,6 +43,10 @@ const LinesPerFrame = 311
 // practical pixel-0 counter "corresponds to ULA count i_hc = 0xC"), so a
 // render loop must offset the display x it hands to Step by this. Passing the
 // raw x released every WAIT twelve pixels late.
+//
+// Restated rather than imported, because this package reaches the Copper
+// through an interface and does not depend on its implementation. Drift is
+// caught by TestCopperConstantsMatchTheDevice rather than by the compiler.
 const copperHCountOrigin = 12
 
 // TStatesPerLineFor returns the documented T-states-per-scanline for a machine
@@ -60,12 +64,19 @@ func TStatesPerLineFor(model roms.SpectrumModel) int {
 
 // linesPerFrameFor returns the scanline count of one frame for a machine
 // model: 312 for the 48K, 311 for the 128K family and +2/+2A/+3. Matches
-// video/zxula_timing.vhd c_max_vc at 50 Hz — 311 for 48K (line 270) and 310
+// video/zxula_timing.vhd c_max_vc at 50 Hz: 311 for 48K (line 270) and 310
 // for 128K (line 204), each being the last line number rather than the count.
 //
 // The Copper needs it because its vertical counter cvc runs the whole frame,
 // not just the displayed rows (video/zxula_timing.vhd:455-466).
-func linesPerFrameFor(model roms.SpectrumModel) int {
+func linesPerFrameFor(model roms.SpectrumModel) int { return LinesPerFrameFor(model) }
+
+// LinesPerFrameFor is the number of scanlines in one frame of a model's video
+// timing. Lines are numbered from zero, so the highest the raster reaches is one
+// below this. Exported because the Copper disassembler needs the same number to
+// tell a never-releasing WAIT from an ordinary one, and two copies of it would
+// drift.
+func LinesPerFrameFor(model roms.SpectrumModel) int {
 	if model == roms.Model48K {
 		return 312
 	}
@@ -411,6 +422,11 @@ type NextI2C interface {
 type NextCopper interface {
 	Step(scanline uint16, hcount uint16, maxClocks int) int
 	Wrote() bool
+	// Idle reports that clocking the Copper cannot change anything, so a row's
+	// worth of columns can be skipped rather than stepped one at a time. Almost
+	// no program enables the Copper, and stepping it anyway costs a couple of
+	// percent of the frame budget in call overhead alone.
+	Idle() bool
 }
 
 // NextRasterLog is the contract for replaying mid-frame CPU writes to the
@@ -425,6 +441,11 @@ type NextRasterLog interface {
 	BeginReplay()
 	ApplyThrough(row int)
 	EndReplay()
+	// SuspendRecording keeps writes made on the machine's own behalf out of the
+	// journal, for the stretch of a frame that is outside the replay window.
+	// The Copper runs below the last display row, and its writes there are not
+	// the guest's to replay.
+	SuspendRecording() (resume func())
 	Len() int
 }
 
@@ -1998,7 +2019,7 @@ func (u *ULA) applyNextCompositor() {
 	// The Copper is clocked from the 28 MHz video domain, NOT from the CPU
 	// clock, so its throughput is fixed by the video timing and does not move
 	// with the CPU speed at all. It is paid per column below rather than per
-	// line, in copper CLOCKS — the unit Step charges in, where a MOVE costs
+	// line, in copper CLOCKS, the unit Step charges in, where a MOVE costs
 	// two and everything else one.
 	//
 	// columnsPerLine is the line's hcount column count: two video columns per
@@ -2057,12 +2078,18 @@ func (u *ULA) applyNextCompositor() {
 		// everything past column 267 generate no displayed pixel of this row,
 		// which is why a write retiring there is clamped rather than composed
 		// from.
-		if u.nextCopper != nil {
+		// An idle Copper cannot write, so the row needs one plain compose and
+		// none of the per-column walk. Skipping it is worth doing rather than
+		// leaving to Step's own early return: at 456 columns a line the call
+		// overhead alone is a couple of percent of the frame budget, spent by
+		// every Next program including the overwhelming majority that never
+		// enable the Copper at all.
+		if u.nextCopper != nil && !u.nextCopper.Idle() {
 			// Compose the row once from the state it starts in, then re-compose
 			// its tail from every pixel a Copper write lands in. Each
 			// re-compose overwrites only [p, w), so pixels generated earlier
 			// keep the state they were generated under and the row ends up
-			// divided exactly where the writes fell — which is what a fixed
+			// divided exactly where the writes fell, which is what a fixed
 			// grid of segments could not express, since the write pulse lands
 			// on a single 28 MHz clock (device/copper.vhd:102-104), a quarter
 			// of a pixel.
@@ -2114,12 +2141,24 @@ func (u *ULA) applyNextCompositor() {
 	// runs after the journal replay so the frame's CPU writes are in place
 	// first; interleaving the two row by row below the display is a separate
 	// question the journal does not currently answer.
-	if u.nextCopper != nil {
+	//
+	// Recording stays suppressed across it. The Copper's writes are the
+	// machine's, not the guest's, and the journal exists to replay the guest's:
+	// the display loop above gets that for free because it runs inside
+	// BeginReplay's window, and this loop has to ask for it. Without that, a
+	// MOVE made on a border or blanking line is journalled, and the next
+	// frame's BeginReplay undoes it for the whole of that frame's display.
+	if u.nextCopper != nil && !u.nextCopper.Idle() {
+		resume := func() {}
+		if journal != nil {
+			resume = journal.SuspendRecording()
+		}
 		for y := h; y < linesPerFrameFor(u.mem.GetCurrentModel()); y++ {
 			for hc := 0; hc < columnsPerLine; hc++ {
 				u.copperDebt = u.stepCopperColumn(y, hc, u.copperDebt)
 			}
 		}
+		resume()
 	}
 
 	// Border-area tilemap pass. Tilemap content in NextZXOS Browser

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+	"github.com/conorarmstrong/zx_go/pkg/ula"
 )
 
 func copperModeName(m copper.StartMode) string {
@@ -22,20 +23,19 @@ func copperModeName(m copper.StartMode) string {
 	}
 }
 
-// copperReachableLines is the number of scanlines in the longest frame any
-// supported timing runs: 312 on the 48K, 311 on the 128K family
-// (video/zxula_timing.vhd c_max_vc). Lines are numbered from zero, so the
-// highest the raster ever reaches is one below this, and a WAIT for this line
-// or any line above it can never release. That is how a copper list ends, and
-// why the idiomatic terminator $FFFF (WAIT x=63, y=511) parks.
-const copperReachableLines = 312
-
 // formatCopperDisasm disassembles the Copper program. ins(i) returns
 // the decoded instruction at index i; cursor/mode come from the live
 // Copper. Rendering stops at the first WAIT that can never release (the
 // program terminator) so trailing NOOPs aren't dumped, or after count
 // instructions. Pure function (instruction reader injected) for unit testing.
-func formatCopperDisasm(ins func(uint16) copper.Instruction, cursor uint16, mode copper.StartMode, count int) string {
+//
+// reachableLines is the running machine's frame height in scanlines. Lines are
+// numbered from zero, so the raster reaches at most one below it and a WAIT for
+// that line or any line above can never release. It has to be the machine's own
+// figure and not the largest across models: 311 on the 128K timing the Next
+// uses and 312 on the 48K, so a threshold of 312 would miss the Next's own
+// terminator, and the Next is the machine the Copper exists on.
+func formatCopperDisasm(ins func(uint16) copper.Instruction, cursor uint16, mode copper.StartMode, count, reachableLines int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OK Copper  cursor=$%03X  mode=%s\r\n", cursor, copperModeName(mode))
 	if count > copper.MaxInstructions {
@@ -55,7 +55,7 @@ func formatCopperDisasm(ins func(uint16) copper.Instruction, cursor uint16, mode
 			// opcode to render instead (device/copper.vhd), and rendering one
 			// implied a stop the silicon does not perform: in mode 3 the list
 			// restarts at every VBL and runs again.
-			if in.Y >= copperReachableLines {
+			if int(in.Y) >= reachableLines {
 				b.WriteString("   ; parks here (end of list)\r\n")
 				return b.String()
 			}
@@ -74,5 +74,6 @@ func (d *remoteDebugger) cmdCopperDisasm() string {
 		return "ERR copper-disasm: no Copper device (not a Next machine?)"
 	}
 	c := d.emu.nextCopper
-	return formatCopperDisasm(c.Instruction, c.Cursor(), c.Mode(), copper.MaxInstructions)
+	return formatCopperDisasm(c.Instruction, c.Cursor(), c.Mode(), copper.MaxInstructions,
+		ula.LinesPerFrameFor(d.emu.mem.GetCurrentModel()))
 }

@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-23 — v1.11.0, plus unreleased work)
+## CURRENT STATE (2026-08-23, v1.11.0, plus unreleased work)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -485,44 +485,45 @@ canonical ordering so two captures of an unchanged machine compare equal.
   single-step path), and any change made from outside the CPU during the window
   (`write-memory`, a key press, a disk arriving).
 
-### 5. [correctness] Open defects from the 2026-08-23 review
+### 5. [correctness] What the 2026-08-23 review left open
 
-A review of the Copper and zxnDMA work found these in committed code. The six
-that were mechanical are fixed; what follows is what is left.
+Most of that review is fixed. Three things are not, and one of them needs a
+decision rather than an implementation.
 
-- **Burst blocks are now charged to the CPU where they previously were not.**
-  The charge used to be gated on `modeContinuous`; it is now unconditional at
-  the end of `runBlock`. That follows the FPGA, which releases the bus only in
+- **Burst blocks are charged to the CPU where they previously were not.** The
+  charge used to be gated on `modeContinuous` and is now unconditional at the
+  end of `runBlock`. That follows the FPGA, which releases the bus only in
   `WAITING_CYCLES`, but it means a burst block with no prescaler can add tens of
-  thousands of T-states at one instruction boundary. It lands squarely on defect
-  (b) of item 2 and should be decided together with it: revert to
-  continuous-only and record why, keep it, or fix the lump-charge first.
-- **Row composition is O(row × writes).** Every Copper write re-composes the
-  row's tail by re-rendering the full Layer 2, tilemap and sprite scanlines, so
-  a `MOVE`-heavy list multiplies the per-row cost by the number of writes.
-  Recording the write columns during the column walk and composing contiguous
-  segments once each would make it O(row) again. Not measured yet: whether a
-  real copper list writes often enough for this to matter is unknown, and the
-  measurement should come before the rewrite.
-- **Copper `MOVE`s have two different lifetimes.** Those on displayed rows run
-  inside the raster journal's replay window and can be undone by `EndReplay`;
-  those on rows below the display run after it and persist. Reported as
-  plausible rather than confirmed; needs verifying before it is acted on.
-- **A test may pin the opposite of what the debt mechanism does.**
-  `TestCopperIsPacedAtFourClocksPerColumn` asserts every step is offered four
-  clocks, which `stepCopperColumn` deliberately breaks when a `MOVE` straddles a
-  column boundary. It is claimed to pass only because the fake never spends a
-  clock. Also plausible rather than confirmed.
-- **Two deliberate changes worth a second look**, both argued from the VHDL and
-  covered by tests: a bare `$87` with no `LOAD` now runs a block from zeroed
-  pointers (`dma.vhd:724` has no armed flag), and `sbtMapLen` is referenced only
-  by tests, so the SAM allocation-map bound is not enforced where it is written.
+  thousands of T-states at one instruction boundary. It lands on defect (b) of
+  item 2 and should be decided with it: revert to continuous-only and record
+  why, keep it, or fix the lump-charge first.
 
-Fixed from the same review: the `pendingOp` wire-format renumbering, the
-`watch-nextreg` / `nr-trace` / `trace-nextreg-deltas` nil panics on non-Next
-machines, the wedged DMA surviving a reboot, `copperMaxFrameLine`'s off-by-one
-and its stolen godoc, the compositor shortcut ignoring its range, and the two
-doc comments that asserted the opposite of the code.
+- **Row composition is O(row x writes).** `ComposeScanlineRange` re-renders the
+  whole Layer 2, tilemap and sprite scanline before it consults `x0`/`x1`, so
+  only the paint loop is bounded, and the ULA calls it once per Copper write.
+  A list writing every column would make 256 full-row layer renders a row.
+  No title on the SD card exercises the Copper at all, so this has never been
+  observed; the fix is to hoist the layer renders above the range check, and it
+  is a restructure of the compositor's hot path, which wants a measured case
+  before it is attempted.
+
+- **The `dma_delay_i` pin is modelled but not wired.** Nothing drives it,
+  because its source is `pkg/next.IM2DaisyChain`, a GHDL-golden reference model
+  that is itself unconnected. The behaviour behind the pin is correct and
+  tested, and marked in the package documentation as unreachable, so the code
+  does not read as a claim it can happen. Wiring it means first wiring the IM2
+  chain into the interrupt path, which is its own piece of work.
+
+Fixed from that review: the Copper applying a self-issued mode change mid
+instruction; Copper writes below the display being journalled and undone; the
+`pendingOp` wire-format renumbering; the `watch-nextreg` / `nr-trace` /
+`trace-nextreg-deltas` nil panics on non-Next machines, their half-armed
+register lists, the bare `log` argument and the hook lost on a model switch; the
+wedged DMA surviving a reboot; `copperReachableLines` using the largest frame
+across models rather than the running machine's; the compositor shortcut
+ignoring its range; the Copper being clocked when it cannot act; the ULA's
+duplicated Copper constants, now pinned against the device by a test; and
+several comments that asserted the opposite of the code.
 
 ---
 

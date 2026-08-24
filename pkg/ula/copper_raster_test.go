@@ -23,7 +23,7 @@ func (w countingRegWriter) WriteReg(_, _ byte) { *w.n++ }
 //
 //   - The WAIT threshold is (X<<3)+12 in hc_ula (device/copper.vhd:94), and
 //     hc_ula 12 IS displayed pixel 0 (video/zxula.vhd:44-46), so column 4
-//     releases at displayed pixel 32 — not pixel 44, which is where treating
+//     releases at displayed pixel 32, not pixel 44, which is where treating
 //     hcount as the display x put it.
 //   - The Copper is clocked at 28 MHz against a 7 MHz hcount
 //     (zxnext.vhd:43,46,3944) and a MOVE costs two clocks
@@ -104,8 +104,8 @@ func (c *boundsCheckingCompositor) ComposeScanlineRange(y int, _, dst []byte, fr
 // render walk's pixel clamp.
 //
 // hc_ula 0 is twelve columns before displayed pixel 0 (video/zxula.vhd:44-46),
-// so a MOVE retiring in hcount 0..11 — twelve of every 448 columns, entirely
-// ordinary — maps to a negative displayed pixel. The whole row is generated
+// so a MOVE retiring in hcount 0..11, twelve of every 448 columns, entirely
+// ordinary, maps to a negative displayed pixel. The whole row is generated
 // after such a write, so the re-compose has to start at pixel 0; handing the
 // compositor the negative number indexes its destination row out of range.
 func TestACopperWriteBeforePixelZeroComposesTheWholeRow(t *testing.T) {
@@ -134,8 +134,8 @@ func TestACopperWriteBeforePixelZeroComposesTheWholeRow(t *testing.T) {
 
 // TestACopperWriteAfterTheLastPixelComposesNothing pins the high edge.
 //
-// The line runs on past displayed pixel 255 — 448 columns on 48K timing
-// (video/zxula_timing.vhd:160) — so a MOVE can retire at an hcount no pixel of
+// The line runs on past displayed pixel 255, 448 columns on 48K timing
+// (video/zxula_timing.vhd:160), so a MOVE can retire at an hcount no pixel of
 // the row corresponds to. The write stands and the next row starts from it, but
 // this row must not be re-composed from a pixel index off the end of it.
 func TestACopperWriteAfterTheLastPixelComposesNothing(t *testing.T) {

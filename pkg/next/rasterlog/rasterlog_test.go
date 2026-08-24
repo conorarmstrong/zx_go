@@ -347,3 +347,51 @@ func TestJournalIsBoundedWithinAFrame(t *testing.T) {
 		t.Errorf("Len = %d, want at most MaxEntries (%d)", log.Len(), MaxEntries)
 	}
 }
+
+// Not everything that writes a NextReg is a guest write. The Copper writes
+// registers on the machine's own behalf, and BeginReplay's window exists partly
+// to keep those out of the log: they land at the right row by construction, and
+// journalling them would both grow the log without bound and, worse, let a
+// later replay undo them.
+//
+// Work that happens outside a replay window needs the same protection, which is
+// what this is for. It is not a replay: nothing is rewound and nothing is
+// re-applied.
+func TestSuspendRecordingKeepsNonGuestWritesOutOfTheLog(t *testing.T) {
+	l := New(func() int { return 100 })
+
+	l.Record(func() {}, func() {})
+	if got := l.Len(); got != 1 {
+		t.Fatalf("entries after an ordinary write = %d, want 1", got)
+	}
+
+	resume := l.SuspendRecording()
+	l.Record(func() {}, func() {})
+	l.Record(func() {}, func() {})
+	if got := l.Len(); got != 1 {
+		t.Errorf("entries while suspended = %d, want 1: writes made on the "+
+			"machine's behalf must not be journalled", got)
+	}
+	resume()
+
+	l.Record(func() {}, func() {})
+	if got := l.Len(); got != 2 {
+		t.Errorf("entries after resuming = %d, want 2: recording must come back", got)
+	}
+}
+
+// Suspending must not disturb a replay that is already in progress: resuming
+// has to leave the window as it found it, or the rest of the frame starts
+// journalling its own replay.
+func TestSuspendRecordingNestsInsideAReplayWindow(t *testing.T) {
+	l := New(func() int { return 100 })
+	l.BeginReplay()
+	if !l.Replaying() {
+		t.Fatal("BeginReplay did not open the window")
+	}
+	resume := l.SuspendRecording()
+	resume()
+	if !l.Replaying() {
+		t.Error("resuming closed a replay window it did not open")
+	}
+}

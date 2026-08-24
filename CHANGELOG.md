@@ -59,13 +59,16 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   than releasing. Not done: NR$03 machine timing is not consulted, so a program
   selecting 48K or Pentagon timing still gets 456 columns and 311 lines.
 
-- **zxnDMA bus arbitration is now modelled.** A block holds the bus for its
-  bytes at each port's programmed cycle length and charges that to the CPU;
-  burst mode gives the bus back only where the FPGA does, in `WAITING_CYCLES`,
-  which is reachable only with a prescaler; the `dma_delay_i` pin parks a block
-  in `START_DMA` and resumes it with the pointers where they stand; and `$83`
-  Disable DMA abandons a block in flight, so end-of-block never latches and
-  auto-restart never reloads. The Z80 DMA's interrupt and match logic is
+- **zxnDMA bus arbitration is now modelled, and half of it is live.** A block
+  holds the bus for its bytes at each port's programmed cycle length and charges
+  that to the CPU; burst mode gives the bus back only where the FPGA does, in
+  `WAITING_CYCLES`, which is reachable only with a prescaler; and `$83` Disable
+  DMA abandons a block in flight, so end-of-block never latches and auto-restart
+  never reloads. The `dma_delay_i` pin, which parks a block in `START_DMA` and
+  resumes it with the pointers where they stand, is modelled and tested but
+  never driven: its source is the IM2 daisy chain, which is itself an unwired
+  reference model here, so no guest can reach it yet. That is marked in the
+  package documentation rather than left to be inferred. The Z80 DMA's interrupt and match logic is
   deliberately still absent, because the FPGA does not implement it either:
   no interrupt output, no daisy-chain pins, the mask/match and
   interrupt-control registers commented out, and the five WR6 interrupt
@@ -82,6 +85,27 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   moved to the sides of the write cycle the FPGA sets them on.
 
 ### Fixed
+
+- **The Copper mishandled a list that reconfigured the Copper.** A `MOVE` can
+  write NextReg $61/$62, so a list can change its own start mode from inside its
+  own execution, and the engine applied that change in the middle of the
+  instruction that made it. A restart left the program counter at 1 rather than
+  0, silently skipping instruction 0 on every self-restart, and a `MOVE` that
+  stopped the Copper did not stop it, because the stop condition was tested once
+  before the clock budget rather than on every clock. Both now follow the
+  device's per-clock if/elsif chain: the clock on which the mode changes
+  performs the restart and executes nothing, and the stopped state is checked
+  every clock. Enabling the Copper therefore costs one clock, as it does in
+  hardware. `last_state_s` is now part of the captured state, so a rewind cannot
+  reintroduce a restart the recorded machine had already performed; the Copper
+  state version is 2 and version 1 captures are refused rather than guessed at.
+
+- **Copper writes below the last display row were journalled.** The raster
+  journal exists to replay the guest's writes, and suppresses recording across
+  the display loop so the Copper's own writes stay out of it. The Copper also
+  runs below the display, outside that window, so a `MOVE` on a border or
+  blanking line was recorded and then undone by the next frame's replay for the
+  whole of that frame.
 
 - **Three NextReg debugger commands crashed the emulator on a non-Next
   machine.** `watch-nextreg`, `nr-trace` and `trace-nextreg-deltas` all arm a
@@ -111,6 +135,25 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   loaded as a read-mask follow, applying the guest's next `$6B` byte to the
   wrong place. The retired code keeps its slot, and the numbers are now pinned
   by a test.
+
+- **`watch-nextreg` could half-arm a watch, and lost its hook on a model
+  switch.** A register list that failed to parse partway through left the
+  registers before the bad one armed while reporting an error and never
+  installing the tracer, so they fired later with no visible cause; the list is
+  now parsed in full before any of it is armed. A bare `watch-nextreg log` was
+  parsed as a register named "log"; it now reports the missing register. And the
+  installed-hook memo was a bare flag, so after a model switch replaced the
+  NextReg dispatcher the hook sat on the old one and armed watches silently
+  never fired again while still listing as active. The memo now records which
+  dispatcher it hooked, and re-installs when that changes. `nr-trace` and
+  `trace-nextreg-deltas` had the same flag and are fixed with it.
+
+- **The Copper is no longer clocked when it cannot do anything.** It was stepped
+  once per column of every line of the frame whenever a Next compositor was
+  wired, about 142,000 calls a frame, even for the overwhelming majority of
+  programs that never enable it. Measured at 334 microseconds a frame, or two
+  percent of a 50 Hz budget, spent entirely on call overhead. A stopped Copper
+  with no pending mode change is now skipped a row at a time.
 
 - **The Copper disassembler did not stop at the lowest unreachable `WAIT`
   line.** Its bound held the frame's line count but was compared as a maximum

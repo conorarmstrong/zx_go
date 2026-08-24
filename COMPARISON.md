@@ -208,9 +208,11 @@ signing/verification.
 (sprite/Layer 2/DAC port endpoints), per-byte prescaler + cycle-length timing
 (burst-mode + prescaler transfers interleaved with the CPU so DMA-streamed audio
 is paced across the CPU timeline), Continue / auto-restart, and read-mask
-register read-back. Bus arbitration is modelled: every block that runs end to
-end is charged to the CPU clock, burst as much as continuous, because the FPGA
-gives the bus back only in WAITING_CYCLES, which needs a prescaler. The
+register read-back. Bus arbitration is partly live: every block that runs end
+to end is charged to the CPU clock, burst as much as continuous, because the
+FPGA gives the bus back only in WAITING_CYCLES, which needs a prescaler. The
+dma_delay_i pin that would let an interrupt hold the DMA off the bus is modelled
+but not driven, its source being an unwired reference model. The
 interrupt/match logic is absent because the FPGA does not implement it either.
 Four timing defects are open, the prescaler period being the largest: see
 ROADMAP item 2.

@@ -49,8 +49,8 @@ func TestAllOnesWordParksOnItsLineNotOnItsColumn(t *testing.T) {
 }
 
 // TestAllOnesWordRestartsEveryFrameInVBLMode is the idiom the invented HALT
-// opcode broke: a list written the standard way — mode 11 (run and restart at
-// frame start), terminated with $FFFF — must run EVERY frame.
+// opcode broke: a list written the standard way, mode 11 (run and restart at
+// frame start), terminated with $FFFF, must run EVERY frame.
 //
 // GHDL, program "ffff-restarts-at-vbl": MOVE $50,$AA followed by $FFFF in mode
 // 3 emits at frame A (v=0,h=1) and again at frame B (v=0,h=1). A model that
@@ -85,12 +85,12 @@ func TestAllOnesWordRestartsEveryFrameInVBLMode(t *testing.T) {
 // TestWaitParksWhenItsTargetLineIsBehindTheRaster pins the vertical test as the
 // equality the hardware writes: `vcount_i = unsigned(...)`
 // (device/copper.vhd:94). A WAIT whose line has already gone by does not
-// release — it waits for that line to come round again next frame.
+// release: it waits for that line to come round again next frame.
 //
 // GHDL, program "wait-behind-raster-parks": WAIT x=0,v=3 driven at v=7 emits
 // nothing across 31 columns. The functional-model fallback that released on
 // `scanline > Y` was there for a caller that skipped lines; the render loop now
-// presents every line and every column, so it only produced divergence — a list
+// presents every line and every column, so it only produced divergence: a list
 // of WAIT y=100; MOVE; WAIT y=50; MOVE ran both MOVEs on line 100 instead of
 // deferring the second to the next frame.
 func TestWaitParksWhenItsTargetLineIsBehindTheRaster(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"log/slog"
 	"strings"
 	"sync"
@@ -78,9 +79,9 @@ func (s *nrDeltaSet) list() []byte {
 // prev array tracks last-seen value per reg ($00-$FF) so the tracer
 // can emit only on actual transitions.
 type nrDeltaState struct {
-	set       nrDeltaSet
-	count     atomic.Uint64
-	installed bool
+	set      nrDeltaSet
+	count    atomic.Uint64
+	hookedOn *nextregs.Dispatcher
 	// prev is the last value we saw for each reg, indexed by reg
 	// number. Stored under set.mu to avoid races with reset.
 	prev [256]byte
@@ -173,10 +174,10 @@ func (d *remoteDebugger) cmdTraceNRDeltas(args []string) string {
 // ensureNRDeltasHook plants the chained tracer once. Cooperates with
 // the existing nr-trace tracer — both can be armed at the same time.
 func (d *remoteDebugger) ensureNRDeltasHook() {
-	if d.nrDeltas.installed {
+	if d.nrDeltas.hookedOn == d.emu.nextRegs {
 		return
 	}
-	d.nrDeltas.installed = true
+	d.nrDeltas.hookedOn = d.emu.nextRegs
 	prior := d.emu.nextRegs.GetTracer()
 	d.emu.nextRegs.SetTracer(func(reg, val byte, isWrite bool) {
 		if prior != nil {

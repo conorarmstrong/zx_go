@@ -32,7 +32,7 @@ var visualJournalRegs = []byte{
 	0x6F, // tile definitions base address
 }
 
-// NR$14, the global transparency colour, IS journalled — it is the first entry
+// NR$14, the global transparency colour, IS journalled: it is the first entry
 // above, and TestVisualRegistersAreJournalledAtTheirRow pins it.
 //
 // It was excluded once, on the argument that transparency is decided by

@@ -130,16 +130,25 @@ func TestStepMaxInstrLimitsExecution(t *testing.T) {
 	c.SetRegWriter(rw)
 	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
 
-	// Step with budget=1 — should execute exactly the first MOVE.
+	// Enabling the Copper costs a clock. last_state_s now differs from
+	// copper_en_i, and that comparison is the first arm of the device's
+	// per-clock chain (copper.vhd:70-76): it latches the mode, resets the
+	// address, and falls through to the end of the clock without executing.
+	c.Step(0, 0, 1)
+	if len(rw.writes) != 0 {
+		t.Fatalf("the enabling clock executed %d MOVEs, want 0: it is spent on the "+
+			"restart, not on an instruction", len(rw.writes))
+	}
+
+	// Then one MOVE per clock.
 	c.Step(0, 0, 1)
 	if len(rw.writes) != 1 || rw.writes[0].val != 0x10 {
-		t.Errorf("Step(_,_,1) executed %d MOVEs, want exactly 1; first val = %#x, want 0x10",
+		t.Errorf("first executing clock ran %d MOVEs, want exactly 1; first val = %#x, want 0x10",
 			len(rw.writes), rw.writes[0].val)
 	}
-	// Step again — second MOVE.
 	c.Step(0, 0, 1)
 	if len(rw.writes) != 2 || rw.writes[1].val != 0x11 {
-		t.Errorf("second Step: expected 2 MOVEs total; got %+v", rw.writes)
+		t.Errorf("second executing clock: expected 2 MOVEs total; got %+v", rw.writes)
 	}
 }
 
@@ -304,5 +313,127 @@ func TestCursorSetResetsBytePhase(t *testing.T) {
 		if got := c.Instruction(1); got.Op != OpMOVE || got.Reg != 0x16 || got.Val != 0x00 {
 			t.Errorf("via62=%v: instruction[1]=%+v, want MOVE NR$16,$00", via62, got)
 		}
+	}
+}
+
+// A mode change is the FIRST arm of the FPGA's per-clock if/elsif chain
+// (copper.vhd:70-76): when last_state_s differs from copper_en_i it latches the
+// new mode, resets copper_list_addr_s to 0 for modes 01 and 11, and falls
+// through to the end of the clock. No instruction executes on that clock. So a
+// list that restarts itself resumes AT instruction 0, and the next instruction
+// fetched is the one at address 0.
+func TestAMoveThatRestartsTheListResumesAtInstructionZero(t *testing.T) {
+	c := New()
+	// 0: MOVE $40,$01   a marker write so we can see instruction 0 run
+	// 1: MOVE $62,<StartFromZero>  restart the list
+	// 2: MOVE $41,$02   must never run: the restart sends us back to 0
+	c.WriteData(0x40)
+	c.WriteData(0x01)
+	c.WriteData(0x62)
+	c.WriteData(byte(StartFromZero) << 6)
+	c.WriteData(0x41)
+	c.WriteData(0x02)
+
+	var seen []byte
+	c.SetRegWriter(&multiWriter{c: c, seen: &seen})
+	// Run in Continue, so the MOVE to $62 is a real mode CHANGE.
+	c.SetWritePtrHighAndMode(byte(StartContinue) << 6)
+	c.Step(0, 0, 1) // the enabling clock
+	c.pc = 0
+
+	// Four clocks: a MOVE costs two (dout raised, then cleared), so this is
+	// instruction 0's MOVE followed by instruction 1's, which sets the mode to
+	// 01 from inside the list.
+	c.Step(0, 0, 4)
+	if c.PC() != 2 {
+		t.Fatalf("pc = %d after the two MOVEs, want 2: the fixture is not set up "+
+			"as intended (writes seen: %v)", c.PC(), seen)
+	}
+
+	// One more clock is the restart. It executes nothing and leaves pc at 0,
+	// so the next instruction fetched is instruction 0 and instruction 2 is
+	// never reached.
+	c.Step(0, 0, 1)
+	if c.PC() != 0 {
+		t.Errorf("pc after a self-restart = %d, want 0: the mode change resets "+
+			"copper_list_addr_s and consumes the clock, so nothing advances past it", c.PC())
+	}
+	for _, reg := range seen {
+		if reg == 0x41 {
+			t.Errorf("instruction 2 ran after the list restarted itself; writes seen: %v", seen)
+		}
+	}
+}
+
+// copper_en_i = "00" falls to the chain's final else, which executes nothing
+// (copper.vhd:112-114). It is evaluated on every clock, not once before the
+// list starts, so a MOVE that stops the Copper stops it there and then.
+func TestAMoveThatStopsTheCopperStopsItImmediately(t *testing.T) {
+	c := New()
+	// 0: MOVE $40,$01
+	// 1: MOVE $62,<StartStop>
+	// 2: MOVE $41,$02   must never run
+	c.WriteData(0x40)
+	c.WriteData(0x01)
+	c.WriteData(0x62)
+	c.WriteData(byte(StartStop) << 6)
+	c.WriteData(0x41)
+	c.WriteData(0x02)
+
+	var seen []byte
+	c.SetRegWriter(&multiWriter{c: c, seen: &seen})
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+
+	c.Step(0, 0, 8)
+
+	for _, reg := range seen {
+		if reg == 0x41 {
+			t.Errorf("the Copper kept executing after a MOVE stopped it; writes seen: %v", seen)
+		}
+	}
+}
+
+// multiWriter records every register a MOVE writes and forwards $62 to the
+// Copper, which is the dispatcher path a MOVE to NextReg $62 really takes:
+// pkg/next/wire.go routes $62 to SetWritePtrHighAndMode, so a copper list can
+// change its own start mode from inside its own execution. A test can then see
+// both what ran and what the list did to itself.
+type multiWriter struct {
+	c    *Copper
+	seen *[]byte
+}
+
+func (w *multiWriter) WriteReg(reg, val byte) {
+	*w.seen = append(*w.seen, reg)
+	if reg == 0x62 {
+		w.c.SetWritePtrHighAndMode(val)
+	}
+}
+
+// Idle is the cheap "can this device do anything at all right now" question a
+// render loop asks before paying for a line's worth of clocks. It has to be
+// false the moment a mode change is pending, or enabling the Copper would not
+// take effect until something else woke the loop up.
+func TestIdleIsFalseWhileAModeChangeIsPending(t *testing.T) {
+	c := New()
+	if !c.Idle() {
+		t.Fatal("a fresh Copper is stopped and has nothing pending, so it is idle")
+	}
+
+	c.SetWritePtrHighAndMode(byte(StartFromZero) << 6)
+	if c.Idle() {
+		t.Error("Idle stayed true with a mode change pending: the restart clock " +
+			"would never be paid and the list would never start")
+	}
+
+	c.Step(0, 0, 1) // the restart clock
+	if c.Idle() {
+		t.Error("Idle is true while the Copper is running")
+	}
+
+	c.SetWritePtrHighAndMode(byte(StartStop) << 6)
+	c.Step(0, 0, 1) // latch the change
+	if !c.Idle() {
+		t.Error("Idle stayed false after the Copper stopped and latched the mode")
 	}
 }

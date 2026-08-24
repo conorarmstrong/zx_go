@@ -33,12 +33,22 @@
 // endpoints and burst+prescaler transfers interleave with the CPU via
 // Step.
 //
-// Bus arbitration is modelled: a block holds the bus for its bytes and charges
-// that to the CPU, burst mode gives the bus back only where the FPGA does
-// (WAITING_CYCLES, so only with a prescaler), the dma_delay_i pin parks and
-// resumes a block (SetBusDelay), and $83 abandons one where it stands. The
-// per-block bus acquisition is derived but not charged; see
-// busAcquisitionCycles.
+// Bus arbitration is modelled, and one half of it is live while the other is
+// not. What runs in the shipped emulator: a block holds the bus for its bytes
+// and charges that to the CPU, burst mode gives the bus back only where the
+// FPGA does (WAITING_CYCLES, so only with a prescaler), and $83 abandons a
+// block where it stands. The per-block bus acquisition is derived but not
+// charged; see busAcquisitionCycles.
+//
+// What is modelled but never exercised: the dma_delay_i pin and everything
+// behind it (SetBusDelay, BusRequested, the stalled state and its capture).
+// Nothing in the emulator drives that pin, because its source does not exist as
+// a live signal here -- pkg/next.IM2DaisyChain is a GHDL-golden reference model
+// that is itself unwired, and NR$CC/$CD/$CE are stored-only. The behaviour is
+// kept because it is the device's, and pinned by tests so it stays correct
+// until the IM2 chain is connected, but no guest can reach it today. Do not
+// read the presence of this code as a claim that a Next program's DMA can be
+// held off the bus by an interrupt here. Recorded as ROADMAP item 2.
 //
 // The Z80 DMA's interrupt and match logic is deliberately absent, because the
 // FPGA does not implement it either. The entity has no interrupt output and no
@@ -333,6 +343,9 @@ func (d *DMA) SetBusDelay(on bool) {
 // now: cpu_busreq_n_s asserted and the bus acknowledged, which on the Next
 // freezes the CPU outright (zxnext.vhd:1824-1835, :1842).
 //
+// Nothing in the emulator calls this yet; it is the read side of the same
+// not-yet-wired arbitration as SetBusDelay. See the package comment.
+//
 // It reads as true only from inside a transfer: an IO endpoint's port
 // callback, which is the one place the rest of the machine is re-entered
 // mid-block, because everything between the request and the release happens
@@ -523,8 +536,12 @@ func (d *DMA) decodeBase(val byte) {
 			p = append(p, opPortBHigh)
 		}
 		// D4 announces the Z80 DMA's interrupt-control byte, and the FPGA never
-		// reads it: R4_BYTE_1 returns unconditionally to IDLE (dma.vhd:826-833)
-		// and the R4_BYTE_2 branch that would have consumed it is commented out
+		// reads it. Both port B address bytes ARE consumed first: R4_BYTE_0
+		// takes the low byte (dma.vhd:816) and hands over to R4_BYTE_1, which
+		// takes the high byte (dma.vhd:827). What R4_BYTE_1 then does is return
+		// to IDLE unconditionally (dma.vhd:832) instead of going on to
+		// R4_BYTE_2, and the R4_BYTE_2 branch that would have consumed the
+		// interrupt-control byte is commented out
 		// (dma.vhd:835-844), as are R4_interrupt_control_s / pulse_control_s /
 		// interrupt_vector_s themselves (dma.vhd:94-96). The byte the guest
 		// meant as interrupt control is decoded as the next base byte.

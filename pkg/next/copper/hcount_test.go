@@ -5,7 +5,7 @@ import "testing"
 // The copper's hcount_i is hc_ula (zxnext.vhd:3949 wired from o_hc_ula at
 // zxnext.vhd:6737), whose zero point is 12 columns BEFORE the first displayed
 // pixel: hc_ula is reset at c_min_hactive - 12 (video/zxula_timing.vhd:423-424)
-// and zxula.vhd:44-46 states it outright — "0 corresponds to when the system is
+// and zxula.vhd:44-46 states it outright: "0 corresponds to when the system is
 // actually generating pixel 0 ... this position corresponds to ULA count
 // i_hc = 0xC". So displayed pixel 0 IS hcount 12, and the WAIT threshold
 // (X<<3)+12 (device/copper.vhd:94) means "release at displayed pixel 8X", not
@@ -43,7 +43,7 @@ func TestWaitReleasesAtDisplayedPixelEightX(t *testing.T) {
 //
 // device/copper.vhd:94 compares against
 // `unsigned(copper_list_data_i(14 downto 9)&"000") + 12`. The left operand is
-// NINE bits — a 6-bit column field concatenated with three zeros — and
+// NINE bits (a 6-bit column field concatenated with three zeros) and
 // numeric_std's "+" returns a result the width of its left operand, so the add
 // is 9-bit and wraps. Column 63 gives 63*8+12 = 516, which truncates to 4: the
 // WAIT releases four columns into the line, not never. Column 62 is the

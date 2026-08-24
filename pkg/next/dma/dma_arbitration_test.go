@@ -37,7 +37,7 @@ func TestABlockChargesTheCPUForItsBytes(t *testing.T) {
 
 // $83 is Disable DMA, and dma.vhd:727-728 makes it a single assignment:
 // dma_seq_s <= IDLE. That is not a request to stop at the end of the block, it
-// is the transfer FSM leaving mid-flight — the bytes still owed are abandoned,
+// is the transfer FSM leaving mid-flight: the bytes still owed are abandoned,
 // the bus request drops (dma.vhd:260-262) and no FINISH_DMA runs, so
 // end-of-block never latches and auto-restart never reloads.
 func TestDisableDMAAbortsABlockInFlight(t *testing.T) {
@@ -130,7 +130,7 @@ func TestBusDelayBlocksTheBusRequest(t *testing.T) {
 // after every byte and goes back to START_DMA rather than on to the next read
 // when it is high (dma.vhd:427-428, :456-461), so an interrupt raised part way
 // through a block parks the transfer and hands the bus back with the pointers
-// where they stand. Dropping the pin resumes that same block from there — it
+// where they stand. Dropping the pin resumes that same block from there, and it
 // does not restart it, and it does not abandon it.
 func TestBusDelayPausesAndResumesMidBlock(t *testing.T) {
 	mem := memMap{}
@@ -176,7 +176,7 @@ func TestBusDelayPausesAndResumesMidBlock(t *testing.T) {
 
 // The same pin, against the interleaved burst that Step() pumps. Here the pause
 // is visible directly: no byte falls due while the delay is high, and the
-// pacing survives it — the FPGA clears DMA_timer_s when the next read finally
+// pacing survives it: the FPGA clears DMA_timer_s when the next read finally
 // starts (dma.vhd:309), so a long pause does not leave a backlog that dumps the
 // rest of the block in one go.
 func TestBusDelayPausesAnInterleavedBurst(t *testing.T) {
@@ -263,7 +263,7 @@ func TestStatusAtLeastOneIsSetDuringABlock(t *testing.T) {
 
 // And it comes back down. FINISH_DMA clears status_endofblock_n (dma.vhd:471)
 // and the return to IDLE clears status_atleastone (dma.vhd:265), so once the
-// block is over and the controller is at rest the status byte reads $1A again —
+// block is over and the controller is at rest the status byte reads $1A again,
 // which is what the FPGA golden capture returns after every completed block.
 func TestStatusAtLeastOneClearsAtEndOfBlock(t *testing.T) {
 	mem := memMap{}
@@ -288,8 +288,8 @@ func TestStatusAtLeastOneClearsAtEndOfBlock(t *testing.T) {
 }
 
 // $87 is one assignment: dma_seq_s <= START_DMA (dma.vhd:724-725). There is no
-// armed flag anywhere in the device — nothing asks whether a LOAD has happened
-// or whether the last block finished — and the transfer FSM always writes a
+// armed flag anywhere in the device: nothing asks whether a LOAD has happened
+// or whether the last block finished, and the transfer FSM always writes a
 // byte before testing the counter against the block length (dma.vhd:426, :433).
 // So an ENABLE arriving after a block has ended, with no LOAD, no CONTINUE and
 // no auto-restart, moves exactly one more byte from where the pointers stand.

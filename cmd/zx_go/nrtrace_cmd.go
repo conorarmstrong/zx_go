@@ -103,10 +103,10 @@ func (d *remoteDebugger) cmdNRTrace(args []string) string {
 // nr-trace add. Any pre-existing tracer (e.g. the env-var-driven
 // startup tracer in next.go) continues to fire.
 func (d *remoteDebugger) ensureNRTraceHook() {
-	if d.nrTraceInstalled {
+	if d.nrTraceHookedOn == d.emu.nextRegs {
 		return
 	}
-	d.nrTraceInstalled = true
+	d.nrTraceHookedOn = d.emu.nextRegs
 	prior := d.emu.nextRegs.GetTracer()
 	d.emu.nextRegs.SetTracer(func(reg, val byte, isWrite bool) {
 		if prior != nil {

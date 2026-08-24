@@ -478,8 +478,8 @@ func (c *Compositor) ComposeScanline(y int, ulaRGBA []byte, dst []byte) {
 //
 // The range exists so the caller can interleave Copper steps with
 // compositing. The Copper's write pulse lands on a single 28 MHz clock
-// (copper.vhd:102-104) — a quarter of a pixel, and a MOVE retires every half
-// pixel — so its writes fall wherever they fall across the line and not on any
+// (copper.vhd:102-104), a quarter of a pixel, and a MOVE retires every half
+// pixel, so its writes fall wherever they fall across the line and not on any
 // grid. The caller therefore composes the row once and re-composes its tail
 // from the exact pixel each write landed in. An earlier note here claimed the
 // Copper resolved to 8 pixels because its WAIT column field is in 8-pixel

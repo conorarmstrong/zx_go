@@ -3,7 +3,7 @@ package dma
 import "testing"
 
 // The FPGA's WR3 decode latches bit 6 into R3_dma_en_s and, when it is set,
-// kicks the transfer FSM straight into START_DMA (dma.vhd:574-580) — the same
+// kicks the transfer FSM straight into START_DMA (dma.vhd:574-580), the same
 // state the $87 ENABLE command jumps to (dma.vhd:724). A WR3 base byte with D6
 // set is therefore a second way to start a configured block, with no ENABLE
 // anywhere in the stream.
@@ -20,7 +20,7 @@ func TestWR3EnableStartsATransfer(t *testing.T) {
 		0x10,             // WR2: port B memory, increment
 		0x8D, 0x00, 0x60, // WR4: continuous, port B = $6000
 		0xCF, // LOAD
-		0xC0, // WR3 with D6 set — the enable; no $87 in this stream
+		0xC0, // WR3 with D6 set: the enable; no $87 in this stream
 	})
 	for i := uint16(0); i < 3; i++ {
 		if got, want := mem[0x6000+i], byte(0xA0+i); got != want {
@@ -32,7 +32,7 @@ func TestWR3EnableStartsATransfer(t *testing.T) {
 // ...and the other half of the same decode: R3_dma_en_s is written at
 // dma.vhd:576 and read nowhere else in the file, so it is dead state, not a
 // gate. A WR3 byte with D6 clear arriving mid-block therefore has no effect on
-// the transfer FSM at all — the block runs to completion. This is a guard on
+// the transfer FSM at all: the block runs to completion. This is a guard on
 // the shape of the behaviour above: the obvious wrong implementation is to
 // treat R3_dma_en_s as an enable the transfer engine consults.
 func TestWR3DisableDoesNotStopABlockInFlight(t *testing.T) {
@@ -70,7 +70,7 @@ func TestWR3DisableDoesNotStopABlockInFlight(t *testing.T) {
 // and the R4_BYTE_2 branch that would have read it is commented out
 // (dma.vhd:835-844), along with R4_interrupt_control_s itself (dma.vhd:94-96).
 // So a stream that sets D4 leaves the byte after the port B address to be
-// decoded as a base byte — here a WR3 enable, which starts the block.
+// decoded as a base byte, here a WR3 enable, which starts the block.
 func TestWR4InterruptControlByteIsNotConsumed(t *testing.T) {
 	mem := memMap{}
 	for i := uint16(0); i < 3; i++ {
@@ -83,7 +83,7 @@ func TestWR4InterruptControlByteIsNotConsumed(t *testing.T) {
 		0x14,       // WR1: port A memory, increment
 		0x10,       // WR2: port B memory, increment
 		0x99, 0x60, // WR4: port B HIGH follows (D3) and interrupt control (D4)
-		0xCF, // LOAD — a command byte, not the interrupt-control byte
+		0xCF, // LOAD: a command byte, not the interrupt-control byte
 		0xC0, // WR3 enable
 	})
 	if got := d.Destination(); got != 0x6000 {
@@ -99,7 +99,7 @@ func TestWR4InterruptControlByteIsNotConsumed(t *testing.T) {
 
 // The same half-removed decode has a sharper edge. WR4's follow-byte chain is
 // an elsif ladder (dma.vhd:603-611): D2 selects R4_BYTE_0, else D3 selects
-// R4_BYTE_1, else D4 selects R4_BYTE_2 — and R4_BYTE_2's case branch is one of
+// R4_BYTE_1, else D4 selects R4_BYTE_2, and R4_BYTE_2's case branch is one of
 // the commented-out ones (dma.vhd:835-844). The write sequencer therefore lands
 // in a state the case statement does not name, and dma.vhd:891's
 // "when others => null" swallows every byte written to the controller from then
@@ -133,7 +133,7 @@ func TestWR4InterruptControlOnlyWedgesTheWriteSequencer(t *testing.T) {
 // inside the write sequencer's own IDLE branch (dma.vhd:511, :637-645), which a
 // wedged sequencer never reaches, and the only other assignment of IDLE to it
 // is under the reset pin (dma.vhd:229). So a driver that tries the documented
-// recovery — RESET, then reprogram — gets nowhere.
+// recovery (RESET, then reprogram) gets nowhere.
 func TestResetCommandDoesNotClearTheWedge(t *testing.T) {
 	mem := memMap{}
 	for i := uint16(0); i < 3; i++ {
@@ -141,7 +141,7 @@ func TestResetCommandDoesNotClearTheWedge(t *testing.T) {
 	}
 	d := New(mem)
 	d.WriteCommand(0x91) // WR4 D4 only: wedged
-	d.WriteCommand(0xC3) // RESET — swallowed like everything else
+	d.WriteCommand(0xC3) // RESET: swallowed like everything else
 
 	feed(d, []byte{
 		0x7D, 0x00, 0x40, 0x03, 0x00, // WR0: A->B, port A = $4000, length 3

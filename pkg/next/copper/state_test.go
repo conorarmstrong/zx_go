@@ -300,7 +300,7 @@ func TestStateIDIsStable(t *testing.T) {
 // precede the step that parks it; the cursor work has to follow the step,
 // because SetWritePtrLow clears the very phase this is trying to move; and the
 // stop comes last because it is a second mode write, which leaves the cursor's
-// low byte — and so the phase — alone.
+// low byte, and so the phase, alone.
 func driveEverything(c *Copper) {
 	// A different list, ending in the $FFFF terminator so the copper parks.
 	c.SetWritePtrLow(0)

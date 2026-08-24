@@ -371,3 +371,64 @@ func TestTraceNRDeltasAllRefusesANonNextMachine(t *testing.T) {
 		t.Errorf("trace-nextreg-deltas all on a non-Next machine = %q, want an ERR", got)
 	}
 }
+
+// A register list is armed all at once or not at all. Adding each register as
+// it parses means a list that fails halfway leaves the earlier ones armed while
+// the command reports an error and never installs the hook: the user believes
+// nothing happened, and some later command that does install the hook makes the
+// machine halt on a register they were never told was being watched.
+func TestABadRegisterInTheListArmsNothing(t *testing.T) {
+	d := newRemoteForNRWatch(t)
+	if got := d.cmdWatchNextReg([]string{"12,ZZ"}); !strings.HasPrefix(got, "ERR") {
+		t.Fatalf("watch-nextreg 12,ZZ = %q, want an ERR", got)
+	}
+	if ws := d.nrWatches.list(); len(ws) != 0 {
+		t.Errorf("watches after a failed parse = %+v, want none: the registers "+
+			"before the bad one must not survive the error", ws)
+	}
+}
+
+// `log` on its own is not a register. It has to be recognised wherever it is
+// the last argument, so the command reports the real problem instead of trying
+// to parse "log" as hex.
+func TestBareLogIsNotParsedAsARegister(t *testing.T) {
+	d := newRemoteForNRWatch(t)
+	got := d.cmdWatchNextReg([]string{"log"})
+	if strings.Contains(got, "bad reg") {
+		t.Errorf("watch-nextreg log = %q, want the no-register error, not a hex "+
+			"parse failure on the word \"log\"", got)
+	}
+	if !strings.HasPrefix(got, "ERR") {
+		t.Errorf("watch-nextreg log = %q, want an ERR naming the missing register", got)
+	}
+}
+
+// A model switch builds a fresh emulator and hands the old one its parts, so
+// emu.nextRegs becomes a different dispatcher. A hook remembered as "installed"
+// by a bare flag is then installed on a dispatcher nobody is using: the watches
+// still list as armed and never fire again, which is worse than losing them,
+// because the user is told they are watching something they are not.
+//
+// Keying the memo on the dispatcher it was installed on makes it self-heal.
+func TestWatchNextRegSurvivesTheDispatcherBeingReplaced(t *testing.T) {
+	d := newRemoteForNRWatch(t)
+	if got := d.cmdWatchNextReg([]string{"12"}); !strings.HasPrefix(got, "OK") {
+		t.Fatalf("arm = %q", got)
+	}
+
+	// What a model switch does to the emulator.
+	d.emu.nextRegs = nextregs.New()
+	d.paused.Store(false)
+
+	// Re-arming is the natural moment to notice, but so is any later arm.
+	if got := d.cmdWatchNextReg([]string{"12"}); !strings.HasPrefix(got, "OK") {
+		t.Fatalf("re-arm = %q", got)
+	}
+	d.emu.nextRegs.Select(0x12)
+	d.emu.nextRegs.WriteData(0x2A)
+
+	if !d.paused.Load() {
+		t.Error("a write to NR$12 did not halt after the dispatcher was replaced: " +
+			"the hook is still on the old one")
+	}
+}

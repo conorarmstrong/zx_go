@@ -161,7 +161,7 @@ building a disk around it. That much was right.
 
 The stated obstacle was not. This file, and `docs/sam-coupe.md`, both said
 `BOOT` loads **directory slot 1 as the DOS**, so a disk carrying only the
-user's file had no DOS on it and the ROM answered `53 No DOS` — and that we
+user's file had no DOS on it and the ROM answered `53 No DOS`, and that we
 therefore needed a DOS image we did not have and could not establish the
 redistribution status of. The ROM disproves all of it. `BOOT` never reads the
 directory:
@@ -269,9 +269,9 @@ emulation goroutine still running, so a save could take PC from one
 instruction and the registers from the next and reload as a crash.
 
 Capture now takes `coreMu`, which the emulation goroutine holds for a
-whole frame. Setting the pause flag is not enough on its own — nothing
+whole frame. Setting the pause flag is not enough on its own, because nothing
 acknowledges it, so a goroutine already inside `ExecuteFrame` finishes
-the frame regardless — which is why the load path had always used the
+the frame regardless, which is why the load path had always used the
 lock. Two callers run inside that frame, the RZX autosave and the
 snapshot-on-breakpoint hook, and use a `Locked` variant.
 
@@ -362,7 +362,7 @@ where the FPGA's `$BF` reset window covers only the first 192 rows.
 
 Found on the way and fixed with them: `ClipWindows.LoadState` restored
 the register copies but never pushed them down, and the NextReg reset
-handler pushed three of the four windows and left Layer 2's behind — so
+handler pushed three of the four windows and left Layer 2's behind, so
 a rewind or a reboot across a clip change put the registers back and left
 the layers drawing the rectangle the running program had set.
 
@@ -465,8 +465,8 @@ Allowing the wrap exposed a budget the caller had never charged
 correctly. `Step` returned only the MOVE count, which the ULA subtracts
 from one shared per-scanline budget, so NOOPs and re-tested WAITs were
 free and a wrapping list lapped itself many times a line. `Step` now
-charges in copper clocks — a MOVE costs two, one to raise `copper_dout_s`
-and one to clear it, and everything else costs one — and the caller
+charges in copper clocks (a MOVE costs two, one to raise `copper_dout_s`
+and one to clear it, and everything else costs one), and the caller
 budgets in the same unit.
 
 The captured state carries a version with it. The write cursor changed
@@ -497,8 +497,8 @@ The compositor's matching approximation — "transparent over ULA when
 `pixel_below_o` plane: `(attr bit 0 or mode_512) and not on_top`.
 
 Dropping the nibble-0 rule needed a second plane with it. A palette index
-is a colour — nibble 0 is an ordinary opaque `$00`, `$10`, `$20` … once
-the offset is kept — so "no pixel here" cannot be signalled in the index,
+is a colour: nibble 0 is an ordinary opaque `$00`, `$10`, `$20` … once
+the offset is kept, so "no pixel here" cannot be signalled in the index,
 and every pixel the renderer skips would otherwise paint as `palette[0]`
 over the ULA. The renderer now also carries `pixel_en_s`, which is clear
 outside the NR$1B clip window and off the tilemap's rows.

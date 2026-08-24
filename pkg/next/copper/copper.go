@@ -3,7 +3,7 @@
 // four start modes.
 //
 // There is no halt. A list is ended by parking it on a WAIT its raster never
-// satisfies — idiomatically $FFFF, which is simply WAIT x=63, y=511 and parks
+// satisfies, idiomatically $FFFF, which is simply WAIT x=63, y=511 and parks
 // because vcount never reaches 511. device/copper.vhd:91-98 has one WAIT
 // branch and no other stop condition, so a list in mode 11 runs again at every
 // frame start however it was terminated.
@@ -121,6 +121,14 @@ type Copper struct {
 	// word and left the top 1 KB unreachable.
 	writePtr uint16
 	mode     StartMode
+	// lastMode is the FPGA's last_state_s (copper.vhd:50): the mode as of the
+	// previous clock. The device compares it against copper_en_i on every clock
+	// and acts on the difference, so a mode change is noticed by the running
+	// engine rather than applied by whatever wrote it. That distinction matters
+	// because a MOVE can write NextReg $62 (pkg/next/wire.go routes it to
+	// SetWritePtrHighAndMode), so a list can change its own mode from inside its
+	// own execution.
+	lastMode StartMode
 	pc       uint16 // execution pointer
 	stopped  bool
 	regs     RegWriter
@@ -183,25 +191,30 @@ func (c *Copper) SetWritePtrLow(b byte) {
 // The program counter restarts only when the mode actually CHANGES to
 // 01 or 11 (device/copper.vhd:70-76 gates the reset on
 // `last_state_s /= copper_en_i`). Restarting on every write meant guest
-// code that set the cursor's high bits — which has to go through this
-// same register — silently rewound its own running list.
+// code that set the cursor's high bits, which has to go through this
+// same register, silently rewound its own running list.
+//
+// This records the new mode and nothing else. The restart is the engine's to
+// perform, on the clock it notices last_state_s differ, because that is where
+// the device does it: the comparison is the first arm of the per-clock chain
+// and it consumes the clock, so no instruction runs on it. Resetting pc here
+// instead put the reset in the middle of whatever instruction was executing,
+// and a MOVE to $62 then had its own pc++ applied on top of the reset.
 func (c *Copper) SetWritePtrHighAndMode(b byte) {
 	c.writePtr = (c.writePtr & 0xFF) | (uint16(b&0x07) << 8)
-	newMode := StartMode((b >> 6) & 0x03)
-	changed := newMode != c.mode
-	c.mode = newMode
-	switch newMode {
-	case StartStop:
-		c.stopped = true
-	case StartFromZero, StartOnVBL:
-		if changed {
-			c.pc = 0
-		}
-		c.stopped = false
-	case StartContinue:
-		c.stopped = false
-	}
+	c.mode = StartMode((b >> 6) & 0x03)
+	c.stopped = c.mode == StartStop
 }
+
+// Idle reports that clocking this Copper cannot change anything: it is stopped
+// and the engine has already latched that mode, so every clock would fall
+// through the chain's final else (copper.vhd:112-114) and do nothing.
+//
+// It exists so a render loop can skip a line's worth of clocks rather than pay
+// for them one column at a time. It is deliberately false while a mode change
+// is pending, because that change is the engine's to notice and the clock that
+// notices it is the one that restarts the list.
+func (c *Copper) Idle() bool { return c.stopped && c.lastMode == c.mode }
 
 // Cursor returns the current write cursor (for debugging / tests).
 func (c *Copper) Cursor() uint16 { return c.writePtr }
@@ -286,7 +299,7 @@ func HCountForPixel(p int) uint16 { return uint16(p + HCountOrigin) }
 // WAIT with column field x releases on its target scanline. The hardware
 // compares hcount_i >= (x << 3) + 12 (device/copper.vhd:94): the 6-bit column
 // is taken as 8-pixel units, and the +12 is exactly HCountOrigin, so a WAIT for
-// column X releases at displayed pixel 8X — for every column but the last.
+// column X releases at displayed pixel 8X, for every column but the last.
 //
 // The add is NINE bits wide and WRAPS. copper.vhd:94 writes
 // `unsigned(copper_list_data_i(14 downto 9)&"000") + 12`, whose left operand is
@@ -299,8 +312,8 @@ func HCountForPixel(p int) uint16 { return uint16(p + HCountOrigin) }
 // control).
 //
 // Thresholds still land past the end of a line for a caller whose line is
-// shorter than 512 columns — a full line is 448 (48K) or 456 (128K) columns
-// (video/zxula_timing.vhd:160,196) — and those WAITs do not release, which is
+// shorter than 512 columns: a full line is 448 (48K) or 456 (128K) columns
+// (video/zxula_timing.vhd:160,196), and those WAITs do not release, which is
 // the hardware's behaviour and not a modelling limit.
 func WaitHThreshold(x byte) uint16 { return HCountForPixel(int(x)*8) & 0x1FF }
 
@@ -347,11 +360,26 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 		c.pc = 0
 	}
 	c.lastScanline = scanline
-	if c.stopped {
-		return 0
-	}
 	spent := 0
 	for spent < maxClocks && c.pc < MaxInstructions {
+		// First arm of the device's per-clock chain (copper.vhd:70-76): the
+		// mode has changed since the previous clock. Latch it, restart the
+		// address for the two modes that restart, and fall through to the end
+		// of the clock. Nothing executes on it.
+		if c.lastMode != c.mode {
+			c.lastMode = c.mode
+			if c.mode == StartFromZero || c.mode == StartOnVBL {
+				c.pc = 0
+			}
+			spent++
+			continue
+		}
+		// Final else of the same chain (copper.vhd:112-114): mode 00 executes
+		// nothing. Tested every clock, so a MOVE that stops the Copper stops it
+		// where it stands rather than at the end of the caller's budget.
+		if c.stopped {
+			return spent
+		}
 		inst := Decode(c.program[c.pc])
 		switch inst.Op {
 		case OpMOVE:
@@ -371,7 +399,7 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 		case OpWAIT:
 			// Release when the raster is ON the target line and at or past the
 			// horizontal threshold (device/copper.vhd:94). The vertical test is
-			// an EQUALITY there — `vcount_i = unsigned(...)` — so a WAIT whose
+			// an EQUALITY there (`vcount_i = unsigned(...)`), so a WAIT whose
 			// line is already behind the raster parks until that line comes
 			// round again next frame; it does not release late. A "scanline > Y"
 			// fallback used to cover a caller that skipped lines, but the render

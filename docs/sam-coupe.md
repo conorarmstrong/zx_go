@@ -46,7 +46,7 @@ redistribution in 2008 — so nothing needs installing (see
   every sector after the odd track at the wrong offset. Real games boot — load
   the disk, then type `BOOT` at the SAM BASIC prompt (verified end to end with
   Manic Miner and Tetris booting to their title screens).
-- **SBT files** — supported. An SBT is not a disk image: it is the raw content
+- **SBT files**: supported. An SBT is not a disk image, it is the raw content
   of a single SAM CODE file, meant to be written onto a disk and booted, so
   zx_go builds an 800K MGT disk around it in memory when you load one.
 

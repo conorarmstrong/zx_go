@@ -1,6 +1,10 @@
 package ula
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+)
 
 // The Copper used to be stepped once per scanline, at end-of-line hcount, so
 // every MOVE on a line landed before the row was composited and a WAIT for a
@@ -30,6 +34,7 @@ func (c *recordingCopper) Step(scanline, hcount uint16, maxClocks int) int {
 }
 
 func (c *recordingCopper) Wrote() bool { return false }
+func (c *recordingCopper) Idle() bool  { return false }
 
 // TestCopperWalksEveryColumnOfTheLine pins that the Copper is clocked once per
 // hcount column of the scanline, over the line's real column count.
@@ -144,6 +149,7 @@ func (c *budgetCopper) Step(scanline, hcount uint16, maxInstr int) int {
 }
 
 func (c *budgetCopper) Wrote() bool { return false }
+func (c *budgetCopper) Idle() bool  { return false }
 
 // writeAtCopper raises its write pulse in exactly one hcount column of every
 // row, standing in for a copper list whose MOVE happens to retire there, and
@@ -164,6 +170,7 @@ func (c *writeAtCopper) Step(_, hcount uint16, _ int) int {
 }
 
 func (c *writeAtCopper) Wrote() bool { return c.wrote }
+func (c *writeAtCopper) Idle() bool  { return false }
 
 // stateStampCompositor paints the current value of the shared state into every
 // pixel of the range it is asked to compose, so a test can read back which
@@ -227,6 +234,7 @@ func (c *straddlingCopper) Step(_, hcount uint16, maxClocks int) int {
 }
 
 func (c *straddlingCopper) Wrote() bool { return true }
+func (c *straddlingCopper) Idle() bool  { return false }
 
 // TestAStraddlingMOVEIsPaidForOutOfTheNextColumn pins that clocks spent past
 // the end of a column are taken off the next one.
@@ -333,6 +341,7 @@ func (c *frameEndStraddlingCopper) Step(scanline, hcount uint16, maxClocks int) 
 }
 
 func (c *frameEndStraddlingCopper) Wrote() bool { return false }
+func (c *frameEndStraddlingCopper) Idle() bool  { return false }
 
 // TestAStraddlingMOVEIsPaidForAcrossTheFrameBoundary pins that the straddle
 // debt survives the end of the frame.
@@ -366,5 +375,26 @@ func TestAStraddlingMOVEIsPaidForAcrossTheFrameBoundary(t *testing.T) {
 			t.Errorf("frame %d column 0 was offered %d clocks, want %d (offered = %v)",
 				i, c.firstColumnOffered[i], w, c.firstColumnOffered)
 		}
+	}
+}
+
+// pkg/ula drives the Copper through an interface and deliberately does not
+// import its implementation, so the two numbers the render loop needs are
+// restated here rather than referenced. That is a drift risk the compiler
+// cannot see: change HCountOrigin in the device and this package keeps
+// compiling while every WAIT releases at the wrong column.
+//
+// This is the check the compiler cannot do. It is the reason the literals are
+// allowed to exist.
+func TestCopperConstantsMatchTheDevice(t *testing.T) {
+	if copperHCountOrigin != copper.HCountOrigin {
+		t.Errorf("copperHCountOrigin = %d, but copper.HCountOrigin = %d: the render "+
+			"loop would offset every WAIT by the difference",
+			copperHCountOrigin, copper.HCountOrigin)
+	}
+	if copperClocksPerHCount != copper.ClocksPerHCount {
+		t.Errorf("copperClocksPerHCount = %d, but copper.ClocksPerHCount = %d: the "+
+			"render loop would pay the Copper the wrong number of clocks a column",
+			copperClocksPerHCount, copper.ClocksPerHCount)
 	}
 }

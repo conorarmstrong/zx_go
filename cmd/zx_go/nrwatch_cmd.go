@@ -16,8 +16,8 @@ import (
 // with no value, $253B the value with no register, and a value match on $253B
 // matches the value whatever register it lands in.
 //
-// The dispatcher's tracer sees the pair already joined — it is called with
-// (reg, val) after the write has been applied — so keying a watch on it is
+// The dispatcher's tracer sees the pair already joined: it is called with
+// (reg, val) after the write has been applied, so keying a watch on it is
 // exact for both the two-port sequence and the single-write $57 path.
 //
 // Copper MOVEs trip these watches too, and that is deliberate: a MOVE goes
@@ -99,10 +99,18 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 		d.nrWatches.clear()
 		return "OK nextreg watches cleared"
 	}
+	// "log" is a mode, never a register, so it is stripped wherever it is the
+	// last argument. Guarding on there being another argument left made a bare
+	// `watch-nextreg log` fall through and fail as a bad hex register.
 	logOnly := false
-	if len(args) >= 2 && strings.ToLower(args[len(args)-1]) == "log" {
+	if len(args) >= 1 && strings.ToLower(args[len(args)-1]) == "log" {
 		logOnly = true
 		args = args[:len(args)-1]
+	}
+	// `watch-nextreg log` asked to arm something and named nothing, which is a
+	// mistake to report rather than a request to list.
+	if logOnly && len(args) == 0 {
+		return "ERR watch-nextreg: no register given"
 	}
 	if len(args) < 1 {
 		ws := d.nrWatches.list()
@@ -152,7 +160,11 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 		matchVal = &b
 	}
 
-	var added []string
+	// Parse the whole list before arming any of it. Adding as we went left a
+	// list that failed halfway partly armed while the command reported an
+	// error and returned before installing the hook, so the watches nobody was
+	// told about fired the next time some other command installed it.
+	var regs []byte
 	for _, p := range strings.Split(strings.ReplaceAll(regStr, " ", ","), ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -162,12 +174,15 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 		if err != nil {
 			return "ERR bad reg " + p + ": " + err.Error()
 		}
-		reg := byte(v & 0xFF)
+		regs = append(regs, byte(v&0xFF))
+	}
+	if len(regs) == 0 {
+		return "ERR watch-nextreg: no register given"
+	}
+	added := make([]string, 0, len(regs))
+	for _, reg := range regs {
 		d.nrWatches.add(nrWatchSpec{reg: reg, matchVal: matchVal, logOnly: logOnly})
 		added = append(added, fmt.Sprintf("$%02X", reg))
-	}
-	if len(added) == 0 {
-		return "ERR watch-nextreg: no register given"
 	}
 	d.ensureNRWatchHook()
 
@@ -186,10 +201,10 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 // watch-nextreg invocation. Any previously-installed tracer fires first, so
 // arming a watch never silences an nr-trace or the startup env-var tracer.
 func (d *remoteDebugger) ensureNRWatchHook() {
-	if d.nrWatchInstalled {
+	if d.nrWatchHookedOn == d.emu.nextRegs {
 		return
 	}
-	d.nrWatchInstalled = true
+	d.nrWatchHookedOn = d.emu.nextRegs
 	prior := d.emu.nextRegs.GetTracer()
 	d.emu.nextRegs.SetTracer(func(reg, val byte, isWrite bool) {
 		if prior != nil {
