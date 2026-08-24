@@ -78,30 +78,36 @@ A subsystem that is implemented and verified but not reachable is not a feature.
 It says so in `docs/spectrum-next.md`, `COMPARISON.md` and
 `VHDL_CONFORMANCE.md`, or the tables are misleading by omission.
 
-### 2. [correctness] The DMA bus-hold reaches the CPU as one lump
+### 2. [correctness] TX-1696 is balanced on a timing edge
 
-A whole block is charged to
-`cpu.Tstates` in a single jump (`cmd/zx_go/next.go`, `cpu.SetTstates`), and
-that counter is also what the frame-interrupt window is scheduled from, so
-there are no sample points anywhere inside the stall. On hardware the stall is
-spread across the transfer with the raster running through it. The practical
-consequence is that the *size* of the lump decides which side of the interrupt
-window a block lands on: adding the three cycles of a correct bus acquisition
-(`busAcquisitionCycles`, derived at `pkg/next/dma/dma.go:277`) is on its own
-enough to stop TX-1696 booting. The constant is therefore documented and *not*
-charged, pinned by `TestBusAcquisitionIsDerivedButNotCharged`. Fixing the granularity
-is the precondition for charging it.
+**This item previously said the wrong thing, and the correction matters more
+than the original claim.** It said the DMA's bus-hold reaching the CPU as one
+jump of the T-state counter was a defect, because it leaves no interrupt sample
+point inside the stall. The first half is true and the conclusion did not
+follow: `zxnext.vhd:1827` forces `cpu_m1_n` inactive while the DMA holds the
+bus, so the real Z80 takes no M1 cycle inside a stall either, and `/INT` keeps
+pulsing where it cannot be sampled (`:1840`). One jump is the right shape. The
+interrupt really is lost, on hardware and here alike.
 
-This is the one place the emulator currently makes a timing claim it cannot
-back, which is why it outranks everything except knowing what is reachable.
+What is actually wrong is that TX-1696 flips on almost any perturbation.
+Charging or refunding a per-block cost across -5 to +10 T-states gives:
 
-It also subsumes a question that looks like a decision and is not. Burst blocks
-are now charged where they previously were not, which follows the FPGA, but
-while the stall arrives as a single jump both answers are wrong and the choice
-between them comes down to which titles happen to survive. Tuning a timing model
-to a title is the opposite of a reference. Spread the stall across the timeline
-and the burst charge becomes correct by construction, `busAcquisitionCycles` can
-finally be charged, and the question disappears rather than being answered.
+| delta | -5 | -4 | -3 | -2 | -1 | 0 | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8 | +9 | +10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| TX-1696 | ok | **fail** | ok | **fail** | ok | ok | ok | ok | **fail** | **fail** | ok | **fail** | ok | **fail** | **fail** | **fail** |
+
+Seven of sixteen fail, scattered, with no monotonic relationship to how much
+time is added. The title is knife-edge, and zero being a working phase is luck.
+
+Two things follow. `busAcquisitionCycles` was deferred on the stated grounds
+that charging it broke TX-1696, which implied the charge was at fault; it is
+not, it simply lands on one failing phase among many. And our green corpus run
+is not evidence that this title's timing is right.
+
+The work is to find why it is marginal at all. A title should not turn on one
+T-state per DMA block. Until that is understood, the three cycles stay
+uncharged, to avoid knowingly regressing a working title, and that deferral is
+now recorded as a deliberate hold rather than as a fix.
 
 ### 3. [correctness] CTC and IM2 are built, verified, and unreachable
 

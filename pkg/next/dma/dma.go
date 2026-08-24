@@ -291,12 +291,20 @@ const (
 // (dma.vhd:469-495, :260-265). The DMA owns the bus in all three, so the CPU
 // is stopped for them.
 //
-// It is derived, recorded, and NOT charged. The block's whole cost reaches the
-// CPU as one jump of the T-state counter, which is also the clock the frame
-// interrupt is scheduled from, so the size of that jump decides which side of
-// the interrupt window the block lands on. Until the stall is spread across the
-// timeline, adding a correct cost to it is a phase lottery rather than an
-// improvement. TestBusAcquisitionIsDerivedButNotCharged pins this.
+// It is derived, recorded, and NOT charged, and the reason is not the one first
+// written here. The original note said charging it broke TX-1696, which implied
+// the charge was at fault. Measurement says otherwise: perturbing the per-block
+// cost by every value from -5 to +10 T-states breaks that title at -4, -2, +3,
+// +4, +6, +8, +9 and +10, and leaves it working at -5, -3, -1, 0, +1, +2, +5
+// and +7. Seven of sixteen, scattered, with no monotonic relationship to how
+// much time is added. TX-1696 is balanced on a phase edge, and the fact that
+// zero happens to be one of the working phases is luck, not correctness.
+//
+// So charging these three cycles is not wrong; it lands on one failing phase
+// among many. It stays deferred because doing it would knowingly regress a
+// working title while the underlying marginality is unexplained, and fixing
+// that marginality is the actual defect. See ROADMAP item 2.
+// TestBusAcquisitionIsDerivedButNotCharged pins the deferral.
 const busAcquisitionCycles = 3
 
 // resetCycleLen is the per-port cycle length both ports come up with and go

@@ -237,18 +237,22 @@ func TestResetPortTimingCommands(t *testing.T) {
 // oversight. busAcquisitionCycles records what the hardware spends; Duration
 // deliberately leaves it out.
 //
-// The reason is a defect one level up. The emulator charges a whole block to
-// the CPU T-state counter in a single jump (cmd/zx_go/next.go, cpu.SetTstates),
-// and that same counter is what the frame-interrupt window is scheduled from,
-// so there are no sample points anywhere inside a stall. On hardware the stall
-// is spread across the transfer with the raster running through it. Adding a
-// correct per-block cost to a lump that coarse changes which side of the
-// interrupt window a block lands on, and that is a phase lottery, not a timing
-// improvement: charging these three cycles is enough on its own to stop a
-// working title from booting. The constant stays derived and documented, and
-// goes into the arithmetic once the DMA stall is spread over the timeline it
-// belongs to. See ROADMAP item 2, "The DMA bus-hold reaches the CPU as one
-// lump".
+// The reason is not that the charge is wrong. An earlier note here said the
+// emulator's one-jump charge left no sample point inside the stall, and that
+// adding a cost to it was a phase lottery. The first half of that is true and
+// the second half misread it: zxnext.vhd:1827 forces cpu_m1_n inactive while
+// the DMA holds the bus, so the real Z80 takes no M1 cycle inside a stall
+// either, and one jump is the right shape for it.
+//
+// What the measurement actually shows is that TX-1696 is marginal. Perturbing
+// the per-block cost across -5..+10 T-states breaks it at -4, -2, +3, +4, +6,
+// +8, +9, +10 and leaves it working at -5, -3, -1, 0, +1, +2, +5, +7: seven of
+// sixteen, scattered, with no monotonic relationship to the amount added. Zero
+// is a working phase by luck. Charging three cycles lands on a failing one.
+//
+// So this stays deferred to avoid knowingly regressing a title while the
+// marginality is unexplained, and the marginality is the real defect. See
+// ROADMAP item 2.
 func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
 	if busAcquisitionCycles != 3 {
 		t.Errorf("busAcquisitionCycles = %d, want 3: START_DMA, WAITING_ACK and "+
