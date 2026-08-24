@@ -18,7 +18,17 @@ it off only when a test pins it to the VHDL value. A green row = that aspect is
 conformant. The boot is the integration test that the rows are *complete*.
 
 Status legend: ✅ test pins it to VHDL · ⚠️ partial / value differs / untested ·
-❌ gap (VHDL feature with no faithful impl) · — n/a.
+❌ gap (VHDL feature with no faithful impl) · **NOT WIRED** modelled and
+pinned, but not reachable by a guest · — n/a.
+
+**A tick is about conformance, not usefulness.** These rows compare our value
+against the VHDL's. They do not say a guest can reach the behaviour behind the
+value, and for a few registers it cannot: the model exists, matches the VHDL and
+is stored, but nothing acts on it. Those rows say **NOT WIRED** so a reader is
+not misled
+into treating a green tick as a working feature. `ROADMAP.md` item 1 is the
+standing rule this legend implements, and `pkg/next/reachability_test.go`
+enforces the package-level half of it.
 
 How a gap was already found by this method: `NR$6E/$6F` reset default. We had a
 test for the bit-6 **write** mask (iter 205) but never for the **reset value**.
@@ -65,8 +75,8 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $BA divmmc ep_timing | $00 | $00 | ✅ | |
 | $BB divmmc ep1 | $CD | $CD | ✅ | |
 | $C4 int en 0 | bit expbus=1 | $00 | ❌ | **GAP**: NR$C4 expbus int enable resets to 1 |
-| $C0 im2/nmi | $00 | $00 | ✅ | |
-| (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0 |
+| $C0 im2/nmi | $00 | $00 | **NOT WIRED** | reset value conforms, but NR$C0 is the IM2 vector base and the IM2 daisy chain is not wired: the register is stored and never acted on. Same for NR$CC/$CD/$CE. ROADMAP item 3 |
+| (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0. The dma-int bits are stored-only for the same reason as NR$C0 |
 
 **Axis 1 remaining gaps to close:** NR$C4 (expbus bit 7 resets to 1, but its
 read-back is composed with the ULA/line int-enable bits — needs the composed

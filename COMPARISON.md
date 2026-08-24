@@ -196,6 +196,7 @@ signing/verification.
 | Multiface (1 / 128 / 3) | ✅ | ❔ | ✅ | ✅ |
 | Kempston joystick + mouse | ✅ | ✅ | ✅ | ✅ |
 | RTC (DS1307) | ✅ ²³ | ✅ | ✅ | ✅ |
+| Z80 CTC / IM2 interrupts | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
 | Next DMA (zxnDMA) | ✅ ²⁴ | ✅ | ⚠️ | ✅ |
 | UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
 | DISCiPLE / +D | ✅ | ❌ | ✅ | ❌ |
@@ -219,6 +220,12 @@ ROADMAP items 2, 4 and 6.
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
+²⁷ zx_go models the Z80 CTC's four counter/timer channels and the IM2
+vectored-interrupt daisy chain, both pinned by golden vectors captured from the
+FPGA VHDL under GHDL, but neither is wired into the emulator: no CTC port is
+decoded and NR$C0/$CC/$CD/$CE are stored-only, so a guest cannot use CTC timers
+or receive IM2 interrupts. The docs call that state NOT WIRED: modelled and
+verified, but not reachable. See ROADMAP item 3.
 
 ---
 
