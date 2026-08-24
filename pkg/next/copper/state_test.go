@@ -448,3 +448,84 @@ func TestSaveStateStampsTheCurrentVersion(t *testing.T) {
 		t.Errorf("Version = %d, want %d", s.Version, copperStateVersion)
 	}
 }
+
+// A version 1 capture predates LastMode, and refusing it was the wrong call.
+// One device rejecting a blob aborts and rolls back the whole machine restore
+// (pkg/machinestate/machinestate.go), so a bump here does not lose the Copper's
+// share of an old snapshot: it loses the entire snapshot, and every rewind
+// buffer with it.
+//
+// The migration is sound. A v1 capture carries the mode it was running in, and
+// last_state_s differs from it only inside the single copper clock between a
+// mode write and the engine noticing it. Assuming they agree suppresses a
+// restart only for a capture taken inside that one-clock window, which is a far
+// smaller error than discarding the snapshot.
+func TestAVersion1CaptureIsMigratedRatherThanRefused(t *testing.T) {
+	// A v1 blob: everything the current struct has except LastMode, which did
+	// not exist, so gob leaves it zero.
+	v1 := copperState{
+		Version:      1,
+		WritePtr:     0x123,
+		Mode:         byte(StartOnVBL),
+		Pc:           7,
+		Stopped:      false,
+		LastScanline: 42,
+	}
+	v1.Program[0] = 0xABCD
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(v1); err != nil {
+		t.Fatalf("encoding a v1 capture: %v", err)
+	}
+
+	c := New()
+	if err := c.LoadState(buf.Bytes()); err != nil {
+		t.Fatalf("a version 1 capture was refused: %v", err)
+	}
+
+	if c.mode != StartOnVBL {
+		t.Errorf("mode = %d, want %d", c.mode, StartOnVBL)
+	}
+	if c.lastMode != c.mode {
+		t.Errorf("lastMode = %d, want it to match mode (%d): a migrated capture "+
+			"must not look like a pending mode change, or the restored Copper "+
+			"performs a restart the recorded machine had already done",
+			c.lastMode, c.mode)
+	}
+	if c.pc != 7 {
+		t.Errorf("pc = %d, want 7: the rest of the v1 fields must survive", c.pc)
+	}
+	if c.program[0] != 0xABCD {
+		t.Errorf("program[0] = $%04X, want $ABCD", c.program[0])
+	}
+}
+
+// And the migrated Copper must not restart on its next clock, which is the
+// whole point of carrying lastMode.
+func TestAMigratedCaptureDoesNotRestartOnItsNextClock(t *testing.T) {
+	v1 := copperState{Version: 1, Mode: byte(StartFromZero), Pc: 5}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(v1); err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	c := New()
+	if err := c.LoadState(buf.Bytes()); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	c.Step(0, 0, 1)
+	if c.PC() == 0 {
+		t.Error("the restored Copper restarted its list on the first clock: the " +
+			"migration left lastMode disagreeing with mode")
+	}
+}
+
+// A version this build has never heard of is still refused.
+func TestAnUnknownStateVersionIsRefused(t *testing.T) {
+	future := copperState{Version: copperStateVersion + 1}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(future); err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	if err := New().LoadState(buf.Bytes()); err == nil {
+		t.Error("a capture from a newer build was accepted")
+	}
+}

@@ -92,9 +92,10 @@ type copperState struct {
 
 // copperStateVersion is the current meaning of copperState's fields.
 // Version 1 introduced the byte-address write cursor.
-// Version 2 added LastMode. A version 1 capture cannot be upgraded: it does not
-// record what the mode was on the previous clock, and guessing it either
-// invents a restart or suppresses a real one.
+// Version 2 added LastMode. A version 1 capture is migrated rather than
+// refused: it does not record what the mode was on the previous clock, but that
+// differed from Mode only inside one copper clock, so assuming they agreed is
+// wrong only for a capture taken inside that window. See LoadState.
 const copperStateVersion = 2
 
 // StateID identifies the copper in a captured machine state.
@@ -140,15 +141,27 @@ func (c *Copper) LoadState(b []byte) error {
 		return fmt.Errorf("copper: decoding state: %w", err)
 	}
 
-	if s.Version != copperStateVersion {
-		return fmt.Errorf("copper: state version %d, want %d: the write cursor changed from an instruction index to a byte address, so an older capture would restore at half its intended position",
+	if s.Version < 1 || s.Version > copperStateVersion {
+		return fmt.Errorf("copper: state version %d, want 1..%d: version 0 predates the byte-address write cursor, so an older capture would restore at half its intended position, and a higher version comes from a build this one cannot read",
 			s.Version, copperStateVersion)
+	}
+
+	// Version 1 predates LastMode. Assume it agreed with Mode, which it did
+	// except inside the single copper clock between a mode write and the engine
+	// noticing it (copper.vhd:70-76). Refusing the capture instead would not
+	// lose the Copper's share of an old snapshot: one device's error aborts and
+	// rolls back the whole machine restore, so it would lose the snapshot
+	// entirely, and every rewind buffer with it. A one-clock window is the far
+	// smaller error.
+	lastMode := StartMode(s.LastMode)
+	if s.Version < 2 {
+		lastMode = StartMode(s.Mode)
 	}
 
 	c.program = s.Program
 	c.writePtr = s.WritePtr
 	c.mode = StartMode(s.Mode)
-	c.lastMode = StartMode(s.LastMode)
+	c.lastMode = lastMode
 	c.pc = s.Pc
 	c.stopped = s.Stopped
 	c.lastScanline = s.LastScanline

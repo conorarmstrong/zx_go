@@ -125,8 +125,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   performs the restart and executes nothing, and the stopped state is checked
   every clock. Enabling the Copper therefore costs one clock, as it does in
   hardware. `last_state_s` is now part of the captured state, so a rewind cannot
-  reintroduce a restart the recorded machine had already performed; the Copper
-  state version is 2 and version 1 captures are refused rather than guessed at.
+  reintroduce a restart the recorded machine had already performed. The Copper
+  state version is 2, and version 1 captures are migrated rather than refused:
+  `last_state_s` differed from the stored mode only inside one copper clock, so
+  assuming they agreed is wrong only for a capture taken in that window, whereas
+  refusing it would have discarded the whole snapshot and every rewind buffer,
+  because one device's load error rolls back the entire machine restore.
 
 - **Copper writes below the last display row were journalled.** The raster
   journal exists to replay the guest's writes, and suppresses recording across
