@@ -8,14 +8,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The Z80 CTC is wired, so a guest can use its timers.** All eight
-  counter/timer channels answer at ports `$183B`..`$1F3B` (`zxnext.vhd:2690`)
-  and tick on the CPU clock: a program can write a channel's control word and
-  time constant and read back its live down-counter. The device itself was
-  complete and pinned by golden vectors captured from the FPGA VHDL under GHDL
-  long before this; nothing constructed it and no port reached it, so no program
-  could tell it existed. Its **interrupts** are still not delivered, because the
-  IM2 daisy chain is not connected to the CPU's interrupt path.
+- **The Z80 CTC's port decode and channel count are modelled correctly**
+  (`pkg/next/ctc`), and the device is still deliberately **not wired**. It was
+  briefly wired during this cycle and the wiring was wrong: eight channels where
+  `zxnext.vhd:4067` has four, ticked once per CPU instruction where the FPGA
+  clocks it at a fixed 28 MHz, and with none of the inter-channel trigger
+  chaining at `:4084`. That would have run a guest's timers two orders of
+  magnitude slow and sped them up under turbo, which the real device does not
+  do, so it is unwired again with the three missing pieces recorded.
 
 - **Coverage claims now separate "modelled" from "reachable".** A tick in the
   feature tables used to mean implemented and pinned against the VHDL; it now

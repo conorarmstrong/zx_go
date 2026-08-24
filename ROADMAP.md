@@ -86,37 +86,47 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 2. [correctness] IM2 interrupts are not delivered
+### 2. [correctness] The CTC and IM2 are modelled but not wired
 
-**Half done.** The CTC is wired: eight channels at ports `$183B`..`$1F3B`
-(`zxnext.vhd:2690`), ticked on the CPU clock, so a guest can program a channel
-and read its live down-counter. What remains is that no interrupt any of them
-raises reaches the CPU.
+Neither can be reached by a guest. Both are complete and pinned by golden
+vectors captured from the FPGA VHDL under GHDL; what is missing is the machine
+around them.
 
-`pkg/next/im2.go` models the daisy chain faithfully and is pinned by golden
-vectors captured from `peripherals.vhd` under GHDL. It is not connected, and the
-blocker is not the chain. It is a per-clock FSM whose stimulus is the Z80's bus:
-`IM2Inputs` wants `/M1`, `/IORQ`, `i_im2_mode` and the RETI decode and seen
-pulses, every clock. Our CPU is instruction-granular. It executes RETI but
-signals it to nobody, and interrupt acceptance happens atomically inside
-`interrupt()` with no INT-acknowledge cycle an observer can see.
+**The CTC** briefly was wired, and the wiring was wrong in three ways that are
+worth recording so the next attempt starts from them:
 
-So the work in order is:
+- It has **four** channels, not eight. `zxnext.vhd:4067` is `NUM_CTC => 4`. Two
+  eight-channel instantiations above it are commented out, and the daisy chain's
+  top four slots are tied off at `:4092-4093`. The eight-slot priority map at
+  `:1936` is what misleads.
+- It is clocked by `i_CLK_28` (`:4072`), a fixed 28 MHz that does not follow
+  NR$07 turbo. Ticking it from the CPU's per-instruction hook ran the timers one
+  tick per 4 to 23 T-states against eight ticks per 3.5 MHz T-state: two orders
+  of magnitude slow, jittering with instruction mix, and speeding up under turbo
+  where the real device does not.
+- Its channels are **chained**: `i_clk_trg` is
+  `ctc_zc_to(2 downto 0) & ctc_zc_to(3)` (`:4084`), so each channel's trigger is
+  another channel's zero-count output. And its interrupt enables come from
+  NR$C5 bits 3:0 (`:4078-4079`), which is stored-only here.
 
-1. **Give the CPU observable bus events.** At minimum an INT-acknowledge hook
-   that lets a device present a vector, and a RETI notification. That is the
-   real prerequisite and it belongs to `pkg/z80`.
-2. **Feed the chain.** `ctc_zc_to` from the eight channels, `ula_int_pulse`, and
-   the two UART sources, at the priority order in `zxnext.vhd:1936`.
-3. **Plumb the enables.** NR$C0 bit 0 selects pulse versus hardware IM2 mode and
-   its bits 7:5 are the programmable vector upper bits, currently unmodelled;
-   NR$C4, NR$C6 and NR$CC/$CD/$CE carry the per-source enables and are
-   stored-only.
+The port decode and the four channels are modelled and pinned
+(`pkg/next/ctc`). The clock rate is the substantial part: eight ticks per
+T-state across four channels is a real per-instruction cost, so it wants a
+divider or a deadline model rather than a naive loop.
 
-Do not approximate this. Driving a per-clock FSM from instruction boundaries
-would produce interrupt timing that is not the FPGA's, and an unfaithful IM2
-would be worse than none: a developer would trust it. The enables all reset to
-zero, so nothing about the current state is unsafe, only incomplete.
+**IM2 delivery** is blocked on the CPU. `IM2Inputs` is a per-clock FSM wanting
+`/M1`, `/IORQ`, `i_im2_mode` and the RETI decode and seen pulses every clock;
+ours is instruction-granular, executes RETI without telling anyone, and accepts
+interrupts atomically inside `interrupt()` with no acknowledge cycle an observer
+can see. So the order is: give `pkg/z80` an interrupt-acknowledge hook and a
+RETI notification; then feed the chain from `ctc_zc_to`, `ula_int_pulse` and the
+two UART sources at the priority order in `zxnext.vhd:1936`; then plumb NR$C0
+bit 0, its bits 7:5, NR$C4, NR$C5 and NR$C6.
+
+Do not approximate either. Driving a per-clock FSM from instruction boundaries
+produces timing that is not the FPGA's, and an unfaithful CTC or IM2 is worse
+than none, because a developer would trust it. Every enable resets to zero, so
+nothing about the current state is unsafe, only incomplete.
 
 ### 3. [efficiency] Row composition is O(row x writes)
 

@@ -552,11 +552,16 @@ func (d *DMA) decodeBase(val byte) {
 			p = append(p, opIgnore)
 		}
 		d.pending = p
-		// D6 is a second ENABLE. The FPGA latches it into R3_dma_en_s and, when
-		// it is set, drops the transfer FSM into START_DMA (dma.vhd:576-580),
-		// the same state $87 jumps to (dma.vhd:724). R3_dma_en_s itself is
-		// written at :576 and read nowhere, so it is dead state: a WR3 byte with
-		// D6 clear starts nothing and stops nothing.
+		// D6 is a second ENABLE, and it really does start a transfer: dma.vhd:578
+		// tests cpu_d_i(6) directly and :579 assigns dma_seq_s <= START_DMA, the
+		// same state $87 jumps to (:724). So a WR3 byte with D6 set moves bytes
+		// with no ENABLE command behind it, exactly as it would on hardware.
+		//
+		// Do not confuse that with R3_dma_en_s, the register the same branch
+		// latches at :576. That one is written and read nowhere, so it is dead
+		// state, and a WR3 byte with D6 CLEAR therefore starts nothing and stops
+		// nothing. Two readers have now taken the dead latch to mean the whole
+		// arm is dead; it is the immediate FSM assignment that is live.
 		if val&0x40 != 0 {
 			d.Trigger()
 		}
@@ -727,12 +732,17 @@ func (d *DMA) Trigger() {
 // runBlock moves the bytes the current block still owes, from START_DMA to
 // FINISH_DMA, unless the bus delay stops it.
 //
-// It is one call for a whole block because nothing in the FPGA's transfer loop
-// gives the bus back once it has it: WAITING_CYCLES is the only state that
-// deasserts cpu_busreq_n_s (dma.vhd:441-449) and it is reachable only with a
-// non-zero prescaler (dma.vhd:424), which is the interleaved path Step() runs
-// instead. So the CPU is stopped for the whole of this, in burst mode exactly
-// as much as in continuous, and the sink is charged once the block completes.
+// It is one call for a whole block because nothing here gives the bus back.
+// WAITING_CYCLES is the only state that deasserts cpu_busreq_n_s, and it does
+// so only in burst mode: dma.vhd:441 gates the release on R4_mode_s = "10".
+// A continuous transfer reaches WAITING_CYCLES too, whenever the prescaler is
+// non-zero (dma.vhd:424), and holds the bus throughout it.
+//
+// So a continuous block with a large prescaler freezes the CPU for a long time,
+// and that is the hardware's answer, not a modelling artefact: 16 KB at
+// prescaler 255 is 133 million T-states, nearly five emulated seconds, on the
+// FPGA as here. Step() is the interleaved path, and it takes only burst
+// transfers, for the same reason.
 func (d *DMA) runBlock() {
 	if d.busDelay {
 		// START_DMA holds cpu_busreq_n_s deasserted while dma_delay_i is high

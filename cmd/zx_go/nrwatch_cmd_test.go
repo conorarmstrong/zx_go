@@ -432,3 +432,28 @@ func TestWatchNextRegSurvivesTheDispatcherBeingReplaced(t *testing.T) {
 			"the hook is still on the old one")
 	}
 }
+
+// The same parse-then-arm rule as watch-nextreg, for the same reason: a list
+// that fails halfway, or a command refused because the machine has no NextRegs,
+// must leave nothing armed. Both were wrong here in the opposite order.
+func TestNRTraceArmsNothingWhenItRefuses(t *testing.T) {
+	t.Run("non-Next machine", func(t *testing.T) {
+		d := &remoteDebugger{emu: &emulator{}}
+		if got := d.cmdNRTrace([]string{"10,20"}); !strings.HasPrefix(got, "ERR") {
+			t.Fatalf("nr-trace on a non-Next machine = %q, want an ERR", got)
+		}
+		if regs := d.nrTraces.list(); len(regs) != 0 {
+			t.Errorf("traces after a refused command = %v, want none", regs)
+		}
+	})
+	t.Run("bad register in the list", func(t *testing.T) {
+		d := newRemoteForNRWatch(t)
+		if got := d.cmdNRTrace([]string{"10,ZZ"}); !strings.HasPrefix(got, "ERR") {
+			t.Fatalf("nr-trace 10,ZZ = %q, want an ERR", got)
+		}
+		if regs := d.nrTraces.list(); len(regs) != 0 {
+			t.Errorf("traces after a failed parse = %v, want none: the registers "+
+				"before the bad one must not survive the error", regs)
+		}
+	})
+}

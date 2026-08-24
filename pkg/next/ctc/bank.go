@@ -1,9 +1,19 @@
 package ctc
 
-// NumChannels is the number of CTC channels the Next carries. The FPGA gives
-// the IM2 daisy chain eight of them, at priority indices 3 to 10
-// (zxnext.vhd:1936).
-const NumChannels = 8
+// NumChannels is the number of CTC channels the Next carries: four.
+//
+// The IM2 daisy chain reserves eight priority slots for the CTC (indices 3 to
+// 10, zxnext.vhd:1936) and two earlier instantiations in the source would have
+// filled them, but both are commented out. The live one is NUM_CTC => 4
+// (zxnext.vhd:4064-4069), and the top four slots are tied off:
+// ctc_zc_to(7 downto 4) and ctc_int_en(7 downto 4) are both hardwired to zero
+// (:4092-4093). ctc.vhd generates channels only for 0..NUM_CTC-1 (:100-123) and
+// its select decode compares against the same bound (:130-136), so a port that
+// selects 4..7 matches no channel: the write goes nowhere and the read-back mux
+// ORs nothing.
+//
+// Eight was a misreading of the daisy chain's slot count as a channel count.
+const NumChannels = 4
 
 // Port decode, from zxnext.vhd:2690:
 //
@@ -15,7 +25,12 @@ const NumChannels = 8
 const (
 	portLow      = 0x3B
 	portPageBase = 0x18
-	portPageLast = portPageBase + NumChannels - 1
+	// The decode spans eight pages because it is three address bits wide, but
+	// only the first four reach a channel. $1C3B..$1F3B are decoded as the
+	// CTC's and select nothing, which is not the same as not being ours: they
+	// must not fall through to the ordinary port dispatch.
+	portPageLast    = portPageBase + 8 - 1
+	portPageChannel = portPageBase + NumChannels - 1
 )
 
 // Bank is the Next's group of eight CTC channels together with the port decode
@@ -46,6 +61,9 @@ func (b *Bank) Channel(i int) *Channel { return b.ch[i] }
 
 // PortChannel reports which channel a port address selects, and whether the
 // address belongs to the CTC at all.
+//
+// Selecting no channel is still the CTC's address: ok is true with a channel of
+// -1 for $1C3B..$1F3B, which the FPGA decodes and then matches against nothing.
 func (b *Bank) PortChannel(addr uint16) (int, bool) {
 	if addr&0xFF != portLow {
 		return 0, false
@@ -53,6 +71,9 @@ func (b *Bank) PortChannel(addr uint16) (int, bool) {
 	page := addr >> 8
 	if page < portPageBase || page > portPageLast {
 		return 0, false
+	}
+	if page > portPageChannel {
+		return -1, true // decoded, selects no channel
 	}
 	return int(page - portPageBase), true
 }
@@ -64,7 +85,9 @@ func (b *Bank) WritePort(addr uint16, val byte) bool {
 	if !ok {
 		return false
 	}
-	b.ch[i].Write(val)
+	if i >= 0 {
+		b.ch[i].Write(val)
+	}
 	return true
 }
 
@@ -77,6 +100,12 @@ func (b *Bank) ReadPort(addr uint16) (byte, bool) {
 	i, ok := b.PortChannel(addr)
 	if !ok {
 		return 0, false
+	}
+	if i < 0 {
+		// The read-back mux ORs the selected channels' outputs, and none is
+		// selected (ctc.vhd:163-175), so the result is zero rather than a
+		// floating bus.
+		return 0, true
 	}
 	return b.ch[i].Count(), true
 }

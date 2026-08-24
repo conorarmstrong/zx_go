@@ -306,7 +306,7 @@ func TestCopperIsClockedOnEveryLineOfTheFrame(t *testing.T) {
 
 	model := u.mem.GetCurrentModel()
 	columns := TStatesPerLineFor(model) * 2
-	lines := linesPerFrameFor(model)
+	lines := LinesPerFrameFor(model)
 
 	perLine := map[uint16]int{}
 	for _, s := range c.steps {
@@ -357,7 +357,7 @@ func TestAStraddlingMOVEIsPaidForAcrossTheFrameBoundary(t *testing.T) {
 	u, _ := newFloatingBusULA(t)
 	model := u.mem.GetCurrentModel()
 	c := &frameEndStraddlingCopper{
-		lastLine:   uint16(linesPerFrameFor(model) - 1),
+		lastLine:   uint16(LinesPerFrameFor(model) - 1),
 		lastColumn: uint16(TStatesPerLineFor(model)*2 - 1),
 	}
 	u.SetNextCopper(c)

@@ -38,7 +38,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
-	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dma"
@@ -265,8 +264,6 @@ type emulator struct {
 	nextAY     *ay.Engine
 	nextDMA    *dma.DMA
 	nextDivMMC *divmmc.Pager
-	// nextCTC is the eight Z80 CTC counter/timer channels at $183B..$1F3B.
-	nextCTC *ctc.Bank
 	// nextClipWindows (NR$18-$1C) and nextReset (NR$02) are the register
 	// state pkg/next's own handlers hold: clip coordinates with their write
 	// indices, and the 3-bit reset-type history software can only see two

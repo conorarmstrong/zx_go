@@ -60,3 +60,50 @@ func TestBankProgramsAndCountsAChannel(t *testing.T) {
 			"from 3: the bank is not ticking its channels", got)
 	}
 }
+
+// The Next has four CTC channels, not eight. Two earlier instantiations in
+// zxnext.vhd would have given it eight and both are commented out; the live one
+// is NUM_CTC => 4 (zxnext.vhd:4064-4069), and the daisy chain's top four slots
+// are tied off at :4092-4093. The eight-slot priority map at :1936 is what
+// misled this model into eight.
+func TestTheNextHasFourChannels(t *testing.T) {
+	if NumChannels != 4 {
+		t.Errorf("NumChannels = %d, want 4 (zxnext.vhd:4067 NUM_CTC => 4)", NumChannels)
+	}
+}
+
+// The port decode is three address bits wide, so it spans eight pages, but
+// ctc.vhd only generates channels 0..NUM_CTC-1 and its select compares against
+// the same bound (ctc.vhd:100-123, :130-136). $1C3B..$1F3B are therefore
+// decoded as the CTC's and select nothing: the write goes nowhere, and the
+// read-back mux ORs no selected channel and yields zero.
+//
+// They must still be claimed. Letting them fall through to the ordinary port
+// dispatch would answer a decoded CTC port with floating-bus junk.
+func TestPortsAboveTheLastChannelAreClaimedButSelectNothing(t *testing.T) {
+	b := NewBank()
+	for page := uint16(0x1C); page <= 0x1F; page++ {
+		addr := page<<8 | 0x3B
+		ch, ok := b.PortChannel(addr)
+		if !ok {
+			t.Errorf("port $%04X is not claimed by the CTC, but the FPGA decodes it", addr)
+			continue
+		}
+		if ch >= 0 {
+			t.Errorf("port $%04X selected channel %d, but only 0..%d exist",
+				addr, ch, NumChannels-1)
+		}
+		if !b.WritePort(addr, 0xFF) {
+			t.Errorf("a write to $%04X was not claimed", addr)
+		}
+		if v, ok := b.ReadPort(addr); !ok || v != 0 {
+			t.Errorf("read of $%04X = ($%02X, %v), want ($00, true)", addr, v, ok)
+		}
+	}
+	// And a write there must not have reached a real channel.
+	for i := 0; i < NumChannels; i++ {
+		if got := b.Channel(i).Count(); got != 0 {
+			t.Errorf("channel %d counter = $%02X after writes to unselected ports", i, got)
+		}
+	}
+}

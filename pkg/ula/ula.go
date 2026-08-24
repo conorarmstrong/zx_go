@@ -62,20 +62,18 @@ func TStatesPerLineFor(model roms.SpectrumModel) int {
 	return 228
 }
 
-// linesPerFrameFor returns the scanline count of one frame for a machine
+// LinesPerFrameFor returns the scanline count of one frame for a machine
 // model: 312 for the 48K, 311 for the 128K family and +2/+2A/+3. Matches
 // video/zxula_timing.vhd c_max_vc at 50 Hz: 311 for 48K (line 270) and 310
 // for 128K (line 204), each being the last line number rather than the count.
 //
-// The Copper needs it because its vertical counter cvc runs the whole frame,
-// not just the displayed rows (video/zxula_timing.vhd:455-466).
-func linesPerFrameFor(model roms.SpectrumModel) int { return LinesPerFrameFor(model) }
-
-// LinesPerFrameFor is the number of scanlines in one frame of a model's video
-// timing. Lines are numbered from zero, so the highest the raster reaches is one
-// below this. Exported because the Copper disassembler needs the same number to
-// tell a never-releasing WAIT from an ordinary one, and two copies of it would
-// drift.
+// Lines are numbered from zero, so the highest the raster reaches is one below
+// this.
+//
+// The Copper needs it twice over: its vertical counter cvc runs the whole
+// frame, not just the displayed rows (video/zxula_timing.vhd:455-466), and the
+// Copper disassembler needs the same number to tell a WAIT that can never
+// release from an ordinary one. Exported so those are one number and not two.
 func LinesPerFrameFor(model roms.SpectrumModel) int {
 	if model == roms.Model48K {
 		return 312
@@ -2064,7 +2062,7 @@ func (u *ULA) applyNextCompositor() {
 	// so 63*8+12 wraps to 4 and it releases near the START of the line (see
 	// copper.WaitHThreshold).
 	//
-	// LIMITATION: both this and linesPerFrameFor read the classic machine model
+	// LIMITATION: both this and LinesPerFrameFor read the classic machine model
 	// from memory, not the Next's NR$03 machine timing. NR$03 bits 6:4 select
 	// 48K / 128K / Pentagon video timing (zxnext.vhd:5124), and the field is
 	// tracked in pkg/next/wire.go but never reaches the ULA, so a Next program
@@ -2186,7 +2184,8 @@ func (u *ULA) applyNextCompositor() {
 		if journal != nil {
 			resume = journal.SuspendRecording()
 		}
-		for y := h; y < linesPerFrameFor(u.mem.GetCurrentModel()); y++ {
+		lines := LinesPerFrameFor(u.mem.GetCurrentModel())
+		for y := h; y < lines; y++ {
 			for hc := 0; hc < columnsPerLine; hc++ {
 				u.copperDebt = u.stepCopperColumn(y, hc, u.copperDebt)
 			}

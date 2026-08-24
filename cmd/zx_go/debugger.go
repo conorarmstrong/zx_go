@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"log/slog"
 	"net"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 

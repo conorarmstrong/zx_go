@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1762,13 +1761,24 @@ sdReady:
 	e.nextLayer2 = l2
 	e.nextAY = ayEngine
 	e.nextDMA = dmaEngine
-	// The eight Z80 CTC counter/timer channels at $183B..$1F3B
-	// (zxnext.vhd:2690). Ticked from the CPU's per-instruction hook so a
-	// guest's timers advance with the machine rather than with the frame.
-	ctcBank := ctc.NewBank()
-	e.nextCTC = ctcBank
-	u.SetNextCTC(ctcBank)
-	cpu.AddPreFetchHook("next-ctc-tick", func(uint16) { ctcBank.Tick() })
+	// The Z80 CTC is deliberately NOT wired. pkg/next/ctc models the channels
+	// faithfully and is pinned by GHDL-captured golden vectors, and the port
+	// decode is right, but three things about the machine around it are not
+	// modelled yet and wiring it without them would invent hardware:
+	//
+	//   - The device is clocked by i_CLK_28 (zxnext.vhd:4072), a fixed 28 MHz
+	//     independent of NR$07 turbo. Ticking it from the CPU's per-instruction
+	//     hook, which is what this used to do, runs the timers one tick per
+	//     4..23 T-states instead of eight ticks per 3.5 MHz T-state: two orders
+	//     of magnitude slow, jittering with instruction mix, and speeding up
+	//     with turbo when the real device does not.
+	//   - The channels are chained. i_clk_trg is
+	//     ctc_zc_to(2 downto 0) & ctc_zc_to(3) (zxnext.vhd:4084), so each
+	//     channel's trigger is another channel's zero-count output.
+	//   - The interrupt enables come from NR$C5 bits 3:0 (zxnext.vhd:4078-4079),
+	//     which is stored-only here.
+	//
+	// See ROADMAP item 2.
 	e.nextDivMMC = pager
 	e.nextClipWindows = clipWindows
 	e.nextReset = resetControl
@@ -1931,7 +1941,6 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextLayer2 = nil
 	e.nextAY = nil
 	e.nextDMA = nil
-	e.nextCTC = nil
 	e.nextDivMMC = nil
 	e.nextClipWindows = nil
 	e.nextLoRes = nil
@@ -1940,7 +1949,6 @@ func unwireNextSubsystems(e *emulator) {
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(nil)
 		e.ula.SetNextLoRes(nil)
-		e.ula.SetNextCTC(nil)
 	}
 	e.nextReset = nil
 }

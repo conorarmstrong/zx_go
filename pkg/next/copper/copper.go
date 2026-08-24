@@ -356,11 +356,13 @@ func WaitHThreshold(x byte) uint16 { return HCountForPixel(int(x)*8) & 0x1FF }
 // release. Passing a larger number is useful for tests that want to
 // "fast-forward" to a stable state.
 //
-// Re-entry guard: if a MOVE writes to NextRegs that mutate the
-// Copper's own state (0x60-0x62), the writes are buffered through
-// the dispatcher and applied as usual; Step doesn't reload its own
-// pc / writePtr fields mid-loop, so a re-entrant mutation only takes
-// effect on the NEXT Step call.
+// Re-entry: a MOVE can write the NextRegs that configure the Copper itself
+// ($60-$62), because pkg/next/wire.go routes them straight back here. Those
+// writes take effect the way any other write to them does. $60 and $61 move the
+// write cursor, which this loop does not read. $62 records a mode change, and
+// the restart it arms is taken by the NEXT clock of this same loop rather than
+// inside the instruction that caused it, which is what the device does and why
+// enabling the Copper costs a clock.
 //
 // scanline is the raster line (vcount). hcount is the raster horizontal
 // counter in the same units the FPGA's hcount_i carries, which is hc_ula: a

@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 )
 
 // nrDeltaSet is the runtime set of NextReg numbers to log transitions

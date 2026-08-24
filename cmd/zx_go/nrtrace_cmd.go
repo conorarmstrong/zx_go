@@ -78,6 +78,15 @@ func (d *remoteDebugger) cmdNRTrace(args []string) string {
 		d.nrTraces.clear()
 		return "OK nr-trace cleared"
 	}
+	// The tracer hangs off the NextReg dispatcher, and only the Next has one
+	// (cmd/zx_go/next.go nils it for every other model). Listing and clearing
+	// above are pure bookkeeping and stay usable anywhere.
+	if d.emu.nextRegs == nil {
+		return "ERR nr-trace: this machine has no NextRegs (Next-only command)"
+	}
+	// Parse the whole list before arming any of it, so a command that reports
+	// an error leaves nothing behind to fire later.
+	var regs []byte
 	for _, p := range strings.Split(strings.Join(args, ","), ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -87,13 +96,10 @@ func (d *remoteDebugger) cmdNRTrace(args []string) string {
 		if err != nil {
 			return "ERR bad reg " + p + ": " + err.Error()
 		}
-		d.nrTraces.add(byte(v & 0xFF))
+		regs = append(regs, byte(v&0xFF))
 	}
-	// The tracer hangs off the NextReg dispatcher, and only the Next has one
-	// (cmd/zx_go/next.go nils it for every other model). Listing and clearing
-	// above are pure bookkeeping and stay usable anywhere.
-	if d.emu.nextRegs == nil {
-		return "ERR nr-trace: this machine has no NextRegs (Next-only command)"
+	for _, r := range regs {
+		d.nrTraces.add(r)
 	}
 	d.ensureNRTraceHook()
 	return "OK nr-trace=" + strings.Join(args, ",")
