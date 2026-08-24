@@ -141,7 +141,7 @@ would produce interrupt timing that is not the FPGA's, and an unfaithful IM2
 would be worse than none: a developer would trust it. The enables all reset to
 zero, so nothing about the current state is unsafe, only incomplete.
 
-### 4. [correctness] zxnDMA prescaler period — DONE
+### 4. [correctness] zxnDMA prescaler period: DONE
 
 Fixed. `perByteCycles` took the prescaler byte as a T-state count. The FPGA
 waits until `DMA_timer_s(13 downto 5)` reaches the prescaler (`dma.vhd:424`,
@@ -157,16 +157,34 @@ period relationship rather than carrying a literal.
 
 ### 5. [efficiency] Row composition is O(row x writes)
 
-`ComposeScanlineRange` re-renders the whole Layer 2, tilemap and sprite scanline
-before it consults `x0`/`x1`, so only the paint loop is bounded, and `pkg/ula`
-calls it once per Copper write. A list writing every column would make 256
-full-row layer renders per row.
+**Measured.** `ComposeScanlineRange` re-renders the whole Layer 2, tilemap and
+sprite scanline before it consults `x0`/`x1`, so only the paint loop is bounded,
+and `pkg/ula` calls it once per Copper write. `pkg/next/compositor/range_bench_test.go`
+holds the benchmark; at 192 displayed rows against a 20 ms frame budget:
 
-This was parked once on the grounds that no title on the SD card exercises the
-Copper at all. That reasoning inverts under the goal above: a Copper-heavy list
-is exactly what a demo or hardware developer writes, so the pathological case is
-the target user's normal case. Measure a real case first, then hoist the layer
-renders above the range check.
+| Copper writes per row | ns per row | ms per frame | % of a 50 Hz budget |
+|---|---|---|---|
+| 0 | 1,639 | 0.31 | 1.6 |
+| 8 | 8,527 | 1.64 | 8.2 |
+| 256 | 228,573 | 43.90 | **219.5** |
+
+An ordinary list is affordable. A saturated one is not: at one MOVE per column
+the compositor alone wants more than twice the frame budget, and since a MOVE
+costs two of a column's four copper clocks, twice that density is reachable. So
+this is a real cliff rather than a theoretical one, and it sits exactly where
+the intended audience works.
+
+**Not yet fixed, deliberately.** The fix is to hoist the layer renders above the
+range check and cache them per row, and the hard part is invalidation: the cache
+has to be dropped when a Copper MOVE touches a register that changes what a
+layer's scanline render produces, and kept when it touches one that only affects
+the paint loop, such as a palette entry or a priority mode. Getting that mapping
+wrong produces visual corruption that no current test would catch, because no
+title on the SD card exercises the Copper at all.
+
+So the work is: enumerate, per layer, which NextRegs its scanline render reads;
+turn that into an invalidation set; then cache. That enumeration is the
+deliverable, not the caching.
 
 ### 6. [correctness] Remaining zxnDMA defects
 
