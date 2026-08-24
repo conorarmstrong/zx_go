@@ -637,7 +637,14 @@ func (d *DMA) command(val byte) {
 		// source added for the prescaler went missing across a $C3 until the
 		// branch was told about it. Assigning what the FPGA assigns cannot
 		// develop that problem.
-		d.inTransfer = false // dma_seq_s <= IDLE
+		// dma_seq_s <= IDLE. Four fields say "not transferring" between them,
+		// and for observable behaviour they are redundant: clearing remaining
+		// alone stops every reachable path, so a mutation sweep finds none of
+		// them individually. They are all cleared anyway because three of the
+		// four are captured in the savestate, and a restore that carries
+		// "a block is parked here" into a controller with no block is a state
+		// no sequence of commands could otherwise produce.
+		d.inTransfer = false
 		d.activeBurst = false
 		d.remaining = 0
 		d.stalled = false

@@ -24,6 +24,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Three zxnDMA behaviours had no test.** A `$C3` arriving mid-block used to be
+  covered by accident: the old whole-struct rebuild zeroed the transfer position
+  as a side effect, so no test ever asked for it, and the explicit assignments
+  that replaced it could all have been deleted without a failure. `$CF` LOAD and
+  `$D3` CONTINUE clearing end-of-block (`dma.vhd:654`, `:671`), which is what
+  lets a driver poll for the NEXT block finishing rather than the last one, were
+  never covered at all.
+
 - **An interleaved zxnDMA burst charged the CPU nothing.** A burst transfer with
   a prescaler is the one case where the device gives the bus back mid-block, and
   `dma.vhd:441-447` gives it back for the prescaler GAP, not for the byte: the

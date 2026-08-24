@@ -308,3 +308,113 @@ func TestResetCommandKeepsWhatTheFPGAKeeps(t *testing.T) {
 			d.aCycleLen, d.bCycleLen, resetCycleLen, resetCycleLen)
 	}
 }
+
+// $C3's first assignment is dma_seq_s <= IDLE (dma.vhd:638), and that has to
+// mean the same thing it means for $83: a block in flight is abandoned where it
+// stands. An interleaved burst is the case where a block outlives the call that
+// started it, so it is the one where "in flight" is observable from outside.
+//
+// This was uncovered when $C3 stopped rebuilding the whole struct. The rebuild
+// zeroed the transfer position as a side effect of zeroing everything, so no
+// test ever asked for it directly, and the three explicit assignments that
+// replaced it could all have been deleted without a failure.
+func TestResetCommandAbandonsABurstInFlight(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 0x20; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	var now uint64
+	d := New(mem)
+	d.SetClock(func() uint64 { return now })
+	feed(d, burstStream(0x4000, 0x6000, 0x20, 10))
+
+	// Pump a few bytes, leaving the rest of the block owed.
+	for now = 0; now < 3*prescalerPeriod(10); now += 10 {
+		d.Step(now)
+	}
+	moved := d.ByteCounter()
+	if moved == 0 || moved >= 0x20 {
+		t.Fatalf("fixture moved %d of 32 bytes; it must be mid-block", moved)
+	}
+
+	d.WriteCommand(0xC3)
+
+	// Nothing more may move, however long the clock runs.
+	for ; now < 64*prescalerPeriod(10); now += 10 {
+		d.Step(now)
+	}
+	if got := d.ByteCounter(); got != moved {
+		t.Errorf("byte counter went %d -> %d after $C3: the block kept running, but "+
+			"dma_seq_s <= IDLE abandons it where it stands", moved, got)
+	}
+	for i := uint16(moved); i < 0x20; i++ {
+		if got := mem[0x6000+i]; got != 0 {
+			t.Errorf("dst[$%04X] = $%02X, want $00: bytes moved after the reset",
+				0x6000+i, got)
+		}
+	}
+}
+
+// LOAD and CONTINUE both clear status_endofblock_n (dma.vhd:654, :671), which is
+// what lets a driver poll the status byte to see the NEXT block finish rather
+// than the last one.
+func TestLoadAndContinueClearEndOfBlock(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  byte
+	}{{"LOAD $CF", 0xCF}, {"CONTINUE $D3", 0xD3}} {
+		t.Run(c.name, func(t *testing.T) {
+			mem := memMap{0x4000: 0xAA}
+			d := New(mem)
+			feed(d, transferCmd(0x4000, 0x6000, 1, addrIncrement, addrIncrement, true))
+			d.WriteCommand(0xBF) // read status byte
+			if got := d.ReadCommand(); got&0x20 != 0 {
+				t.Fatalf("status = $%02X after a finished block, want bit 5 clear "+
+					"(end-of-block latched)", got)
+			}
+
+			d.WriteCommand(c.cmd)
+			d.WriteCommand(0xBF)
+			if got := d.ReadCommand(); got&0x20 == 0 {
+				t.Errorf("status = $%02X after %s, want bit 5 set: it clears "+
+					"status_endofblock_n", got, c.name)
+			}
+		})
+	}
+}
+
+// A block parked by dma_delay_i is the one position that outlives $C3 in a way
+// the byte counter cannot show: the pointers say where the block got to, and
+// only the stalled flag says it was still going. If $C3 leaves that set, the
+// block resumes the moment the pin drops, running a transfer the guest reset.
+//
+// The three assignments that model dma_seq_s <= IDLE are mutually redundant for
+// an ordinary in-flight burst, so none of them is caught alone by that test.
+// This is the path where the stalled flag answers for itself.
+func TestResetCommandUnparksABlockTheDelayPinStopped(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 8; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	d := New(mem)
+	d.SetBusDelay(true) // the pin is high before the block starts
+	feed(d, transferCmd(0x4000, 0x6000, 8, addrIncrement, addrIncrement, true))
+
+	if d.ByteCounter() != 0 {
+		t.Fatalf("the block moved %d bytes with dma_delay_i high, want 0", d.ByteCounter())
+	}
+
+	d.WriteCommand(0xC3)
+	d.SetBusDelay(false) // the pin drops: nothing may resume
+
+	if got := d.ByteCounter(); got != 0 {
+		t.Errorf("byte counter = %d after the delay pin dropped, want 0: $C3 took "+
+			"the transfer FSM to IDLE, so there is no parked block to resume", got)
+	}
+	for i := uint16(0); i < 8; i++ {
+		if got := mem[0x6000+i]; got != 0 {
+			t.Errorf("dst[$%04X] = $%02X, want $00: the reset block resumed",
+				0x6000+i, got)
+		}
+	}
+}
