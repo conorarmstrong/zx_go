@@ -6,6 +6,13 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.0]
+
+**The SAM Coupe loads `.sbt` files, the Copper is paced per raster column, and
+the zxnDMA's bus arbitration and prescaler are modelled properly.** Coverage
+claims now separate what is modelled from what a guest can actually reach, and a
+test enforces the difference.
+
 ### Added
 
 - **The Z80 CTC's port decode and channel count are modelled correctly**
