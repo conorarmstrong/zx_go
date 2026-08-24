@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -45,7 +45,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -63,7 +63,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
@@ -89,7 +89,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
@@ -110,15 +110,20 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
 
       - name: golangci-lint
+        # Pinned rather than tracking latest, for the same reason the release
+        # workflow pins llvm-mingw: a lint run should not change underneath a
+        # commit. Tracking latest broke this job on 2026-08-19 when v2.13.1
+        # started requiring Go 1.26 while this workflow pinned 1.25, and the
+        # failure had nothing to do with any code in the repository.
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.12.2
           install-mode: goinstall
 
   vet:
@@ -134,7 +139,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
