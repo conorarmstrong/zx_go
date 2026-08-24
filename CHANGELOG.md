@@ -6,6 +6,51 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.1]
+
+**Fixes found by reviewing v1.12.0's own changes.** Two of them are incomplete
+work from that release rather than older defects.
+
+### Fixed
+
+- **The AY engine's savestate path was still racing.** v1.12.0 put a mutex round
+  the engine's shared fields and did not cover `SaveState` / `LoadState`, which
+  read and write the same four. A rewind or a savestate load while audio is
+  playing was still an unsynchronised write against the audio callback
+  goroutine's read.
+
+- **The Copper's captured state changed shape without changing version.**
+  Version 2 carried a `LastMode` byte; v1.12.0 replaced it with a
+  `RestartPending` flag and left the version at 2. Gob matches fields by name
+  and ignores ones it does not recognise, so the two formats were
+  indistinguishable and an older capture loaded silently with the field zeroed.
+  It is version 3 now, versions 1 and 2 are both migrated, and a test pins the
+  field set against the version so the next change of shape fails the build
+  instead of a restore. `LoadState` also validates the values it decodes again,
+  rejecting a mode outside 0..3 or a program counter past the end of the list.
+
+- **`ctc.Bank.Channel` panicked on the sentinel its own sibling returns.**
+  `PortChannel` reports -1 for the four addresses that decode as the CTC's and
+  select no channel, and `Channel` indexed the array with whatever it was given.
+  It returns nil for any index that names no channel.
+
+- **`Engine.Reset` was the one loop over the AY chips without a nil guard**, and
+  internal callers reached shared state through the locking accessors, which
+  made `sync.Mutex`'s non-reentrancy a latent deadlock on the audio goroutine.
+
+### Changed
+
+- **The unused ULA-side CTC plumbing is removed.** With the device deliberately
+  unwired, its interface, field, setter and both port-dispatch branches were
+  unreachable, costing a branch per port access on the Next's I/O path for a
+  hook that could never fire.
+
+- **Comments corrected where they contradicted the code**: three in
+  `pkg/next/ctc` still described eight channels below `NumChannels = 4`, the IM2
+  priority map read as a channel count when it is a slot count, and
+  `docs/spectrum-next.md` claimed the reachability test fails the build when the
+  coverage tables go stale, which it cannot do because it never reads them.
+
 ## [v1.12.0]
 
 **The SAM Coupe loads `.sbt` files, the Copper is paced per raster column, and
