@@ -6,6 +6,19 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.3]
+
+**Backlog work, and two corrections to v1.12.2's own changes.**
+
+### Added
+
+- **The Z80 exposes the two bus events a vectored-interrupt daisy chain needs**,
+  and `IM2Driver` turns the chain's per-clock FSM into them. `SetINTAckHook` is
+  the acknowledge cycle, where the peripheral that won arbitration drives its
+  vector onto the bus; `SetRETISeenHook` is the end-of-interrupt, and matches
+  `$4D` exactly where the existing RETN hook fires for every mirror of both
+  instructions. The chain is not wired into the emulator yet.
+
 
 ### Added
 
