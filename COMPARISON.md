@@ -196,7 +196,8 @@ signing/verification.
 | Multiface (1 / 128 / 3) | ✅ | ❔ | ✅ | ✅ |
 | Kempston joystick + mouse | ✅ | ✅ | ✅ | ✅ |
 | RTC (DS1307) | ✅ ²³ | ✅ | ✅ | ✅ |
-| Z80 CTC / IM2 interrupts | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
+| Z80 CTC timers | ✅ ²⁷ | ✅ | ⚠️ | ✅ |
+| IM2 vectored interrupts | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
 | Next DMA (zxnDMA) | ✅ ²⁴ | ✅ | ⚠️ | ✅ |
 | UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
 | DISCiPLE / +D | ✅ | ❌ | ✅ | ❌ |
@@ -220,12 +221,14 @@ ROADMAP items 2, 4 and 6.
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
-²⁷ zx_go models the Z80 CTC's four counter/timer channels and the IM2
+²⁷ zx_go models the Z80 CTC's eight counter/timer channels and the IM2
 vectored-interrupt daisy chain, both pinned by golden vectors captured from the
-FPGA VHDL under GHDL, but neither is wired into the emulator: no CTC port is
-decoded and NR$C0/$CC/$CD/$CE are stored-only, so a guest cannot use CTC timers
-or receive IM2 interrupts. The docs call that state NOT WIRED: modelled and
-verified, but not reachable. See ROADMAP item 3.
+FPGA VHDL under GHDL. The CTC is wired: its ports $183B..$1F3B are decoded and
+its channels tick on the CPU clock, so a guest can use the timers. The IM2 chain
+is not connected to the CPU's interrupt path and NR$C0/$CC/$CD/$CE are
+stored-only, so CTC and UART interrupts are not delivered. The docs call that
+second state NOT WIRED: modelled and verified, but not reachable. See ROADMAP
+item 3.
 
 ---
 

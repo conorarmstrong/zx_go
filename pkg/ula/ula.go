@@ -242,6 +242,10 @@ type ULA struct {
 	// then fall through to the existing floating-bus dispatch.
 	nextRegs NextRegAccess
 
+	// nextCTC is the Next's CTC bank when wired (ModelNext only). Nil on every
+	// other model, where $183B..$1F3B fall through to the ordinary dispatch.
+	nextCTC NextCTC
+
 	// nextAY is the Spectrum Next's three-chip AY engine when
 	// wired. When non-nil, port 0xFFFD / 0xBFFD traffic routes
 	// to engine.Active() instead of the singleton u.ay. Stays
@@ -502,6 +506,19 @@ type NextDivMMC interface {
 	ReadPort(port uint16) (byte, bool)
 }
 
+// NextCTC is the contract the ULA uses to reach the Spectrum Next's eight Z80
+// CTC counter/timer channels. pkg/next/ctc.Bank satisfies it.
+//
+// The ports are $183B..$1F3B: zxnext.vhd:2690 decodes cpu_a(15 downto 11) =
+// "00011" with the low byte $3B, so the channel index is address bits 10..8.
+// The device answers whether an address was its own rather than the ULA
+// restating the decode, so the rule lives in one place.
+type NextCTC interface {
+	WritePort(addr uint16, val byte) bool
+	ReadPort(addr uint16) (byte, bool)
+	Tick()
+}
+
 // NextRegAccess is the contract the ULA uses to forward port 0x243B
 // (select latch) and 0x253B (data port) traffic into the Spectrum
 // Next register file.
@@ -567,6 +584,10 @@ func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
 // default, and every classic model) leaves the compositor pass exactly as it
 // was. See NextRasterLog.
 func (u *ULA) SetNextRasterLog(l NextRasterLog) { u.nextRasterLog = l }
+
+// SetNextCTC installs the Spectrum Next's CTC bank. Passing nil unhooks it and
+// returns $183B..$1F3B to the ordinary port dispatch.
+func (u *ULA) SetNextCTC(c NextCTC) { u.nextCTC = c }
 
 // FrameID identifies the frame currently being executed, as the running
 // T-state counter divided by the model's frame length.
@@ -1376,6 +1397,13 @@ func (u *ULA) ReadPort(addr uint16) (byte, bool) {
 // RZX bookkeeping. Pulled out so ReadPort can sandwich it between the
 // playback and recording hooks without duplicating dispatch code.
 func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
+	// Spectrum Next CTC channels at $183B..$1F3B (zxnext.vhd:2690). A read
+	// returns the addressed channel's live down-counter.
+	if u.nextCTC != nil {
+		if v, ok := u.nextCTC.ReadPort(addr); ok {
+			return v, true
+		}
+	}
 	// Spectrum Next NextReg ports. Data port (0x253B) reads return
 	// whatever the dispatcher's currently-selected register says.
 	// Select port (0x243B) reads back the selected register NUMBER
@@ -1718,6 +1746,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		if u.timexModeObserver != nil {
 			u.timexModeObserver(val)
 		}
+	}
+	// Spectrum Next CTC channels at $183B..$1F3B (zxnext.vhd:2690). The device
+	// owns the decode and says whether the address was its own.
+	if u.nextCTC != nil && u.nextCTC.WritePort(addr, val) {
+		return
 	}
 	// Spectrum Next NextReg ports take priority over any other
 	// dispatch when wired. 0x243B is the select latch (write-only),

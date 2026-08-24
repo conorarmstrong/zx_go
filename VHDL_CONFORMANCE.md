@@ -75,7 +75,7 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $BA divmmc ep_timing | $00 | $00 | ✅ | |
 | $BB divmmc ep1 | $CD | $CD | ✅ | |
 | $C4 int en 0 | bit expbus=1 | $00 | ❌ | **GAP**: NR$C4 expbus int enable resets to 1 |
-| $C0 im2/nmi | $00 | $00 | **NOT WIRED** | reset value conforms, but NR$C0 is the IM2 vector base and the IM2 daisy chain is not wired: the register is stored and never acted on. Same for NR$CC/$CD/$CE. ROADMAP item 3 |
+| $C0 im2/nmi | $00 | $00 | **NOT WIRED** | reset value conforms, but NR$C0 is the IM2 vector base and the IM2 daisy chain is not connected to the CPU's interrupt path: the register is stored and never acted on. Same for NR$CC/$CD/$CE. The CTC itself is wired (ports $183B..$1F3B); only its interrupts are undelivered. ROADMAP item 3 |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0. The dma-int bits are stored-only for the same reason as NR$C0 |
 
 **Axis 1 remaining gaps to close:** NR$C4 (expbus bit 7 resets to 1, but its

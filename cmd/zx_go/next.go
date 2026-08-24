@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1754,6 +1755,13 @@ sdReady:
 	e.nextLayer2 = l2
 	e.nextAY = ayEngine
 	e.nextDMA = dmaEngine
+	// The eight Z80 CTC counter/timer channels at $183B..$1F3B
+	// (zxnext.vhd:2690). Ticked from the CPU's per-instruction hook so a
+	// guest's timers advance with the machine rather than with the frame.
+	ctcBank := ctc.NewBank()
+	e.nextCTC = ctcBank
+	u.SetNextCTC(ctcBank)
+	cpu.AddPreFetchHook("next-ctc-tick", func(uint16) { ctcBank.Tick() })
 	e.nextDivMMC = pager
 	e.nextClipWindows = clipWindows
 	e.nextReset = resetControl
@@ -1916,6 +1924,7 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextLayer2 = nil
 	e.nextAY = nil
 	e.nextDMA = nil
+	e.nextCTC = nil
 	e.nextDivMMC = nil
 	e.nextClipWindows = nil
 	e.nextLoRes = nil
@@ -1924,6 +1933,7 @@ func unwireNextSubsystems(e *emulator) {
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(nil)
 		e.ula.SetNextLoRes(nil)
+		e.ula.SetNextCTC(nil)
 	}
 	e.nextReset = nil
 }

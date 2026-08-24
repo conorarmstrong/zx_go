@@ -73,8 +73,8 @@ build if a package moves between those states without this table being updated.
 
 | Subsystem | Status |
 |---|---|
-| Z80 CTC (4 counter/timer channels) | **NOT WIRED**: complete and pinned by GHDL-captured golden vectors from the FPGA VHDL, but not wired: no CTC port is decoded and nothing constructs the device, so a guest cannot use its timers or its interrupts (`pkg/next/ctc`, ROADMAP item 3) |
-| IM2 vectored-interrupt daisy chain | **NOT WIRED**: complete and pinned by GHDL-captured golden vectors (`pkg/next/im2.go`), but not wired: NR$C0 (vector base) and NR$CC/$CD/$CE (interrupt enables) are stored and never acted on, so IM2 interrupts from the CTC, UART or line counter are not delivered (ROADMAP item 3) |
+| Z80 CTC (8 counter/timer channels) | ✅ all eight channels at ports `$183B`..`$1F3B` (`zxnext.vhd:2690`), pinned by GHDL-captured golden vectors from the FPGA VHDL, ticked on the CPU clock: a guest can program a channel's control word and time constant and read back its live down-counter. Its **interrupts** are not delivered yet, because the IM2 daisy chain below is not wired (ROADMAP item 3) |
+| IM2 vectored-interrupt daisy chain | **NOT WIRED**: complete and pinned by GHDL-captured golden vectors (`pkg/next/im2.go`), but not connected to the CPU's interrupt path: NR$C0 (vector base) and NR$CC/$CD/$CE (interrupt enables) are stored and never acted on, so IM2 interrupts from the CTC, UART or line counter are not delivered (ROADMAP item 3) |
 | Z80N CPU (extended opcodes) | ✅ all ~30 opcodes; cycle accurate at 3.5 MHz |
 | 8K MMU (NextRegs 0x50–0x57) | ✅ slot table maintained, classic-paging coexistence |
 | NextReg port file (0x243B / 0x253B) | ✅ select/data ports; per-register write masks + read-back semantics audited against `zxnext.vhd` (incl. clip-window NR$18-$1B 4-coordinate read/write index); a few read-backs still under audit |

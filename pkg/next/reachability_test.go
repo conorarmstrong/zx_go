@@ -26,13 +26,12 @@ import (
 func TestEveryNextSubsystemIsReachableOrDeclaredUnreachable(t *testing.T) {
 	// Declared unreachable: the package exists and is verified, but nothing in
 	// the shipped emulator constructs it, so no guest can exercise it.
-	unreachable := map[string]string{
-		"ctc": "the Z80 CTC's four counter/timer channels are complete and pinned " +
-			"by GHDL-captured golden vectors, but no CTC port is decoded in pkg/ula " +
-			"or pkg/next/wire.go and nothing constructs the device. Reachable once " +
-			"the IM2 daisy chain is wired, which is what its interrupts feed. " +
-			"ROADMAP item 3.",
-	}
+	//
+	// Empty is the goal, not an oversight. pkg/next/ctc was the last entry and
+	// came off when the CTC was wired to ports $183B..$1F3B. Anything added
+	// here needs the reason and what would change it, and the coverage tables
+	// named below need the same statement.
+	unreachable := map[string]string{}
 
 	root, err := filepath.Abs("..")
 	if err != nil {
