@@ -8,6 +8,13 @@
 # Test binary, built with `go test -c`
 *.test
 
+# GHDL / cgo build artefacts. e~zxnext.o, an 89KB Mach-O object left by a GHDL
+# elaboration, was tracked from June 2026 until v1.12.x: referenced by nothing,
+# machine-specific, and shipped in every clone.
+*.o
+e~*
+work-obj*.cf
+
 # Output of the go coverage tool, specifically when run with the
 # -o option
 *.out
