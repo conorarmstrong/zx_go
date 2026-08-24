@@ -623,12 +623,32 @@ func cycleLen(v byte) byte {
 // command executes a WR6 command byte.
 func (d *DMA) command(val byte) {
 	switch val {
-	case 0xC3: // RESET — clear configuration + state machine (keep the buses;
-		// dma_mode and dma_delay_i are pins outside the core in the FPGA, so
-		// they survive too)
-		*d = DMA{mem: d.mem, io: d.io, cycleSink: d.cycleSink, clock: d.clock,
-			speedMul: d.speedMul, zMode: d.zMode, busDelay: d.busDelay,
-			aCycleLen: resetCycleLen, bCycleLen: resetCycleLen, readMask: 0x7F}
+	case 0xC3: // RESET assigns exactly eight signals (dma.vhd:637-645), and this
+		// is all eight. Everything the branch does not name survives, which is
+		// most of the device: the latched addresses, the block length, the
+		// direction, both ports' address and memory-or-IO modes, the live
+		// transfer pointers, the byte counter, the transfer mode, the read mask
+		// and its sequence cursor. Only the reset PIN clears those
+		// (dma.vhd:211-245), which is what Reset() models.
+		//
+		// This used to rebuild the whole struct and keep a hand-written list of
+		// exceptions. That was wrong about the hardware, and it was a trap: the
+		// list had to name every dependency the device grew, so the CPU speed
+		// source added for the prescaler went missing across a $C3 until the
+		// branch was told about it. Assigning what the FPGA assigns cannot
+		// develop that problem.
+		d.inTransfer = false // dma_seq_s <= IDLE
+		d.activeBurst = false
+		d.remaining = 0
+		d.stalled = false
+		d.endOfBlock = false        // status_endofblock_n <= '1'
+		d.atLeastOne = false        // status_atleastone <= '0'
+		d.aCycleLen = resetCycleLen // R1_portA_timming_byte_s <= "01"
+		d.bCycleLen = resetCycleLen // R2_portB_timming_byte_s <= "01"
+		d.prescaler = 0             // R2_portB_preescaler_s <= x"00"
+		d.autoRestart = false       // R5_auto_restart_s <= '0'
+		// R5_ce_wait_s <= '0' has no counterpart: the CE/WAIT multiplex is not
+		// modelled, so there is nothing to clear.
 	case 0xCF: // LOAD — latch the start addresses into the internal pointers
 		d.curA = d.portAStart
 		d.curB = d.portBStart

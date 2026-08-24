@@ -160,9 +160,13 @@ func TestReentrantResetLeavesTheControllerReset(t *testing.T) {
 	if got := d.ReadCommand(); got != 0x3A {
 		t.Errorf("status after a re-entrant $C3 = $%02X, want the reset value $3A", got)
 	}
-	if d.ByteCounter() != 0 {
-		t.Errorf("byte counter after a re-entrant $C3 = %d, want 0: the reset zeroes it "+
-			"and no block survives the reset to count past it", d.ByteCounter())
+	// The byte counter is NOT in the $C3 branch (dma.vhd:637-645), so it keeps
+	// the two bytes the block moved before the reset landed. Only the reset pin
+	// zeroes it (dma.vhd:221). This used to assert zero, back when $C3 rebuilt
+	// the whole device.
+	if got := d.ByteCounter(); got != 2 {
+		t.Errorf("byte counter after a re-entrant $C3 = %d, want 2: $C3 does not "+
+			"clear dma_counter_s, and two bytes had moved", got)
 	}
 }
 

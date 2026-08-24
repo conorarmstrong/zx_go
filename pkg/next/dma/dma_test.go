@@ -149,10 +149,19 @@ type countingMem struct{ count *int }
 func (c *countingMem) Read(_ uint16) byte     { return 0 }
 func (c *countingMem) Write(_ uint16, _ byte) { *c.count++ }
 
-// TestResetClearsConfig verifies a $C3 RESET (at a base-byte boundary)
-// clears the latched configuration. Note RESET is a WR6 command, so it
-// is only honoured when a base byte — not a follow byte — is expected.
-func TestResetClearsConfig(t *testing.T) {
+// TestResetCommandLeavesTheLatchedConfiguration is the corrected form of a test
+// that used to assert the opposite. It read: "a $C3 RESET clears the latched
+// configuration", and the model obliged by rebuilding the whole struct.
+//
+// The hardware does not. $C3 assigns eight signals (dma.vhd:637-645) and the
+// port A start address and block length are not among them; only the reset PIN
+// clears those (dma.vhd:211-245). A driver that programs the controller, issues
+// $C3 to clear the state machine and then LOADs is relying on exactly that, and
+// against the old model it transferred from $0000 with a length of zero.
+//
+// RESET is a WR6 command, so it is only honoured where a base byte is expected,
+// not in place of a follow byte.
+func TestResetCommandLeavesTheLatchedConfiguration(t *testing.T) {
 	mem := memMap{}
 	d := New(mem)
 	feed(d, []byte{0x7D, 0x34, 0x12, 0x78, 0x56}) // WR0: src=$1234, len=$5678
@@ -160,8 +169,17 @@ func TestResetClearsConfig(t *testing.T) {
 		t.Fatalf("setup: Source=$%04X Length=$%04X", d.Source(), d.Length())
 	}
 	d.WriteCommand(0xC3) // RESET (all follow bytes already consumed)
-	if d.Source() != 0 || d.Length() != 0 {
-		t.Errorf("after RESET: Source=$%04X Length=$%04X, want 0/0", d.Source(), d.Length())
+	if d.Source() != 0x1234 || d.Length() != 0x5678 {
+		t.Errorf("after $C3: Source=$%04X Length=$%04X, want them unchanged at "+
+			"$1234/$5678", d.Source(), d.Length())
+	}
+
+	// The reset PIN is what clears them.
+	d.Reset()
+	if d.Source() != 0x1234 || d.Length() != 0x5678 {
+		t.Errorf("after the reset pin: Source=$%04X Length=$%04X. dma.vhd:211-245 "+
+			"does not name the latched addresses either, so these survive both",
+			d.Source(), d.Length())
 	}
 }
 

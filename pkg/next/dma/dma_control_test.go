@@ -209,3 +209,102 @@ func TestHardwareResetClearsTheWedge(t *testing.T) {
 		}
 	}
 }
+
+// The $C3 RESET command assigns exactly eight signals (dma.vhd:637-645): the
+// transfer FSM to IDLE, both status bits, both port timing bytes, the
+// prescaler, ce_wait and auto-restart. Everything else in the device survives
+// it, and only the reset PIN clears those (dma.vhd:211-245), which is what
+// Reset() models.
+//
+// This model rebuilt the whole struct instead, which was wrong twice over. It
+// cleared latched configuration the hardware keeps, so a driver that programs
+// the controller, issues $C3 to clear the state machine and then LOADs would
+// transfer from address zero with a length of zero. And because the rebuild had
+// to name the fields it kept, it silently dropped every dependency added
+// afterwards: the CPU speed source for the prescaler went missing across a $C3
+// until the branch was told about it.
+func TestResetCommandKeepsWhatTheFPGAKeeps(t *testing.T) {
+	mem := memMap{}
+	for i := uint16(0); i < 4; i++ {
+		mem[0x4000+i] = byte(0xA0 + i)
+	}
+	d := New(mem)
+
+	// Program every latched field away from its power-on value, and move the
+	// byte counter by running a block.
+	feed(d, []byte{
+		0x79 | 0x04, 0x00, 0x40, 0x04, 0x00, // WR0: A->B, port A = $4000, length 4
+		0x24,             // WR1: port A memory, FIXED
+		0x40, 0x21, 0x07, // WR2: port B memory, decrement, + timing byte: 3-cycle
+		//                   with D5 set, so a prescaler of 7 follows
+		0xCD, 0x00, 0x60, // WR4: BURST, port B = $6000
+		0xA2,       // WR5: auto-restart on
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+	feed(d, []byte{0xBB, 0x08}) // WR6 read mask = port A low only
+
+	before := struct {
+		src, dst, curA, curB uint16
+		length               uint16
+		counter              uint16
+		mode                 byte
+	}{d.Source(), d.Destination(), d.CurrentA(), d.CurrentB(), d.Length(), d.ByteCounter(), d.Mode()}
+	if before.src != 0x4000 || before.length != 4 || before.mode != modeBurst {
+		t.Fatalf("fixture did not take: %+v", before)
+	}
+	if d.prescaler != 7 || !d.autoRestart {
+		t.Fatalf("fixture did not set the fields $C3 must clear: prescaler=%d autoRestart=%v",
+			d.prescaler, d.autoRestart)
+	}
+
+	d.WriteCommand(0xC3)
+
+	// What $C3 leaves alone.
+	if got := d.Source(); got != before.src {
+		t.Errorf("port A start = $%04X after $C3, want $%04X unchanged", got, before.src)
+	}
+	if got := d.Destination(); got != before.dst {
+		t.Errorf("port B start = $%04X after $C3, want $%04X unchanged", got, before.dst)
+	}
+	if got := d.Length(); got != before.length {
+		t.Errorf("block length = %d after $C3, want %d unchanged", got, before.length)
+	}
+	if got := d.CurrentA(); got != before.curA {
+		t.Errorf("port A pointer = $%04X after $C3, want $%04X unchanged", got, before.curA)
+	}
+	if got := d.CurrentB(); got != before.curB {
+		t.Errorf("port B pointer = $%04X after $C3, want $%04X unchanged", got, before.curB)
+	}
+	if got := d.ByteCounter(); got != before.counter {
+		t.Errorf("byte counter = %d after $C3, want %d unchanged: dma_counter_s is "+
+			"cleared by the reset pin (dma.vhd:221), not by $C3", got, before.counter)
+	}
+	if got := d.Mode(); got != before.mode {
+		t.Errorf("transfer mode = %d after $C3, want %d unchanged: R4_mode_s is not "+
+			"in the $C3 branch", got, before.mode)
+	}
+
+	// The read mask survives too, so the next read is still the port A low byte
+	// the mask selected, not the status register.
+	if got := d.ReadCommand(); got != byte(before.curA) {
+		t.Errorf("first read after $C3 = $%02X, want the port A low byte $%02X: "+
+			"R6_read_mask_s is not in the $C3 branch", got, byte(before.curA))
+	}
+
+	// And what it does clear: both port timings back to "01", the prescaler to
+	// zero, auto-restart off, and both status bits at their idle values.
+	d.WriteCommand(0xBF) // read status byte
+	if got := d.ReadCommand(); got != 0x3A {
+		t.Errorf("status after $C3 = $%02X, want $3A", got)
+	}
+	if d.autoRestart {
+		t.Error("auto-restart survived $C3, but R5_auto_restart_s is in the branch")
+	}
+	if d.prescaler != 0 {
+		t.Errorf("prescaler = %d after $C3, want 0", d.prescaler)
+	}
+	if d.aCycleLen != resetCycleLen || d.bCycleLen != resetCycleLen {
+		t.Errorf("port timings = %d/%d after $C3, want %d/%d",
+			d.aCycleLen, d.bCycleLen, resetCycleLen, resetCycleLen)
+	}
+}

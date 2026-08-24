@@ -159,27 +159,14 @@ So the work is: enumerate, per layer, which NextRegs its scanline render reads;
 turn that into an invalidation set; then cache. That enumeration is the
 deliverable, not the caching.
 
-### 4. [correctness] Remaining zxnDMA defects
+### 4. [correctness] An interleaved burst charges the CPU nothing
 
-**An interleaved burst charges the CPU nothing.** `Step`
-(`pkg/next/dma/dma.go:825`) pumps bytes without ever calling `cycleSink`, so a
-burst+prescaler transfer is free. The FPGA only releases the bus inside
-`WAITING_CYCLES` (`dma.vhd:441-449`); the read and write cycles around each
-pumped byte still hold it, and the CPU is still stopped for them.
-
-**`$C3` resets more than the FPGA's `$C3`.** `command`
-(`pkg/next/dma/dma.go:619`) rebuilds the whole struct, preserving only the
-wiring the branch was written to know about. That list is a maintenance hazard
-in itself: adding the CPU speed source for the prescaler fix silently lost it
-across a `$C3` until the branch was told about it, which is the same defect
-biting the next thing added.
-
-The FPGA's `$C3` branch assigns exactly eight signals (`dma.vhd:638-645`): the
-FSM to IDLE, both status bits, both port timings, the prescaler, `ce_wait` and
-auto-restart. The byte counter, the transfer mode, the read mask and its cursor,
-and every latched address, length, direction and port mode survive it on
-hardware, and do not here. Only the reset *pin* clears those
-(`dma.vhd:211-245`), which is what `Reset()` already models.
+`Step` (`pkg/next/dma/dma.go`) pumps bytes without ever calling `cycleSink`, so
+a burst+prescaler transfer is free. The FPGA releases the bus only inside
+`WAITING_CYCLES` and only in burst mode (`dma.vhd:441-449`); the read and write
+cycles around each pumped byte still hold it, and the CPU is still stopped for
+them. What a pumped byte should cost is the byte's own cycles, not the whole
+prescaler period, because the period is the gap the CPU runs in.
 
 Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
 match logic**. The FPGA does not have it. The entity has no interrupt output
