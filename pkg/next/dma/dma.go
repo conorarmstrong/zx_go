@@ -48,7 +48,8 @@
 // kept because it is the device's, and pinned by tests so it stays correct
 // until the IM2 chain is connected, but no guest can reach it today. Do not
 // read the presence of this code as a claim that a Next program's DMA can be
-// held off the bus by an interrupt here. Recorded as ROADMAP item 2.
+// held off the bus by an interrupt here. Recorded as ROADMAP item 3, which is
+// the work that makes it reachable.
 //
 // The Z80 DMA's interrupt and match logic is deliberately absent, because the
 // FPGA does not implement it either. The entity has no interrupt output and no
@@ -369,7 +370,7 @@ func (d *DMA) SetClock(clock func() uint64) { d.clock = clock }
 // rebuilds the whole struct, so it clears the byte counter, the transfer mode,
 // the read mask and its cursor, and every latched address, length, direction
 // and port mode, all of which the FPGA's $C3 leaves standing. Recorded as
-// ROADMAP item 2d.
+// ROADMAP item 6.
 //
 // The branch restores the transfer FSM and the register-write sequencer to
 // IDLE, both port timings to "01" (3 cycles), the prescaler to zero, the

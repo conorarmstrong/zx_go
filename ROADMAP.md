@@ -22,22 +22,167 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-08-23, v1.11.0, plus unreleased work)
+## CURRENT STATE (2026-08-24, v1.11.0, plus unreleased work)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
 interactive desktop, and the individual hardware blocks are tested against
 the FPGA VHDL.
 
-**The honest weak point is Next game compatibility**, exactly as
-`README.md` says. Blocks being faithful in isolation has not yet been
-converted into "arbitrary `.NEX` titles run".
+The goal this backlog is ordered against is that zx_go becomes the emulator a
+hardware or demo developer checks their work against: the one where, if it and
+the silicon disagree, the disagreement is worth investigating. That bar is
+higher than "the games run", and it is not the same bar. It needs two things.
+Every claim has to be traceable to the VHDL, which this project already does
+well. And no claim may outrun what is actually wired up, which is where the
+real gaps are.
+
+**The two honest weak points are Next game compatibility** (exactly as
+`README.md` says: blocks being faithful in isolation has not yet been converted
+into "arbitrary `.NEX` titles run") **and the distance between modelled and
+reachable**. Several subsystems are complete and verified against the VHDL and
+cannot be reached by a guest at all. That gap is invisible from the outside,
+which for a reference emulator is the more damaging of the two.
 
 ---
 
 ## Open work (ordered)
 
-### 1. [product] Next game compatibility
+Ordered by what the reference-emulator goal above is worth, not by size. Items
+1 to 5 are that reordering; 6 to 8 are the pre-existing product work, unchanged
+in substance.
+
+### 1. [correctness] Say what is reachable, not only what is modelled
+
+**This is the precondition for the rest.** A coverage claim that conflates
+"we have modelled this" with "a guest can use this" makes every other claim in
+the document unreliable, because the reader cannot tell which kind they are
+looking at.
+
+It is not hypothetical. In August 2026 the zxnDMA's bus arbitration was written
+up as "modelled" in `CHANGELOG.md`, `ROADMAP.md` and `docs/spectrum-next.md` on
+the strength of a green test suite, when nothing in the emulator drives the pin
+it depends on. That was found by review rather than by the documents. The same
+conflation is why items 3 below went unnoticed for so long.
+`VHDL_CONFORMANCE.md` currently gives NR$C0 a tick for a reset value it stores
+and never acts on.
+
+The fix is a third axis wherever coverage is claimed:
+
+- **implemented**: the model exists
+- **verified**: it is pinned against the FPGA VHDL, by golden vectors or by
+  citation
+- **reachable**: a guest running on this emulator can actually exercise it
+
+A subsystem that is implemented and verified but not reachable is not a feature.
+It says so in `docs/spectrum-next.md`, `COMPARISON.md` and
+`VHDL_CONFORMANCE.md`, or the tables are misleading by omission.
+
+### 2. [correctness] The DMA bus-hold reaches the CPU as one lump
+
+A whole block is charged to
+`cpu.Tstates` in a single jump (`cmd/zx_go/next.go`, `cpu.SetTstates`), and
+that counter is also what the frame-interrupt window is scheduled from, so
+there are no sample points anywhere inside the stall. On hardware the stall is
+spread across the transfer with the raster running through it. The practical
+consequence is that the *size* of the lump decides which side of the interrupt
+window a block lands on: adding the three cycles of a correct bus acquisition
+(`busAcquisitionCycles`, derived at `pkg/next/dma/dma.go:277`) is on its own
+enough to stop TX-1696 booting. The constant is therefore documented and *not*
+charged, pinned by `TestBusAcquisitionIsDerivedButNotCharged`. Fixing the granularity
+is the precondition for charging it.
+
+This is the one place the emulator currently makes a timing claim it cannot
+back, which is why it outranks everything except knowing what is reachable.
+
+It also subsumes a question that looks like a decision and is not. Burst blocks
+are now charged where they previously were not, which follows the FPGA, but
+while the stall arrives as a single jump both answers are wrong and the choice
+between them comes down to which titles happen to survive. Tuning a timing model
+to a title is the opposite of a reference. Spread the stall across the timeline
+and the burst charge becomes correct by construction, `busAcquisitionCycles` can
+finally be charged, and the question disappears rather than being answered.
+
+### 3. [correctness] CTC and IM2 are built, verified, and unreachable
+
+`pkg/next/ctc` and `pkg/next/im2.go` are both complete and both pinned by
+golden vectors captured from the FPGA VHDL under GHDL. Neither is constructed
+anywhere outside its own tests: nothing imports `pkg/next/ctc`, `IM2DaisyChain`
+is referenced only inside the file that defines it, and no CTC port is decoded
+in `pkg/ula` or `pkg/next/wire.go`. NR$C0, NR$CC, NR$CD and NR$CE are
+stored-only.
+
+So the Next's whole vectored-interrupt and timer path is unreachable by a guest,
+which is precisely what a developer writing interrupt-driven or timer-driven
+code would reach for first. This is the largest gap between what the project has
+built and what anyone can use, and until now the backlog recorded it only as a
+footnote inside a DMA entry.
+
+The work is integration rather than new hardware modelling, because the hard
+part is done and verified. Wiring it also closes the `dma_delay_i` gap below for
+free.
+
+### 4. [correctness] zxnDMA prescaler period is 4x to 32x too short
+
+`perByteCycles`
+(`pkg/next/dma/dma.go:838`) uses the raw prescaler byte as a T-state count. The
+FPGA waits until `DMA_timer_s(13 downto 5) >= prescaler` (`dma.vhd:424`, `:451`)
+and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 / 14 /
+28 MHz (`dma.vhd:250-254`), so the real period is `prescaler × 32 ÷ increment`
+CPU T-states: 4× the prescaler at 3.5 MHz, rising to 32× at 28 MHz. The
+`max(byte cycles, prescaler)` *shape* is right, because `DMA_timer_s` is
+zeroed at `TRANSFERING_READ_1` (`dma.vhd:309`) and the wait therefore overlaps
+the byte's own cycles rather than following them. Only the scale is wrong. This is the
+largest of the four: DMA-streamed audio plays far too fast.
+
+For the audience this backlog is ordered around, this is a first-afternoon bug:
+DMA-streamed audio is the obvious use of the prescaler and it plays far too
+fast. The fix is small and the evidence is already gathered.
+
+### 5. [efficiency] Row composition is O(row x writes)
+
+`ComposeScanlineRange` re-renders the whole Layer 2, tilemap and sprite scanline
+before it consults `x0`/`x1`, so only the paint loop is bounded, and `pkg/ula`
+calls it once per Copper write. A list writing every column would make 256
+full-row layer renders per row.
+
+This was parked once on the grounds that no title on the SD card exercises the
+Copper at all. That reasoning inverts under the goal above: a Copper-heavy list
+is exactly what a demo or hardware developer writes, so the pathological case is
+the target user's normal case. Measure a real case first, then hoist the layer
+renders above the range check.
+
+### 6. [correctness] Remaining zxnDMA defects
+
+**An interleaved burst charges the CPU nothing.** `Step`
+(`pkg/next/dma/dma.go:749`) pumps bytes without ever calling `cycleSink`, so a
+burst+prescaler transfer is free. The FPGA only releases the bus inside
+`WAITING_CYCLES` (`dma.vhd:441-449`); the read and write cycles around each
+pumped byte still hold it, and the CPU is still stopped for them.
+
+**`$C3` resets more than the FPGA's `$C3`.** `command`
+(`pkg/next/dma/dma.go:543`) rebuilds the whole struct. The FPGA's `$C3` branch
+assigns exactly eight signals (`dma.vhd:638-645`): the FSM to IDLE, both status
+bits, both port timings, the prescaler, `ce_wait` and auto-restart. The byte
+counter, the transfer mode, the read mask and its cursor, and every latched
+address, length, direction and port mode survive it. Only the reset *pin*
+clears those (`dma.vhd:211-245`), which is what `Reset()` already models.
+
+
+Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
+match logic**. The FPGA does not have it. The entity has no interrupt output
+and no IEI/IEO pins (`dma.vhd:29-61`); R3's interrupt-enable, stop-on-match and
+mask/match registers are declared and commented out (`dma.vhd:87-90`,
+`:582-583`, `:802-813`); R4's interrupt-control, pulse-control and vector
+registers and the three states that would read them are commented out too
+(`dma.vhd:94-96`, `:835-857`); and the five WR6 interrupt commands
+`$AF/$AB/$A3/$B7/$B3` decode into empty branches (`dma.vhd:679-686`, `:722`).
+The daisy chain is inert on the machine side as well: `bus_busreq_n_i` is tied
+high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
+time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
+hardware.
+
+### 7. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **158 title rows: 11 Works, 20 Works
 (caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6
@@ -282,66 +427,7 @@ the interrupt/match logic turned out not to be implementable at all, and the
 arbitration work that replaced it uncovered four real timing defects, which are
 item 2 below.
 
-### 2. [correctness] zxnDMA timing defects
-
-Bus arbitration is now modelled: a block holds the bus for its bytes
-and charges the CPU, burst yields the bus only in `WAITING_CYCLES` as the FPGA
-does, `dma_delay_i` parks and resumes a block, and `$83` abandons one where it
-stands. Building it surfaced four defects in the surrounding time model. None
-is known to affect a title on the SD card, where all 12 still render, so they
-are recorded rather than rushed.
-
-**a. The prescaler period is 4× to 32× too short.** `perByteCycles`
-(`pkg/next/dma/dma.go:838`) uses the raw prescaler byte as a T-state count. The
-FPGA waits until `DMA_timer_s(13 downto 5) >= prescaler` (`dma.vhd:424`, `:451`)
-and `DMA_timer_s` advances by 8 / 4 / 2 / 1 per CPU clock at 3.5 / 7 / 14 /
-28 MHz (`dma.vhd:250-254`), so the real period is `prescaler × 32 ÷ increment`
-CPU T-states: 4× the prescaler at 3.5 MHz, rising to 32× at 28 MHz. The
-`max(byte cycles, prescaler)` *shape* is right, because `DMA_timer_s` is
-zeroed at `TRANSFERING_READ_1` (`dma.vhd:309`) and the wait therefore overlaps
-the byte's own cycles rather than following them. Only the scale is wrong. This is the
-largest of the four: DMA-streamed audio plays far too fast.
-
-**b. The bus-hold reaches the CPU as one lump.** A whole block is charged to
-`cpu.Tstates` in a single jump (`cmd/zx_go/next.go`, `cpu.SetTstates`), and
-that counter is also what the frame-interrupt window is scheduled from, so
-there are no sample points anywhere inside the stall. On hardware the stall is
-spread across the transfer with the raster running through it. The practical
-consequence is that the *size* of the lump decides which side of the interrupt
-window a block lands on: adding the three cycles of a correct bus acquisition
-(`busAcquisitionCycles`, derived at `pkg/next/dma/dma.go:277`) is on its own
-enough to stop TX-1696 booting. The constant is therefore documented and *not*
-charged, pinned by `TestBusAcquisitionIsDerivedButNotCharged`. Fixing (b) is
-the precondition for charging it.
-
-**c. An interleaved burst charges the CPU nothing.** `Step`
-(`pkg/next/dma/dma.go:749`) pumps bytes without ever calling `cycleSink`, so a
-burst+prescaler transfer is free. The FPGA only releases the bus inside
-`WAITING_CYCLES` (`dma.vhd:441-449`); the read and write cycles around each
-pumped byte still hold it, and the CPU is still stopped for them.
-
-**d. `$C3` resets more than the FPGA's `$C3`.** `command`
-(`pkg/next/dma/dma.go:543`) rebuilds the whole struct. The FPGA's `$C3` branch
-assigns exactly eight signals (`dma.vhd:638-645`): the FSM to IDLE, both status
-bits, both port timings, the prescaler, `ce_wait` and auto-restart. The byte
-counter, the transfer mode, the read mask and its cursor, and every latched
-address, length, direction and port mode survive it. Only the reset *pin*
-clears those (`dma.vhd:211-245`), which is what `Reset()` already models.
-
-Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
-match logic**. The FPGA does not have it. The entity has no interrupt output
-and no IEI/IEO pins (`dma.vhd:29-61`); R3's interrupt-enable, stop-on-match and
-mask/match registers are declared and commented out (`dma.vhd:87-90`,
-`:582-583`, `:802-813`); R4's interrupt-control, pulse-control and vector
-registers and the three states that would read them are commented out too
-(`dma.vhd:94-96`, `:835-857`); and the five WR6 interrupt commands
-`$AF/$AB/$A3/$B7/$B3` decode into empty branches (`dma.vhd:679-686`, `:722`).
-The daisy chain is inert on the machine side as well: `bus_busreq_n_i` is tied
-high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
-time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
-hardware.
-
-### 3. [product] Windows ARM64: the core is proven, the GUI is not
+### 8. [product] Windows ARM64: the core is proven, the GUI is not
 
 **Run 2026-08-14 against v1.8.23 on Windows 11 Pro ARM64 (Build 28000).**
 Two of the three checks pass outright; the third could not be reached.
@@ -403,7 +489,7 @@ to leave it stalled, not to work around it here.
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
 
-### 4. [product] Time travel
+### 9. [product] Time travel
 
 Three mechanisms, deliberately separate.
 
@@ -484,46 +570,6 @@ canonical ordering so two captures of an unchanged machine compare equal.
   T-state counter every frame and schedules the frame INT differently from the
   single-step path), and any change made from outside the CPU during the window
   (`write-memory`, a key press, a disk arriving).
-
-### 5. [correctness] What the 2026-08-23 review left open
-
-Most of that review is fixed. Three things are not, and one of them needs a
-decision rather than an implementation.
-
-- **Burst blocks are charged to the CPU where they previously were not.** The
-  charge used to be gated on `modeContinuous` and is now unconditional at the
-  end of `runBlock`. That follows the FPGA, which releases the bus only in
-  `WAITING_CYCLES`, but it means a burst block with no prescaler can add tens of
-  thousands of T-states at one instruction boundary. It lands on defect (b) of
-  item 2 and should be decided with it: revert to continuous-only and record
-  why, keep it, or fix the lump-charge first.
-
-- **Row composition is O(row x writes).** `ComposeScanlineRange` re-renders the
-  whole Layer 2, tilemap and sprite scanline before it consults `x0`/`x1`, so
-  only the paint loop is bounded, and the ULA calls it once per Copper write.
-  A list writing every column would make 256 full-row layer renders a row.
-  No title on the SD card exercises the Copper at all, so this has never been
-  observed; the fix is to hoist the layer renders above the range check, and it
-  is a restructure of the compositor's hot path, which wants a measured case
-  before it is attempted.
-
-- **The `dma_delay_i` pin is modelled but not wired.** Nothing drives it,
-  because its source is `pkg/next.IM2DaisyChain`, a GHDL-golden reference model
-  that is itself unconnected. The behaviour behind the pin is correct and
-  tested, and marked in the package documentation as unreachable, so the code
-  does not read as a claim it can happen. Wiring it means first wiring the IM2
-  chain into the interrupt path, which is its own piece of work.
-
-Fixed from that review: the Copper applying a self-issued mode change mid
-instruction; Copper writes below the display being journalled and undone; the
-`pendingOp` wire-format renumbering; the `watch-nextreg` / `nr-trace` /
-`trace-nextreg-deltas` nil panics on non-Next machines, their half-armed
-register lists, the bare `log` argument and the hook lost on a model switch; the
-wedged DMA surviving a reboot; `copperReachableLines` using the largest frame
-across models rather than the running machine's; the compositor shortcut
-ignoring its range; the Copper being clocked when it cannot act; the ULA's
-duplicated Copper constants, now pinned against the device by a test; and
-several comments that asserted the opposite of the code.
 
 ---
 

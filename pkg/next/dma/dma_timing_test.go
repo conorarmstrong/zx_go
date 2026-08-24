@@ -247,7 +247,8 @@ func TestResetPortTimingCommands(t *testing.T) {
 // improvement: charging these three cycles is enough on its own to stop a
 // working title from booting. The constant stays derived and documented, and
 // goes into the arithmetic once the DMA stall is spread over the timeline it
-// belongs to. See ROADMAP "zxnDMA bus-hold time is charged as one lump".
+// belongs to. See ROADMAP item 2, "The DMA bus-hold reaches the CPU as one
+// lump".
 func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
 	if busAcquisitionCycles != 3 {
 		t.Errorf("busAcquisitionCycles = %d, want 3: START_DMA, WAITING_ACK and "+

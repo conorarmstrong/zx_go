@@ -173,8 +173,8 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   size of that jump decides which side of the interrupt window a block lands
   on. Charging the acquisition was on its own enough to stop a working title
   booting. The constant stays derived and documented, and a test pins that it
-  is deliberately excluded. See ROADMAP item 2 for this and the three other
-  time-model defects the arbitration work uncovered.
+  is deliberately excluded. See ROADMAP item 2 for this, and items 4 and 6 for
+  the other time-model defects the arbitration work uncovered.
 
 - **Four VHDL citations in `pkg/next/dma` pointed at the wrong lines.** The WR4
   base-byte ladder is `dma.vhd:603-611` and its R4_BYTE_2 arm `:607-608`, not
