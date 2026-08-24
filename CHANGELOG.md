@@ -8,6 +8,25 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The Z80 CTC is wired, so a guest can use its timers.** All eight
+  counter/timer channels answer at ports `$183B`..`$1F3B` (`zxnext.vhd:2690`)
+  and tick on the CPU clock: a program can write a channel's control word and
+  time constant and read back its live down-counter. The device itself was
+  complete and pinned by golden vectors captured from the FPGA VHDL under GHDL
+  long before this; nothing constructed it and no port reached it, so no program
+  could tell it existed. Its **interrupts** are still not delivered, because the
+  IM2 daisy chain is not connected to the CPU's interrupt path.
+
+- **Coverage claims now separate "modelled" from "reachable".** A tick in the
+  feature tables used to mean implemented and pinned against the VHDL; it now
+  also means a guest can exercise it, and NOT WIRED means the first two without
+  the third. `pkg/next/reachability_test.go` enforces the package-level half:
+  every subsystem under `pkg/next` must be imported by production code or listed
+  with the reason it is not, and the test fails in both directions so the list
+  cannot rot. This exists because the project had already published the wrong
+  answer once, describing the zxnDMA bus arbitration as modelled in three
+  documents while nothing drove the pin it needs.
+
 - **SAM Coupé `.sbt` files now load.** An SBT is not a disk image but the raw
   content of a single SAM CODE file, so zx_go builds a bootable 800K MGT disk
   around it: the file at cylinder 4 head 0 sector 1 behind a 9-byte CODE header,
@@ -85,6 +104,15 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   moved to the sides of the write cycle the FPGA sets them on.
 
 ### Fixed
+
+- **The zxnDMA's fixed-time prescaler ran 4x to 32x too fast.** The period is
+  not a T-state count. The FPGA waits until `DMA_timer_s(13 downto 5)` reaches
+  the prescaler (`dma.vhd:424`, `:451`), and `DMA_timer_s` advances by 8, 4, 2
+  or 1 per CPU clock at 3.5, 7, 14 and 28 MHz (`dma.vhd:250-254`), so the real
+  period is `4 x prescaler x the speed multiplier`: a constant wall time, which
+  is what scaling the increment is for. Taking the byte itself as T-states made
+  every fixed-time transfer 4x too fast at 3.5 MHz and 32x at 28 MHz, so
+  DMA-streamed audio played at the wrong pitch on every machine.
 
 - **The Copper mishandled a list that reconfigured the Copper.** A `MOVE` can
   write NextReg $61/$62, so a list can change its own start mode from inside its
