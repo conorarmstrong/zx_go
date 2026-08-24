@@ -128,7 +128,7 @@ type Compositor struct {
 	// allocator. Single goroutine assumption: the ULA's render
 	// loop is the only caller.
 	l2Scratch      [Width]byte
-	l2Enabled      [Width]byte // per-pixel layer2_en plane for the same row
+	l2Enabled      [Width]byte     // per-pixel layer2_en plane for the same row
 	spriteScratch  [FullWidth]byte // full 320-wide row in FRAME coordinates (sprite X/Y are frame-relative; paper starts at 32,32)
 	tilemapScratch [FullWidth]byte // sized for full 320-wide row; ComposeScanline takes the centred 256 pixels
 	tilemapEn      [FullWidth]byte // per-pixel pixel_en_s plane for the same row

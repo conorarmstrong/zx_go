@@ -95,8 +95,18 @@ func productionImporters(t *testing.T, root, pkgPath, selfRel string) int {
 	n := 0
 	for _, tree := range []string{"cmd", "pkg"} {
 		err := filepath.Walk(filepath.Join(root, tree), func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			if err != nil {
+				// Other tests create and remove scratch directories under pkg
+				// while this one runs, so an entry can vanish between the
+				// readdir and the stat. That is not this test's business:
+				// skip it rather than failing the run.
+				if os.IsNotExist(err) {
+					return nil
+				}
 				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") {
+				return nil
 			}
 			if strings.HasSuffix(path, "_test.go") {
 				return nil
