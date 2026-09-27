@@ -1339,7 +1339,6 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		defer timer.Stop()
 
 		frameCount := 0
-		lastRender := time.Now()
 
 		for {
 			select {
@@ -1359,6 +1358,16 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					// Hold the core for the whole frame so a machine
 					// switch cannot swap cpu/mem/ula out underneath it.
 					e.coreMu.Lock()
+					// The audio ring plays each frame's samples out over
+					// the period actually paced, not a flat 20 ms, or a
+					// 48K's 50.08 Hz frames overfill it (issue #12).
+					audioHz := float64(time.Second) / float64(period)
+					if e.ula != nil {
+						e.ula.SetAudioFrameRate(audioHz)
+					}
+					if e.samAudio != nil {
+						e.samAudio.SetProducerFrameRate(audioHz)
+					}
 					// Execution paths: ZX80/ZX81 (CPU-generated video),
 					// RZX playback, RZX recording, or normal frame.
 					switch {
@@ -1509,49 +1518,47 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					// still loading) — see applyForcedCPUSpeed.
 					e.applyForcedCPUSpeed()
 
-					// Render at the model's own frame rate.
-					now := time.Now()
-					if now.Sub(lastRender) >= period {
-						newImage := e.renderFrame()
+					// Render every frame the pacer runs. Each render also
+					// pushes the frame's audio, so a wall-clock gate here
+					// dropped about a third of the audio frames to timer
+					// jitter (issue #12).
+					newImage := e.renderFrame()
 
-						// In plain mode, screen.Image already points at the
-						// ULA's frame buffer (set at startup) and Render
-						// mutated it in place — we just need to refresh.
-						// In CRT mode we post-process into a 2x scratch
-						// buffer and point screen.Image at that instead.
-						displayImg := newImage
-						if e.crtFilter.Load() {
-							b := newImage.Bounds()
-							want := image.Rect(0, 0, b.Dx()*2, b.Dy()*2)
-							if e.crtScratch == nil || e.crtScratch.Bounds() != want {
-								e.crtScratch = image.NewRGBA(want)
-							}
-							applyCRTFilterInto(e.crtScratch, newImage)
-							displayImg = e.crtScratch
+					// In plain mode, screen.Image already points at the
+					// ULA's frame buffer (set at startup) and Render
+					// mutated it in place — we just need to refresh.
+					// In CRT mode we post-process into a 2x scratch
+					// buffer and point screen.Image at that instead.
+					displayImg := newImage
+					if e.crtFilter.Load() {
+						b := newImage.Bounds()
+						want := image.Rect(0, 0, b.Dx()*2, b.Dy()*2)
+						if e.crtScratch == nil || e.crtScratch.Bounds() != want {
+							e.crtScratch = image.NewRGBA(want)
 						}
-
-						// The surround follows the frame's border colour, so
-						// the gap the layout leaves is border rather than a
-						// black picture frame. Sampled from the un-filtered
-						// frame: the CRT scratch has the scanline darkening
-						// applied and would tint the surround.
-						border := frameBorderColor(newImage)
-
-						// Update UI on main thread
-						fyne.Do(func() {
-							if screen.Image != displayImg {
-								screen.Image = displayImg
-							}
-							screen.Refresh()
-							if e.surround != nil && border != e.lastSurround {
-								e.lastSurround = border
-								e.surround.FillColor = border
-								e.surround.Refresh()
-							}
-						})
-
-						lastRender = now
+						applyCRTFilterInto(e.crtScratch, newImage)
+						displayImg = e.crtScratch
 					}
+
+					// The surround follows the frame's border colour, so
+					// the gap the layout leaves is border rather than a
+					// black picture frame. Sampled from the un-filtered
+					// frame: the CRT scratch has the scanline darkening
+					// applied and would tint the surround.
+					border := frameBorderColor(newImage)
+
+					// Update UI on main thread
+					fyne.Do(func() {
+						if screen.Image != displayImg {
+							screen.Image = displayImg
+						}
+						screen.Refresh()
+						if e.surround != nil && border != e.lastSurround {
+							e.lastSurround = border
+							e.surround.FillColor = border
+							e.surround.Refresh()
+						}
+					})
 
 					e.coreMu.Unlock()
 				}

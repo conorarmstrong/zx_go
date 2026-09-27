@@ -106,6 +106,16 @@ type AudioSystem struct {
 	// length of every buffer starve.
 	lastL, lastR int16
 
+	// Rate matching; see SetProducerFrameRate. producerHz is 0 until a
+	// producer states its frame rate, and the ring then plays out one queued
+	// frame per output frame. Once set, readStep queued frames are consumed
+	// per output frame, readPos is the fractional position between the
+	// frame at the tail and the one after it, and fillAvg is the smoothed
+	// fill (in stereo frames) that trims readStep toward the target latency.
+	producerHz float64
+	readPos    float64
+	fillAvg    float64
+
 	// Optional AY-3-8912 source.
 	ayMu sync.RWMutex
 	ay   AYSource
@@ -197,6 +207,8 @@ func (as *AudioSystem) prefillSilence() {
 		as.queue[i] = 0
 	}
 	as.lastL, as.lastR = 0, 0
+	as.readPos = 0
+	as.fillAvg = fillTarget
 }
 
 // pushFrame appends one stereo frame. On overflow the oldest FRAME is dropped,
@@ -260,29 +272,103 @@ func decayHeld(v int16) int16 {
 	return int16(int32(v) * underrunDecayNum / underrunDecayDen)
 }
 
-// popStereoSamples drains up to len(out) slots from the ring buffer into out,
-// a frame at a time. Any unfilled frames continue from the last delivered one
-// and then decay toward 0 PER CHANNEL, so underruns fade to silence smoothly
-// instead of clicking, and without the image collapsing to the centre on the
-// way down. A trailing odd slot in out is left untouched.
+// Rate matching constants.
+//
+// The producer pushes SamplesPerFrame frames per emulated frame, paced to the
+// model's real period (50.08 Hz on a 48K, 50.02 Hz on the 128K family, 48.83
+// Hz on a Pentagon), while the card drains at exactly SampleRate. Left
+// uncoupled, a 48K hands over ~70 surplus samples a second: the ring filled,
+// latency grew to the whole ring, and overflow then cut samples out in bursts
+// (issue #12). The reader therefore resamples by the stated producer rate, and
+// trims that step by the smoothed fill so the host's timer crystal drifting
+// against its sound card's is absorbed too.
+const (
+	// fillTarget is the latency the controller holds, in stereo frames: the
+	// same cushion the startup prefill seeds.
+	fillTarget = queuePrefill / ChannelCount
+
+	// fillGain is the step trim per unit of relative fill error, and
+	// maxTrim caps it. A 0.5% cap keeps the pitch within ~9 cents while
+	// covering far more drift than real host clocks show.
+	fillGain = 0.01
+	maxTrim  = 0.005
+
+	// fillSmoothing is the per-pull weight of the fill average. At ~43 pulls
+	// a second it averages over ~0.4 s, flattening the 50 Hz push sawtooth
+	// so it cannot frequency-modulate the output.
+	fillSmoothing = 1.0 / 16
+)
+
+// SetProducerFrameRate states how many frames a second the producer pushes,
+// each of SamplesPerFrame samples, and enables rate matching. The frame loop
+// calls it with the period it is actually pacing to.
+func (as *AudioSystem) SetProducerFrameRate(hz float64) {
+	as.queueMu.Lock()
+	defer as.queueMu.Unlock()
+	if as.producerHz == 0 {
+		as.fillAvg = float64(as.queueSize / ChannelCount)
+	}
+	as.producerHz = hz
+}
+
+// readStep returns how many queued frames one output frame consumes. Caller
+// holds queueMu.
+func (as *AudioSystem) readStep() float64 {
+	as.fillAvg += (float64(as.queueSize/ChannelCount) - as.fillAvg) * fillSmoothing
+	trim := fillGain * (as.fillAvg - fillTarget) / fillTarget
+	trim = max(-maxTrim, min(maxTrim, trim))
+	return as.producerHz * SamplesPerFrame / SampleRate * (1 + trim)
+}
+
+// popStereoSamples drains the ring buffer into out, a frame at a time. Any
+// unfilled frames continue from the last delivered one and then decay toward
+// 0 PER CHANNEL, so underruns fade to silence smoothly instead of clicking,
+// and without the image collapsing to the centre on the way down. A trailing
+// odd slot in out is left untouched.
+//
+// With rate matching on, each output frame interpolates linearly between the
+// frame at the tail and the next one, at readPos, and then advances readPos
+// by the step.
 func (as *AudioSystem) popStereoSamples(out []int16) {
 	as.queueMu.Lock()
 	defer as.queueMu.Unlock()
+	step := 1.0
+	if as.producerHz > 0 {
+		step = as.readStep()
+	}
 	n := 0
 	for n+1 < len(out) && as.queueSize > 0 {
-		out[n] = as.queue[as.queueTail]
-		out[n+1] = as.queue[(as.queueTail+1)%queueCapacity]
-		as.queueTail = (as.queueTail + 2) % queueCapacity
-		as.queueSize -= 2
+		l, r := as.queue[as.queueTail], as.queue[as.queueTail+1]
+		if as.readPos > 0 && as.queueSize >= 2*ChannelCount {
+			next := (as.queueTail + 2) % queueCapacity
+			l = lerp16(l, as.queue[next], as.readPos)
+			r = lerp16(r, as.queue[next+1], as.readPos)
+		}
+		out[n], out[n+1] = l, r
+		as.lastL, as.lastR = l, r
 		n += 2
+		as.readPos += step
+		for as.readPos >= 1 && as.queueSize > 0 {
+			as.queueTail = (as.queueTail + 2) % queueCapacity
+			as.queueSize -= 2
+			as.readPos--
+		}
 	}
-	if n > 0 {
-		as.lastL, as.lastR = out[n-2], out[n-1]
+	if as.queueSize == 0 {
+		as.readPos = 0
 	}
 	for ; n+1 < len(out); n += 2 {
 		out[n], out[n+1] = as.lastL, as.lastR
 		as.lastL, as.lastR = decayHeld(as.lastL), decayHeld(as.lastR)
 	}
+}
+
+// lerp16 interpolates between a and b at t in [0, 1). It works in float64 and
+// converts only the result, which always lies between a and b: the difference
+// across a full-scale edge does not fit an int16, and Go leaves converting an
+// out-of-range float to an integer implementation-defined.
+func lerp16(a, b int16, t float64) int16 {
+	return int16(float64(a) + t*(float64(b)-float64(a)))
 }
 
 // Read implements io.Reader for the audioReader. Pulls interleaved stereo

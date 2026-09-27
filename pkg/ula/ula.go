@@ -2241,6 +2241,15 @@ func (u *ULA) StopRecording() error {
 	return u.audio.StopRecording()
 }
 
+// SetAudioFrameRate tells the audio output how many frames a second the
+// frame loop really runs at, so it plays each frame's samples out over that
+// period rather than over a flat 20 ms. No-op without audio.
+func (u *ULA) SetAudioFrameRate(hz float64) {
+	if u.audio != nil {
+		u.audio.SetProducerFrameRate(hz)
+	}
+}
+
 // IsRecording reports whether a WAV recording is currently in progress.
 func (u *ULA) IsRecording() bool {
 	if u.audio == nil {
