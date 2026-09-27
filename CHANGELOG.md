@@ -6,6 +6,32 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.4]
+
+**Audio no longer stutters, lags or tears (issue #12).**
+
+### Fixed
+
+- **About a third of all audio frames were thrown away.** Each frame's audio is
+  pushed when the frame renders, and the frame loop only rendered when the
+  wall clock said a full period had passed since the last render. The pacer
+  already runs one frame per period, so timer jitter put about half the ticks
+  a hair under that and they skipped the render. A 40-second run on a 48K
+  rendered 1146 of 1751 frames. The audio frames lost with them are the
+  stutter, and the picture ran at about 33 fps. The loop now renders every
+  frame it runs.
+- **The audio ring now plays frames out at the rate they really arrive.** Each
+  emulated frame pushes 882 samples, a flat 44100/50, but the frame loop paces
+  to the model's real period: 50.08 Hz on a 48K, 50.02 Hz on the 128K family
+  and the Next, 48.83 Hz on a Pentagon. Nothing reconciled the two, so a 48K
+  handed the card about 70 samples a second more than it played and a
+  Pentagon about 1000 fewer. A surplus fills the ring, grows latency to its
+  whole 240 ms and then overflows in bursts. A deficit starves it. The reader
+  now resamples each frame over the period actually paced, interpolating
+  between samples, and trims that rate by up to 0.5% from the smoothed fill.
+  Latency holds near 80 ms on every model, against the host timer drifting
+  from the sound card's clock as well.
+
 ## [v1.12.3]
 
 **Backlog work, and two corrections to v1.12.2's own changes.**
