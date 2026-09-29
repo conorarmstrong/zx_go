@@ -6,6 +6,15 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sound no longer arrives half a second late (issue #12).** The audio
+  library's player keeps its own read-ahead, 0.5 s by default, and nothing
+  ever set it. The emulator always has samples ready, so that read-ahead
+  stayed full. In Batty the ball's hit sounded well after the ball struck.
+  The player's buffer is now capped at one 1024-sample pull. Measured in the
+  running GUI, its share of the delay fell from about 515 ms to about 42 ms.
+
 ## [v1.12.4]
 
 **Audio no longer stutters, lags or tears (issue #12).**

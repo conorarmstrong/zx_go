@@ -190,6 +190,11 @@ func New() (*AudioSystem, error) {
 	}
 	as.prefillSilence()
 	as.player = ctx.NewPlayer(as.reader)
+	// oto's player keeps its own read-ahead, 0.5 s by default. Our Read never
+	// blocks, so that read-ahead stays full and every sound came out half a
+	// second after the frame that made it. Cap it at the one pull we size
+	// Read for; the ring above already absorbs the producer's jitter.
+	as.player.(oto.BufferSizeSetter).SetBufferSize(len(as.reader.buffer))
 	return as, nil
 }
 
