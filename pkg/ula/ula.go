@@ -714,6 +714,19 @@ type audioEvent struct {
 	state        bool
 }
 
+// videoTStates converts a count of CPU T-states to video T-states. The raster
+// runs on the video clock; at a turbo speed the CPU counter runs
+// SpeedMultiplier T-states per video T-state (as audioFrameTStates allows
+// for).
+func (u *ULA) videoTStates(t int) int {
+	if u.mem.SpeedMultiplier != nil {
+		if m := u.mem.SpeedMultiplier(); m > 1 {
+			t /= m
+		}
+	}
+	return t
+}
+
 // New creates a new ULA instance.
 func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 	u := &ULA{
@@ -1325,6 +1338,7 @@ func (u *ULA) BeamPosition() (line, hpos int) {
 	if t < 0 {
 		t = 0
 	}
+	t = u.videoTStates(t)
 	// Wrap at the frame, not at 9 bits. The old `& 0x1FF` bounded the line at
 	// 511, which is not a raster position: a frame is LinesPerFrame lines, and
 	// software polling NextReg $1E/$1F for a scanline is comparing against a

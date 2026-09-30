@@ -71,3 +71,22 @@ func TestBeamPosition(t *testing.T) {
 		t.Errorf("nil mem: got line=%d hpos=%d, want 0,0", line, hpos)
 	}
 }
+
+// TestBeamPositionAtTurboSpeed: the raster runs on the video clock. At 7, 14
+// or 28 MHz the CPU counter advances SpeedMultiplier T-states per video
+// T-state, so the beam position divides it back down. Counting raw CPU
+// T-states ran NextReg $1E/$1F eight times too fast at 28 MHz; TX-1696 polls
+// it in a tight loop and gave up once port reads were sampled at their real
+// point in the I/O cycle.
+func TestBeamPositionAtTurboSpeed(t *testing.T) {
+	var ts uint64
+	mem := &memory.Memory{}
+	mem.TStates = &ts
+	mem.SpeedMultiplier = func() int { return 8 }
+	u := &ULA{mem: mem, frameStartTstate: 100}
+
+	ts = 100 + 8*uint64(TStatesPerLine*5+40)
+	if line, hpos := u.BeamPosition(); line != 5 || hpos != 10 {
+		t.Errorf("mid line 5 at 28 MHz: got line=%d hpos=%d, want 5,10", line, hpos)
+	}
+}

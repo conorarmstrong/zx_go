@@ -14,6 +14,18 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stayed full. In Batty the ball's hit sounded well after the ball struck.
   The player's buffer is now capped at one 1024-sample pull. Measured in the
   running GUI, its share of the delay fell from about 515 ms to about 42 ms.
+- **I/O to a ULA port no longer runs 4 T-states long.** The ULA port's
+  contention added the I/O cycle's own 4 T-states and the instruction then
+  added them again, so every `OUT ($FE)` and `IN ($FE)` on the 48K and 128K
+  family was 4 T-states slow (15 instead of 11 for `OUT (n),A`), slowing every
+  beeper routine. Contention was also checked at the start of the instruction
+  rather than in its I/O cycle. Ports are now contended in Fuse's early and
+  late halves, and the port sees a write 1 T-state into the cycle and a read
+  3 T-states in.
+- **The Next's raster line (NextReg $1E/$1F) now runs at the video clock at
+  every CPU speed.** It counted CPU T-states, so at 28 MHz it ran eight times
+  too fast. TX-1696 polls it and gave control back to NextZXOS once reads were
+  sampled at the right point in the cycle.
 
 ## [v1.12.4]
 

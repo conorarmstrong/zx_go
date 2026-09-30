@@ -868,46 +868,77 @@ func (m *Memory) ContendMemory(addr uint16) {
 	}
 }
 
-// ContendPort adds contention delay for I/O port access.
-// On 48K/128K/+2: even ports (bit 0 = 0) are ULA ports and always contended.
-// Additionally, if the port address is in contended memory range, extra contention applies.
-// On +2A/+3: no ports are treated as ULA ports (different ULA design).
-func (m *Memory) ContendPort(addr uint16) {
-	if !m.ContentionEnabled || m.TStates == nil {
+// ContendPortEarly and ContendPortLate add the ULA's I/O contention for one
+// I/O machine cycle, in the two halves Fuse applies it (peripherals/ula.c
+// ula_contend_port_early/late). They add only the DELAY: the CPU charges the
+// cycle's own 4 T. The CPU calls ContendPortEarly at the start of the cycle,
+// advances 1 T, calls ContendPortLate, then charges the remaining 3 T. A write
+// reaches the port between the two; a read samples 2 T after the late half.
+//
+// On 48K/128K/+2, even ports (bit 0 = 0) are ULA ports and always contended,
+// and a port address in the contended memory range adds more. The +2A/+3 ULA
+// does not contend ports at all.
+//
+// The four shapes, with C a contention check and N none (Sean Young §4.2):
+//
+//	contended address, ULA port      C:1, C:3
+//	contended address, other port    C:1, C:1, C:1, C:1
+//	uncontended address, ULA port    N:1, C:3
+//	uncontended address, other port  N:4
+func (m *Memory) ContendPortEarly(addr uint16) {
+	if !m.portContends() {
 		return
 	}
+	if m.isContendedPortAddr(addr) {
+		*m.TStates += m.contentionDelay()
+	}
+}
 
-	// +2A/+3 have no ULA port contention
-	if m.currentModel == roms.ModelPlus3 || m.currentModel == roms.ModelPlus2A {
+// ContendPortLate: see ContendPortEarly.
+func (m *Memory) ContendPortLate(addr uint16) {
+	if !m.portContends() {
 		return
 	}
-
 	isULAPort := (addr & 0x01) == 0
-	isContended := m.isContendedPortAddr(addr)
-
-	if isContended && isULAPort {
-		// Contended address, ULA port: C:1, C:3
+	if isULAPort {
 		*m.TStates += m.contentionDelay()
-		*m.TStates++ // io cycle
-		*m.TStates += m.contentionDelay()
-		*m.TStates += 3
-	} else if isContended {
-		// Contended address, non-ULA port: C:1, C:1, C:1, C:1
-		*m.TStates += m.contentionDelay()
-		*m.TStates++
-		*m.TStates += m.contentionDelay()
-		*m.TStates++
-		*m.TStates += m.contentionDelay()
-		*m.TStates++
-		*m.TStates += m.contentionDelay()
-		*m.TStates++
-	} else if isULAPort {
-		// Non-contended address, ULA port: N:1, C:3
-		*m.TStates++ // io cycle
-		*m.TStates += m.contentionDelay()
-		*m.TStates += 3
+		return
 	}
-	// Non-contended, non-ULA: no contention (just the standard T-states)
+	if !m.isContendedPortAddr(addr) {
+		return
+	}
+	// C:1 three more times. The checks sit 1 T apart, so step the counter
+	// over each T-state to sample the next one, then take the steps back:
+	// only the delay is ours to add.
+	for i := 0; i < 3; i++ {
+		*m.TStates += m.contentionDelay()
+		if i < 2 {
+			*m.TStates++
+		}
+	}
+	*m.TStates -= 2
+}
+
+// ContendPort adds the whole I/O cycle's contention delay in one call, for a
+// caller that does not need the access placed inside the cycle. It is the
+// early and late halves with the cycle's first T between them.
+func (m *Memory) ContendPort(addr uint16) {
+	if !m.portContends() {
+		return
+	}
+	m.ContendPortEarly(addr)
+	*m.TStates++
+	m.ContendPortLate(addr)
+	*m.TStates--
+}
+
+// portContends reports whether this machine contends I/O at all right now.
+func (m *Memory) portContends() bool {
+	if !m.ContentionEnabled || m.TStates == nil {
+		return false
+	}
+	// +2A/+3 have no ULA port contention
+	return m.currentModel != roms.ModelPlus3 && m.currentModel != roms.ModelPlus2A
 }
 
 // New creates a new Memory instance for a given machine model.

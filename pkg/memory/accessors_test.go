@@ -95,12 +95,12 @@ func TestContendPortPlus3NoOp(t *testing.T) {
 func TestContendPort_ContendedULAPort(t *testing.T) {
 	m := newTestMemory(t, roms.Model48K)
 	m.ContentionEnabled = true
-	var ts uint64
+	ts := uint64(14335) // first contended T-state
 	m.TStates = &ts
 	// Address $4000 is the first contended bank-5 byte; port = $40FE
 	// is even (ULA) and address-contended.
 	m.ContendPort(0x40FE)
-	if ts == 0 {
+	if ts == 14335 {
 		t.Error("contended ULA port did not advance TStates")
 	}
 }
@@ -108,11 +108,11 @@ func TestContendPort_ContendedULAPort(t *testing.T) {
 func TestContendPort_ContendedNonULAPort(t *testing.T) {
 	m := newTestMemory(t, roms.Model48K)
 	m.ContentionEnabled = true
-	var ts uint64
+	ts := uint64(14335) // first contended T-state
 	m.TStates = &ts
 	// $40FF is odd (non-ULA) + contended.
 	m.ContendPort(0x40FF)
-	if ts == 0 {
+	if ts == 14335 {
 		t.Error("contended non-ULA port did not advance TStates")
 	}
 }
@@ -120,12 +120,12 @@ func TestContendPort_ContendedNonULAPort(t *testing.T) {
 func TestContendPort_NonContendedULAPort(t *testing.T) {
 	m := newTestMemory(t, roms.Model48K)
 	m.ContentionEnabled = true
-	var ts uint64
+	ts := uint64(14335) // first contended T-state
 	m.TStates = &ts
 	// $00FE is even (ULA) but at $00xx — not in the contended
 	// 16K window ($4000-$7FFF) so only the C:3 stage applies.
 	m.ContendPort(0x00FE)
-	if ts == 0 {
+	if ts == 14335 {
 		t.Error("non-contended ULA port (FE-style) did not advance TStates")
 	}
 }

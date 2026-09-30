@@ -13,10 +13,8 @@ import (
 //     {6,5,4,3,2,1,0,0} over the 128-T contended window of each of
 //     the 192 display lines (Sean Young §contention / FUSE model).
 //  2. ContendPort() — the four ULA I/O contention shapes (§4.2):
-//     C:1,C:3 / C:1×4 / N:1,C:3 / N:4. Tested for the fixed wait
-//     T-states (delay forced to 0 by positioning outside the display)
-//     so the structure is unambiguous, plus an in-display check that
-//     the delay actually contributes.
+//     C:1,C:3 / C:1×4 / N:1,C:3 / N:4, as the delay each adds from a
+//     known T-state, plus none outside the display.
 
 func newContendMem(t *testing.T) (*Memory, *uint64) {
 	t.Helper()
@@ -68,27 +66,46 @@ func TestContentionDelay_Boundaries(t *testing.T) {
 	}
 }
 
-// TestContendPort_FixedWaits positions the counter OUTSIDE the display
-// region so contentionDelay()==0; what remains is the fixed I/O wait
-// T-state structure for each of the four cases.
-func TestContendPort_FixedWaits(t *testing.T) {
+// TestContendPort_Shapes pins the delay each of the four shapes adds for an
+// I/O cycle opening on 14335, the first contended T-state. The pattern there
+// runs 6,5,4,3,2,1,0,0 from 14335. ContendPort adds only the delay; the CPU
+// charges the cycle's own 4 T (a double charge made every ULA-port IN/OUT
+// 4 T too long).
+//
+//	C:1,C:3  $40FE  check 14335 (6); 1 T on, 14342 (0)           = 6
+//	N:1,C:3  $00FE  check 14336 (5)                              = 5
+//	C:1 x4   $40FF  14335 (6), 14342 (0), 14343 (6), 14350 (0)   = 12
+//	N:4      $00FF  no checks                                    = 0
+func TestContendPort_Shapes(t *testing.T) {
 	cases := []struct {
 		name string
 		port uint16
 		want uint64
 	}{
-		{"contended ULA (C:1,C:3)", 0x40FE, 4},      // 0+1+0+3
-		{"contended non-ULA (C:1x4)", 0x40FF, 4},    // (0+1)*4
-		{"non-contended ULA (N:1,C:3)", 0x00FE, 4},  // 1+0+3
-		{"non-contended non-ULA (none)", 0x00FF, 0}, // untouched
+		{"contended ULA (C:1,C:3)", 0x40FE, 6},
+		{"non-contended ULA (N:1,C:3)", 0x00FE, 5},
+		{"contended non-ULA (C:1x4)", 0x40FF, 12},
+		{"non-contended non-ULA (N:4)", 0x00FF, 0},
 	}
 	for _, c := range cases {
 		m, ts := newContendMem(t)
-		*ts = 100000 // well past the 57343 display end → delay 0
-		before := *ts
+		*ts = 14335
 		m.ContendPort(c.port)
-		if got := *ts - before; got != c.want {
+		if got := *ts - 14335; got != c.want {
 			t.Errorf("%s: +%d T, want +%d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestContendPort_NoDelayOutsideDisplay: outside the contended window no
+// shape adds anything, since the cycle's base T-states are the CPU's.
+func TestContendPort_NoDelayOutsideDisplay(t *testing.T) {
+	for _, port := range []uint16{0x40FE, 0x00FE, 0x40FF, 0x00FF} {
+		m, ts := newContendMem(t)
+		*ts = 100000
+		m.ContendPort(port)
+		if *ts != 100000 {
+			t.Errorf("port $%04X: +%d T outside the display, want 0", port, *ts-100000)
 		}
 	}
 }
