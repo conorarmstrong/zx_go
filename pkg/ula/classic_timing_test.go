@@ -178,8 +178,9 @@ func TestClassicFloatingBus48KOrigin(t *testing.T) {
 // T-states-per-line (TStatesPerLineFor: 224 on 48K, 228 on 128K+) — the same
 // per-model line length the floating bus uses (TestClassicFloatingBus48KOrigin).
 // A 48K border write timestamped at exactly scanline 50 (50*224 T-states)
-// must take effect starting at that scanline's row, not one row earlier
-// (which is what dividing by the 128K's 228-T line would give).
+// is where that scanline's paper would start: 16 T after image row 10's left
+// edge, so it lands on row 10 at x=32 (see paintBorder). A 228-T line would
+// put it elsewhere.
 func TestClassicBorderChangeScanlineUsesPerModelLineLength(t *testing.T) {
 	testDir := "test_roms_classic_border_scanline"
 	createTestROMs(t, testDir)
@@ -201,15 +202,15 @@ func TestClassicBorderChangeScanlineUsesPerModelLineLength(t *testing.T) {
 	img := u.Render()
 
 	const wantRow = targetScanline - (64 - BorderTop) // 50 - 40 = 10
-	gotNew := img.RGBAAt(0, wantRow)
+	gotNew := img.RGBAAt(BorderLeft, wantRow)
 	wantNew := u.palette[0x03]
 	if gotNew != wantNew {
-		t.Errorf("row %d (the new-colour scanline): got %v, want new border colour %v", wantRow, gotNew, wantNew)
+		t.Errorf("row %d x=%d (the write's column): got %v, want new border colour %v", wantRow, BorderLeft, gotNew, wantNew)
 	}
-	gotOld := img.RGBAAt(0, wantRow-1)
+	gotOld := img.RGBAAt(BorderLeft-1, wantRow)
 	wantOld := u.palette[0] // initial BorderColour is 0 (black)
 	if gotOld != wantOld {
-		t.Errorf("row %d (one scanline before the change): got %v, want old border colour %v (the change landed a row early)", wantRow-1, gotOld, wantOld)
+		t.Errorf("row %d x=%d (the column before the write): got %v, want old border colour %v (the change landed early)", wantRow, BorderLeft-1, gotOld, wantOld)
 	}
 }
 

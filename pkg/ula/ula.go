@@ -174,8 +174,9 @@ type ULA struct {
 	ulaScrollX, ulaScrollY byte
 	ulaFineScrollX         bool
 
-	// Mid-frame border tracking: records (scanline, colour) pairs for each border change.
-	// Allows accurate rendering of border effects that change colour during the frame.
+	// Mid-frame border tracking: records (T-state, colour) pairs for each
+	// border change, so Render can paint each one from the beam position of
+	// the write. See paintBorder.
 	borderChanges []borderChange
 	// frameStartBorderColour is the border colour in effect at the start of
 	// the frame currently being built, i.e. before any of this frame's port
@@ -703,8 +704,8 @@ func (u *ULA) activeAY() *ay.AY {
 }
 
 type borderChange struct {
-	scanline int
-	colour   byte
+	tstate int // raster T-state of the write, from the frame interrupt
+	colour byte
 }
 
 // audioEvent records a single speaker-bit toggle within a frame, with
@@ -712,6 +713,15 @@ type borderChange struct {
 type audioEvent struct {
 	tstateOffset int
 	state        bool
+}
+
+// rasterTState is the frame T-state of the moment, in video T-states from the
+// frame interrupt.
+func (u *ULA) rasterTState() int {
+	if u.mem.TStates == nil {
+		return 0
+	}
+	return u.videoTStates(int(*u.mem.TStates))
 }
 
 // videoTStates converts a count of CPU T-states to video T-states. The raster
@@ -725,6 +735,51 @@ func (u *ULA) videoTStates(t int) int {
 		}
 	}
 	return t
+}
+
+// paintBorder paints the border area of u.img from the frame's recorded
+// border changes, each from the beam position of its write.
+//
+// The mapping follows Fuse (display_dirty.c display_get_beam_position,
+// machine.c line_times). Image row y is drawn from T-state
+//
+//	displayStart - BorderTop lines - BorderLeft/2 + y*line
+//
+// at 2 pixels per T-state, and a write paints from the unit that contains it
+// onward. The Sinclair ULAs latch the border colour once per 8-pixel column,
+// 4 T: zxula.vhd:423-429 reloads attr_reg with the border colour only on
+// sload. The Pentagon reloads it on every pixel (zxula.vhd:443-447), so there
+// the unit is one T-state, 2 pixels.
+func (u *ULA) paintBorder(changes []borderChange, colour byte) {
+	model := u.mem.GetCurrentModel()
+	line := TStatesPerLineFor(model)
+	step := 4
+	if model == roms.ModelPentagon {
+		step = 1
+	}
+	unitPx := step * 2
+	first := roms.DisplayStartTState(model) - BorderTop*line - BorderLeft/2
+
+	next := 0
+	for y := 0; y < TotalHeight; y++ {
+		inPaperRows := y >= BorderTop && y < BorderTop+ScreenHeight
+		rowT := first + y*line
+		for x := 0; x < TotalWidth; x += unitPx {
+			// A write anywhere inside this unit shows from its start.
+			end := rowT + (x/unitPx+1)*step
+			for next < len(changes) && changes[next].tstate < end {
+				colour = changes[next].colour
+				next++
+			}
+			if inPaperRows && x >= BorderLeft && x < BorderLeft+ScreenWidth {
+				continue
+			}
+			c := u.palette[colour]
+			for px := x; px < x+unitPx; px++ {
+				u.img.SetRGBA(px, y, c)
+			}
+		}
+	}
 }
 
 // New creates a new ULA instance.
@@ -857,38 +912,14 @@ func (u *ULA) render() *image.RGBA {
 		u.flashCount = 0
 	}
 
-	// Build per-scanline border colour map from recorded changes.
-	// Each display scanline (0-239) maps to a border colour.
-	var borderPerLine [TotalHeight]byte
-	if len(u.borderChanges) > 0 {
-		// Start with the colour that was active before the first change in
-		// this frame (frameStartBorderColour, not the live BorderColour,
-		// which this frame's writes have already advanced past).
-		currentBorder := u.frameStartBorderColour
-		if u.borderChanges[0].scanline == 0 {
-			currentBorder = u.borderChanges[0].colour
-		}
-		changeIdx := 0
-		// The frame scanline the display starts on. Only the 48K's is a whole
-		// 64 lines from the interrupt — see roms.DisplayStartTState — so
-		// hardcoding 64 put a mid-frame border change on the wrong row by
-		// about a scanline for the whole 128K family.
-		displayStartLine := roms.DisplayStartTState(u.mem.GetCurrentModel()) /
-			TStatesPerLineFor(u.mem.GetCurrentModel())
-		for line := 0; line < TotalHeight; line++ {
-			// Advance past any border changes that apply to this scanline.
-			// Image row 0 is BorderTop rows above the first display row.
-			frameScanline := line + (displayStartLine - BorderTop)
-			for changeIdx < len(u.borderChanges) && u.borderChanges[changeIdx].scanline <= frameScanline {
-				currentBorder = u.borderChanges[changeIdx].colour
-				changeIdx++
-			}
-			borderPerLine[line] = currentBorder
-		}
-	} else {
-		for line := 0; line < TotalHeight; line++ {
-			borderPerLine[line] = u.BorderColour
-		}
+	// This frame's border changes and the colour before the first of them.
+	// The slice keeps its backing array: nothing writes the port until the
+	// render returns.
+	borderChanges, borderStart := u.borderChanges, u.frameStartBorderColour
+	if len(borderChanges) == 0 {
+		// No port writes: BorderColour may still have been set directly (a
+		// snapshot load does), so it, not the baseline, is the colour.
+		borderStart = u.BorderColour
 	}
 	u.borderChanges = u.borderChanges[:0] // Clear for next frame
 	// Snapshot the now-current border colour as the baseline for the next
@@ -921,15 +952,7 @@ func (u *ULA) render() *image.RGBA {
 		return u.img
 	}
 
-	// Draw borders with per-scanline colours
-	for y := 0; y < TotalHeight; y++ {
-		borderColor := u.palette[borderPerLine[y]]
-		for x := 0; x < TotalWidth; x++ {
-			if x < BorderLeft || x >= BorderLeft+ScreenWidth || y < BorderTop || y >= BorderTop+ScreenHeight {
-				u.img.Set(x, y, borderColor)
-			}
-		}
-	}
+	u.paintBorder(borderChanges, borderStart)
 
 	// Draw screen
 	screenMem := u.mem.GetPage(u.mem.ScreenPage)
@@ -1891,14 +1914,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	if addr&0x01 == 0 { // Port 0xFE
 		newBorder := val & 0x07
 		if newBorder != u.BorderColour {
-			// Record the border change with current scanline for mid-frame rendering.
-			// Per-model line length (224 on 48K, 228 on 128K+) — see
-			// TStatesPerLineFor and its use in floatingBusByte.
-			scanline := 0
-			if u.mem.TStates != nil {
-				scanline = int(*u.mem.TStates) / TStatesPerLineFor(u.mem.GetCurrentModel())
-			}
-			u.borderChanges = append(u.borderChanges, borderChange{scanline: scanline, colour: newBorder})
+			// Record the border change with the raster T-state of the write,
+			// for Render to paint from its beam position.
+			at := u.rasterTState()
+			scanline := at / TStatesPerLineFor(u.mem.GetCurrentModel())
+			u.borderChanges = append(u.borderChanges, borderChange{tstate: at, colour: newBorder})
 			u.BorderColour = newBorder
 			if u.borderTracer != nil {
 				u.borderTracer(addr, val, newBorder, scanline)

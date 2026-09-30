@@ -26,6 +26,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every CPU speed.** It counted CPU T-states, so at 28 MHz it ran eight times
   too fast. TX-1696 polls it and gave control back to NextZXOS once reads were
   sampled at the right point in the cycle.
+- **Border changes now land where the beam was, not on the whole line.** The
+  border was painted one colour per scanline, the last one written on it. A
+  beeper routine flips the border with every speaker pulse, several times a
+  line, so the "We Are Vocoders" demo showed a solid border where real
+  hardware shows moving stripes. Each change is now painted from its beam
+  position (Fuse's mapping), in 8-pixel steps on the Sinclair ULAs and 2-pixel
+  steps on the Pentagon, which reloads the border colour every pixel
+  (zxula.vhd).
 
 ## [v1.12.4]
 

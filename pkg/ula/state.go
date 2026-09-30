@@ -111,8 +111,8 @@ type ulaState struct {
 // stateBorderChange and stateAudioEvent mirror the unexported per-frame event
 // records for the same reason.
 type stateBorderChange struct {
-	Scanline int
-	Colour   byte
+	TState int
+	Colour byte
 }
 
 type stateAudioEvent struct {
@@ -243,7 +243,7 @@ func saveBorderChanges(in []borderChange) []stateBorderChange {
 	}
 	out := make([]stateBorderChange, len(in))
 	for i, c := range in {
-		out[i] = stateBorderChange{Scanline: c.scanline, Colour: c.colour}
+		out[i] = stateBorderChange{TState: c.tstate, Colour: c.colour}
 	}
 	return out
 }
@@ -251,7 +251,7 @@ func saveBorderChanges(in []borderChange) []stateBorderChange {
 func loadBorderChanges(in []stateBorderChange) []borderChange {
 	out := make([]borderChange, len(in))
 	for i, c := range in {
-		out[i] = borderChange{scanline: c.Scanline, colour: c.Colour}
+		out[i] = borderChange{tstate: c.TState, colour: c.Colour}
 	}
 	return out
 }
