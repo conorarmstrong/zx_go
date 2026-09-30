@@ -6,6 +6,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.12.5]
+
+**Sound in sync, border effects drawn along the line (issue #12).**
+
 ### Fixed
 
 - **Sound no longer arrives half a second late (issue #12).** The audio

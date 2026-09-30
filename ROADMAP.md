@@ -22,7 +22,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-09-28, v1.12.4)
+## CURRENT STATE (2026-09-30, v1.12.5)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
