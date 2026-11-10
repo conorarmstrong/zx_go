@@ -6,9 +6,7 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [v1.12.5]
-
-**Sound in sync, border effects drawn along the line (issue #12).**
+## [v1.13.0]
 
 ### Added
 
@@ -34,6 +32,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fresh install boots to the NextZXOS menu.
 - **The Next reports core 3.03.03** (NextReg `$01` = `$33`, `$0E` = `$03`),
   matching the 26.11a distro.
+
+## [v1.12.5]
+
+**Sound in sync, border effects drawn along the line (issue #12).**
 
 ### Fixed
 
