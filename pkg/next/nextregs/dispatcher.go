@@ -49,10 +49,10 @@ const (
 	// re-boot retry loop ($1B04). Must stay $0A to match real hardware.
 	defaultMachineID = 0x0A
 	// CoreVersion at NextReg 0x01 (R). Encoded as major<<4 | minor.
-	// 0x32 = core 3.02 — the current Spectrum Next core line (3.02.03 latest).
-	defaultCoreVersion = 0x32
+	// 0x33 = core 3.03 — the current Spectrum Next core line (3.03.03 latest).
+	defaultCoreVersion = 0x33
 	// CoreSubMinor at NextReg 0x0E (R) — the third version number. 0x03 reports
-	// core 3.02.03 (the latest release), comfortably above any game's minimum.
+	// core 3.03.03 (the latest release), comfortably above any game's minimum.
 	defaultCoreSubMinor = 0x03
 	// BoardID at NextReg 0x0F (R). bits 3:0 = board issue; 0x01 = ZXN Issue 3.
 	defaultBoardID = 0x01

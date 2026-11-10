@@ -241,3 +241,76 @@ func TestDownloadNextROMsSeedsConfigINI(t *testing.T) {
 		t.Fatalf("config.ini not seeded: %v", err)
 	}
 }
+
+// The 26.11a distro ships uppercase CONFIG.INI with timing=8 (the
+// testcard wizard) and an enNextMf.rom alongside the two licensed
+// ROMs. A fresh install must promote the Multiface ROM and patch the
+// stock config to timing=3, or the emulator lands on the wizard.
+func TestDownloadNextROMs26_11ConfigAndMultiface(t *testing.T) {
+	dir := redirectConfig(t)
+	t.Setenv("ZX_GO_NEXT_SD_DIR", filepath.Join(dir, "sd"))
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	add := func(name string, data []byte) {
+		w, _ := zw.Create(name)
+		_, _ = w.Write(data)
+	}
+	add("machines/next/enNextZX.rom", bytes.Repeat([]byte{0xE1}, 65536))
+	add("machines/next/enNxtmmc.rom", bytes.Repeat([]byte{0xD1}, 8192))
+	add("machines/next/enNextMf.rom", bytes.Repeat([]byte{0xFE}, 8192))
+	add("machines/next/CONFIG.INI", []byte("scandoubler=1\r\ntiming=8\r\npsgmode=1\r\n"))
+	add("machines/next/MENU.DEF", []byte("menu=ZX Spectrum Next,2,8,enNextZX.rom,enNxtmmc.rom,enNextMf.rom\n"))
+	add("TBBLUE.FW", []byte("fw"))
+	_ = zw.Close()
+
+	srv := serveZip(t, buf.Bytes())
+	res, err := DownloadNextROMs(context.Background(), srv.Client(), srv.URL, nil)
+	if err != nil {
+		t.Fatalf("DownloadNextROMs: %v", err)
+	}
+	for _, base := range []string{DistroROM, DivMMCROM, MultifaceROM} {
+		if _, err := os.Stat(filepath.Join(dir, base)); err != nil {
+			t.Errorf("%s not installed: %v", base, err)
+		}
+	}
+	cfg, err := os.ReadFile(filepath.Join(dir, "sd", "machines", "next", "CONFIG.INI"))
+	if err != nil {
+		t.Fatalf("read CONFIG.INI: %v", err)
+	}
+	if !strings.Contains(string(cfg), "timing=3") {
+		t.Errorf("stock CONFIG.INI not patched to timing=3: %q", cfg)
+	}
+	if strings.Contains(string(cfg), "timing=8") {
+		t.Errorf("timing=8 survived: %q", cfg)
+	}
+	if !strings.Contains(string(cfg), "\r\n") {
+		t.Errorf("CRLF endings not preserved: %q", cfg)
+	}
+	if res.SDFiles < 5 {
+		t.Errorf("SDFiles = %d, want >=5", res.SDFiles)
+	}
+}
+
+func TestPatchTimingTo3(t *testing.T) {
+	in := []byte("scandoubler=1\r\ntiming=8\r\npsgmode=1\r\n")
+	out := patchTimingTo3(in)
+	if !strings.Contains(string(out), "timing=3") || strings.Contains(string(out), "timing=8") {
+		t.Errorf("timing=8 not patched: %q", out)
+	}
+	if !strings.Contains(string(out), "\r\n") {
+		t.Errorf("CRLF endings not preserved: %q", out)
+	}
+	in2 := []byte("timing=1\ntiming=80\n")
+	if out2 := patchTimingTo3(in2); string(out2) != string(in2) {
+		t.Errorf("non-stock timing changed: %q", out2)
+	}
+}
+
+// The default distro is the 26.11a complete zip (NextZXOS 2.10a).
+func TestDefaultDistroURLIs26_11a(t *testing.T) {
+	const want = "https://www.specnext.com/distro/26.11a/sn-complete-26.11a.zip"
+	if DefaultDistroURL != want {
+		t.Errorf("DefaultDistroURL = %q, want %q", DefaultDistroURL, want)
+	}
+}

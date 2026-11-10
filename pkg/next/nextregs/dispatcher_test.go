@@ -385,7 +385,7 @@ func TestReadOnlyIdentityRegisters(t *testing.T) {
 
 // TestCoreVersionSatisfiesModernGames pins the reported core version is a real
 // recent core (>= 3.01.10), so games that gate on a minimum core version run.
-// NR$01 = major.minor (3.02), NR$0E = sub-minor.
+// NR$01 = major.minor (3.03), NR$0E = sub-minor.
 func TestCoreVersionSatisfiesModernGames(t *testing.T) {
 	d := New()
 	major := d.ReadReg(0x01) >> 4
@@ -396,5 +396,17 @@ func TestCoreVersionSatisfiesModernGames(t *testing.T) {
 	const need = 3*10000 + 1*100 + 10 // 3.01.10
 	if got < need {
 		t.Errorf("core version %d.%02d.%02d < 3.01.10 — games will refuse to run", major, minor, sub)
+	}
+}
+
+// TestCoreVersionIsLatestRelease pins the reported core to 3.03.03
+// (NR$01 = major<<4|minor = $33, NR$0E = sub-minor = $03).
+func TestCoreVersionIsLatestRelease(t *testing.T) {
+	d := New()
+	if got := d.ReadReg(0x01); got != 0x33 {
+		t.Errorf("NR$01 = $%02X, want $33 (core 3.03)", got)
+	}
+	if got := d.ReadReg(0x0E); got != 0x03 {
+		t.Errorf("NR$0E = $%02X, want $03 (sub-minor .03)", got)
 	}
 }

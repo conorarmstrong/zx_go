@@ -157,7 +157,7 @@ func InstallROM(srcPath string) (*InstalledROM, error) {
 // that participate in the cross-check: enNextZX.rom and enNxtmmc.rom.
 func sdVersionWarning(basename, installedHash string) string {
 	switch basename {
-	case DistroROM, DivMMCROM:
+	case DistroROM, DivMMCROM, MultifaceROM:
 	default:
 		return ""
 	}

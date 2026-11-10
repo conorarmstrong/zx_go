@@ -28,8 +28,8 @@ distribution (or install by hand — licensing, see README):
 To install:
 
 1. Download the official Spectrum Next distribution zip from
-   `https://www.specnext.com/distro/` (the 24.11 release is the one zx_go
-   has been validated against).
+   `https://www.specnext.com/distro/` (the 26.11a release, NextZXOS 2.10a, is the one
+   zx_go has been validated against).
 2. From the running emulator, choose **File → Install Next ROMs…** and
    point the file picker at each of `enNextZX.rom` and `enNxtmmc.rom`
    in the zip's `machines/next/` directory.

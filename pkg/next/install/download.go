@@ -18,10 +18,14 @@ import (
 // bundle these ROMs with the emulator (they are not ours to
 // redistribute); the user downloads them from this official source.
 //
-// The version in the URL moves on over time; any sn-complete-2x.y
-// release works. Overridable via $ZX_GO_NEXT_DISTRO_URL so the UI /
-// tests can point elsewhere without a rebuild.
-const DefaultDistroURL = "https://www.specnext.com/distro/24.11/sn-complete-24.11.zip"
+// 26.11a carries NextZXOS 2.10a and firmware 1.46 (core 3.03.03).
+// It is the validated baseline: it cold-boots to the welcome/menu/Browser
+// and the firmware's Info page reports the correct product/distro versions.
+// The version in the URL moves on over time; any sn-complete release with
+// machines/next/enNextZX.rom and enNxtmmc.rom works. Overridable via
+// $ZX_GO_NEXT_DISTRO_URL so the UI / tests can point elsewhere without a
+// rebuild.
+const DefaultDistroURL = "https://www.specnext.com/distro/26.11a/sn-complete-26.11a.zip"
 
 // DistroURL returns the configured distro download URL.
 func DistroURL() string {
@@ -36,8 +40,9 @@ func DistroURL() string {
 // by suffix so a leading distro-root folder ("sn-complete-24.11/…")
 // doesn't matter.
 var distroROMPaths = map[string]string{
-	DistroROM: "machines/next/ennextzx.rom",
-	DivMMCROM: "machines/next/ennxtmmc.rom",
+	DistroROM:    "machines/next/ennextzx.rom",
+	DivMMCROM:    "machines/next/ennxtmmc.rom",
+	MultifaceROM: "machines/next/ennextmf.rom",
 }
 
 // DownloadResult reports what DownloadNextROMs installed.
@@ -155,22 +160,102 @@ func DownloadNextROMs(ctx context.Context, client *http.Client, url string, prog
 		return nil, fmt.Errorf("archive does not contain %s (machines/next/%s) — not a Spectrum Next distro?",
 			DistroROM, DistroROM)
 	}
+	if !romHit[DivMMCROM] {
+		return nil, fmt.Errorf("archive does not contain %s (machines/next/%s) — not a bootable Spectrum Next distro?",
+			DivMMCROM, DivMMCROM)
+	}
 
-	// The stock distro does NOT ship machines/next/config.ini; on real
-	// hardware the firmware writes it after the first-run video-mode
-	// wizard. Without it our cold boot lands on the testcard wizard
-	// instead of the NextZXOS menu. Seed a sensible default so the
-	// downloaded card boots straight to the menu. Only written when
-	// absent, so a user's own config.ini is never overwritten.
-	cfgPath := filepath.Join(sdRoot, "machines", "next", "config.ini")
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		if mkerr := os.MkdirAll(filepath.Dir(cfgPath), 0o755); mkerr == nil {
-			if werr := os.WriteFile(cfgPath, []byte(defaultNextConfigINI), 0o644); werr == nil {
-				res.SDFiles++
-			}
-		}
+	// The stock 26.11a distro ships machines/next/CONFIG.INI with
+	// timing=8, the interactive testcard/video-mode wizard. On real
+	// hardware that is deliberate: a monitor may not support the
+	// stored mode. In an emulator the display is fixed, so landing on
+	// the wizard instead of the NextZXOS menu is a poor out-of-box
+	// experience. Patch the stock config to timing=3, preserving every
+	// other setting, and handle the uppercase filename the distro uses
+	// (case-sensitive hosts otherwise end up with two config files).
+	if err := normaliseInstalledConfig(sdRoot); err != nil {
+		return nil, fmt.Errorf("normalise machines/next config: %w", err)
 	}
 	return res, nil
+}
+
+// normaliseInstalledConfig makes the extracted distro boot straight to
+// the NextZXOS menu. It:
+//
+//   - finds machines/next/{config.ini,CONFIG.INI} case-insensitively;
+//   - patches the stock testcard setting timing=8 to timing=3;
+//   - seeds defaultNextConfigINI when neither file is present.
+//
+// It deliberately leaves any other timing value alone, and never
+// overwrites an existing config's other keys. DownloadNextROMs has just
+// replaced the SD tree, so "existing" here means the distro's own file,
+// not a user's hand-edited card.
+func normaliseInstalledConfig(sdRoot string) error {
+	nextDir := filepath.Join(sdRoot, "machines", "next")
+	if st, err := os.Stat(nextDir); err != nil || !st.IsDir() {
+		// A partial/odd archive without a machine directory: leave it
+		// to the boot path to report. Seeding into a directory that
+		// doesn't exist would be worse than useless.
+		return nil
+	}
+	entries, err := os.ReadDir(nextDir)
+	if err != nil {
+		return err
+	}
+	var cfgPaths []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.EqualFold(e.Name(), "config.ini") {
+			cfgPaths = append(cfgPaths, filepath.Join(nextDir, e.Name()))
+		}
+	}
+	if len(cfgPaths) == 0 {
+		cfgPath := filepath.Join(nextDir, "config.ini")
+		return os.WriteFile(cfgPath, []byte(defaultNextConfigINI), 0o644)
+	}
+	for _, cfgPath := range cfgPaths {
+		data, err := os.ReadFile(cfgPath)
+		if err != nil {
+			return err
+		}
+		patched := patchTimingTo3(data)
+		if bytes.Equal(patched, data) {
+			continue
+		}
+		if err := os.WriteFile(cfgPath, patched, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// patchTimingTo3 changes an exact `timing=8` line (the 26.11a stock
+// testcard setting) to `timing=3`, leaving comments, CRLF endings and
+// every other key untouched. Matching the whole trimmed line avoids
+// turning values like `timing=80` into `timing=30`.
+func patchTimingTo3(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		cr := strings.HasSuffix(line, "\r")
+		body := line
+		if cr {
+			body = strings.TrimSuffix(body, "\r")
+		}
+		if strings.TrimSpace(body) == "timing=8" {
+			lines[i] = "timing=3"
+			if cr {
+				lines[i] += "\r"
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return data
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // readAllWithProgress reads r fully, invoking progress as it goes.
@@ -274,39 +359,50 @@ func extractZipFile(f *zip.File, dest string) error {
 	return nil
 }
 
-// defaultNextConfigINI is the machines/next/config.ini we seed when
-// the distro doesn't ship one. boot.bin reads it at startup; with it
-// present the cold boot skips the interactive testcard / video-mode
-// wizard and goes straight to the NextZXOS menu. Values mirror a
-// standard "Next, +3 timing, scandoubler on" setup.
+// defaultNextConfigINI is the machines/next/config.ini we seed when the
+// distro doesn't ship one. Values mirror the stock System/Next 26.11a
+// CONFIG.INI (firmware 1.46) with one deliberate difference: timing=3
+// instead of the stock timing=8. timing=8 is the interactive testcard /
+// video-mode wizard, which makes no sense when the emulator's display is
+// fixed; timing=3 boots straight to the NextZXOS welcome/menu. Keep the
+// remaining keys in step with the distro's CONFIG.INI so new firmware
+// settings (ps2, dma, ay48, uart_i2c, kmouse, mousedpi, expbus, pidebug)
+// are present and explicit.
 const defaultNextConfigINI = `; ZX Spectrum Next config.ini (seeded by zx_go on ROM download)
 ;
-; boot.bin reads this at startup; when present it skips the
-; interactive testcard / video-mode wizard and boots to the menu.
+; Values mirror the stock System/Next 26.11a CONFIG.INI, except timing=3:
+; the stock timing=8 is the interactive testcard wizard, which an
+; emulator does not need. boot.bin skips the wizard and goes to the
+; NextZXOS menu.
 scandoubler=1
 50_60hz=0
 timex=1
-psgmode=0
-stereomode=1
+psgmode=1
 intsnd=1
+stereomode=0
 turbosound=1
-dac=1
 divmmc=0
-divports=1
 mf=0
-joystick1=0
-joystick2=0
+joystick1=1
+joystick2=3
+ps2=1
+dma=0
 scanlines=0
-turbokey=0
+turbokey=1
 default=0
 timing=3
 keyb_issue=0
-uart_i2c=0
-kmouse=0
+divports=1
+dac=1
+ay48=0
+uart_i2c=1
+kmouse=1
 ulaplus=1
 hdmisound=1
 beepmode=0
 buttonswap=0
-mousedpi=0
+mousedpi=1
 espreset=0
+expbus=0
+pidebug=0
 `
