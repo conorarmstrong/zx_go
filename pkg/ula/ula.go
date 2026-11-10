@@ -75,10 +75,7 @@ func TStatesPerLineFor(model roms.SpectrumModel) int {
 // Copper disassembler needs the same number to tell a WAIT that can never
 // release from an ordinary one. Exported so those are one number and not two.
 func LinesPerFrameFor(model roms.SpectrumModel) int {
-	if model == roms.Model48K {
-		return 312
-	}
-	return LinesPerFrame
+	return roms.LinesPerFrameFor(model, false)
 }
 
 // ULA represents the Uncommitted Logic Array, handling video, sound, and keyboard.
@@ -241,6 +238,17 @@ type ULA struct {
 	// then fall through to the existing floating-bus dispatch.
 	nextRegs NextRegAccess
 
+	// sixtyHz selects the Next's 60 Hz video timing (NextReg 0x05 bit 2).
+	// It changes the frame length, scanline count, display origin and
+	// contention origin together; see roms.FrameTStatesFor and
+	// DisplayStartTStateFor. The pixel clock and line length are unchanged.
+	sixtyHz bool
+	// modelSet is true for a ULA built by New. Test constructors commonly
+	// use a zero-valued memory.Memory (model 48K) but have always meant
+	// the 128K-family 228/311 geometry; the flag preserves that contract
+	// without guessing from a zero model.
+	modelSet bool
+
 	// nextAY is the Spectrum Next's three-chip AY engine when
 	// wired. When non-nil, port 0xFFFD / 0xBFFD traffic routes
 	// to engine.Active() instead of the singleton u.ay. Stays
@@ -259,6 +267,10 @@ type ULA struct {
 	// nextDMA receives port 0x6B writes (zxnDMA command stream).
 	// Wired only for ModelNext.
 	nextDMA NextDMA
+
+	// nextCTC receives the $183B..$1F3B CTC port group. Wired only for
+	// ModelNext.
+	nextCTC NextCTC
 
 	// nextSprite receives port $303B traffic: a write selects the
 	// active sprite, a read returns the sprite status (collision /
@@ -400,6 +412,16 @@ type NextDMA interface {
 	SetZ80Mode(on bool)
 }
 
+// NextCTC is the contract for the Spectrum Next's four-channel CTC on
+// ports $183B..$1F3B. pkg/next/ctc.Bank satisfies it. Both calls report
+// whether the address belongs to the CTC: $1C3B..$1F3B decode as the
+// CTC but select no channel, and must not fall through to the ordinary
+// port dispatch.
+type NextCTC interface {
+	ReadPort(addr uint16) (byte, bool)
+	WritePort(addr uint16, val byte) bool
+}
+
 // NextI2C is the contract for the Spectrum Next's bit-banged i2c bus
 // on ports $103B (SCL) and $113B (SDA) — zxnext.vhd:2630-2631 decode
 // + :3234-3250 write latches. The DS1307 RTC slave lives behind it
@@ -532,6 +554,50 @@ type NextRegAccess interface {
 // ModelNext construction; passing nil unhooks (useful for tests).
 func (u *ULA) SetNextRegs(n NextRegAccess) { u.nextRegs = n }
 
+// Set60Hz selects 60 Hz video timing for the Spectrum Next (NextReg
+// 0x05 bit 2). The line length is unchanged; the frame shortens from
+// 311/312 lines to 264 and the display/contention origin moves up.
+// It is a no-op for models without a 60 Hz timing mode.
+func (u *ULA) Set60Hz(on bool) { u.sixtyHz = on }
+
+// SixtyHz reports the selected video timing.
+func (u *ULA) SixtyHz() bool { return u.sixtyHz }
+
+// FrameTStates returns the live frame length in 3.5 MHz T-states for the
+// current model and video mode.
+func (u *ULA) FrameTStates() int {
+	if u.mem == nil {
+		return 69888
+	}
+	return roms.FrameTStatesFor(u.mem.GetCurrentModel(), u.sixtyHz)
+}
+
+// tStatesPerLine is the live scanline length. The zero-value ULA used by
+// unit tests has always meant the 128K 228-T line; keep that contract.
+func (u *ULA) tStatesPerLine() int {
+	if u.mem == nil || !u.modelSet {
+		return TStatesPerLine
+	}
+	return TStatesPerLineFor(u.mem.GetCurrentModel())
+}
+
+// linesPerFrame is the live scanline count for the current model and mode.
+func (u *ULA) linesPerFrame() int {
+	if u.mem == nil || !u.modelSet {
+		return LinesPerFrame
+	}
+	return roms.LinesPerFrameFor(u.mem.GetCurrentModel(), u.sixtyHz)
+}
+
+// displayStartTState is the live frame-relative T-state of the first paper
+// fetch, for the current model and video mode.
+func (u *ULA) displayStartTState() int {
+	if u.mem == nil || !u.modelSet {
+		return roms.DisplayStartTState(roms.Model128K)
+	}
+	return roms.DisplayStartTStateFor(u.mem.GetCurrentModel(), u.sixtyHz)
+}
+
 // SetNextCompositor installs the Spectrum Next render stack's
 // scanline compositor. Once installed, Render overlays the
 // composited output on top of the 256x192 active display region.
@@ -547,6 +613,10 @@ func (u *ULA) Palette() [16]color.RGBA { return u.palette }
 // SetNextDMA installs the Spectrum Next zxnDMA controller. Port
 // 0x6B writes are forwarded as command bytes. Passing nil unhooks.
 func (u *ULA) SetNextDMA(d NextDMA) { u.nextDMA = d }
+
+// SetNextCTC installs the Spectrum Next four-channel CTC. Ports
+// $183B..$1F3B route to it; nil unhooks.
+func (u *ULA) SetNextCTC(c NextCTC) { u.nextCTC = c }
 
 // SetNextSpritePort installs the sprite engine's $303B select/status
 // port handler. Passing nil unhooks.
@@ -580,7 +650,7 @@ func (u *ULA) FrameID() uint64 {
 	if u.mem == nil || u.mem.TStates == nil {
 		return 0
 	}
-	frame := roms.FrameTStates(u.mem.GetCurrentModel())
+	frame := u.FrameTStates()
 	if frame <= 0 {
 		return 0
 	}
@@ -600,13 +670,12 @@ func (u *ULA) DisplayRow() int {
 	if u.mem == nil || u.mem.TStates == nil {
 		return -1
 	}
-	model := u.mem.GetCurrentModel()
 	t := int(*u.mem.TStates - u.frameStartTstate)
-	start := roms.DisplayStartTState(model)
+	start := u.displayStartTState()
 	if t < start {
 		return -1
 	}
-	row := (t - start) / TStatesPerLineFor(model)
+	row := (t - start) / u.tStatesPerLine()
 	if row >= ScreenHeight {
 		return ScreenHeight
 	}
@@ -752,13 +821,13 @@ func (u *ULA) videoTStates(t int) int {
 // the unit is one T-state, 2 pixels.
 func (u *ULA) paintBorder(changes []borderChange, colour byte) {
 	model := u.mem.GetCurrentModel()
-	line := TStatesPerLineFor(model)
+	line := u.tStatesPerLine()
 	step := 4
 	if model == roms.ModelPentagon {
 		step = 1
 	}
 	unitPx := step * 2
-	first := roms.DisplayStartTState(model) - BorderTop*line - BorderLeft/2
+	first := u.displayStartTState() - BorderTop*line - BorderLeft/2
 
 	next := 0
 	for y := 0; y < TotalHeight; y++ {
@@ -785,9 +854,10 @@ func (u *ULA) paintBorder(changes []borderChange, colour byte) {
 // New creates a new ULA instance.
 func New(mem *memory.Memory, kbd *keyboard.Keyboard) *ULA {
 	u := &ULA{
-		mem: mem,
-		kbd: kbd,
-		img: image.NewRGBA(image.Rect(0, 0, TotalWidth, TotalHeight)),
+		mem:      mem,
+		kbd:      kbd,
+		modelSet: true,
+		img:      image.NewRGBA(image.Rect(0, 0, TotalWidth, TotalHeight)),
 	}
 	// Bound the DC-blocked audio to the speaker's physical amplitude so an
 	// isolated speaker toggle clicks at the level, not the high-pass's 2x
@@ -1372,9 +1442,10 @@ func (u *ULA) BeamPosition() (line, hpos int) {
 	// flush: with audio disabled, or in a loop that does not render every
 	// frame, the offset grows without bound and the masked version became a
 	// free-running counter with no relation to the beam.
-	t %= TStatesPerLine * LinesPerFrame
-	line = t / TStatesPerLine
-	hpos = (t % TStatesPerLine) / 4
+	lineLen := u.tStatesPerLine()
+	t %= lineLen * u.linesPerFrame()
+	line = t / lineLen
+	hpos = (t % lineLen) / 4
 	return line, hpos
 }
 
@@ -1442,6 +1513,15 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	if lsb := addr & 0xFF; u.nextDMA != nil && (lsb == 0x6B || lsb == 0x0B) {
 		u.nextDMA.SetZ80Mode(lsb == 0x0B)
 		return u.nextDMA.ReadCommand(), true
+	}
+
+	// Ports $183B..$1F3B: the Next CTC's four channels. The decode is
+	// owned by the device even when it selects no channel ($1C3B..$1F3B),
+	// so a handled=false from the bank would be a bug, not a fall-through.
+	if u.nextCTC != nil {
+		if v, ok := u.nextCTC.ReadPort(addr); ok {
+			return v, true
+		}
 	}
 
 	// Multiface 3 paging-register readback. Per the FPGA source
@@ -1598,14 +1678,14 @@ func (u *ULA) floatingBusByte() byte {
 
 	// Per-model line length: the 48K ULA uses 224 T-states/line, the 128K
 	// family 228 (video/zxula_timing.vhd c_max_hc 447 vs 455).
-	tPerLine := TStatesPerLineFor(model)
+	tPerLine := u.tStatesPerLine()
 
 	// The first paper fetch of display line 0, measured from the interrupt.
 	// This is per-personality and only the 48K's is a whole 64 scanlines —
 	// see roms.DisplayStartTState. The same constant anchors pkg/memory's
 	// contention window, so the floating bus and contention agree by
 	// construction.
-	displayStart := roms.DisplayStartTState(model)
+	displayStart := u.displayStartTState()
 	if tstates < displayStart {
 		return 0xFF
 	}
@@ -1811,6 +1891,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 	if lsb := addr & 0xFF; u.nextDMA != nil && (lsb == 0x6B || lsb == 0x0B) {
 		u.nextDMA.SetZ80Mode(lsb == 0x0B)
 		u.nextDMA.WriteCommand(val)
+		return
+	}
+
+	// Ports $183B..$1F3B: the Next CTC.
+	if u.nextCTC != nil && u.nextCTC.WritePort(addr, val) {
 		return
 	}
 
@@ -2185,7 +2270,7 @@ func (u *ULA) applyNextCompositor() {
 		if journal != nil {
 			resume = journal.SuspendRecording()
 		}
-		lines := LinesPerFrameFor(u.mem.GetCurrentModel())
+		lines := u.linesPerFrame()
 		for y := h; y < lines; y++ {
 			for hc := 0; hc < columnsPerLine; hc++ {
 				u.copperDebt = u.stepCopperColumn(y, hc, u.copperDebt)
@@ -2519,7 +2604,7 @@ func (u *ULA) audioFrameTStates() int {
 	if u.mem == nil {
 		return 69888
 	}
-	n := roms.FrameTStates(u.mem.GetCurrentModel())
+	n := u.FrameTStates()
 	if u.mem.SpeedMultiplier != nil {
 		if m := u.mem.SpeedMultiplier(); m > 0 {
 			n *= m

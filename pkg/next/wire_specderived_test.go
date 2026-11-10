@@ -314,7 +314,7 @@ func TestSpec_NR09_NilPagerSafe(t *testing.T) {
 // 0 reflect effective video config (not modelled), reading 0.
 func TestSpec_NR05_BitReorderingOnRead(t *testing.T) {
 	disp := nextregs.New()
-	WireJoystickMode(disp)
+	WireJoystickMode(disp, nil)
 
 	type c struct {
 		write, wantRead byte
@@ -322,12 +322,12 @@ func TestSpec_NR05_BitReorderingOnRead(t *testing.T) {
 	}
 	for _, tc := range []c{
 		{0x00, 0x00, "all zero"},
-		{0xFF, 0xFA, "all mode bits set; eff bits 2,0 read 0"},
+		{0xFF, 0xFE, "all mode bits set; 60Hz reads 1, scandoubler bit 0 reads 0"},
 		{0xC0, 0xC0, "joy0[1:0] read back at bits 7:6"},
 		{0x08, 0x08, "joy0[2] (wr bit 3) reads back at bit 3"},
 		{0x02, 0x02, "joy1[2] (wr bit 1) reads back at bit 1"},
 		{0x30, 0x30, "joy1[1:0] (wr bits 5:4) read back at bits 5:4"},
-		{0x55, 0x50, "wr bits 2,0 (eff 50/60Hz + scandouble) masked to 0"},
+		{0x55, 0x54, "60Hz bit 2 retained; scandoubler bit 0 masked to 0"},
 	} {
 		disp.WriteReg(0x05, tc.write)
 		got := disp.ReadReg(0x05)

@@ -29,17 +29,7 @@ func TestEveryNextSubsystemIsReachableOrDeclaredUnreachable(t *testing.T) {
 	//
 	// Anything here needs the reason and what would change it, and the coverage
 	// tables named below need the same statement.
-	unreachable := map[string]string{
-		"ctc": "the four channels and the $183B..$1F3B port decode are modelled " +
-			"and pinned by GHDL-captured golden vectors, but three things about " +
-			"the machine around them are not: the device is clocked by i_CLK_28 " +
-			"independent of NR$07 turbo (zxnext.vhd:4072), its channels are " +
-			"chained through each other's zero-count outputs (:4084), and its " +
-			"interrupt enables come from NR$C5 (:4078-4079), which is " +
-			"stored-only. It was briefly wired with none of those and ticked " +
-			"once per instruction instead, which ran the timers two orders of " +
-			"magnitude slow; that is why this entry is back. ROADMAP item 2.",
-	}
+	unreachable := map[string]string{}
 
 	root, err := filepath.Abs("..")
 	if err != nil {

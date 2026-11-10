@@ -38,10 +38,12 @@ const (
 type IM2Driver struct {
 	chain *IM2DaisyChain
 
-	hwIM2      bool // NR$C0 bit 0: 0 = pulse mode, 1 = hardware IM2
-	vectorBase byte // NR$C0 bits 7:5
-	req        [IM2NumPeriph]bool
-	enabled    [IM2NumPeriph]bool
+	hwIM2       bool // NR$C0 bit 0: 0 = pulse mode, 1 = hardware IM2
+	vectorBase  byte // NR$C0 bits 7:5
+	req         [IM2NumPeriph]bool
+	enabled     [IM2NumPeriph]bool
+	statusClr   [IM2NumPeriph]bool // one-shot i_int_status_clear inputs
+	intListener func(bool)         // /INT state observer for the CPU latch
 }
 
 // NewIM2Driver returns a driver in pulse mode with every source disabled, which
@@ -55,6 +57,23 @@ func NewIM2Driver() *IM2Driver {
 func (d *IM2Driver) SetMode(hwIM2 bool) {
 	d.hwIM2 = hwIM2
 	d.settle()
+	d.notify()
+}
+
+// HWIM2 reports whether the vectored IM2 mode (NR$C0 bit 0) is selected.
+func (d *IM2Driver) HWIM2() bool { return d.hwIM2 }
+
+// SetINTListener installs a callback invoked whenever the chain's /INT
+// state may have changed. The CPU uses it to set its IRQPending latch.
+func (d *IM2Driver) SetINTListener(fn func(bool)) {
+	d.intListener = fn
+	d.notify()
+}
+
+func (d *IM2Driver) notify() {
+	if d.intListener != nil {
+		d.intListener(d.INTAsserted())
+	}
 }
 
 // SetVectorBase applies NR$C0 bits 7:5, the programmable top of the vector byte.
@@ -68,6 +87,7 @@ func (d *IM2Driver) SetEnabled(source int, on bool) {
 	}
 	d.enabled[source] = on
 	d.settle()
+	d.notify()
 }
 
 // Raise and Lower drive one peripheral's request line.
@@ -82,6 +102,7 @@ func (d *IM2Driver) setRequest(source int, on bool) {
 	}
 	d.req[source] = on
 	d.settle()
+	d.notify()
 }
 
 // INTAsserted reports whether the chain is pulling /INT low.
@@ -99,6 +120,7 @@ func (d *IM2Driver) Acknowledge() (byte, bool) {
 	vec := d.chain.VectorByte(d.vectorBase)
 	// /M1 high again: ACK -> ISR, and the slot is held until RETI.
 	d.settle()
+	d.notify()
 	return vec, true
 }
 
@@ -106,6 +128,31 @@ func (d *IM2Driver) Acknowledge() (byte, bool) {
 // and lets a lower-priority one through.
 func (d *IM2Driver) RETISeen() {
 	d.tick(func(in *IM2Inputs) { in.RetiSeen = true })
+	d.settle()
+	d.notify()
+}
+
+// Status reports one peripheral's sticky interrupt-pending bit (NR$C8/C9/CA).
+func (d *IM2Driver) Status(source int) bool {
+	if source < 0 || source >= IM2NumPeriph {
+		return false
+	}
+	return d.chain.Status()[source]
+}
+
+// StatusBits packs every peripheral's sticky status into a mask.
+func (d *IM2Driver) StatusBits() uint16 { return d.chain.StatusBits() }
+
+// ClearStatus applies a write-1-to-clear to one peripheral's status bit,
+// matching the NR$C8/C9/CA write side. It does not acknowledge or lower an
+// outstanding request; it is the software's record-clearing path.
+func (d *IM2Driver) ClearStatus(source int) {
+	if source < 0 || source >= IM2NumPeriph {
+		return
+	}
+	d.statusClr[source] = true
+	d.tick(nil)
+	d.statusClr[source] = false
 	d.settle()
 }
 
@@ -137,10 +184,11 @@ func (d *IM2Driver) settle() {
 
 func (d *IM2Driver) tick(adjust func(*IM2Inputs)) {
 	in := IM2Inputs{
-		IM2:    d.hwIM2,
-		HWIM2:  d.hwIM2,
-		IntReq: d.req,
-		IntEn:  d.enabled,
+		IM2:         d.hwIM2,
+		HWIM2:       d.hwIM2,
+		IntReq:      d.req,
+		IntEn:       d.enabled,
+		StatusClear: d.statusClr,
 	}
 	if adjust != nil {
 		adjust(&in)

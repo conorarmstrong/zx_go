@@ -121,7 +121,7 @@ func TestFirstContendedTState(t *testing.T) {
 	}
 }
 
-// TestFrameTStates pins the per-model frame length. 48K: 312 lines * 224.
+// TestFrameTStates pins the per-model 50 Hz frame length. 48K: 312 lines * 224.
 // 128K family: 311 * 228. Pentagon: 320 * 224 (zxula_timing.vhd c_max_vc /
 // c_max_hc per personality).
 func TestFrameTStates(t *testing.T) {
@@ -140,5 +140,47 @@ func TestFrameTStates(t *testing.T) {
 		if got := FrameTStates(tc.model); got != tc.want {
 			t.Errorf("FrameTStates(%s) = %d, want %d", GetModelName(tc.model), got, tc.want)
 		}
+	}
+}
+
+// Test60HzGeometry pins the 60 Hz raster values from zxula_timing.vhd's
+// i_50_60=1 branch: c_max_vc=263 (264 lines), c_min_vactive=40, c_int_v=0.
+// The line length is unchanged. At 60 Hz both the 48K and the 128K family
+// use 264 lines; the display start and frame length therefore change even
+// though the pixel clock does not.
+func Test60HzGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		model     SpectrumModel
+		lines     int
+		frame     int
+		display   int
+		firstCont int
+	}{
+		{Model48K, 264, 59136, 8960, 8959},
+		{Model128K, 264, 60192, 9118, 9117},
+		{ModelPlus2, 264, 60192, 9118, 9117},
+		{ModelPlus2A, 264, 60192, 9119, 9118},
+		{ModelPlus3, 264, 60192, 9119, 9118},
+		{ModelNext, 264, 60192, 9118, 9117},
+	} {
+		if got := LinesPerFrameFor(tc.model, true); got != tc.lines {
+			t.Errorf("LinesPerFrameFor(%s,60) = %d, want %d", GetModelName(tc.model), got, tc.lines)
+		}
+		if got := FrameTStatesFor(tc.model, true); got != tc.frame {
+			t.Errorf("FrameTStatesFor(%s,60) = %d, want %d", GetModelName(tc.model), got, tc.frame)
+		}
+		if got := DisplayStartTStateFor(tc.model, true); got != tc.display {
+			t.Errorf("DisplayStartTStateFor(%s,60) = %d, want %d", GetModelName(tc.model), got, tc.display)
+		}
+		if got := FirstContendedTStateFor(tc.model, true); got != tc.firstCont {
+			t.Errorf("FirstContendedTStateFor(%s,60) = %d, want %d", GetModelName(tc.model), got, tc.firstCont)
+		}
+	}
+	// Pentagon has no 60 Hz timing: it must keep its 50 Hz values.
+	if got := FrameTStatesFor(ModelPentagon, true); got != 71680 {
+		t.Errorf("Pentagon 60 Hz frame = %d, want 71680 (no 60 Hz mode)", got)
+	}
+	if got := LinesPerFrameFor(ModelPentagon, true); got != 320 {
+		t.Errorf("Pentagon 60 Hz lines = %d, want 320", got)
 	}
 }

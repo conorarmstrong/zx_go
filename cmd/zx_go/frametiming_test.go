@@ -30,3 +30,25 @@ func TestFrameTStatesForModel(t *testing.T) {
 		}
 	}
 }
+
+// TestFrameTStatesForModel60 pins the 60 Hz Next frame lengths. The
+// selection comes from NR$05 bit 2; the emitter must use the same value
+// for the CPU budget and the wall-clock frame period.
+func TestFrameTStatesForModel60(t *testing.T) {
+	for _, tc := range []struct {
+		model roms.SpectrumModel
+		want  int
+	}{
+		{roms.Model48K, 59136},
+		{roms.Model128K, 60192},
+		{roms.ModelPlus2, 60192},
+		{roms.ModelPlus2A, 60192},
+		{roms.ModelPlus3, 60192},
+		{roms.ModelNext, 60192},
+		{roms.ModelPentagon, 71680}, // no 60 Hz mode
+	} {
+		if got := frameTStatesForModel(tc.model, true); got != tc.want {
+			t.Errorf("frameTStatesForModel(%v, 60Hz) = %d, want %d", tc.model, got, tc.want)
+		}
+	}
+}

@@ -113,3 +113,17 @@ func TestFramePacerFollowsAModelSwitch(t *testing.T) {
 		t.Errorf("wait after model switch = %v, want 20.48ms", wait)
 	}
 }
+
+// TestFrameDuration60Hz pins the Next's 60 Hz wall-clock period:
+// 60192 T at 3.5469 MHz = 16.970 ms (~58.93 Hz for the +3 geometry
+// the VHDL specifies).
+func TestFrameDuration60Hz(t *testing.T) {
+	got := frameDurationForModel(roms.ModelNext, true)
+	want := time.Duration(60192) * time.Second / time.Duration(cpuHz128K)
+	if d := got - want; d > time.Nanosecond || d < -time.Nanosecond {
+		t.Errorf("frameDurationForModel(Next, 60Hz) = %v, want %v", got, want)
+	}
+	if got == 20*time.Millisecond {
+		t.Error("60 Hz frame still paced at 50 Hz")
+	}
+}

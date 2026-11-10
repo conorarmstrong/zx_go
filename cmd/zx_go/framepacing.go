@@ -42,10 +42,12 @@ func cpuHzForModel(model roms.SpectrumModel) int {
 //	          70908 T @ 3.5469 MHz = 19.992 ms  (50.02 Hz)
 //	Pentagon  71680 T @ 3.5 MHz    = 20.480 ms  (48.83 Hz)
 //
-// The emulation loop used a flat 20 ms tick for every machine, which is
-// wrong for all of them and noticeably so for the Pentagon.
-func frameDurationForModel(model roms.SpectrumModel) time.Duration {
-	frameT := frameTStatesForModel(model)
+// At the Next's 60 Hz mode the 48K/128K-family frame is 264 lines:
+// 59136 T and 60192 T respectively. The emulation loop used a flat 20 ms
+// tick for every machine, which is wrong for all of them and noticeably
+// so for the Pentagon.
+func frameDurationForModel(model roms.SpectrumModel, sixtyHz ...bool) time.Duration {
+	frameT := frameTStatesForModel(model, sixtyHz...)
 	return time.Duration(frameT) * time.Second / time.Duration(cpuHzForModel(model))
 }
 

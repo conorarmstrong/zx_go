@@ -121,6 +121,17 @@ type CPU struct {
 	// IRQPending.Store(true) — only line interrupts can fire.
 	FrameIntDisabled bool
 
+	// IRQExternal is set when the Next's hardware IM2 mode owns the
+	// maskable interrupt line (NR$C0 bit 0). In that mode the frame and
+	// line INT pulses must not write IRQPending directly: the daisy
+	// chain drives it through IntLineActive, and a source that remains
+	// pending must survive the M1 accept of a higher-priority one.
+	IRQExternal bool
+	// IntLineActive, when non-nil, reports whether the external IM2
+	// chain is still asserting /INT after an acknowledge. It keeps the
+	// CPU's IRQPending latch set for a nested source.
+	IntLineActive func() bool
+
 	// --- Spec-faithful frame-INT timing (timing.md §1a/§1c) ---
 	// The FPGA asserts the maskable frame INT for a NARROW pulse at a
 	// specific point in the ULA frame, not "held the whole frame".
@@ -189,7 +200,7 @@ type CPU struct {
 	// speedLocked pins speedSelect across guest NR$07 writes (diagnostic).
 	speedLocked bool
 
-	// retnHook fires after RETN/RETI — see SetRETNHook.
+	// retnHook fires after ED $45 RETN — see SetRETNHook.
 	retnHook func()
 
 	// retiSeenHook fires after ED $4D only, and intAckHook fires when an
@@ -197,6 +208,18 @@ type CPU struct {
 	// daisy chain is built on; see SetRETISeenHook and SetINTAckHook.
 	retiSeenHook func()
 	intAckHook   func() (byte, bool)
+
+	// instructionHook fires after every executed instruction (including
+	// HALT refreshes and interrupt/NMI acknowledge cycles) with the number
+	// of CPU T-states consumed. Used by the Next CTC, which is clocked by
+	// the fixed 28 MHz clock and must advance independently of the CPU's
+	// turbo multiplier.
+	instructionHook func(int)
+	// frameIntHook and lineIntHook fire when the ULA raises its frame or
+	// line interrupt request, before the CPU samples it. They feed the
+	// Next's IM2 daisy chain, whose request latches are edge-triggered.
+	frameIntHook func()
+	lineIntHook  func()
 
 	// Memory and ULA interfaces
 	mem Memory
@@ -687,12 +710,13 @@ func (c *CPU) SpeedMultiplier() int {
 	return 1
 }
 
-// retnHook, when non-nil, fires after every RETN/RETI (all ED
-// mirror encodings). The TBBlue T80N asserts I_RETN for BOTH
-// instructions (t80n_mcode.vhd:660,2432) and zxnext.vhd routes it
-// to the divMMC as i_retn_seen, clearing the automap latch — without
-// this the overlay would stay latched across ISR exits where real
-// hardware drops it.
+// retnHook, when non-nil, fires after RETN (ED $45 only). zxnext.vhd:4111
+// routes z80_retn_seen_28 to the divMMC as i_retn_seen, clearing the
+// automap latch, and that signal is im2_control.vhd's o_retn_seen (:236),
+// which matches the bus opcode ED $45 exactly (:128-135). The T80N's own
+// I_RETN is internal (it only restores IFF1) and RETI, $55/$65/$75 and the
+// other mirrors do not reach the divMMC, so an ISR that ends in RETI leaves
+// the automap latch alone.
 //
 // SetRETNHook installs it; pass nil to remove.
 func (c *CPU) SetRETNHook(fn func()) { c.retnHook = fn }
@@ -701,10 +725,8 @@ func (c *CPU) SetRETNHook(fn func()) { c.retnHook = fn }
 // vectored-interrupt daisy chain waits for before it releases the in-service
 // slot and lets a lower-priority peripheral through.
 //
-// It is deliberately narrower than SetRETNHook. That one fires for every mirror
-// of both RETI and RETN, because the T80N asserts I_RETN for all of them
-// (t80n_mcode.vhd:660) and the divMMC wants exactly that. The IM2 controller
-// decodes the opcode byte itself and matches $4D exactly
+// It matches ED $4D only, where SetRETNHook matches ED $45 only. The IM2
+// controller decodes the opcode byte itself and matches $4D exactly
 // (im2_control.vhd:135, :172-173, :234), so $5D, $6D and $7D execute the same
 // instruction and are not this signal.
 //
@@ -729,6 +751,27 @@ func (c *CPU) SetRETISeenHook(fn func()) { c.retiSeenHook = fn }
 //
 // Pass nil to remove.
 func (c *CPU) SetINTAckHook(fn func() (byte, bool)) { c.intAckHook = fn }
+
+// SetInstructionHook installs a callback fired after every instruction
+// with the CPU T-states it consumed. It is used by the Next CTC, which
+// runs from the fixed 28 MHz clock rather than the CPU clock.
+func (c *CPU) SetInstructionHook(fn func(tstates int)) { c.instructionHook = fn }
+
+// SetFrameIntHook installs a callback fired when the ULA frame INT is
+// raised at its programmed assert T-state. It feeds the Next IM2 chain.
+func (c *CPU) SetFrameIntHook(fn func()) { c.frameIntHook = fn }
+
+// SetLineIntHook installs a callback fired when the ULA line INT is
+// raised at its programmed scanline. It feeds the Next IM2 chain.
+func (c *CPU) SetLineIntHook(fn func()) { c.lineIntHook = fn }
+
+// notifyInstruction advances the instruction hook. A zero/negative delta
+// (possible only on a malformed custom instruction path) is ignored.
+func (c *CPU) notifyInstruction(tstates int) {
+	if c.instructionHook != nil && tstates > 0 {
+		c.instructionHook(tstates)
+	}
+}
 
 // SetSpeedSelect installs the NextReg 0x07 speed selector. Only
 // the low 2 bits are honoured; other bits are ignored. A no-op once
@@ -841,10 +884,19 @@ func (c *CPU) frameIntPulse(frameStart uint64) {
 	}
 	assertAt := frameStart + c.IntAssertTstate*uint64(c.SpeedMultiplier())
 	windowEnd := assertAt + c.IntPulseTstates
+	// Feed the IM2 chain at the moment the FPGA's int_ula pulse is
+	// generated, even if no M1 sample point falls inside the window: the
+	// daisy-chain request latch is edge-triggered on CLK_28 and holds the
+	// request until the CPU acknowledges it.
+	if !c.frameIntFired && c.tstates >= assertAt && c.frameIntHook != nil {
+		c.frameIntHook()
+	}
 	switch {
 	case !c.frameIntFired && c.tstates >= assertAt && c.tstates < windowEnd:
 		// An M1 sample point fell inside the pulse window — latch the INT.
-		c.IRQPending.Store(true)
+		if !c.IRQExternal {
+			c.IRQPending.Store(true)
+		}
 		c.frameIntFired = true
 	case !c.frameIntFired && c.tstates >= windowEnd:
 		// No M1 boundary landed inside the window: a single long/atomic
@@ -860,7 +912,9 @@ func (c *CPU) frameIntPulse(frameStart uint64) {
 	case c.frameIntFired && !c.frameIntDeasct && c.tstates >= windowEnd:
 		// pulse window elapsed; interrupt() clears IRQPending on
 		// acceptance, so a still-set latch here means it was missed.
-		c.IRQPending.Store(false)
+		if !c.IRQExternal {
+			c.IRQPending.Store(false)
+		}
 		c.frameIntDeasct = true
 	}
 }
@@ -900,7 +954,7 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	narrowPulse := c.IntPulseTstates > 0
 	c.frameIntFired = false
 	c.frameIntDeasct = false
-	if !c.FrameIntDisabled && !narrowPulse {
+	if !c.FrameIntDisabled && !narrowPulse && !c.IRQExternal {
 		c.IRQPending.Store(true)
 	}
 
@@ -927,7 +981,12 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 		// interrupt uses — the CPU's M1 sample point handles both
 		// identically.
 		if lineIntAt != 0 && !c.lineIntFired && c.tstates >= lineIntAt {
-			c.IRQPending.Store(true)
+			if !c.IRQExternal {
+				c.IRQPending.Store(true)
+			}
+			if c.lineIntHook != nil {
+				c.lineIntHook()
+			}
 			c.lineIntFired = true
 		}
 		// INT sample point — equivalent to the Z80's M1-boundary
@@ -939,7 +998,12 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 		// take. The next M1 sees eiDelay=false and may acknowledge.
 		if c.IRQPending.Load() && c.IFF1 && !c.eiDelay {
 			c.interrupt()
-			c.IRQPending.Store(false)
+			if c.IRQExternal && c.IntLineActive != nil && c.IntLineActive() {
+				// A lower-priority source is still pending; leave the
+				// latch for the next M1.
+			} else {
+				c.IRQPending.Store(false)
+			}
 		}
 		c.eiDelay = false
 		if c.Halted {
@@ -998,18 +1062,22 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	if c.IRQPending.Load() {
 		if c.IFF1 {
 			c.interrupt()
-		} else {
+			if !c.IRQExternal || c.IntLineActive == nil || !c.IntLineActive() {
+				c.IRQPending.Store(false)
+			}
+		} else if !c.IRQExternal {
 			IntRejectCount++
 			LastRejectPC = c.PC
 			LastRejectInsns = c.instructionCount
+			c.IRQPending.Store(false)
 		}
-		c.IRQPending.Store(false)
 	}
 
 	c.tstates -= tstatesEnd
 }
 
 func (c *CPU) executeInstruction() {
+	before := c.tstates
 	if c.PreFetchHook != nil {
 		c.PreFetchHook(c.PC)
 	}
@@ -1037,6 +1105,7 @@ func (c *CPU) executeInstruction() {
 		h.fn(pc)
 	}
 	c.executeBaseInstruction(opcode)
+	c.notifyInstruction(int(c.tstates - before))
 	// Classify any non-sequential PC transition the instruction
 	// just caused, for the debugger's history attribution. Done
 	// post-execute so we see the actual new PC and decide based on
@@ -1213,6 +1282,7 @@ func (c *CPU) StepInstruction() {
 func (c *CPU) haltTick() {
 	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7F)
 	c.tstates += 4
+	c.notifyInstruction(4)
 }
 
 // stepFrameBudget is the per-frame T-state count used by
@@ -1269,7 +1339,7 @@ func (c *CPU) StepInstructionWithIRQ() {
 	// Narrow pulse: only reset the per-frame one-shots here; the pulse
 	// itself is raised/withdrawn by frameIntPulse below (timing.md §1c).
 	if c.tstates >= c.nextFrameBoundary {
-		if !c.FrameIntDisabled && !narrowPulse {
+		if !c.FrameIntDisabled && !narrowPulse && !c.IRQExternal {
 			c.IRQPending.Store(true)
 		}
 		c.nextFrameBoundary = ((c.tstates / frameBudget) + 1) * frameBudget
@@ -1285,7 +1355,12 @@ func (c *CPU) StepInstructionWithIRQ() {
 	if c.LineIntOffsetTstates > 0 && !c.lineIntFired {
 		frameStart := c.nextFrameBoundary - frameBudget
 		if c.tstates >= frameStart+c.LineIntOffsetTstates {
-			c.IRQPending.Store(true)
+			if !c.IRQExternal {
+				c.IRQPending.Store(true)
+			}
+			if c.lineIntHook != nil {
+				c.lineIntHook()
+			}
 			c.lineIntFired = true
 		}
 	}
@@ -1293,7 +1368,11 @@ func (c *CPU) StepInstructionWithIRQ() {
 	// IRQ sample point at M1 boundary
 	if c.IRQPending.Load() && c.IFF1 && !c.eiDelay {
 		c.interrupt()
-		c.IRQPending.Store(false)
+		if c.IRQExternal && c.IntLineActive != nil && c.IntLineActive() {
+			// Another daisy-chain source is still pending.
+		} else {
+			c.IRQPending.Store(false)
+		}
 	}
 	c.eiDelay = false
 
@@ -3000,9 +3079,6 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		// (IFF1 <- IFF2), the same as RETN.
 		c.IFF1 = c.IFF2
 		c.tstates += 14
-		if c.retnHook != nil {
-			c.retnHook() // t80n_mcode.vhd asserts I_RETN for RETI too (line 660)
-		}
 	case 0x45, 0x55, 0x65, 0x75: // RETN mirrors
 		popped := c.pop() // always pop (SP stays correct)
 		if c.NMIStackless && c.StacklessReadNR != nil {
@@ -3016,7 +3092,8 @@ func (c *CPU) executeEDInstruction(opcode byte) {
 		c.WZ = c.PC // per Sean Young §3.4: RETN sets MEMPTR = popped PC
 		c.IFF1 = c.IFF2
 		c.tstates += 14
-		if c.retnHook != nil {
+		// Only ED $45 is the divMMC's i_retn_seen (im2_control.vhd:236).
+		if opcode == 0x45 && c.retnHook != nil {
 			c.retnHook()
 		}
 
@@ -4750,6 +4827,7 @@ func (c *CPU) interrupt() {
 	if !c.IFF1 {
 		return
 	}
+	before := c.tstates
 	IntFireCount++
 	LastIntPC = c.PC
 	LastIntInsns = c.instructionCount
@@ -4814,10 +4892,12 @@ func (c *CPU) interrupt() {
 	// Per Sean Young §3.4: interrupt acceptance modifies MEMPTR
 	// like CALL — the post-jump PC is loaded into WZ.
 	c.WZ = c.PC
+	c.notifyInstruction(int(c.tstates - before))
 }
 
 // NMI (Non-Maskable Interrupt) handling - for Multiface red button
 func (c *CPU) NMI() {
+	before := c.tstates
 	// NMI cannot be disabled and always executes.
 	//
 	// Standard Z80 documentation says IFF2 = IFF1 before clearing IFF1,
@@ -4855,4 +4935,5 @@ func (c *CPU) NMI() {
 	c.PC = 0x0066
 	c.WZ = c.PC // per Sean Young §3.4: NMI acceptance behaves like CALL
 	c.tstates += 11
+	c.notifyInstruction(int(c.tstates - before))
 }

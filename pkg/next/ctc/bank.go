@@ -126,3 +126,51 @@ func (b *Bank) Tick() {
 		c.Tick()
 	}
 }
+
+// TickChained advances every channel by one CTC clock with the hardware's
+// zero-count chaining: channel n's trigger is channel n-1's registered
+// ZC/TO output, and channel 0's trigger is channel 3's output
+// (zxnext.vhd:4084, `ctc_zc_to(2 downto 0) & ctc_zc_to(3)`).
+//
+// It returns the registered ZC/TO pulse for each channel after the tick,
+// which the IM2 wiring uses to raise the matching interrupt request.
+func (b *Bank) TickChained() [NumChannels]bool {
+	var out [NumChannels]bool
+	prev := b.ch[NumChannels-1].ZCTO()
+	for i, c := range b.ch {
+		c.SetTrigger(prev)
+		c.Tick()
+		out[i] = c.ZCTO()
+		prev = out[i]
+	}
+	return out
+}
+
+// Running reports whether any channel is counting.
+func (b *Bank) Running() bool {
+	for _, c := range b.ch {
+		if c.Running() {
+			return true
+		}
+	}
+	return false
+}
+
+// Idle reports whether every channel is still waiting for a control word.
+// In that state a CTC clock cannot change any channel's state, so the
+// 28 MHz tick loop can be skipped.
+func (b *Bank) Idle() bool {
+	for _, c := range b.ch {
+		if !c.Idle() {
+			return false
+		}
+	}
+	return true
+}
+
+// HardReset puts every channel back to its power-on state.
+func (b *Bank) HardReset() {
+	for _, c := range b.ch {
+		c.HardReset()
+	}
+}

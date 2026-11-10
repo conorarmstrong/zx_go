@@ -65,12 +65,6 @@ import (
 )
 
 const (
-	// tstatesPerFrame is the 48K ULA frame length. The 128K family and
-	// the Next use a longer frame — see frameTStatesForModel, which the
-	// ExecuteFrame loops use so the maskable INT cadence is model-correct
-	// (timing.md §1a; the Next previously ran the 48K 69888 by mistake).
-	tstatesPerFrame = 69888
-
 	// tapeTurboFramesPerTick is how many emulated frames run per 50 Hz tick
 	// while fast tape loading is active. ~64× turns a multi-minute real-time
 	// tape load into ~10 s of wall-clock without starving the UI thread
@@ -93,19 +87,14 @@ const (
 
 // frameTStatesForModel returns the ULA frame length in 3.5 MHz T-states
 // for a machine model: 48K = 69888; the 128K family (128K/+2/+2A/+3) and
-// the Spectrum Next (which boots in +3/128K timing) = 70908. Matches the
-// per-model convention in z80.ExecuteFrame and the 70908 stepFrameBudget
-// used by StepInstructionWithIRQ, and the FPGA frame geometry
-// (zxula_timing.vhd c_max_hc/c_max_vc → (456·311)/2 = 70908).
-func frameTStatesForModel(model roms.SpectrumModel) int {
-	switch model {
-	case roms.Model48K:
-		return tstatesPerFrame // 69888
-	case roms.ModelPentagon:
-		return 71680 // Pentagon 128: 320 lines × 224 T-states, no contention
-	default:
-		return 70908
-	}
+// the Spectrum Next (which boots in +3/128K timing) = 70908. At the Next's
+// 60 Hz video mode the 48K and 128K family use 264 lines instead of
+// 312/311, giving 59136/60192. Matches the per-model convention in
+// z80.ExecuteFrame and the FPGA frame geometry (zxula_timing.vhd
+// c_max_hc/c_max_vc).
+func frameTStatesForModel(model roms.SpectrumModel, sixtyHz ...bool) int {
+	on := len(sixtyHz) > 0 && sixtyHz[0]
+	return roms.FrameTStatesFor(model, on)
 }
 
 type keyState struct {
@@ -182,6 +171,9 @@ type emulator struct {
 	// ULA frame length (frameTStatesForModel) so the maskable INT cadence
 	// is model-correct in the GUI render loop too (timing.md §1a).
 	model roms.SpectrumModel
+	// video60Hz is the Next's effective 50/60 Hz video mode (NR$05 bit 2).
+	// It changes the frame length, INT assert point and contention origin.
+	video60Hz bool
 
 	// coreMu guards the swappable machine core: model, cpu, mem, ula, kbd,
 	// peripherals, zx8x, sam and the Next device set. The emulation goroutine
@@ -929,11 +921,22 @@ func configureClassicIntTiming(cpu *z80.CPU, model roms.SpectrumModel) {
 		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
 		return
 	}
+	configureIntTiming(cpu, nr03, false)
+}
+
+// configureIntTiming applies the narrow frame-INT pulse for a machine
+// timing code and 50/60 Hz selection. Kept separate so the NextReg $05
+// bit-2 handler can re-apply the assert point when the guest switches
+// video mode at runtime.
+func configureIntTiming(cpu *z80.CPU, nr03 byte, sixtyHz bool) {
+	if cpu == nil {
+		return
+	}
 	if os.Getenv("ZX_GO_NO_INT_TIMING") != "" {
 		cpu.IntAssertTstate, cpu.IntPulseTstates = 0, 0
 		return
 	}
-	assert, pulse := next.FrameIntTiming(nr03, false)
+	assert, pulse := next.FrameIntTiming(nr03, sixtyHz)
 	cpu.IntAssertTstate = uint64(assert)
 	cpu.IntPulseTstates = uint64(pulse)
 }
@@ -1335,7 +1338,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		// (no accumulated drift) and drops missed frames instead of running
 		// them back-to-back — see framepacing.go.
 		pacer := newFramePacer(time.Now())
-		timer := time.NewTimer(frameDurationForModel(e.currentModel()))
+		timer := time.NewTimer(frameDurationForModel(e.currentModel(), e.video60Hz))
 		defer timer.Stop()
 
 		frameCount := 0
@@ -1343,7 +1346,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		for {
 			select {
 			case <-timer.C:
-				period := frameDurationForModel(e.currentModel())
+				period := frameDurationForModel(e.currentModel(), e.video60Hz)
 				timer.Reset(pacer.next(time.Now(), period))
 				if !e.paused.Load() {
 					// Honour the remote debugger's pause state.
@@ -1409,7 +1412,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					case e.rzxRecord.Load() != nil:
 						recorder := e.rzxRecord.Load()
 						before := e.cpu.InstructionCount()
-						e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
+						e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
 						delta := e.cpu.InstructionCount() - before
 						if delta > 0xFFFF {
 							slog.Warn("RZX record: frame instruction count exceeded 0xFFFF, clamping", "count", delta)
@@ -1458,7 +1461,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							if e.ula != nil {
 								before = e.ula.FEReadCount()
 							}
-							e.cpu.ExecuteFrame(frameTStatesForModel(e.model))
+							e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
 							if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
 								heavyReads = true
 							}

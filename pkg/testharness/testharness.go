@@ -29,9 +29,11 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
 	"github.com/conorarmstrong/zx_go/pkg/next"
+	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/esxdos"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/opus"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
@@ -57,6 +59,15 @@ type Harness struct {
 	kbd         *keyboard.Keyboard
 	peripherals *peripherals.PeripheralManager
 	opus        *opus.Interface
+
+	// nextRegs is the Spectrum Next NextReg dispatcher when the harness
+	// was constructed with ModelNext. Tests use it to poke/inspect the
+	// register file without going through a guest port sequence.
+	nextRegs *nextregs.Dispatcher
+	// nextIM2 and nextCTC are the wired Next interrupt chain and CTC
+	// bank; nil on classic models.
+	nextIM2 *next.IM2Driver
+	nextCTC *ctc.Bank
 
 	// nextEsxdos is the Spectrum Next's esxDOS dispatcher when
 	// the harness was constructed with ModelNext, nil otherwise.
@@ -156,6 +167,17 @@ func New(model roms.SpectrumModel) (*Harness, error) {
 // register state directly can use it; most tests should stick to
 // the higher-level Memory / ScreenText helpers.
 func (h *Harness) CPU() *z80.CPU { return h.cpu }
+
+// NextRegs returns the Spectrum Next NextReg dispatcher, or nil for
+// classic models. Tests use ReadReg/WriteReg to inspect or preset the
+// register file directly.
+func (h *Harness) NextRegs() *nextregs.Dispatcher { return h.nextRegs }
+
+// NextIM2 returns the Spectrum Next IM2 daisy-chain driver, or nil.
+func (h *Harness) NextIM2() *next.IM2Driver { return h.nextIM2 }
+
+// NextCTC returns the Spectrum Next CTC bank, or nil.
+func (h *Harness) NextCTC() *ctc.Bank { return h.nextCTC }
 
 // CloseFiles closes any open esxDOS host-file handles. Tests should call
 // it (via t.Cleanup) before their t.TempDir is removed — on Windows an

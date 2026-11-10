@@ -12,6 +12,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/compositor"
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dma"
@@ -81,6 +82,8 @@ func newNext() (*Harness, error) {
 	uartEngine := uartpkg.New()
 	dmaEngine := dma.New(mem)
 	dacBank := dac.New()
+	im2 := next.NewIM2Driver()
+	ctcBank := ctc.NewBank()
 	next.Wire(next.WireOpts{
 		Dispatcher: disp,
 		Memory:     mem,
@@ -93,9 +96,26 @@ func newNext() (*Harness, error) {
 		Copper:     cop,
 		RTC:        rtcEngine,
 		UART:       uartEngine,
+		IM2:        im2,
+		Video60Hz:  u.SixtyHz,
+		SetVideo60Hz: func(on bool) {
+			u.Set60Hz(on)
+			mem.Set60Hz(on)
+			if nr03, ok := next.MachineTimingFor(roms.ModelNext); ok {
+				assert, pulse := next.FrameIntTiming(nr03, on)
+				cpu.IntAssertTstate = uint64(assert)
+				cpu.IntPulseTstates = uint64(pulse)
+			}
+			disp.WriteReg(0x22, disp.ReadReg(0x22))
+		},
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	u.SetNextCTC(ctcBank)
+	ctcClock := next.NewCTCClock(ctcBank, im2)
+	cpu.SetInstructionHook(func(tstates int) {
+		ctcClock.Advance(tstates, cpu.SpeedMultiplier())
+	})
 	u.SetNextAY(ayEngine)
 	comp := compositor.New(pal, l2)
 	comp.SetSprites(sprites)
@@ -195,6 +215,9 @@ func newNext() (*Harness, error) {
 		kbd:         kbd,
 		peripherals: pm,
 		nextEsxdos:  esx,
+		nextRegs:    disp,
+		nextIM2:     im2,
+		nextCTC:     ctcBank,
 		nextDivMMC:  pager,
 		nextDAC:     dacBank,
 		nextSprites: sprites,

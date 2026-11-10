@@ -99,6 +99,9 @@ type Memory struct {
 	contendTiming   contentionTiming
 	contendTPerLine uint64
 	contendStart    uint64
+	// sixtyHz follows the Next's effective video mode (NR$05 bit 2) so
+	// the contention window moves with the display origin at 60 Hz.
+	sixtyHz bool
 
 	// Opus Discovery overlay, nil unless the interface is fitted.
 	opus OpusOverlay
@@ -1026,7 +1029,7 @@ func (m *Memory) setupModel(model roms.SpectrumModel) error {
 	// so it must not re-derive these from the model each time.
 	m.contendTiming = contentionTimingFor(model)
 	m.contendTPerLine = uint64(roms.TStatesPerLine(model))
-	m.contendStart = uint64(roms.FirstContendedTState(model))
+	m.contendStart = uint64(roms.FirstContendedTStateFor(model, m.sixtyHz))
 
 	var err error
 	switch model {
@@ -1300,6 +1303,17 @@ func (m *Memory) BetaPreFetch(pc uint16) {
 func (m *Memory) GetCurrentModel() roms.SpectrumModel {
 	return m.currentModel
 }
+
+// Set60Hz switches the contention window to the model's 60 Hz display
+// origin. The line length is unchanged; only the frame-relative start
+// of the first contended T-state moves. Safe to call while running.
+func (m *Memory) Set60Hz(on bool) {
+	m.sixtyHz = on
+	m.contendStart = uint64(roms.FirstContendedTStateFor(m.currentModel, on))
+}
+
+// SixtyHz reports the current video-timing selection.
+func (m *Memory) SixtyHz() bool { return m.sixtyHz }
 
 // GetROMManager returns the ROM manager
 func (m *Memory) GetROMManager() *roms.ROMManager {

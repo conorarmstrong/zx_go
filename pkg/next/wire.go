@@ -146,15 +146,19 @@ func WireJoystickIOMode(d *nextregs.Dispatcher) {
 func WireInterruptEnable0(d *nextregs.Dispatcher) {
 	d.SetOnWrite(0xC4, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0xC4, val&0x83) // bits 7, 1, 0 retained
-		// Bit 1 of NR$C4 aliases NR$22 bit 1 (line int enable).
-		// Update NR$22's storage to reflect this AND trigger its
-		// OnWrite to recompute cpu.LineIntOffsetTstates.
+		// NR$C4 bits 1:0 alias NR$22 bits 1 and 2: bit 1 writes
+		// nr_22_line_interrupt_en (zxnext.vhd:5610) and bit 0 writes
+		// port_ff_reg(6) <= not bit 0 (:3622-3623), which NR$22 bit 2
+		// reads and writes. Mirror both into NR$22's storage and
+		// trigger its OnWrite so cpu.LineIntOffsetTstates and
+		// cpu.FrameIntDisabled are recomputed.
 		oldNR22 := disp.Raw(0x22)
-		var newNR22 byte
+		newNR22 := oldNR22 &^ 0x06
 		if val&0x02 != 0 {
-			newNR22 = oldNR22 | 0x02
-		} else {
-			newNR22 = oldNR22 &^ 0x02
+			newNR22 |= 0x02
+		}
+		if val&0x01 == 0 {
+			newNR22 |= 0x04
 		}
 		if newNR22 != oldNR22 {
 			disp.WriteReg(0x22, newNR22)
@@ -245,36 +249,28 @@ func WirePeripheral3(d *nextregs.Dispatcher, pager MAPRAMClearer) {
 	})
 }
 
-// WireJoystickMode installs the NextReg $05 OnWrite + OnRead
-// handlers per zxnext.vhd:
+// WireJoystickMode installs the NextReg $05 OnWrite handler per
+// zxnext.vhd:
 //
 //	WRITE:
 //	    nr_05_joy0 <= nr_wr_dat(3) & nr_wr_dat(7 downto 6)
 //	    nr_05_joy1 <= nr_wr_dat(1) & nr_wr_dat(5 downto 4)
 //
-//	READ:
-//	    port_253b_dat <=
-//	        nr_05_joy0(1 downto 0) & '0' & nr_05_joy0(2) &
-//	        nr_05_joy1(1 downto 0) & '0' & nr_05_joy1(2)
+// The read places joy0 at bits (7,6,_,4) and joy1 at bits (3,2,_,0);
+// bit 2 is the effective 50/60 Hz mode and bit 0 the effective
+// scandoubler enable. The mode bits round-trip exactly. Bit 2 is wired
+// through set60 so the ULA, memory contention and CPU frame-interrupt
+// timing switch together; bit 0 is not modelled, so it reads 0.
 //
-// So the write packs bits (7,6,3) → joy0 [MSB:LSB] and (5,4,1) →
-// joy1 [MSB:LSB], while the read places joy0 at bits (7,6,_,4) and
-// joy1 at bits (3,2,_,0) with bits 5 and 1 always reading as 0.
-// Net effect: writing $FF reads back as $DD (joy0=$7, joy1=$7).
-//
-// We store the SPEC-CORRECT READ-BACK byte directly so reads
-// transparently see whatever the spec says reads should return.
-func WireJoystickMode(d *nextregs.Dispatcher) {
+// set60 may be nil on test paths that only exercise the register file.
+func WireJoystickMode(d *nextregs.Dispatcher, set60 func(bool)) {
 	d.SetOnWrite(0x05, func(disp *nextregs.Dispatcher, val byte) {
-		// Read-back per FPGA zxnext.vhd:5897:
-		//   [7:6]=joy0[1:0] [5:4]=joy1[1:0] [3]=joy0[2] [2]=eff 50/60Hz
-		//   [1]=joy1[2] [0]=eff scandouble.
-		// The write decode (:5156-5158) places joy0/joy1 at exactly those
-		// positions, so the joystick-mode bits read back where they were
-		// written; only bits 2 and 0 reflect effective video config (not
-		// modelled in NR$05), so the read is the written byte with those
-		// two bits masked to 0.
-		disp.Store(0x05, val&0xFA)
+		// Keep bit 2 (50/60 Hz); mask only the unwritten scandoubler
+		// bit, which the emulator does not model.
+		disp.Store(0x05, val&0xFE)
+		if set60 != nil {
+			set60(val&0x04 != 0)
+		}
 	})
 }
 
@@ -859,6 +855,17 @@ type WireOpts struct {
 	// classic-model or test paths that don't construct a divMMC
 	// overlay.
 	DivMMCPager AutomapSetter
+	// SetVideo60Hz, when set, is called on every NR$05 bit-2 write. The
+	// caller wires it to the ULA, memory contention and CPU frame-INT
+	// timing so the three switch together.
+	SetVideo60Hz func(bool)
+	// Video60Hz reports the current effective 50/60 Hz selection. The
+	// line-interrupt scheduler needs it because the raster has 264 lines
+	// at 60 Hz instead of 311.
+	Video60Hz func() bool
+	// IM2, when set, is wired to the CPU's interrupt acknowledge/RETI
+	// hooks and to NR$C0/C4/C5/C6/C8/C9/CA.
+	IM2 *IM2Driver
 }
 
 // Wire is the umbrella that installs every NextReg handler in one
@@ -883,16 +890,18 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 	spiReset, _ := opts.DivMMCPager.(SPIResetter)
 	resetControl := WireReset(opts.Dispatcher, opts.Memory, opts.CPU, spiReset)
 	WireCPUSpeed(opts.Dispatcher, opts.CPU)
-	WireLineInterrupt(opts.Dispatcher, opts.CPU)
+	WireLineInterrupt(opts.Dispatcher, opts.CPU, opts.Video60Hz)
 	WireContentionDisable(opts.Dispatcher, opts.Memory)
 	WirePeripheral2(opts.Dispatcher, opts.AYEngine, opts.DivMMCPager, opts.Memory)
 	WirePeripheral1(opts.Dispatcher, opts.DivMMCPager, opts.Memory)
 	WireVideoTiming(opts.Dispatcher, opts.Memory)
-	WireJoystickMode(opts.Dispatcher)
+	WireJoystickMode(opts.Dispatcher, opts.SetVideo60Hz)
 	WireJoystickIOMode(opts.Dispatcher)
 	WireInterruptControl(opts.Dispatcher, opts.CPU)
 	WireInterruptEnable0(opts.Dispatcher)
+	WireInterruptEnable1(opts.Dispatcher)
 	WireInterruptEnable2(opts.Dispatcher)
+	WireIM2(opts.Dispatcher, opts.IM2, opts.CPU)
 	if mc, ok := opts.DivMMCPager.(MAPRAMClearer); ok {
 		WirePeripheral3(opts.Dispatcher, mc)
 	} else {
@@ -1435,7 +1444,7 @@ const linesPerFrame = 311
 // the CPU's SpeedMultiplier so the offset stays correct under turbo
 // modes (NR$07 = 14 / 28 MHz). Must be called after WireCPUSpeed
 // (so OnWriteFn(0x07) is non-nil and we can chain onto it).
-func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
+func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, sixtyHz ...func() bool) {
 	const tstatesPerScanLine = 228
 	recompute := func() {
 		nr22 := d.Raw(0x22)
@@ -1468,7 +1477,11 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU) {
 		// of the frame past the last line, where they could never match:
 		// Eternal Battle asks for line 310 of 311 with the frame interrupt
 		// disabled, waited on line 373, and sat halted in IM 2 forever.
-		lineAbs := uint64(linesPerFrame - 1)
+		lines := linesPerFrame
+		if len(sixtyHz) > 0 && sixtyHz[0] != nil && sixtyHz[0]() {
+			lines = 264
+		}
+		lineAbs := uint64(lines - 1)
 		if target != 0 {
 			lineAbs = uint64(target - 1)
 		}

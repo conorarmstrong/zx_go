@@ -10,6 +10,31 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Sound in sync, border effects drawn along the line (issue #12).**
 
+### Added
+
+- **The Next's CTC and IM2 interrupt chain are now wired.** The four CTC
+  channels are clocked at a fixed 28 MHz from the CPU's instruction
+  boundaries at every CPU speed, as `zxnext.vhd` does, and feed the IM2
+  daisy chain. NextReg `$C0`, `$C4`, `$C5`, `$C6` and the status registers
+  `$C8`-`$CA` now drive it. The chain stays inert until a guest sets NR$C0
+  bit 0, so pulse-mode software is unchanged.
+- **The Next honours the 60 Hz video mode (NextReg `$05` bit 2).** The ULA,
+  memory contention, the frame interrupt and the frame pacer all follow it,
+  so a mid-run 50/60 Hz switch takes effect.
+- **A warning when the SD image is not a bootable FAT32 card.** The
+  official emulator image has fewer than 65,525 clusters on its volume, which
+  makes the firmware print a cryptic `menu.ini` error. The log now names the
+  geometry and points at the distro tree instead.
+
+### Changed
+
+- **The default download is the System/Next 26.11a distro** (NextZXOS 2.10a,
+  firmware 1.46). It also installs the Multiface ROM and patches the stock
+  `CONFIG.INI` from `timing=8` (the testcard wizard) to `timing=3`, so a
+  fresh install boots to the NextZXOS menu.
+- **The Next reports core 3.03.03** (NextReg `$01` = `$33`, `$0E` = `$03`),
+  matching the 26.11a distro.
+
 ### Fixed
 
 - **Sound no longer arrives half a second late (issue #12).** The audio

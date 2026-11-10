@@ -24,6 +24,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/compositor"
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dma"
@@ -857,6 +858,8 @@ func wireNextSubsystems(e *emulator) error {
 	tilemapLayer := tilemap.New(mem)
 	dmaEngine := dma.New(mem)
 	dacBank := dac.New()
+	im2 := next.NewIM2Driver()
+	ctcBank := ctc.NewBank()
 	// divMMC pager built early so we can wire NextReg $0A bit 4 →
 	// pager.SetAutomap in next.Wire. ROM is optional.
 	divROM, err := install.LoadROM(install.DivMMCROM)
@@ -1140,9 +1143,28 @@ func wireNextSubsystems(e *emulator) error {
 		Keymap:      keymapEngine,
 		Tilemap:     tilemapLayer,
 		DivMMCPager: pager,
+		IM2:         im2,
+		Video60Hz:   func() bool { return e.video60Hz },
+		SetVideo60Hz: func(on bool) {
+			e.video60Hz = on
+			u.Set60Hz(on)
+			mem.Set60Hz(on)
+			if nr03, ok := next.MachineTimingFor(roms.ModelNext); ok {
+				configureIntTiming(cpu, nr03, on)
+			}
+			// The line-interrupt scheduler pre-computes a frame-relative
+			// offset from the raster line count; re-run its NR$22 handler
+			// so a mid-run 50/60 Hz switch takes effect.
+			disp.WriteReg(0x22, disp.ReadReg(0x22))
+		},
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	u.SetNextCTC(ctcBank)
+	ctcClock := next.NewCTCClock(ctcBank, im2)
+	cpu.SetInstructionHook(func(tstates int) {
+		ctcClock.Advance(tstates, cpu.SpeedMultiplier())
+	})
 
 	// FPGA bootrom mode — the hardware-faithful path. Real Spectrum
 	// Next hardware always boots through the FPGA loader at
@@ -1512,8 +1534,9 @@ func wireNextSubsystems(e *emulator) error {
 			}
 		})
 	}
-	// RETN/RETI clear the automap latch on real hardware (the T80N
-	// asserts I_RETN for both; zxnext.vhd feeds it as i_retn_seen).
+	// RETN (ED $45) clears the automap latch on real hardware
+	// (im2_control.vhd:236 o_retn_seen; zxnext.vhd:4111 feeds it as
+	// i_retn_seen). RETI does not.
 	// RETN (ED 45) pages out BOTH the divMMC and the Next Multiface
 	// (zxnext changelog 3.01.09 — "executing a retn will now disable the
 	// multiface and the divmmc"). The MF $0066 handler ends with a RETN to
@@ -1545,6 +1568,23 @@ func wireNextSubsystems(e *emulator) error {
 		if err != nil {
 			slog.Warn("next: SD image file read failed", "path", imgPath, "err", err)
 		} else {
+			if info, perr := sdcard.ProbeFAT32(raw); perr != nil {
+				// Do not refuse the image: a user may have a
+				// deliberately unusual but working card. But the
+				// firmware's own symptom is a cryptic config
+				// error, so say what is wrong and what to use
+				// instead.
+				slog.Warn("next: SD image is not a bootable FAT32 card",
+					"path", imgPath, "err", perr,
+					"hint", "use the distro tree (ZX_GO_NEXT_SD_DIR) or a card built by zx_go; the official sn-emulator-*.zip image is not a standard FAT32 volume")
+			} else {
+				slog.Info("SD card image geometry",
+					"path", imgPath,
+					"partition_lba", info.PartitionLBA,
+					"cluster_bytes", info.SectorsPerCluster*512,
+					"clusters", info.ClusterCount,
+					"label", info.VolumeLabel)
+			}
 			src, _ := sdcard.NewImageSource(raw, false)
 			// Expose the live in-memory SD image so File->Open .nex can
 			// import a copy into it (confirmImportNex) — the guest reads

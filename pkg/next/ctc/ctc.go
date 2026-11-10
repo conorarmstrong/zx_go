@@ -92,6 +92,13 @@ func (c *Channel) ZCTO() bool { return c.zcToD }
 // IntEnabled returns the interrupt-enable bit (o_int_en, ctc_chan.vhd:276).
 func (c *Channel) IntEnabled() bool { return c.controlReg&0x10 != 0 }
 
+// Running reports whether the channel is counting.
+func (c *Channel) Running() bool { return c.state == sRun || c.state == sRunTC }
+
+// Idle reports whether the channel is waiting for its control word, the
+// only state in which a clock edge cannot change anything.
+func (c *Channel) Idle() bool { return c.state == sReset }
+
 // resetSoft mirrors ctc_chan.vhd:117 — asserted whenever not in a RUN state.
 func (c *Channel) resetSoft() bool { return c.state != sRun && c.state != sRunTC }
 
