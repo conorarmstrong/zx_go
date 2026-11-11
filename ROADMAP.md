@@ -1,4 +1,65 @@
-# zx_go — Roadmap
+# zx_go Roadmap
+
+**Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
+
+> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (roadmap restructured to the summary, tables, upcoming, progress log and revision history layout; open-work text unchanged) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+
+zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
+detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+**Why this stage:** every machine boots and is interactive, the classic line is mature, and the Next cold-boots
+NextZXOS through the real FPGA chain to an interactive desktop. What is missing is confidence, not boot: Next game
+compatibility is still the honest weak point, one Next-wired title (TX-1696) is balanced on a timing edge, and the
+Windows ARM64 GUI has never produced a window.
+
+## Headline numbers
+
+| | Value | Kind |
+|---|---|---|
+| **Machines that boot and are interactive** | **all 9 listed** | measured |
+| **Compatibility rows** (`docs/compatibility.md`) | **158**: 11 Works, 20 Works (caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6 Untested | measured |
+| **Known issue rows with a third-emulator reference** | **11 of 11** (8 settled as bad dumps) | measured |
+| **Next games on the SD card** | **12 `.nex` launch and render**, 5 NextBASIC programs and NEXTipede also run | measured |
+| **Z80N opcode vectors captured from the FPGA HDL** | **8567, all green** | measured |
+| **Open work items** | **7** (4 correctness, 1 efficiency, 2 product) | counted from this page |
+| **Time and effort estimates** | none kept | not estimated |
+
+Nothing on this page is a percentage, because no weighted parity measure exists for this project. Counts above are
+the ones the repository can reproduce.
+
+## By machine
+
+| Machine | Status | Open |
+|---|---|---|
+| ZX80, ZX81 | supported (`pkg/zx8x`, [zx80-zx81.md](docs/zx80-zx81.md)) | none listed |
+| 48K, 128K, +2, +2A, +3 | mature; +3 disk FDC proven on 6 reference-compared titles | item 5 (breadth) |
+| Pentagon 128 | boots | none listed |
+| SAM Coupé | boots to BASIC ([sam-coupe.md](docs/sam-coupe.md)) | stereo audio, GUI disk load, symbol keys |
+| Spectrum Next | cold-boots NextZXOS to the desktop ([spectrum-next.md](docs/spectrum-next.md)) | items 1, 2, 3, 5 |
+
+## By dimension
+
+| Dimension | Status | Doc |
+|---|---|---|
+| Next hardware blocks vs the FPGA VHDL | golden suites for the CPU, sprites, paging, DMA and others | `VHDL_CONFORMANCE.md` |
+| Reachability (modelled and wired) | enforced by `pkg/next/reachability_test.go`; declared-unwired list is empty | item 2 |
+| Next game compatibility | weak point; 12 of 12 SD `.nex` launch, about 100 catalogued titles unscreened | item 5 |
+| Timing fidelity | one knife-edge title (TX-1696) | item 1 |
+| Performance | Copper-saturated rows cost 219.5% of a 50 Hz budget | item 3 |
+| Time travel and debugging | reverse debugging and snapshot rewind done on every machine | item 7 |
+| Platforms | Windows ARM64 core proven, GUI blocked upstream | item 6 |
+| Out of scope | Wi-Fi, IF1 RS-232, NR$0B GPIO, SAM MIDI/IDE, Beta density bit | Catalogued below |
+
+## Upcoming
+
+Ranked; detail in the open-work items below.
+
+1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
+2. **CTC and IM2** (item 2): the wiring landed 2026-11-10 (`d4e569648`); the item text below predates it and needs re-checking against the code.
+3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
+4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
+5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
 
 ## What this is
 
@@ -696,3 +757,23 @@ Solved problems whose answers were expensive to find.
   which press every named key together at frame N (`cmd/zx_go/debug.go:674`).
 - **Rough real-time GUI boot timings:** splash ~5s, NextZXOS welcome ~10s.
   A large deviation means something regressed.
+
+---
+
+## Progress log
+
+Newest first. Earlier history is in `CHANGELOG.md` and git.
+
+| Date | What landed |
+|---|---|
+| 2026-11-10 | Next: the CTC (four channels, fixed 28 MHz clock, zero-count chaining) and the IM2 chain are wired to the guest, with NR$C0, C4, C5, C6 and the NR$C8 to CA status registers. 60 Hz video timing via NR$05 bit 2. The RETN hook now fires for `ED 45` only, which fixed a TX-1696 crash. |
+| 2026-11-10 | Next: targets System/Next 26.11a and reports core 3.03.03. |
+| 2026-09-30 | v1.12.5: border changes painted from their beam position, ULA-port I/O charged once and placed in its cycle, audio read-ahead capped at one pull. |
+| 2026-09-28 | v1.12.4: audio no longer drops frames; the ring matches the paced rate. |
+| 2026-08-25 | v1.12.3: the IM2 daisy chain is driven from CPU bus events; zxnDMA comment and test fixes. |
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-11 | minor | Roadmap restructured to the stage line, headline numbers, by-machine and by-dimension tables, upcoming list, progress log and revision history. Open-work text unchanged. Item 2 flagged as predating the 2026-11-10 wiring commit. |
