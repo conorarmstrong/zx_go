@@ -50,6 +50,9 @@ const (
 	defaultMachineID = 0x0A
 	// CoreVersion at NextReg 0x01 (R). Encoded as major<<4 | minor.
 	// 0x33 = core 3.03 — the current Spectrum Next core line (3.03.03 latest).
+	// This is the identity only: the hardware model is still the public
+	// 3.02.x VHDL, and no 3.03 change (Blitter, DDMA, zero wait state) is
+	// emulated. See ROADMAP.md item 8.
 	defaultCoreVersion = 0x33
 	// CoreSubMinor at NextReg 0x0E (R) — the third version number. 0x03 reports
 	// core 3.03.03 (the latest release), comfortably above any game's minimum.

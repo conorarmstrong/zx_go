@@ -814,7 +814,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 | Date | What landed |
 |---|---|
 | 2026-11-10 | Next: the CTC (four channels, fixed 28 MHz clock, zero-count chaining) and the IM2 chain are wired to the guest, with NR$C0, C4, C5, C6 and the NR$C8 to CA status registers. 60 Hz video timing via NR$05 bit 2. The RETN hook now fires for `ED 45` only, which fixed a TX-1696 crash. |
-| 2026-11-10 | Next: targets System/Next 26.11a and reports core 3.03.03. |
+| 2026-11-10 | Next: targets System/Next 26.11a and identifies as core 3.03.03 (version registers only; 3.03 hardware is not emulated, see item 8). |
 | 2026-09-30 | v1.12.5: border changes painted from their beam position, ULA-port I/O charged once and placed in its cycle, audio read-ahead capped at one pull. |
 | 2026-09-28 | v1.12.4: audio no longer drops frames; the ring matches the paced rate. |
 | 2026-08-25 | v1.12.3: the IM2 daisy chain is driven from CPU bus events; zxnDMA comment and test fixes. |

@@ -30,8 +30,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   firmware 1.46). It also installs the Multiface ROM and patches the stock
   `CONFIG.INI` from `timing=8` (the testcard wizard) to `timing=3`, so a
   fresh install boots to the NextZXOS menu.
-- **The Next reports core 3.03.03** (NextReg `$01` = `$33`, `$0E` = `$03`),
-  matching the 26.11a distro.
+- **The Next identifies as core 3.03.03** (NextReg `$01` = `$33`, `$0E` = `$03`)
+  so software written for the 26.11a distro accepts it. This is the version
+  number only. The hardware is still modelled from the public VHDL (3.02.x);
+  core 3.03 changes are not emulated.
 
 ## [v1.12.5]
 
