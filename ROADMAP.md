@@ -2,7 +2,7 @@
 
 **Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (roadmap restructured to the summary, tables, upcoming, progress log and revision history layout; open-work text unchanged) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (release targets table and item 8 added) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -22,11 +22,26 @@ Windows ARM64 GUI has never produced a window.
 | **Known issue rows with a third-emulator reference** | **11 of 11** (8 settled as bad dumps) | measured |
 | **Next games on the SD card** | **12 `.nex` launch and render**, 5 NextBASIC programs and NEXTipede also run | measured |
 | **Z80N opcode vectors captured from the FPGA HDL** | **8567, all green** | measured |
-| **Open work items** | **7** (4 correctness, 1 efficiency, 2 product) | counted from this page |
+| **Open work items** | **8** (4 correctness, 1 efficiency, 2 product, 1 research) | counted from this page |
 | **Time and effort estimates** | none kept | not estimated |
 
 Nothing on this page is a percentage, because no weighted parity measure exists for this project. Counts above are
 the ones the repository can reproduce.
+
+## Release targets
+
+zx_go must track the latest public Spectrum Next release. Checked 2026-11-11 against the
+[official latest-distro page](https://www.specnext.com/latestdistro/).
+
+| Target | Public release | zx_go | Status |
+|---|---|---|---|
+| Distribution | System/Next 26.11a | default download since 2026-11-10 (`bdfe1e1d3`) | achieved |
+| NextZXOS | 2.10a (firmware 1.46) | boots to the menu, Browser and NextBASIC | achieved |
+| Core ID | 3.03.03 | NR$01 = `$33`, NR$0E = `$03` | achieved, identity only |
+| Core 3.03 hardware behaviour | 3.03.x | unchanged from the pre-3.03 VHDL model | **open**, item 8 |
+
+"Achieved, identity only" means zx_go reports and boots the 26.11a release. It does not mean the 3.03
+hardware changes are modelled; see item 8.
 
 ## By machine
 
@@ -60,6 +75,7 @@ Ranked; detail in the open-work items below.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
+6. **Research:** diff our VHDL reference against the public 3.02.05; 3.03 VHDL is not public (item 8).
 
 ## What this is
 
@@ -114,7 +130,7 @@ which depends on it.
 ## Open work (ordered)
 
 Ordered by what the reference-emulator goal above is worth, not by size. Items
-1 to 4 are correctness against the FPGA; 5 to 7 are product work.
+1 to 4 are correctness against the FPGA; 5 to 7 are product work; 8 is research.
 
 ### 1. [correctness] TX-1696 is balanced on a timing edge
 
@@ -634,6 +650,37 @@ canonical ordering so two captures of an unchanged machine compare equal.
   single-step path), and any change made from outside the CPU during the window
   (`write-memory`, a key press, a disk arriving).
 
+### 8. [research] Core 3.03 hardware behaviour is not modelled
+
+The release targets table above is met for the distribution, the OS and the core ID. The hardware under
+that ID is still the pre-3.03 model.
+
+**Checked 2026-11-11: no 3.03 VHDL is public.**
+
+- The official [latest-distro page](https://www.specnext.com/latestdistro/) states core 3.03.03 "featuring
+  Zero Wait State 28MHz and zxnDimensionalDMA (zxnDDMA aka Blitter)" and says KS1 cores split into HDMI and
+  VGA parts from 3.03.00. So the features are real. It links no VHDL.
+- The official core repository, `gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA` (GPLv3), has `master` at
+  3.02.03 (2025-11-06) and a `30205` branch at 3.02.05 (2026-09-25; `g_version` `$32`, `g_sub_version` `$05`
+  in `zxnext_top_issue5.vhd`). There is no 3.03 branch or tag, and a search of the 3.02.05 tree finds no
+  Blitter or DDMA source.
+- `gitlab.com/thesmog358/tbblue` is the distribution repo (binaries such as `TBBLUE.TBU`), not VHDL.
+- The MiSTer port is built from core 3.02.
+
+So the newest public VHDL is 3.02.05, and the 3.03 changes are binary-only. The oracle this project uses
+cannot cover Zero Wait State 28 MHz, the Blitter or the DDMA.
+
+Next steps, in order:
+
+1. Diff our VHDL reference against 3.02.05. If it is older, 3.02.04 and 3.02.05 are public changes we can
+   take with the normal golden-suite method.
+2. Watch the official repo for a 3.03 branch.
+3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
+   NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL
+   must be labelled as not VHDL-derived.
+
+`docs/spectrum-next.md` must not claim 3.03 hardware parity.
+
 ---
 
 ## Catalogued — deliberately not doing
@@ -776,4 +823,5 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Added the release targets table (26.11a, NextZXOS 2.10a, core 3.03.03 achieved; 3.03 hardware open) and item 8. |
 | 2026-11-11 | minor | Roadmap restructured to the stage line, headline numbers, by-machine and by-dimension tables, upcoming list, progress log and revision history. Open-work text unchanged. Item 2 flagged as predating the 2026-11-10 wiring commit. |
