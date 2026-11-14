@@ -6,6 +6,13 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **NextReg `$0A` bit 5 (SD swap) now needs bit 2 set in the same write.**
+  Public core 3.02.04 added this lock bit because older firmware changed the
+  swap by accident while in config mode. Bits 7:6 are unchanged, and the swap
+  still only updates in config mode.
+
 ## [v1.13.0]
 
 ### Added

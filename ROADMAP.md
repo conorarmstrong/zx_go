@@ -2,7 +2,7 @@
 
 **Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (release targets table and item 8 added) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (item 2 rewritten against the code; item 8 step 1 done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -71,11 +71,11 @@ hardware changes are modelled; see item 8.
 Ranked; detail in the open-work items below.
 
 1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **CTC and IM2** (item 2): the wiring landed 2026-11-10 (`d4e569648`); the item text below predates it and needs re-checking against the code.
+2. **IM2 remainder** (item 2): the CTC and chain are wired; the UART request lines and the DMA delay pin are not.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
-6. **Research:** diff our VHDL reference against the public 3.02.05; 3.03 VHDL is not public (item 8).
+6. **Research:** the 3.02.05 diff is done (item 8); the open parts are the new boot ROM and NR$A0 bit 1. 3.03 VHDL is not public.
 
 ## What this is
 
@@ -122,8 +122,8 @@ The second weak point, the distance between modelled and reachable, is now
 measured rather than assumed. `pkg/next/reachability_test.go` fails the build if
 a subsystem under `pkg/next` is neither wired nor declared unwired, and the
 declared list is empty. What remains unreachable is finer-grained than a
-package: IM2 interrupt delivery (item 2) and the zxnDMA's `dma_delay_i` pin,
-which depends on it.
+package: the UART interrupt request lines and the zxnDMA's `dma_delay_i` pin
+(both item 2).
 
 ---
 
@@ -163,54 +163,50 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 2. [correctness] The CTC and IM2 are modelled but not wired
+### 2. [correctness] IM2: the UART request lines and the DMA delay pin are not wired
 
-Neither can be reached by a guest. Both are complete and pinned by golden
-vectors captured from the FPGA VHDL under GHDL; what is missing is the machine
-around them.
+**Re-checked against the code on 2026-11-14.** This item used to say neither the
+CTC nor IM2 could be reached by a guest. That stopped being true in `d4e569648`
+(2026-11-10), and the text below is what is left.
 
-**The CTC** briefly was wired, and the wiring was wrong in three ways that are
-worth recording so the next attempt starts from them:
+**Wired and reachable** (`pkg/next/wire_im2.go`, `pkg/next/ctcclock.go`):
 
-- It has **four** channels, not eight. `zxnext.vhd:4067` is `NUM_CTC => 4`. Two
-  eight-channel instantiations above it are commented out, and the daisy chain's
-  top four slots are tied off at `:4092-4093`. The eight-slot priority map at
-  `:1936` is what misleads.
-- It is clocked by `i_CLK_28` (`:4072`), a fixed 28 MHz that does not follow
-  NR$07 turbo. Ticking it from the CPU's per-instruction hook ran the timers one
-  tick per 4 to 23 T-states against eight ticks per 3.5 MHz T-state: two orders
-  of magnitude slow, jittering with instruction mix, and speeding up under turbo
-  where the real device does not.
-- Its channels are **chained**: `i_clk_trg` is
-  `ctc_zc_to(2 downto 0) & ctc_zc_to(3)` (`:4084`), so each channel's trigger is
-  another channel's zero-count output. And its interrupt enables come from
-  NR$C5 bits 3:0 (`:4078-4079`), which is stored-only here.
+- The CTC: four channels (`zxnext.vhd:4067` is `NUM_CTC => 4`), ports
+  `$183B`..`$1F3B`, zero-count chaining (`:4084`), enables from NR$C5 bits 3:0.
+  It is advanced at a fixed 28 MHz regardless of NR$07 turbo (`:4072`).
+- The chain: NR$C0 bit 0 hands `/INT` to it, bits 7:5 set the vector base, and
+  NR$C4, C5 and C6 set the enables. The ULA frame and line enables follow NR$22
+  (`:6711`). NR$C8, C9 and CA read and clear the sticky status. The CPU answers
+  the acknowledge cycle (`SetINTAckHook`) and reports the end of interrupt
+  (`SetRETISeenHook`, `ED 45` only, `im2_control.vhd:135`).
+- `ula_int_pulse` and the line interrupt reach the chain from the CPU's frame
+  and line hooks.
 
-The port decode and the four channels are modelled and pinned
-(`pkg/next/ctc`). The clock rate is the substantial part: eight ticks per
-T-state across four channels is a real per-instruction cost, so it wants a
-divider or a deadline model rather than a naive loop.
+**Not wired:**
 
-**IM2 delivery.** The CPU side is done: `SetINTAckHook` lets a peripheral answer
-the acknowledge cycle and drive its vector onto the bus, and `SetRETISeenHook`
-reports the end-of-interrupt. Both are pinned against the FPGA, including that
-the IM2 controller matches `$4D` exactly (`im2_control.vhd:135`) where the
-existing RETN hook fires for every mirror of both instructions.
+- **The two UART sources.** `IM2SourceUART0R/0T/1R/1T` have their enables and
+  status bits wired (NR$C6, NR$CA) but nothing ever calls `Raise` on them. The
+  UART engine (`pkg/next/uart`) has no interrupt output, so a guest that enables
+  a UART interrupt never gets one. This is the largest remaining piece.
+- **`dma_delay_i`.** `dma.SetBusDelay` exists and is pinned, but no production
+  code calls it. The pin is `im2_dma_delay` (`zxnext.vhd:1785`, `:2001-2010`):
+  a device whose NR$CC, CD or CE dma-int-enable bit is set and whose FSM is out
+  of idle, an NMI with NR$CC bit 7, or a RETI pop in progress. NR$CC, CD and CE
+  are stored-only (`pkg/next/wire.go:1187-1201`). Until this lands no guest can
+  have its DMA held off the bus by an interrupt.
+- **`o_reti_decode`** (`im2_control.vhd:233`): high for the single T-state
+  between the `ED` prefix and its second byte. The CPU still cannot give that
+  window. Nothing in the current chain needs it; it is the first thing to check
+  if arbitration comes out wrong.
 
-One signal the CPU still cannot give: `o_reti_decode` (`im2_control.vhd:233`),
-high for the single T-state between the `ED` prefix and its second byte. That is
-a sub-instruction window and a peripheral needing it to arbitrate needs a
-cycle-stepped CPU. Nothing in this chain does today, but it is the first thing
-to check if the arbitration comes out wrong.
-
-What remains: feed the chain from `ctc_zc_to`, `ula_int_pulse` and the two UART
-sources at the priority order in `zxnext.vhd:1936`, then plumb NR$C0 bit 0, its
-bits 7:5, NR$C4, NR$C5 and NR$C6, all of which are stored-only.
-
-Do not approximate either. Driving a per-clock FSM from instruction boundaries
-produces timing that is not the FPGA's, and an unfaithful CTC or IM2 is worse
-than none, because a developer would trust it. Every enable resets to zero, so
-nothing about the current state is unsafe, only incomplete.
+**A known approximation, and the line not to cross.** `CTCClock.Advance` ticks
+the CTC from instruction boundaries, `T-states * 8 / SpeedMultiplier` clocks at
+a time. The channel FSM has no timers of its own, so that equals continuous
+ticking for the CTC alone. It is not safe to extend the same trick to a source
+that depends on a sub-instruction position. Do not approximate those: an
+unfaithful interrupt source is worse than none, because a developer would trust
+it. Every enable resets to zero, so the current state is unsafe in no case, only
+incomplete.
 
 ### 3. [efficiency] Row composition is O(row x writes)
 
@@ -670,11 +666,25 @@ that ID is still the pre-3.03 model.
 So the newest public VHDL is 3.02.05, and the 3.03 changes are binary-only. The oracle this project uses
 cannot cover Zero Wait State 28 MHz, the Blitter or the DDMA.
 
+**Step 1 done, 2026-11-14.** Our reference is 3.02.03 (`master`, commit `b047011`). The remote also holds
+`30204` and `30205`; the `28MHz` branch is a 2019 experiment and not the 3.03 feature. Diffing `master`
+against `30205` (VHDL only, ignoring Vivado netlists) gives:
+
+| Change | Guest-visible | Status |
+|---|---|---|
+| NR$0A bit 5 (`sd_swap`) needs bit 2 set in the same write, in config mode (3.02.04, `6395c28`) | yes | **done**, `TestSpec_NR0A_SDSwapNeedsLockBit` |
+| Boot ROM shrinks to `$0000-$1FFF`; config memory shows through `$2000-$3FFF` (`zxnext.vhd` `cpu_a(15 downto 13)`) | yes | open: needs the new `bootrom.vhd` image compared with the one we vendor |
+| NR$A0 bit 1 (Pi SPI slave enable) is now live, readable, and sticky across soft reset | yes, via NR$A0 | open, minor |
+| Six-button Mega Drive pad also reports as three-button (`md6_joystick_connector_x2.vhd`) | yes | not modelled: no Mega Drive pad in zx_go |
+| `spi_master` refuses a new transaction while `rd` or `wr` is held (`spi_active`) | SD SPI only | open: unverified whether any guest holds the strobe |
+| Pi debug SPI slave, Pi CPU and BRAM debug, SRAM port C, TZX hotkeys QWERT, AB core drops DMA, Multiface and divMMC | no, Pi side or other board | out of scope |
+| PS/2 hotkeys: expansion bus F11/F12 moved to F5/F6, F12 a second PS/2 reset | no, host keyboard | not applicable |
+| `t80n` CPU: debug variant is the production default (`g_option` `$FFF2`); `mcode` and `alu` identical | no | no behaviour change found |
+
 Next steps, in order:
 
-1. Diff our VHDL reference against 3.02.05. If it is older, 3.02.04 and 3.02.05 are public changes we can
-   take with the normal golden-suite method.
-2. Watch the official repo for a 3.03 branch.
+1. Take the open rows above through the normal golden-suite method; the boot ROM row first.
+2. Watch the official repo for a 3.03 branch. Last checked 2026-11-14: `30205` is the newest branch.
 3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
    NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL
    must be labelled as not VHDL-derived.
@@ -813,6 +823,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-14 | Next: NR$0A `sd_swap` now needs the bit 2 lock bit (public VHDL 3.02.04). Item 8 step 1 done: 3.02.03 vs 3.02.05 diffed, five guest-visible changes found, one taken. Item 2 rewritten against the code. |
 | 2026-11-10 | Next: the CTC (four channels, fixed 28 MHz clock, zero-count chaining) and the IM2 chain are wired to the guest, with NR$C0, C4, C5, C6 and the NR$C8 to CA status registers. 60 Hz video timing via NR$05 bit 2. The RETN hook now fires for `ED 45` only, which fixed a TX-1696 crash. |
 | 2026-11-10 | Next: targets System/Next 26.11a and identifies as core 3.03.03 (version registers only; 3.03 hardware is not emulated, see item 8). |
 | 2026-09-30 | v1.12.5: border changes painted from their beam position, ULA-port I/O charged once and placed in its cycle, audio read-ahead capped at one pull. |
@@ -823,5 +834,6 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Item 2 rewritten to what is actually unwired (UART request lines, `dma_delay_i`). Item 8 step 1 done with a results table. |
 | 2026-11-11 | minor | Added the release targets table (26.11a, NextZXOS 2.10a, core 3.03.03 achieved; 3.03 hardware open) and item 8. |
 | 2026-11-11 | minor | Roadmap restructured to the stage line, headline numbers, by-machine and by-dimension tables, upcoming list, progress log and revision history. Open-work text unchanged. Item 2 flagged as predating the 2026-11-10 wiring commit. |

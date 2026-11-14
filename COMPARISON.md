@@ -196,7 +196,7 @@ signing/verification.
 | Multiface (1 / 128 / 3) | ✅ | ❔ | ✅ | ✅ |
 | Kempston joystick + mouse | ✅ | ✅ | ✅ | ✅ |
 | RTC (DS1307) | ✅ ²³ | ✅ | ✅ | ✅ |
-| Z80 CTC timers | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
+| Z80 CTC timers | ✅ | ✅ | ⚠️ | ✅ |
 | IM2 vectored interrupts | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
 | Next DMA (zxnDMA) | ✅ ²⁴ | ✅ | ⚠️ | ✅ |
 | UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
@@ -221,13 +221,11 @@ ROADMAP items 1 and 4.
 ²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
-²⁷ zx_go models the Z80 CTC's four counter/timer channels and the IM2
-vectored-interrupt daisy chain, both pinned by golden vectors captured from the
-FPGA VHDL under GHDL, and neither is wired into the emulator. The CTC needs a
-fixed 28 MHz clock, its inter-channel trigger chain and NR$C5's enables before
-it can be; the IM2 chain needs the CPU to expose an interrupt-acknowledge cycle
-and a RETI notification. The docs call that state NOT WIRED: modelled and
-verified, but not reachable. See ROADMAP item 2.
+²⁷ zx_go's IM2 daisy chain is wired to the CPU for the CTC and the ULA frame
+and line interrupts (2026-11-10), pinned by golden vectors captured from the
+FPGA VHDL under GHDL. Two parts are not: no UART source raises a request, and
+the DMA delay pin is never driven because NR$CC/$CD/$CE are stored-only. See
+ROADMAP item 2.
 
 ---
 

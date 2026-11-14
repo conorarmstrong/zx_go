@@ -540,10 +540,18 @@ func WirePeripheral1(d *nextregs.Dispatcher, pager AutomapSetter, mem ConfigMode
 		// 1,0 always update. Bit 2 is reserved (reads as 0).
 		// When config_mode = '0', bits 7:5 freeze at their old
 		// values.
+		//
+		// Public VHDL 3.02.04 (commit 6395c28) also makes bit 5
+		// need bit 2 set in the same write, as a lock bit: older
+		// firmware changed the swap by accident in config mode.
 		new := val
-		if mem != nil && !mem.ConfigModeActive() {
+		if mem != nil {
 			old := disp.Raw(0x0A)
-			new = (val &^ 0xE0) | (old & 0xE0)
+			if !mem.ConfigModeActive() {
+				new = (val &^ 0xE0) | (old & 0xE0)
+			} else if val&0x04 == 0 {
+				new = (val &^ 0x20) | (old & 0x20)
+			}
 		}
 		// Bit 2 reads as 0 per zxnext.vhd:5908.
 		new &^= 0x04

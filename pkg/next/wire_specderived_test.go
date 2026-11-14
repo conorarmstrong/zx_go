@@ -1232,3 +1232,46 @@ func TestSpec_NR13_Layer2ShadowBank_Bit7Reserved(t *testing.T) {
 		t.Errorf("NR$13 bits 6:0 dropped: $%02X (want $7F)", got)
 	}
 }
+
+// TestSpec_NR0A_SDSwapNeedsLockBit.
+// Public VHDL 3.02.04 (gitlab SpectrumNext/ZX_Spectrum_Next_FPGA, commit
+// 6395c28) gates sd_swap on a lock bit: older firmware changed the swap
+// while in config mode by accident, so bit 5 now only updates when bit 2
+// of the same write is also set. mf_type (7:6) is unchanged.
+//
+//	if nr_03_config_mode = '1' then
+//	    nr_0a_mf_type <= nr_wr_dat(7 downto 6);
+//	end if;
+//	if nr_03_config_mode = '1' and nr_wr_dat(2) = '1' then
+//	    nr_0a_sd_swap <= nr_wr_dat(5);
+//	end if;
+func TestSpec_NR0A_SDSwapNeedsLockBit(t *testing.T) {
+	disp, mem := withConfigMode(t, true)
+	WirePeripheral1(disp, nil, mem)
+
+	// Bit 5 set, lock bit 2 clear: swap must not change, mf_type must.
+	disp.WriteReg(0x0A, 0xE0)
+	got := disp.ReadReg(0x0A)
+	if got&0x20 != 0 {
+		t.Errorf("write $E0 without lock bit: sd_swap = 1, want unchanged 0 (NR$0A = $%02X)", got)
+	}
+	if got&0xC0 != 0xC0 {
+		t.Errorf("write $E0 without lock bit: mf_type = $%02X, want $C0", got&0xC0)
+	}
+
+	// Lock bit set: swap follows bit 5 in both directions.
+	disp.WriteReg(0x0A, 0x24)
+	if got := disp.ReadReg(0x0A); got&0x20 == 0 {
+		t.Errorf("write $24 with lock bit: sd_swap = 0, want 1 (NR$0A = $%02X)", got)
+	}
+	// Lock bit clear again: swap holds its 1.
+	disp.WriteReg(0x0A, 0x00)
+	if got := disp.ReadReg(0x0A); got&0x20 == 0 {
+		t.Errorf("write $00 without lock bit: sd_swap cleared, want held at 1 (NR$0A = $%02X)", got)
+	}
+	// Lock bit set with bit 5 clear: swap clears.
+	disp.WriteReg(0x0A, 0x04)
+	if got := disp.ReadReg(0x0A); got&0x20 != 0 {
+		t.Errorf("write $04 with lock bit: sd_swap = 1, want 0 (NR$0A = $%02X)", got)
+	}
+}

@@ -75,7 +75,8 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $BA divmmc ep_timing | $00 | $00 | ✅ | |
 | $BB divmmc ep1 | $CD | $CD | ✅ | |
 | $C4 int en 0 | bit expbus=1 | $00 | ❌ | **GAP**: NR$C4 expbus int enable resets to 1 |
-| $C0 im2/nmi | $00 | $00 | **NOT WIRED** | reset value conforms, but NR$C0 is the IM2 vector base and the IM2 daisy chain is not connected to the CPU's interrupt path: the register is stored and never acted on. Same for NR$CC/$CD/$CE. The CTC is not wired either; see docs/spectrum-next.md. ROADMAP item 2 |
+| $C0 im2/nmi | $00 | $00 | ⚠️ | wired since 2026-11-10: bit 0 hands /INT to the IM2 chain, bits 7:5 set the vector base; NR$C4/C5/C6 enables and NR$C8-CA status drive it. Still open: no UART source raises a request, and NR$CC/$CD/$CE are stored-only, so `dma_delay_i` is never driven. ROADMAP item 2 |
+| $0A peripheral 1 | $00 | $00 | ✅ | bit 5 (`sd_swap`) needs bit 2 set in the same config-mode write (public VHDL 3.02.04, `6395c28`); `TestSpec_NR0A_SDSwapNeedsLockBit`. Bits 7:6 (`mf_type`) are config-mode only. 3.03 VHDL is not public, so this is checked to 3.02.05 only |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0. The dma-int bits are stored-only for the same reason as NR$C0 |
 
 **Axis 1 remaining gaps to close:** NR$C4 (expbus bit 7 resets to 1, but its
@@ -119,7 +120,7 @@ frame boundary), `pkg/next/inttiming_test.go` (per-mode assert tstate + pulse).
 Fixed this session: **StepInstructionWithIRQ 28 MHz frame boundary not
 SpeedMultiplier-scaled (8× over-fire)**; narrow-pulse default. ⚠️ frame-ORIGIN
 offset (CPU tstate=0 ↔ ULA hc0/vc0) unvalidated; line-INT at turbo; IM2 vector
-table; NR$22/$C0/$C4/$C6 enable gates not all wired to the INT generator.
+table; the NR$22/$C0/$C4/$C5/$C6 enable gates are wired to the chain (2026-11-10), but no UART source raises a request.
 
 ## Axis 6 — Z80 / Z80N operations  (FUSE + Sean Young + GHDL gate oracle)
 Tests: canonical T-state tables (iter 266-270), per-op timing batches, flags
