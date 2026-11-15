@@ -273,6 +273,9 @@ type emulator struct {
 	// nextULAPlus is the ULA+ enable and the $BF3B select latch behind ports
 	// $BF3B / $FF3B. The LoRes layer needs the enable as ulap_en_i.
 	nextULAPlus *next.ULAPlus
+	// nextUART is the UART register block on ports $133B..$163B and the ESP
+	// module behind UART 0.
+	nextUART *next.UARTSystem
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS
@@ -1614,6 +1617,11 @@ func (e *emulator) rebootLocked() {
 	// reboot would hand the next program broken hardware.
 	if e.nextDMA != nil {
 		e.nextDMA.Reset()
+	}
+	// The UART's reset pin: FIFOs empty, PHYs idle, select back to UART 0. The
+	// baud and frame registers survive, as in the FPGA.
+	if e.nextUART != nil {
+		e.nextUART.Reset()
 	}
 	// The palette bank carries the NR$44 two-byte write latch
 	// (pending9/have9). nextRegs.Reset's Phase 1 zero-pass writes a

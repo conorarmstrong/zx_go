@@ -16,7 +16,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/rtc"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
-	"github.com/conorarmstrong/zx_go/pkg/next/uart"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
@@ -880,7 +879,6 @@ type WireOpts struct {
 	Sprites    *sprite.Engine
 	Copper     *copper.Copper
 	RTC        *rtc.RTC
-	UART       *uart.UART
 	Keymap     *keymap.Map
 	Tilemap    *tilemap.Tilemap
 	// DivMMCPager, if set, has its SetAutomap toggled by NextReg
@@ -972,9 +970,7 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 	if opts.RTC != nil {
 		WireRTC(opts.Dispatcher, opts.RTC)
 	}
-	if opts.UART != nil {
-		WireUART(opts.Dispatcher, opts.UART)
-	}
+	WireESPGPIO(opts.Dispatcher)
 	if opts.Keymap != nil {
 		WireKeymap(opts.Dispatcher, opts.Keymap)
 	}
@@ -1408,17 +1404,29 @@ func WireRTC(d *nextregs.Dispatcher, _ *rtc.RTC) {
 	d.SetOnWrite(0x10, func(disp *nextregs.Dispatcher, val byte) { disp.Store(0x10, val) })
 }
 
-// WireUART installs NextReg 0xA8 / 0xA9 OnWrite + OnRead handlers
-// for the ESP UART. 0xA8 is the data byte (writes append to the
-// outgoing FIFO; reads pop the incoming FIFO). 0xA9 is the status
-// byte (read-only).
-func WireUART(d *nextregs.Dispatcher, u *uart.UART) {
-	d.SetOnWrite(0xA8, func(disp *nextregs.Dispatcher, val byte) {
-		u.WriteData(val)
-		disp.Store(0xA8, val)
+// WireESPGPIO installs NextReg $A8 and $A9, the ESP module's GPIO0 pin
+// (zxnext.vhd:5569-5573). They are not UART registers: the UART is at ports
+// $133B..$163B (UARTSystem). $A8 bit 0 enables the pin's output driver and
+// $A9 bit 0 is the level driven (reset values 0 and 1).
+//
+// Reading $A9 returns the pin, not the register (:6200-6201), as bits 2 and 0
+// of i_ESP_GPIO_20. The FPGA has no say in that value. This emulator has no
+// board, so the pins read as the board's pull-ups would hold them, high,
+// unless the output driver is enabled, when GPIO0 reads back the level driven.
+// That is an assumption about hardware outside the FPGA and is the only
+// one in this register pair.
+func WireESPGPIO(d *nextregs.Dispatcher) {
+	d.Store(0xA8, 0x00)
+	d.Store(0xA9, 0x01)
+	d.SetOnWrite(0xA8, func(disp *nextregs.Dispatcher, val byte) { disp.Store(0xA8, val&0x01) })
+	d.SetOnWrite(0xA9, func(disp *nextregs.Dispatcher, val byte) { disp.Store(0xA9, val&0x01) })
+	d.SetOnRead(0xA9, func(disp *nextregs.Dispatcher) byte {
+		gpio0 := byte(1)
+		if disp.Raw(0xA8)&0x01 != 0 {
+			gpio0 = disp.Raw(0xA9) & 0x01
+		}
+		return 0x04 | gpio0
 	})
-	d.SetOnRead(0xA8, func(_ *nextregs.Dispatcher) byte { return u.ReadData() })
-	d.SetOnRead(0xA9, func(_ *nextregs.Dispatcher) byte { return u.Status() })
 }
 
 // WireCPUSpeed installs the NextReg 0x07 OnWrite handler that

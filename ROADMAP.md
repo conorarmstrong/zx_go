@@ -2,7 +2,7 @@
 
 **Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (item 2 rewritten against the code; item 8 step 1 done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (UART register block done; item 2 now `dma_delay_i` and capture) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -71,7 +71,7 @@ hardware changes are modelled; see item 8.
 Ranked; detail in the open-work items below.
 
 1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **UART and IM2 remainder** (item 2): the CTC and chain are wired. The real UART register block is not modelled, which blocks its three request lines; `dma_delay_i` needs three pieces.
+2. **`dma_delay_i` and IM2 capture** (item 2): the UART, the CTC and the chain are wired. The DMA delay pin needs three pieces, and the CTC and IM2 chain are not yet in save states.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
@@ -122,8 +122,7 @@ The second weak point, the distance between modelled and reachable, is now
 measured rather than assumed. `pkg/next/reachability_test.go` fails the build if
 a subsystem under `pkg/next` is neither wired nor declared unwired, and the
 declared list is empty. What remains unreachable is finer-grained than a
-package: the UART interrupt request lines and the zxnDMA's `dma_delay_i` pin
-(both item 2).
+package: the zxnDMA's `dma_delay_i` pin (item 2).
 
 ---
 
@@ -163,13 +162,12 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 2. [correctness] IM2: the UART request lines and the DMA delay pin are not wired
+### 2. [correctness] IM2: `dma_delay_i` is not wired, and the CTC and chain are not captured
 
-**Re-checked against the code on 2026-11-14.** This item used to say neither the
-CTC nor IM2 could be reached by a guest. That stopped being true in `d4e569648`
-(2026-11-10), and the text below is what is left.
+**Re-checked against the code on 2026-11-15.** The CTC, the IM2 chain and the
+UART are wired and reachable. What is left is two things.
 
-**Wired and reachable** (`pkg/next/wire_im2.go`, `pkg/next/ctcclock.go`):
+**Wired and reachable** (`pkg/next/wire_im2.go`, `ctcclock.go`, `uartsys.go`):
 
 - The CTC: four channels (`zxnext.vhd:4067` is `NUM_CTC => 4`), ports
   `$183B`..`$1F3B`, zero-count chaining (`:4084`), enables from NR$C5 bits 3:0.
@@ -179,35 +177,23 @@ CTC nor IM2 could be reached by a guest. That stopped being true in `d4e569648`
   (`:6711`). NR$C8, C9 and CA read and clear the sticky status. The CPU answers
   the acknowledge cycle (`SetINTAckHook`) and reports the end of interrupt
   (`SetRETISeenHook`, `ED 45` only, `im2_control.vhd:135`).
+- The UART (done 2026-11-15, see the progress log): the register block at
+  `$133B`..`$163B`, an ESP8266 on UART 0, and the four request lines into the
+  chain (`zxnext.vhd:1941-1943`) with the avail term masked by NR$C6 bits 1 and
+  5. The lines are levels and the chain latches the edge, as in the VHDL, so
+  enabling an interrupt while its level is already high raises nothing.
 - `ula_int_pulse` and the line interrupt reach the chain from the CPU's frame
   and line hooks.
 
 **Not wired:**
 
-- **The two UART sources, and the UART itself.** `IM2SourceUART0R/0T/1R/1T`
-  have their enables and status bits wired (NR$C6, NR$CA) but nothing calls
-  `Raise` on them. Looking for where to raise them found a larger problem: **the
-  guest-visible UART is not modelled.** The three lines come from `uart.vhd`
-  (`rx_avail`, `rx_near_full`, `tx_empty`, `zxnext.vhd:1941-1943`), a register
-  block decoded at ports `$133B`/`$143B`/`$153B`/`$163B`/`$173B` (`:2639`)
-  with 512-byte Rx and 64-byte Tx FIFOs per UART. Nothing decodes those ports.
-  What `WireUART` serves instead is an AT-command stub at **NR$A8 and NR$A9,
-  which are not UART registers**: they are `nr_a8_esp_gpio0_en` and
-  `nr_a9_esp_gpio0`, the ESP GPIO0 pin (`zxnext.vhd:5569-5573`). So a guest that
-  probes the ESP through the real ports reads nothing, and one that pokes
-  NR$A8/A9 gets a made-up device. `serial.go` holds the PHY (`TX`, `RX`,
-  `FIFOP`) pinned by golden vectors; the register block, frame and prescaler
-  registers, UART select and the hardware flow control around it are missing.
-  The right order is: model `uart.vhd`'s register block against its golden
-  vectors, wire the five ports, retire the NR$A8/A9 stub and make those two
-  registers the GPIO0 pair, then raise the three lines from the FIFO flags.
 - **`dma_delay_i`.** `dma.SetBusDelay` exists and is pinned, but no production
   code calls it. The pin is `im2_dma_delay` (`zxnext.vhd:1785`, `:2001-2010`):
   a device whose NR$CC, CD or CE dma-int-enable bit is set and whose FSM is out
   of idle, an NMI with NR$CC bit 7, or a RETI pop in progress. NR$CC, CD and CE
-  are stored-only (`pkg/next/wire.go:1187-1201`). Until this lands no guest can
-  have its DMA held off the bus by an interrupt. Three pieces are missing, not
-  one: the chain model has no `i_dma_int_en` input or `o_dma_int` output
+  are stored-only (`pkg/next/wire.go`). Until this lands no guest can have its
+  DMA held off the bus by an interrupt. Three pieces are missing, not one: the
+  chain model has no `i_dma_int_en` input or `o_dma_int` output
   (`im2_device.vhd:151`: `state /= S_0 and i_dma_int_en`), the NMI term needs
   `nmi_activated`, and `o_dma_delay` (`im2_control.vhd:238`) is true in the
   `S_ED_T4`, `S_ED4D_T4`, `S_ED45_T4` and `S_SRL_T1/T2` states, which are
@@ -218,15 +204,27 @@ CTC nor IM2 could be reached by a guest. That stopped being true in `d4e569648`
   between the `ED` prefix and its second byte. The CPU still cannot give that
   window. Nothing in the current chain needs it; it is the first thing to check
   if arbitration comes out wrong.
+- **Save states.** The UART is captured; the CTC bank, its clock and the IM2
+  chain are not. A rewind across a guest that programmed a CTC channel or took
+  an IM2 interrupt leaves them in the present. `pkg/next/uart/state.go` and its
+  round-trip tests are the pattern: capture every field, and prove it by
+  restoring into a fresh device and comparing.
 
-**A known approximation, and the line not to cross.** `CTCClock.Advance` ticks
-the CTC from instruction boundaries, `T-states * 8 / SpeedMultiplier` clocks at
-a time. The channel FSM has no timers of its own, so that equals continuous
-ticking for the CTC alone. It is not safe to extend the same trick to a source
-that depends on a sub-instruction position. Do not approximate those: an
-unfaithful interrupt source is worse than none, because a developer would trust
-it. Every enable resets to zero, so the current state is unsafe in no case, only
-incomplete.
+**A known approximation, and the line not to cross.** The CTC and the UART are
+advanced from instruction boundaries, `T-states * 8 / SpeedMultiplier` clocks at
+a time. For the CTC that equals continuous ticking, because its channel FSM has
+no timers of its own. For the UART it holds because a bit at 115200 baud is 243
+clocks, longer than any instruction, and a register access is played out clock
+by clock inside its instruction. It is not safe to extend the same trick to a
+source that depends on a sub-instruction position, which is the `dma_delay_i`
+problem above. Do not approximate those: an unfaithful interrupt source is
+worse than none, because a developer would trust it.
+
+**Also not done, and why.** The UARTs routed to the joystick ports (NR$0B I/O
+mode, `zxnext.vhd:3340-3347`) are not modelled; they repurpose joystick pins as
+a serial link to an external device, the same class as the other NR$0B GPIO use
+catalogued below. Nothing is attached to UART 1, which has the Raspberry Pi
+behind it on the real board.
 
 ### 3. [efficiency] Row composition is O(row x writes)
 
@@ -718,9 +716,9 @@ Next steps, in order:
 Kept so they are not re-proposed.
 
 - [⊘] **Real Wi-Fi / TCP networking.** A live network stack is out of scope for
-  a reference emulator. The UART register block (`$133B`..`$173B`) is not, and is
-  not yet modelled: see item 2. What exists today is the PHY and an AT-command
-  stub at the wrong registers (`pkg/next/uart/doc.go`).
+  a reference emulator. The UART register block and the serial lines to the
+  module are modelled (`pkg/next/uart`); what answers on them is an AT-command
+  responder with nothing behind it.
 - [⊘] **Interface 1 RS-232 / SinclairNET.** The NET port is decoded
   (`pkg/if1/ula.go:8`); bit-banging an external serial device is out of
   scope, same rationale as the UART. The microdrive, the IF1's primary
@@ -844,6 +842,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-15 | Next: the UART register block (`serial/uart.vhd`) is modelled and wired: ports `$133B`..`$163B`, both UARTs, the FIFOs, the status and error logic, an ESP8266 on UART 0 over the real serial lines, the four request lines into the IM2 chain, reset, and save states. Replayed against a GHDL golden of 17,334 output changes and 3,325 reads, with the idle skip replayed against the same golden. NR$A8 and NR$A9 are now the ESP GPIO0 pair; the AT stub that sat there is gone. Mutation testing found a per-UART gating error in the Rx FIFO write. |
 | 2026-11-14 | Next: a port `$FF` write now sets the ULA interrupt disable (bit 6) and shows in NR$22 and NR$C4. Verified NR$C4's read composition and reset against `zxnext.vhd`. Found that the guest-visible UART (ports `$133B`..`$173B`) is not modelled and that the stub at NR$A8/A9 is on the ESP GPIO0 registers. |
 | 2026-11-14 | Next: NR$0A `sd_swap` now needs the bit 2 lock bit (public VHDL 3.02.04). Item 8 step 1 done: 3.02.03 vs 3.02.05 diffed, five guest-visible changes found, one taken. Item 2 rewritten against the code. |
 | 2026-11-10 | Next: the CTC (four channels, fixed 28 MHz clock, zero-count chaining) and the IM2 chain are wired to the guest, with NR$C0, C4, C5, C6 and the NR$C8 to CA status registers. 60 Hz video timing via NR$05 bit 2. The RETN hook now fires for `ED 45` only, which fixed a TX-1696 crash. |
@@ -856,6 +855,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Item 2 rewritten: the UART is wired, `dma_delay_i` and save-state capture of the CTC and chain remain. Catalogued Wi-Fi entry corrected again. |
 | 2026-11-14 | minor | Item 2: UART finding (wrong registers, ports not decoded) and the three missing pieces of `dma_delay_i`. Catalogued Wi-Fi entry corrected. |
 | 2026-11-14 | minor | Item 2 rewritten to what is actually unwired (UART request lines, `dma_delay_i`). Item 8 step 1 done with a results table. |
 | 2026-11-11 | minor | Added the release targets table (26.11a, NextZXOS 2.10a, core 3.03.03 achieved; 3.03 hardware open) and item 8. |

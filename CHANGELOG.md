@@ -6,6 +6,27 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The Next's UART register block.** Ports `$133B` (Tx and status), `$143B`
+  (Rx and prescaler), `$153B` (select) and `$163B` (frame) now reach both
+  UARTs, with the 512-byte Rx and 64-byte Tx FIFOs, the status and error
+  flags, the prescaler and frame registers and the soft-reset behaviour of the
+  real `uart.vhd`. It is replayed against a golden captured from that VHDL
+  under GHDL: all 17,334 output changes and 3,325 register reads over 17,198
+  stimulus records, including a fuzz section. The ports are gated by NR$83 bit 4. Nothing
+  decoded these ports before, so a guest probing the ESP or the Pi through
+  them read the floating bus.
+- **An ESP8266 module on UART 0.** It listens to the guest's Tx line and
+  answers over the Rx line through the same serial PHY, fixed at 115200 baud
+  8N1 as the AT firmware is, so a guest at another baud rate is not understood.
+  There is no Wi-Fi behind it.
+- **The four UART interrupt sources reach the IM2 chain.** Rx (avail or
+  three-quarters full, by NR$C6 bits 1 and 5) and Tx-empty for each UART,
+  with the edge behaviour of the hardware: enabling an interrupt while its
+  level is already high raises nothing.
+- **The UART is captured by save states and rewind.**
+
 ### Fixed
 
 - **A port `$FF` write now disables the ULA frame interrupt when bit 6 is set.**
@@ -13,6 +34,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the NR$22 and NR$C4 read-backs. It was stored as a screen mode and ignored.
 
 ### Changed
+
+- **NextReg `$A8` and `$A9` are the ESP's GPIO0 pin, not UART registers.**
+  The AT-command stub that answered there is gone. `$A8` bit 0 enables the
+  pin's output driver and `$A9` bit 0 is the level driven (reset values 0 and
+  1). `$A9` reads the pin; the emulator has no board, so it reads high unless
+  the driver is enabled.
 
 - **NextReg `$0A` bit 5 (SD swap) now needs bit 2 set in the same write.**
   Public core 3.02.04 added this lock bit because older firmware changed the

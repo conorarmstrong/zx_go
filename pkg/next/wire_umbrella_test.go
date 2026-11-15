@@ -14,7 +14,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
 	"github.com/conorarmstrong/zx_go/pkg/next/rtc"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
-	"github.com/conorarmstrong/zx_go/pkg/next/uart"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
@@ -59,7 +58,6 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 	sprites := sprite.New()
 	cop := copper.New()
 	rtcEngine := rtc.New()
-	uartEngine := uart.New()
 
 	Wire(WireOpts{
 		Dispatcher: disp,
@@ -72,7 +70,6 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 		Sprites:    sprites,
 		Copper:     cop,
 		RTC:        rtcEngine,
-		UART:       uartEngine,
 	})
 
 	// 0x07: CPU speed -> cpu.SpeedSelect
@@ -231,22 +228,30 @@ func TestWireUmbrellaInstallsAllHandlers(t *testing.T) {
 	disp.Select(0x11)
 	disp.WriteData(0x55)
 
-	// 0xA8 / 0xA9: UART. Send "AT\r" through the dispatcher
-	// and read back "OK\r\n".
-	for _, ch := range []byte("AT\r") {
-		disp.Select(0xA8)
-		disp.WriteData(ch)
+	// 0xA8 / 0xA9: the ESP's GPIO0 pin (zxnext.vhd:5569-5573), not a UART.
+	// Reset: driver off, level 1. A9 reads the pin: high with the driver off
+	// (the board's pull-up), the driven level with it on.
+	disp.Select(0xA8)
+	if got := disp.ReadData(); got != 0x00 {
+		t.Errorf("NR$A8 at reset = %#x, want 0", got)
 	}
 	disp.Select(0xA9)
-	if status := disp.ReadData(); status&uart.StatusRXReady == 0 {
-		t.Errorf("UART after AT\\r: status %#x, want RXReady set", status)
+	if got := disp.ReadData(); got != 0x05 {
+		t.Errorf("NR$A9 at reset = %#x, want 5 (GPIO2 and GPIO0 pulled up)", got)
+	}
+	disp.WriteData(0x00) // level 0, driver still off
+	if got := disp.ReadData(); got != 0x05 {
+		t.Errorf("NR$A9 with the driver off = %#x, want 5", got)
 	}
 	disp.Select(0xA8)
-	want := []byte("OK\r\n")
-	for i, w := range want {
-		if got := disp.ReadData(); got != w {
-			t.Errorf("UART response byte %d = %#x, want %#x", i, got, w)
-		}
+	disp.WriteData(0x01) // driver on
+	disp.Select(0xA9)
+	if got := disp.ReadData(); got != 0x04 {
+		t.Errorf("NR$A9 driving 0 = %#x, want 4", got)
+	}
+	disp.WriteData(0xFF) // only bit 0 is stored
+	if got := disp.ReadData(); got != 0x05 {
+		t.Errorf("NR$A9 driving 1 = %#x, want 5", got)
 	}
 }
 

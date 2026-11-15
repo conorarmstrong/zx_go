@@ -25,7 +25,6 @@ import (
 	rtcpkg "github.com/conorarmstrong/zx_go/pkg/next/rtc"
 	"github.com/conorarmstrong/zx_go/pkg/next/sdcard"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
-	uartpkg "github.com/conorarmstrong/zx_go/pkg/next/uart"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
@@ -79,7 +78,6 @@ func newNext() (*Harness, error) {
 	cop := copper.New()
 	cop.SetRegWriter(disp)
 	rtcEngine := rtcpkg.New()
-	uartEngine := uartpkg.New()
 	dmaEngine := dma.New(mem)
 	dacBank := dac.New()
 	im2 := next.NewIM2Driver()
@@ -95,7 +93,6 @@ func newNext() (*Harness, error) {
 		Sprites:    sprites,
 		Copper:     cop,
 		RTC:        rtcEngine,
-		UART:       uartEngine,
 		IM2:        im2,
 		Video60Hz:  u.SixtyHz,
 		SetVideo60Hz: func(on bool) {
@@ -113,8 +110,14 @@ func newNext() (*Harness, error) {
 	u.SetNextRegs(disp)
 	u.SetNextCTC(ctcBank)
 	ctcClock := next.NewCTCClock(ctcBank, im2)
+	// The UART register block (ports $133B..$163B) and the ESP behind UART 0.
+	// Built after Wire so it can chain onto the NR$02 and NR$C6 handlers.
+	uartSys := next.NewUARTSystem(disp, im2, cpu.SpeedMultiplier)
+	u.SetNextUART(uartSys)
 	cpu.SetInstructionHook(func(tstates int) {
-		ctcClock.Advance(tstates, cpu.SpeedMultiplier())
+		speed := cpu.SpeedMultiplier()
+		ctcClock.Advance(tstates, speed)
+		uartSys.Advance(tstates, speed)
 	})
 	u.SetNextAY(ayEngine)
 	comp := compositor.New(pal, l2)

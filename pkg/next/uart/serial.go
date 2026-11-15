@@ -47,6 +47,7 @@ type TX struct {
 	ctsN      bool   // i_cts_n: false ('0') = receiver ready
 	txEn      bool   // i_Tx_en pulse for the next Clock()
 	txByte    byte   // i_Tx_byte
+	reset     bool   // i_reset
 
 	// registers (uart_tx.vhd signals)
 	state         txState
@@ -82,6 +83,16 @@ func (t *TX) Reset() {
 func (t *TX) SetFrame(f byte)         { t.frame = f }
 func (t *TX) SetPrescaler(p uint32)   { t.prescaler = p & ((1 << prescalerBits) - 1) }
 func (t *TX) SetCTS(clearToSend bool) { t.ctsN = !clearToSend }
+
+// idleStable reports a transmitter that Clock() would leave unchanged in every
+// way another module can observe: idle, no break, no reset requested.
+func (t *TX) idleStable() bool {
+	return t.state == txIdle && t.frame&0xC0 == 0 && !t.reset && !t.txEn
+}
+
+// SetReset drives i_reset for the next Clock(): the state machine returns to
+// idle (uart_tx.vhd:163-172) and nothing else changes.
+func (t *TX) SetReset(v bool) { t.reset = v }
 
 // Send latches a byte and asserts i_Tx_en for exactly the next Clock().
 func (t *TX) Send(b byte) {
@@ -234,7 +245,7 @@ func (t *TX) Clock() bool {
 	}
 
 	// state machine (uart_tx.vhd:163-172)
-	if (t.frame & 0x80) != 0 { // i_frame(7) reset
+	if (t.frame&0x80) != 0 || t.reset { // i_frame(7) or i_reset
 		t.state = txIdle
 	} else {
 		t.state = ns
@@ -325,6 +336,10 @@ func (f *FIFOP) Clock() {
 		f.stored = (f.stored - 1) & storedMask
 	}
 }
+
+// settled reports a pointer manager with no read or write in flight, so a
+// Clock() with unchanged inputs changes nothing.
+func (f *FIFOP) settled() bool { return !f.rd && !f.wr && !f.rdDly && !f.wrDly }
 
 // Empty mirrors o_empty (fifop.vhd:135,140).
 func (f *FIFOP) Empty() bool { return f.empty() }
@@ -431,6 +446,7 @@ func (d *debounce) out() bool { return d.buttonDb }
 type RX struct {
 	frame     byte
 	prescaler uint32
+	reset     bool // i_reset
 
 	db  *debounce
 	rxD bool // Rx_d register (one-cycle delay of debounced Rx)
@@ -472,6 +488,26 @@ func (r *RX) Reset() {
 
 func (r *RX) SetFrame(f byte)       { r.frame = f }
 func (r *RX) SetPrescaler(p uint32) { r.prescaler = p & ((1 << prescalerBits) - 1) }
+
+// idleStable reports a receiver on a quiet line that Clock() would leave
+// unchanged in every way another module can observe: idle, the debounce front
+// end settled on the line level, no output strobe pending.
+func (r *RX) idleStable(line bool) bool {
+	if r.state != rxIdle || r.frame&0xC0 != 0 || r.reset || r.rxAvail || r.errFr || r.errPar {
+		return false
+	}
+	d := r.db
+	want := uint8(0)
+	if line {
+		want = 3
+	}
+	return line && d.button == want && d.buttonDb == line && r.rxD == line &&
+		(d.counter>>d.counterSize)&1 != 0
+}
+
+// SetReset drives i_reset for the next Clock(): the state machine goes to
+// S_PAUSE (uart_rx.vhd:217-218) and no other register is touched.
+func (r *RX) SetReset(v bool) { r.reset = v }
 
 func (r *RX) timerExpired() bool    { return (r.rxTimer >> 1) == 0 } // uart_rx.vhd:178
 func (r *RX) bitCountExpired() bool { return r.rxBitCount == 0 }
@@ -635,7 +671,7 @@ func (r *RX) Clock(rxIn bool) {
 	r.db.clock(rxIn)
 
 	// state machine (uart_rx.vhd:216-225)
-	if (r.frame & 0x80) != 0 {
+	if (r.frame&0x80) != 0 || r.reset {
 		r.state = rxPause
 	} else {
 		r.state = ns
@@ -648,6 +684,20 @@ func boolBit(b bool) byte {
 	}
 	return 0
 }
+
+// CombFramingError, CombParityError and CombBreak are the combinational
+// outputs o_err_framing, o_err_parity and o_err_break as they stand in the
+// current cycle (uart_rx.vhd:312-314). FramingError and ParityError above
+// report the value from the cycle before, which is what the RX test replays;
+// a consumer that reads these in the same cycle as the state they derive
+// from, as uart.vhd does, needs these instead.
+func (r *RX) CombFramingError() bool {
+	return (r.state == rxStop1 || r.state == rxStop2) && r.nextState(r.db.out()) == rxError
+}
+func (r *RX) CombParityError() bool {
+	return r.state == rxParity && r.nextState(r.db.out()) == rxError
+}
+func (r *RX) CombBreak() bool { return r.state == rxError && r.rxShift == 0 }
 
 // Avail mirrors o_Rx_avail (one cycle when a clean byte completes).
 func (r *RX) Avail() bool { return r.rxAvail }

@@ -199,7 +199,7 @@ signing/verification.
 | Z80 CTC timers | ✅ | ✅ | ⚠️ | ✅ |
 | IM2 vectored interrupts | ⚠️ ²⁷ | ✅ | ⚠️ | ✅ |
 | Next DMA (zxnDMA) | ✅ ²⁴ | ✅ | ⚠️ | ✅ |
-| UART / Wi-Fi (ESP) | ⚠️ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
+| UART / Wi-Fi (ESP) | ✅ ²⁵ | ⚠️ | ⚠️ | ⚠️ ²⁶ |
 | DISCiPLE / +D | ✅ | ❌ | ✅ | ❌ |
 | Interface 1 + Microdrive | ✅ | ❌ | ✅ | ⚠️ |
 | Opus Discovery | ✅ | ❌ | ❔ | ✅ |
@@ -218,14 +218,14 @@ but not driven, its source being an unwired reference model. The
 interrupt/match logic is absent because the FPGA does not implement it either.
 Four timing defects are open, the prescaler period being the largest: see
 ROADMAP items 1 and 4.
-²⁵ zx_go provides a UART/AT-command stub; real Wi-Fi networking is out of scope.
+²⁵ zx_go models the Next's UART register block from the FPGA VHDL (ports `$133B`..`$163B`, both UARTs, the FIFOs, the status and error flags), with an ESP8266 module answering AT commands on UART 0 over the real serial lines at 115200 baud. Real Wi-Fi networking is out of scope.
 ²⁶ None of these emulators run a real ESP8266 Wi-Fi firmware stack; they model the
 UART and optionally bridge to host serial / a real device.
 ²⁷ zx_go's IM2 daisy chain is wired to the CPU for the CTC and the ULA frame
 and line interrupts (2026-11-10), pinned by golden vectors captured from the
-FPGA VHDL under GHDL. Two parts are not: no UART source raises a request, and
-the DMA delay pin is never driven because NR$CC/$CD/$CE are stored-only. See
-ROADMAP item 2.
+FPGA VHDL under GHDL, and the four UART request lines reach it (2026-11-15).
+One part is not wired: the DMA delay pin is never driven because NR$CC/$CD/$CE
+are stored-only. See ROADMAP item 2.
 
 ---
 

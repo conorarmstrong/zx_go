@@ -75,11 +75,11 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $BA divmmc ep_timing | $00 | $00 | ✅ | |
 | $BB divmmc ep1 | $CD | $CD | ✅ | |
 | $C4 int en 0 | bit expbus=1 | $81 | ✅ | reset and read composition (`expbus & 00000 & ula_int_en`, `:6239`) verified 2026-11-14; bit 0 follows port $FF bit 6 and NR$22 bit 2, bit 1 follows NR$22 bit 1. `TestSpec_NRC4_Bit0_FollowsPortFFBit6` |
-| $C0 im2/nmi | $00 | $00 | ⚠️ | wired since 2026-11-10: bit 0 hands /INT to the IM2 chain, bits 7:5 set the vector base; NR$C4/C5/C6 enables and NR$C8-CA status drive it. Still open: no UART source raises a request, and NR$CC/$CD/$CE are stored-only, so `dma_delay_i` is never driven. ROADMAP item 2 |
+| $C0 im2/nmi | $00 | $00 | ⚠️ | wired since 2026-11-10: bit 0 hands /INT to the IM2 chain, bits 7:5 set the vector base; NR$C4/C5/C6 enables and NR$C8-CA status drive it. The UART request lines are wired (2026-11-15). Still open: NR$CC/$CD/$CE are stored-only, so `dma_delay_i` is never driven. ROADMAP item 2 |
 | $0A peripheral 1 | $00 | $00 | ✅ | bit 5 (`sd_swap`) needs bit 2 set in the same config-mode write (public VHDL 3.02.04, `6395c28`); `TestSpec_NR0A_SDSwapNeedsLockBit`. Bits 7:6 (`mf_type`) are config-mode only. 3.03 VHDL is not public, so this is checked to 3.02.05 only |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0. The dma-int bits are stored-only for the same reason as NR$C0 |
 
-**Axis 1 remaining gaps to close:** NR$0B/$A9 (composed). Note NR$A8/$A9 are the ESP GPIO0 pair in the VHDL (`:5569-5573`); the emulator serves a UART stub there instead (ROADMAP item 2). None are boot-blocking. (NR$98/
+**Axis 1 remaining gaps to close:** NR$0B/$A9 (composed). NR$A8/$A9 are the ESP GPIO0 pair (`:5569-5573`) and are modelled as such; the pin readback assumes the board's pull-ups, which is outside the FPGA. None are boot-blocking. (NR$98/
 $99 fixed this pass; NR$68 was a misread — already conformant.)
 **Action:** extend the reset test to assert the FULL vhd reset vector incl.
 composed read-backs.
@@ -100,10 +100,9 @@ read-backs — verify vs VHDL, never blind-match). **Gap:** ~30 composed read-ba
 ($68,$69,$C0,$C4,$C6,$CC-$CE,$A9,$0B,...) not individually pinned to the VHDL mux.
 
 ## Axis 4 — Ports / IO decode
-Source: zxnext.vhd port decode (`port_*`). Tests: scattered. **Confirmed gap this
-session:** port **$FF** (Timex/SCLD) — bit6 = ULA-frame-INT disable
-(`port_ff_interrupt_disable`, vhd 3635/6711/6750) is **not implemented** in
-WritePort. ⚠️ $FE,$7FFD,$1FFD,$243B/$253B,$E3/$E7/$EB,$6B,$DFFD,AY ports present
+Source: zxnext.vhd port decode (`port_*`). Tests: scattered. Port **$FF** (Timex/SCLD) bit 6 = ULA-frame-INT disable
+(`port_ff_interrupt_disable`, vhd 3635/6711/6750) is implemented as of
+2026-11-14 (`next.PortFFWrite`; `TestSpec_NRC4_Bit0_FollowsPortFFBit6`). ⚠️ $FE,$7FFD,$1FFD,$243B/$253B,$E3/$E7/$EB,$6B,$DFFD,AY ports present
 but no port-by-port VHDL decode conformance test. **This gap bit in v1.4.1:**
 `$DFFD` latched its bank correctly but the *read* path applied the classic page
 map's ">= 16 means ROM index" encoding to the `$C000` slot, where the bank is
@@ -112,13 +111,24 @@ Banks 16-19 read ROM while the write landed in RAM; 20+ panicked. Pinned now by
 `pkg/memory/dffd_highbank_test.go`, but the port-by-port decode test is still
 the thing that would have caught it by enumeration rather than by fuzzing.
 
+**UART ports** `$133B` `$143B` `$153B` `$163B` (vhd 2639, `port_uart`; register = A9:8): ✅
+decode and gate (NR$83 bit 4, `internal_port_enable(12)`) pinned by
+`TestUARTPortDecode` and `TestUARTPortsFollowNR83Bit4`; the register block behind them is
+pinned against a golden captured from the real `uart.vhd` (`TestBlockMatchesFPGAGolden`,
+`TestBlockAdvanceMatchesFPGAGolden`; every mutant tried against `block.go` and
+`uartsys.go` is killed). Two dead paths in the VHDL are reproduced and untested because they cannot be
+reached: `o_err_break` (`rx_shift` is forced to ones whenever `state_next` is `S_ERROR`, so
+it is never zero in `S_ERROR`) and `o_full_almost` (the comparison against `to_unsigned(-1)`
+never matches, so it equals `o_full`). Not modelled: the UARTs routed to the joystick ports
+(NR$0B I/O mode, vhd 3340-3347).
+
 ## Axis 5 — Interrupts / timing  (zxula_timing.vhd + zxnext.vhd 2014-2033)
 Tests: `pkg/z80/int_timing_test.go` (narrow pulse, DI-across-pulse, speed-scaled
 frame boundary), `pkg/next/inttiming_test.go` (per-mode assert tstate + pulse).
 Fixed this session: **StepInstructionWithIRQ 28 MHz frame boundary not
 SpeedMultiplier-scaled (8× over-fire)**; narrow-pulse default. ⚠️ frame-ORIGIN
 offset (CPU tstate=0 ↔ ULA hc0/vc0) unvalidated; line-INT at turbo; IM2 vector
-table; the NR$22/$C0/$C4/$C5/$C6 enable gates are wired to the chain (2026-11-10), but no UART source raises a request.
+table; the NR$22/$C0/$C4/$C5/$C6 enable gates are wired to the chain (2026-11-10), and so are the four UART request lines (2026-11-15).
 
 ## Axis 6 — Z80 / Z80N operations  (FUSE + Sean Young + GHDL gate oracle)
 Tests: canonical T-state tables (iter 266-270), per-op timing batches, flags

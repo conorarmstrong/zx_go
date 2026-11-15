@@ -40,7 +40,6 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/next/sdcard"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
-	uartpkg "github.com/conorarmstrong/zx_go/pkg/next/uart"
 	"github.com/conorarmstrong/zx_go/pkg/peripherals"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 	"github.com/conorarmstrong/zx_go/pkg/ula"
@@ -853,7 +852,6 @@ func wireNextSubsystems(e *emulator) error {
 	if dir, err := install.Path(); err == nil {
 		rtcEngine.SetPersistPath(filepath.Join(dir, "i2c_nvram"))
 	}
-	uartEngine := uartpkg.New()
 	keymapEngine := keymap.New()
 	tilemapLayer := tilemap.New(mem)
 	dmaEngine := dma.New(mem)
@@ -1139,7 +1137,6 @@ func wireNextSubsystems(e *emulator) error {
 		Sprites:     sprites,
 		Copper:      cop,
 		RTC:         rtcEngine,
-		UART:        uartEngine,
 		Keymap:      keymapEngine,
 		Tilemap:     tilemapLayer,
 		DivMMCPager: pager,
@@ -1162,8 +1159,15 @@ func wireNextSubsystems(e *emulator) error {
 	u.SetNextRegs(disp)
 	u.SetNextCTC(ctcBank)
 	ctcClock := next.NewCTCClock(ctcBank, im2)
+	// The UART register block (ports $133B..$163B) and the ESP behind UART 0.
+	// Built after Wire so it can chain onto the NR$02 and NR$C6 handlers.
+	uartSys := next.NewUARTSystem(disp, im2, cpu.SpeedMultiplier)
+	u.SetNextUART(uartSys)
+	e.nextUART = uartSys
 	cpu.SetInstructionHook(func(tstates int) {
-		ctcClock.Advance(tstates, cpu.SpeedMultiplier())
+		speed := cpu.SpeedMultiplier()
+		ctcClock.Advance(tstates, speed)
+		uartSys.Advance(tstates, speed)
 	})
 
 	// FPGA bootrom mode — the hardware-faithful path. Real Spectrum
@@ -1989,9 +1993,11 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextLoRes = nil
 	e.nextLoResState = nil
 	e.nextULAPlus = nil
+	e.nextUART = nil
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(nil)
 		e.ula.SetNextLoRes(nil)
+		e.ula.SetNextUART(nil)
 	}
 	e.nextReset = nil
 }

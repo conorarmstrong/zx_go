@@ -271,6 +271,8 @@ type ULA struct {
 	// nextCTC receives the $183B..$1F3B CTC port group. Wired only for
 	// ModelNext.
 	nextCTC NextCTC
+	// nextUART receives the UART register ports. Wired only for ModelNext.
+	nextUART NextUART
 
 	// nextSprite receives port $303B traffic: a write selects the
 	// active sprite, a read returns the sprite status (collision /
@@ -418,6 +420,14 @@ type NextDMA interface {
 // CTC but select no channel, and must not fall through to the ordinary
 // port dispatch.
 type NextCTC interface {
+	ReadPort(addr uint16) (byte, bool)
+	WritePort(addr uint16, val byte) bool
+}
+
+// NextUART is the contract for the Spectrum Next's UART register block on
+// ports $133B, $143B, $153B and $163B (zxnext.vhd:2639). Each method reports
+// whether it claimed the port, so a non-UART address falls through.
+type NextUART interface {
 	ReadPort(addr uint16) (byte, bool)
 	WritePort(addr uint16, val byte) bool
 }
@@ -617,6 +627,9 @@ func (u *ULA) SetNextDMA(d NextDMA) { u.nextDMA = d }
 // SetNextCTC installs the Spectrum Next four-channel CTC. Ports
 // $183B..$1F3B route to it; nil unhooks.
 func (u *ULA) SetNextCTC(c NextCTC) { u.nextCTC = c }
+
+// SetNextUART wires the UART register block. Passing nil unhooks it.
+func (u *ULA) SetNextUART(c NextUART) { u.nextUART = c }
 
 // SetNextSpritePort installs the sprite engine's $303B select/status
 // port handler. Passing nil unhooks.
@@ -1524,6 +1537,13 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		}
 	}
 
+	// Ports $133B, $143B, $153B, $163B: the UART register block.
+	if u.nextUART != nil {
+		if v, ok := u.nextUART.ReadPort(addr); ok {
+			return v, true
+		}
+	}
+
 	// Multiface 3 paging-register readback. Per the FPGA source
 	// (zxnext.vhd:2612-2616 port_mf_enable decode + the mf_port_dat mux,
 	// and multiface.vhd:43-44): while the Multiface is active (paged in /
@@ -1896,6 +1916,11 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 
 	// Ports $183B..$1F3B: the Next CTC.
 	if u.nextCTC != nil && u.nextCTC.WritePort(addr, val) {
+		return
+	}
+
+	// Ports $133B, $143B, $153B, $163B: the UART register block.
+	if u.nextUART != nil && u.nextUART.WritePort(addr, val) {
 		return
 	}
 
