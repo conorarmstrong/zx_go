@@ -38,6 +38,7 @@ import (
 	"github.com/conorarmstrong/zx_go/pkg/multiface"
 	"github.com/conorarmstrong/zx_go/pkg/next"
 	"github.com/conorarmstrong/zx_go/pkg/next/copper"
+	"github.com/conorarmstrong/zx_go/pkg/next/ctc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dac"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/dma"
@@ -276,6 +277,11 @@ type emulator struct {
 	// nextUART is the UART register block on ports $133B..$163B and the ESP
 	// module behind UART 0.
 	nextUART *next.UARTSystem
+
+	// nextIM2 and nextCTC are the IM2 daisy chain and the four CTC channels.
+	// They are held here so a save state can reach them.
+	nextIM2 *next.IM2Driver
+	nextCTC *ctc.Bank
 
 	// nexloadMacro, when non-nil, drives the NextZXOS .nexload dot
 	// command from the run loop to load a .nex via the genuine OS

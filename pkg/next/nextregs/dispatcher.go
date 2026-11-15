@@ -33,6 +33,9 @@ type Dispatcher struct {
 	onRead   [256]func(*Dispatcher) byte
 	onReset  []func()
 	tracer   TraceFunc
+	// resetting is true while Reset drives the register file, so a handler can
+	// tell a reset write from a guest write.
+	resetting bool
 }
 
 // Hardware identity defaults (read-only registers the boot ROM
@@ -89,6 +92,8 @@ func New() *Dispatcher {
 // continue rendering stale bank-5 data over whatever the next boot
 // path tries to display.
 func (d *Dispatcher) Reset() {
+	d.resetting = true
+	defer func() { d.resetting = false }()
 	// Phase 1: drive every register through write() with the value 0
 	// so handlers see the "back to defaults" event. Direct backing
 	// writes alone wouldn't notify the tilemap layer / L2 / etc.
@@ -114,6 +119,11 @@ func (d *Dispatcher) Reset() {
 		fn()
 	}
 }
+
+// InReset reports whether Reset is driving the register file. A handler uses it
+// for the few registers the FPGA's reset block leaves alone, which Reset would
+// otherwise clear along with the rest.
+func (d *Dispatcher) InReset() bool { return d.resetting }
 
 // applyResetDefaults seeds the FPGA's tbblue_reset_common power-on
 // values. Shared between New() and Reset() so they cannot drift.

@@ -95,6 +95,7 @@ type blockState struct {
 
 	HasPeer  bool
 	PeerLine bool
+	PeerCut  bool
 	Peer     []byte
 	Quiet    int
 	Executed uint64
@@ -166,7 +167,7 @@ func (b *Block) SaveState() []byte {
 		RxAvailD: b.rxAvailD, RxByteD: b.rxByteD,
 		OTx: b.oTx, ORtrN: b.oRtrN, ORxNear: b.oRxNear, ORxAvail: b.oRxAvail,
 		ORxErr: b.oRxErr, ORxBreak: b.oRxBreak, OTxEmpty: b.oTxEmpty,
-		PeerLine: b.peerLine, Quiet: b.quiet, Executed: b.executed,
+		PeerLine: b.peerLine, PeerCut: b.peerCut, Quiet: b.quiet, Executed: b.executed,
 	}
 	for u := 0; u < 2; u++ {
 		s.TX[u], s.RX[u] = b.tx[u].save(), b.rx[u].save()
@@ -218,7 +219,7 @@ func (b *Block) LoadState(data []byte) error {
 	b.rxAvailD, b.rxByteD = s.RxAvailD, s.RxByteD
 	b.oTx, b.oRtrN, b.oRxNear, b.oRxAvail = s.OTx, s.ORtrN, s.ORxNear, s.ORxAvail
 	b.oRxErr, b.oRxBreak, b.oTxEmpty = s.ORxErr, s.ORxBreak, s.OTxEmpty
-	b.peerLine, b.quiet, b.executed = s.PeerLine, s.Quiet, s.Executed
+	b.peerLine, b.peerCut, b.quiet, b.executed = s.PeerLine, s.PeerCut, s.Quiet, s.Executed
 	for u := 0; u < 2; u++ {
 		b.tx[u].load(s.TX[u])
 		b.rx[u].load(s.RX[u])

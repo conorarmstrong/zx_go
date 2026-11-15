@@ -397,3 +397,80 @@ func TestAnIOCycleIsTwoCPUTStates(t *testing.T) {
 		}
 	}
 }
+
+// probeAT sends AT to UART 0 and returns what comes back.
+func probeAT(s *UARTSystem) string {
+	for _, c := range []byte("AT\r") {
+		out(s, portTx, c)
+	}
+	s.Advance(60_000, 1)
+	var got []byte
+	for in(s, portTx)&0x01 != 0 {
+		got = append(got, in(s, portRx))
+	}
+	return string(got)
+}
+
+// NR$0B with the I/O mode enabled and mode bit 5 set gives a UART to the
+// joystick connector (zxnext.vhd:3340-3350). Bit 0 picks UART 0 or UART 1.
+// UART 0 loses the ESP: its peer sees an idle line and its Rx is the joystick
+// pin, which idles high.
+func TestJoystickRoutingCutsTheESPOffUART0(t *testing.T) {
+	s, d, _ := newUARTRig(t)
+	d.WriteReg(0x0B, 0xA0) // enable, mode bit 5, UART 0
+	if got := probeAT(s); got != "" {
+		t.Errorf("the ESP answered %q with UART 0 routed to the joystick port", got)
+	}
+}
+
+func TestJoystickRoutingOfUART1LeavesTheESPAlone(t *testing.T) {
+	s, d, _ := newUARTRig(t)
+	d.WriteReg(0x0B, 0xA1) // UART 1
+	if got := probeAT(s); got != "OK\r\n" {
+		t.Errorf("ESP reply %q with UART 1 routed, want OK", got)
+	}
+}
+
+func TestJoystickRoutingNeedsBothTheEnableAndTheMode(t *testing.T) {
+	for _, v := range []byte{0x20, 0x80, 0x90, 0x00} {
+		s, d, _ := newUARTRig(t)
+		d.WriteReg(0x0B, v)
+		if got := probeAT(s); got != "OK\r\n" {
+			t.Errorf("NR$0B=$%02X cut the ESP off (reply %q)", v, got)
+		}
+	}
+}
+
+// Routing is undone by writing it off, and by a register reset, which drives
+// NR$0B to zero.
+func TestJoystickRoutingIsUndone(t *testing.T) {
+	for name, undo := range map[string]func(d *nextregs.Dispatcher){
+		"write":  func(d *nextregs.Dispatcher) { d.WriteReg(0x0B, 0x00) },
+		"reset":  func(d *nextregs.Dispatcher) { d.Reset() },
+		"unmode": func(d *nextregs.Dispatcher) { d.WriteReg(0x0B, 0x80) },
+	} {
+		s, d, _ := newUARTRig(t)
+		d.Store(0x83, 0xFF)
+		d.WriteReg(0x0B, 0xA0)
+		undo(d)
+		d.Store(0x83, 0xFF)
+		if got := probeAT(s); got != "OK\r\n" {
+			t.Errorf("%s: reply %q after undoing the routing, want OK", name, got)
+		}
+	}
+}
+
+// The routing is part of a captured state: restore into a fresh system and
+// the ESP stays cut off.
+func TestJoystickRoutingSurvivesAStateRoundTrip(t *testing.T) {
+	s, d, _ := newUARTRig(t)
+	d.WriteReg(0x0B, 0xA0)
+	b, d2, _ := newUARTRig(t)
+	d2.Store(0x0B, 0xA0)
+	if err := b.LoadState(s.SaveState()); err != nil {
+		t.Fatal(err)
+	}
+	if got := probeAT(b); got != "" {
+		t.Errorf("restored system let the ESP answer: %q", got)
+	}
+}

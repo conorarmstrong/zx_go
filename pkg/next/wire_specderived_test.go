@@ -567,18 +567,48 @@ func TestSpec_NRCD_DMAIntEn1_AllBits(t *testing.T) {
 	}
 }
 
-// TestSpec_NRC0_ReadShape_NotImplemented documents that NR$C0 read
-// shape (z80_im_mode synthesis at bits 2:1) is not implemented.
-// Per VHDL line 6230 read is:
-//
-//	nr_c0_im2_vector(3) & '0' & nr_c0_stackless_nmi & z80_im_mode(2) & nr_c0_int_mode_pulse_0_im2_1
-//
-// We don't synthesise z80_im_mode into the read — stored byte has
-// those bits masked off. Software polling for "current IM mode" via
-// NR$C0 read would see zeros instead of the live IM. Skip-test to
-// document the gap so future work spots it.
-func TestSpec_NRC0_ReadShape_NotImplemented(t *testing.T) {
-	t.Skip("NR$C0 read shape (z80_im_mode synthesis at bits 2:1) not implemented")
+// NR$C0 bits 2:1 read the CPU's interrupt mode (zxnext.vhd:6230,
+// im2_control.vhd:195-203): IM 0 and reset read 00, IM 1 sets bit 1, IM 2 sets
+// bit 2. The mode is changed by executing the opcode, so the test runs
+// ED 46/56/5E instead of poking a field.
+func TestSpec_NRC0_ReadShape_ReportsTheCPUsIMMode(t *testing.T) {
+	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu := z80.New(mem, nil)
+	disp := nextregs.New()
+	WireInterruptControl(disp, cpu)
+	disp.WriteReg(0xC0, 0xE9) // vector base, stackless, hardware IM 2
+
+	run := func(op byte) {
+		t.Helper()
+		cpu.PC = 0x8000
+		mem.Write(0x8000, 0xED)
+		mem.Write(0x8001, op)
+		cpu.StepInstruction()
+	}
+	for _, c := range []struct {
+		op   byte
+		want byte
+	}{
+		{0x56, 0xE9 | 0x02}, // IM 1
+		{0x5E, 0xE9 | 0x04}, // IM 2
+		{0x46, 0xE9},        // IM 0
+		{0x76, 0xE9 | 0x02}, // IM 1 mirror
+		{0x7E, 0xE9 | 0x04}, // IM 2 mirror
+		{0x4E, 0xE9},        // IM 0 mirror
+	} {
+		run(c.op)
+		if got := disp.ReadReg(0xC0); got != c.want {
+			t.Errorf("after ED %02X NR$C0 = $%02X, want $%02X", c.op, got, c.want)
+		}
+	}
+	// A write cannot disturb the field.
+	disp.WriteReg(0xC0, 0xFF)
+	if got := disp.ReadReg(0xC0) & 0x06; got != 0x00 {
+		t.Errorf("a write changed bits 2:1 to %02X", got)
+	}
 }
 
 // TestSpec_NRC4_Bit0_FollowsPortFFBit6.

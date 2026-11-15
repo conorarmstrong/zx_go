@@ -58,6 +58,7 @@ type Block struct {
 
 	peer     Peer // far end of UART 0, optional
 	peerLine bool // level the peer drives onto i_Rx_0
+	peerCut  bool // UART 0 is routed to the joystick port: the peer is disconnected
 
 	quiet    int    // consecutive Clocks that left the Block quiescent
 	executed uint64 // Clocks actually run, as distinct from skipped
@@ -78,6 +79,12 @@ func (b *Block) SetPeer(p Peer) {
 	b.peer = p
 	b.peerLine = true
 }
+
+// SetPeerCut disconnects the peer from UART 0, as zxnext.vhd:3340-3350 does
+// when UART 0 is routed to the joystick connector: the peer sees an idle line
+// (uart0_tx_esp is forced high) and i_Rx_0 is taken from SetRx instead of from
+// the peer.
+func (b *Block) SetPeerCut(on bool) { b.peerCut = on }
 
 // Power-up prescaler: 115200 baud at the 28 MHz system clock
 // (uart.vhd:136, 324).
@@ -332,7 +339,7 @@ func (b *Block) Clock() {
 		}
 
 		line := b.rxDrv[u]
-		if u == 0 && b.peer != nil {
+		if u == 0 && b.peer != nil && !b.peerCut {
 			line = b.peerLine
 		}
 		if b.loop[u] {
@@ -393,7 +400,7 @@ func (b *Block) Clock() {
 		b.oTxEmpty[u] = txEmptyOut[u]
 	}
 	if b.peer != nil {
-		b.peerLine = b.peer.Clock(b.oTx[0])
+		b.peerLine = b.peer.Clock(b.oTx[0] || b.peerCut)
 	}
 	if b.quiescentNow() {
 		b.quiet++
@@ -417,7 +424,7 @@ func (b *Block) quiescentNow() bool {
 	}
 	for u := 0; u < 2; u++ {
 		line := b.rxDrv[u]
-		if u == 0 && b.peer != nil {
+		if u == 0 && b.peer != nil && !b.peerCut {
 			line = b.peerLine
 		}
 		if b.loop[u] {

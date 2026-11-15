@@ -42,6 +42,7 @@ type IM2Driver struct {
 	vectorBase  byte // NR$C0 bits 7:5
 	req         [IM2NumPeriph]bool
 	enabled     [IM2NumPeriph]bool
+	dmaEnabled  [IM2NumPeriph]bool // i_dma_int_en, from NR$CC/$CD/$CE
 	statusClr   [IM2NumPeriph]bool // one-shot i_int_status_clear inputs
 	intListener func(bool)         // /INT state observer for the CPU latch
 }
@@ -195,3 +196,35 @@ func (d *IM2Driver) tick(adjust func(*IM2Inputs)) {
 	}
 	d.chain.Tick(in)
 }
+
+// SetDMAEnabled sets one source's dma-interrupt enable (im2_device.vhd
+// i_dma_int_en), the bits NR$CC, NR$CD and NR$CE carry.
+func (d *IM2Driver) SetDMAEnabled(source int, on bool) {
+	if source >= 0 && source < IM2NumPeriph {
+		d.dmaEnabled[source] = on
+	}
+}
+
+// DMAInt is the chain's o_dma_int: some enabled device is out of idle.
+func (d *IM2Driver) DMAInt() bool { return d.chain.DMAInt(d.dmaEnabled) }
+
+// DMADelay is the zxnDMA's dma_delay_i pin at an instruction boundary
+// (zxnext.vhd:2001-2010):
+//
+//	im2_dma_delay <= im2_dma_int or (nmi_activated and nr_cc_bit7)
+//	                 or (im2_dma_delay and dma_delay)
+//
+// The last term is a hold: im2_control.vhd:238 raises dma_delay from the ED
+// prefix fetch to two clocks past the second opcode's T4 for ED 4D and ED 45,
+// and it keeps the pin up through those clocks after the device has gone back
+// to idle. Every ED instruction is at least 8 T-states and that window closes
+// by T10 of a 14 T-state RETI/RETN (T7 of the others), so it is always shut
+// before the instruction ends. Sampled once per instruction boundary, the pin
+// is therefore exactly im2_dma_int or the NMI term, and the hold term has
+// nothing left to hold.
+//
+// The NMI term (nmi_activated and NR$CC bit 7) is not modelled: nothing here
+// has the NMI activation latch (zxnext.vhd:2093-2118), which depends on the
+// Multiface and divMMC hold signals. A guest that sets NR$CC bit 7 to have an
+// NMI hold the DMA off the bus gets no hold. See ROADMAP item 2.
+func (d *IM2Driver) DMADelay() bool { return d.DMAInt() }

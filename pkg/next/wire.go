@@ -221,6 +221,22 @@ func WireInterruptControl(d *nextregs.Dispatcher, cpu *z80.CPU) {
 		cpu.StacklessReadNR = func(reg byte) byte { return d.Raw(reg) }
 		cpu.StacklessWriteNR = func(reg, val byte) { d.Store(reg, val) }
 	}
+	// Bits 2:1 read the CPU's interrupt mode as im_control tracks it
+	// (im2_control.vhd:195-203, zxnext.vhd:6230): an ED xx110 opcode with
+	// bit 4 set selects IM 1 (ED 56/76) or, with bit 3 also set, IM 2
+	// (ED 5E/7E). IM 0 reads 00 and so does reset. bit 2 = IM 2, bit 1 = IM 1.
+	if cpu != nil {
+		d.SetOnRead(0xC0, func(disp *nextregs.Dispatcher) byte {
+			v := disp.Raw(0xC0) &^ 0x06
+			switch cpu.IM {
+			case 1:
+				v |= 0x02
+			case 2:
+				v |= 0x04
+			}
+			return v
+		})
+	}
 	d.SetOnWrite(0xC0, func(disp *nextregs.Dispatcher, val byte) {
 		// Mask bits 2:1 — they're read-only "current IM mode" status
 		// that we don't yet compute from CPU state. Store as 0 so
@@ -978,6 +994,8 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 		WireTilemap(opts.Dispatcher, opts.Tilemap, opts.Palette)
 	}
 	WirePeripheralMasks(opts.Dispatcher)
+	WirePiPeripherals(opts.Dispatcher)
+	WireDMAInterruptEnables(opts.Dispatcher, opts.IM2)
 	clipWindows := WireClipWindows(opts.Dispatcher, opts.Tilemap, opts.Sprites, opts.Layer2)
 	opts.Memory.SpeedMultiplier = opts.CPU.SpeedMultiplier
 	applyTBBLUEFWBootDefaults(opts.Dispatcher)
@@ -1941,4 +1959,32 @@ func WireMMU(d *nextregs.Dispatcher, mem *memory.Memory) {
 			return mem.GetMMU(s)
 		})
 	}
+}
+
+// WirePiPeripherals installs NR$A0, the Raspberry Pi peripheral enables, as
+// core 3.02.05 has it (zxnext.vhd 30205 branch :2587-2591, :5640-5641, :6777).
+//
+// The register stores all eight bits, and the read returns
+// "00" & en(5:3) & '0' & (en(1) and g_option(4)) & en(0). g_option(4) is the
+// Pi SPI slave option, and the production top level builds with
+// g_option = $FFF2, so it is set and bit 1 reads back. Bits 7, 6 and 2 read as
+// zero.
+//
+// Bit 1 is the one the reset block does not clear (:5640-5641 assign bits 7:2
+// and 0 only), so it survives a hard reset as well as a soft one. A soft reset
+// here leaves the register file alone already; a register-file Reset would
+// clear it, so the write handler keeps the stored bit while one is in progress.
+//
+// This is a 3.02.05 behaviour. The reference tree is 3.02.03, where bit 1 does
+// not exist and the register is stored whole (:5561, :6189).
+func WirePiPeripherals(d *nextregs.Dispatcher) {
+	d.SetOnWrite(0xA0, func(disp *nextregs.Dispatcher, val byte) {
+		if disp.InReset() {
+			val = val&^0x02 | disp.Raw(0xA0)&0x02
+		}
+		disp.Store(0xA0, val)
+	})
+	d.SetOnRead(0xA0, func(disp *nextregs.Dispatcher) byte {
+		return disp.Raw(0xA0) & 0x3B
+	})
 }

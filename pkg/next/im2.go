@@ -95,6 +95,19 @@ type IM2Inputs struct {
 	StatusClear [IM2NumPeriph]bool // i_int_status_clear : clear sticky status bit
 }
 
+// DMAInt is peripherals.vhd's o_dma_int (lines 174-183): the OR over every
+// peripheral of im2_device.vhd:151, `state /= S_0 and i_dma_int_en`. A device
+// that is requesting, acknowledging or in service holds it high for as long as
+// its enable is set. en is index-aligned with the chain, 0 being the line.
+func (c *IM2DaisyChain) DMAInt(en [IM2NumPeriph]bool) bool {
+	for i := range c.per {
+		if c.per[i].state != im2S0 && en[i] {
+			return true
+		}
+	}
+	return false
+}
+
 // NewIM2DaisyChain returns a reset daisy chain.
 func NewIM2DaisyChain() *IM2DaisyChain {
 	c := &IM2DaisyChain{}

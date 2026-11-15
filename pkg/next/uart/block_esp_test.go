@@ -194,3 +194,33 @@ func TestAdvanceMatchesClockingWithAPeer(t *testing.T) {
 		t.Log("note: Advance did not skip anything in this conversation")
 	}
 }
+
+// spyPeer records the level the block drives at it.
+type spyPeer struct{ sawLow bool }
+
+func (p *spyPeer) Clock(blockTx bool) bool {
+	if !blockTx {
+		p.sawLow = true
+	}
+	return true
+}
+func (p *spyPeer) Quiescent() bool { return true }
+
+// With the peer cut off (UART 0 routed to the joystick port) it sees an idle
+// line however much the block transmits, and the block takes Rx from SetRx.
+func TestPeerCutHidesTheTxLineAndTheRxLine(t *testing.T) {
+	for _, cut := range []bool{false, true} {
+		b := NewBlock()
+		p := &spyPeer{}
+		b.SetPeer(p)
+		b.SetPeerCut(cut)
+		a := io{b}
+		a.wr(3, 0x55)
+		for i := 0; i < 5000; i++ {
+			b.Clock()
+		}
+		if p.sawLow == cut {
+			t.Errorf("cut=%v: peer saw a low level = %v", cut, p.sawLow)
+		}
+	}
+}

@@ -1164,11 +1164,14 @@ func wireNextSubsystems(e *emulator) error {
 	uartSys := next.NewUARTSystem(disp, im2, cpu.SpeedMultiplier)
 	u.SetNextUART(uartSys)
 	e.nextUART = uartSys
-	cpu.SetInstructionHook(func(tstates int) {
-		speed := cpu.SpeedMultiplier()
-		ctcClock.Advance(tstates, speed)
-		uartSys.Advance(tstates, speed)
-	})
+	e.nextIM2, e.nextCTC = im2, ctcBank
+	cpu.SetInstructionHook(next.InstructionHook(cpu.SpeedMultiplier, ctcClock, uartSys, im2,
+		func() next.BusDelayer {
+			if e.nextDMA == nil {
+				return nil
+			}
+			return e.nextDMA
+		}))
 
 	// FPGA bootrom mode — the hardware-faithful path. Real Spectrum
 	// Next hardware always boots through the FPGA loader at
@@ -1994,6 +1997,7 @@ func unwireNextSubsystems(e *emulator) {
 	e.nextLoResState = nil
 	e.nextULAPlus = nil
 	e.nextUART = nil
+	e.nextIM2, e.nextCTC = nil, nil
 	if e.ula != nil {
 		e.ula.SetNextULAPlus(nil)
 		e.ula.SetNextLoRes(nil)

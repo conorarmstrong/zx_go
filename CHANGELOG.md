@@ -26,6 +26,24 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the edge behaviour of the hardware: enabling an interrupt while its
   level is already high raises nothing.
 - **The UART is captured by save states and rewind.**
+- **The CTC and the IM2 chain are captured by save states and rewind.** All four
+  channels with their edge-detect levels, and the chain's per-device state,
+  request latches, sticky status and vector. Restoring does not replay an
+  interrupt transition into the CPU.
+- **The zxnDMA is held off the bus by interrupts.** NR$CC, CD and CE choose
+  which sources do it, laid out as `zxnext.vhd:1957` has them. While a chosen
+  device is requesting, acknowledged or in service, `dma_delay_i` is high: a DMA
+  started from an interrupt routine waits for the RETI, and a block in flight
+  parks. The pin is sampled once per instruction boundary, which is exact for
+  the RETI hold window because it always closes inside the instruction.
+  Not done: the NMI term (NR$CC bit 7).
+- **NR$C0 bits 2:1 read the CPU's interrupt mode**, set by executing
+  `ED 46/56/5E` and their mirrors, as `im2_control.vhd` tracks it.
+- **A UART can be routed to the joystick connector** with NR$0B (bit 7, bit 5,
+  and bit 0 to pick the UART). UART 0 then loses the ESP and reads the idle
+  joystick pins, as `zxnext.vhd:3340-3350` does.
+- **NR$A0 follows core 3.02.05.** Bit 1 (Pi SPI slave enable) reads back and is
+  the one bit a reset leaves alone; bits 7, 6 and 2 read as zero.
 
 ### Fixed
 

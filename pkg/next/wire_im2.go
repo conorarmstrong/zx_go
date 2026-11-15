@@ -180,3 +180,40 @@ func WireIM2(d *nextregs.Dispatcher, im2 *IM2Driver, cpu *z80.CPU) {
 	cpu.SetFrameIntHook(func() { im2.Raise(IM2SourceULA); im2.Lower(IM2SourceULA) })
 	cpu.SetLineIntHook(func() { im2.Raise(IM2SourceLine); im2.Lower(IM2SourceLine) })
 }
+
+// WireDMAInterruptEnables connects NR$CC, NR$CD and NR$CE to the chain's
+// dma-interrupt enables. It must run after WirePeripheralMasks, which stores
+// the registers, because it chains onto those handlers. A register reset
+// drives each of them through a write of zero, so the enables clear with it.
+func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
+	if im2 == nil {
+		return
+	}
+	// NR$CC/CD/CE: which sources hold the DMA off the bus while they are out of
+	// idle. The vector is zxnext.vhd:1957-1958, bit k being chain index k:
+	//
+	//	0 line   <- CC.1          11 ula     <- CC.0
+	//	1 uart0 rx <- CE.1 or CE.0   12 uart0 tx <- CE.2
+	//	2 uart1 rx <- CE.5 or CE.4   13 uart1 tx <- CE.6
+	//	3..10 ctc 0..7 <- CD.0..7
+	//
+	// CC.7 is the NMI term and is read by the DMA delay, not mapped here.
+	syncDMAEnables := func() {
+		cc, cd, ce := d.Raw(0xCC), d.Raw(0xCD), d.Raw(0xCE)
+		bit := func(v byte, n uint) bool { return v&(1<<n) != 0 }
+		im2.SetDMAEnabled(IM2SourceLine, bit(cc, 1))
+		im2.SetDMAEnabled(IM2SourceULA, bit(cc, 0))
+		im2.SetDMAEnabled(IM2SourceUART0R, bit(ce, 1) || bit(ce, 0))
+		im2.SetDMAEnabled(IM2SourceUART0T, bit(ce, 2))
+		im2.SetDMAEnabled(IM2SourceUART1R, bit(ce, 5) || bit(ce, 4))
+		im2.SetDMAEnabled(IM2SourceUART1T, bit(ce, 6))
+		for ch := uint(0); ch < 8; ch++ {
+			im2.SetDMAEnabled(IM2SourceCTC0+int(ch), bit(cd, ch))
+		}
+	}
+	// WirePeripheralMasks stores the three registers with the FPGA's masks
+	// (zxnext.vhd:5628-5637); this chains onto those handlers.
+	chainOnWrite(d, 0xCC, func(byte) { syncDMAEnables() })
+	chainOnWrite(d, 0xCD, func(byte) { syncDMAEnables() })
+	chainOnWrite(d, 0xCE, func(byte) { syncDMAEnables() })
+}

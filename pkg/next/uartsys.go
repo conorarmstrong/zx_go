@@ -53,6 +53,11 @@ func NewUARTSystem(d *nextregs.Dispatcher, im2 *IM2Driver, speed func() int) *UA
 	// The Rx request depends on NR$C6 bit 1 (zxnext.vhd:1942-1943), so a write
 	// to it can change a line without the block having moved.
 	chainOnWrite(d, 0xC6, func(byte) { s.syncIM2() })
+	// NR$0B can hand a UART to the joystick connector (zxnext.vhd:3340-3350,
+	// :3536-3539). It needs the I/O mode enable (bit 7) and mode bit 5; bit 0
+	// picks the UART, 0 for UART 0 and 1 for UART 1. A reset drives NR$0B to
+	// zero, which undoes it.
+	chainOnWrite(d, 0x0B, func(v byte) { s.route(v) })
 	// NR$02 bits 1:0 are the soft and hard reset triggers. i_reset_hard is tied
 	// low, so both reach the block as i_reset only.
 	chainOnWrite(d, 0x02, func(v byte) {
@@ -73,6 +78,35 @@ func (s *UARTSystem) Reset() {
 	s.Block.Clock()
 	s.Block.SetReset(false)
 	s.syncIM2()
+}
+
+// Joystick pins as the connector idles: nothing pressed. joy_uart_rx is the
+// inverse of a pressed button, so an idle pin reads as a high line, and
+// joy_uart_cts_n likewise reads as not clear to send.
+const (
+	joyIdleRx   = true
+	joyIdleCtsN = true
+)
+
+// route applies NR$0B. The routed UART takes its Rx and CTS from the joystick
+// pins. UART 0 loses the ESP: its peer is cut and sees an idle line. The
+// other UART keeps its own lines.
+func (s *UARTSystem) route(nr0b byte) {
+	on := nr0b&0x80 != 0 && nr0b&0x20 != 0
+	routed := -1
+	if on {
+		routed = int(nr0b & 1)
+	}
+	for u := 0; u < 2; u++ {
+		if u == routed {
+			s.Block.SetRx(u, joyIdleRx)
+			s.Block.SetCTSn(u, joyIdleCtsN)
+		} else {
+			s.Block.SetRx(u, true)
+			s.Block.SetCTSn(u, false)
+		}
+	}
+	s.Block.SetPeerCut(routed == 0)
 }
 
 // decode returns the register a port address selects, or false.
