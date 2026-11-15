@@ -71,7 +71,7 @@ hardware changes are modelled; see item 8.
 Ranked; detail in the open-work items below.
 
 1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **IM2 remainder** (item 2): the CTC and chain are wired; the UART request lines and the DMA delay pin are not.
+2. **UART and IM2 remainder** (item 2): the CTC and chain are wired. The real UART register block is not modelled, which blocks its three request lines; `dma_delay_i` needs three pieces.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
@@ -184,16 +184,36 @@ CTC nor IM2 could be reached by a guest. That stopped being true in `d4e569648`
 
 **Not wired:**
 
-- **The two UART sources.** `IM2SourceUART0R/0T/1R/1T` have their enables and
-  status bits wired (NR$C6, NR$CA) but nothing ever calls `Raise` on them. The
-  UART engine (`pkg/next/uart`) has no interrupt output, so a guest that enables
-  a UART interrupt never gets one. This is the largest remaining piece.
+- **The two UART sources, and the UART itself.** `IM2SourceUART0R/0T/1R/1T`
+  have their enables and status bits wired (NR$C6, NR$CA) but nothing calls
+  `Raise` on them. Looking for where to raise them found a larger problem: **the
+  guest-visible UART is not modelled.** The three lines come from `uart.vhd`
+  (`rx_avail`, `rx_near_full`, `tx_empty`, `zxnext.vhd:1941-1943`), a register
+  block decoded at ports `$133B`/`$143B`/`$153B`/`$163B`/`$173B` (`:2639`)
+  with 512-byte Rx and 64-byte Tx FIFOs per UART. Nothing decodes those ports.
+  What `WireUART` serves instead is an AT-command stub at **NR$A8 and NR$A9,
+  which are not UART registers**: they are `nr_a8_esp_gpio0_en` and
+  `nr_a9_esp_gpio0`, the ESP GPIO0 pin (`zxnext.vhd:5569-5573`). So a guest that
+  probes the ESP through the real ports reads nothing, and one that pokes
+  NR$A8/A9 gets a made-up device. `serial.go` holds the PHY (`TX`, `RX`,
+  `FIFOP`) pinned by golden vectors; the register block, frame and prescaler
+  registers, UART select and the hardware flow control around it are missing.
+  The right order is: model `uart.vhd`'s register block against its golden
+  vectors, wire the five ports, retire the NR$A8/A9 stub and make those two
+  registers the GPIO0 pair, then raise the three lines from the FIFO flags.
 - **`dma_delay_i`.** `dma.SetBusDelay` exists and is pinned, but no production
   code calls it. The pin is `im2_dma_delay` (`zxnext.vhd:1785`, `:2001-2010`):
   a device whose NR$CC, CD or CE dma-int-enable bit is set and whose FSM is out
   of idle, an NMI with NR$CC bit 7, or a RETI pop in progress. NR$CC, CD and CE
   are stored-only (`pkg/next/wire.go:1187-1201`). Until this lands no guest can
-  have its DMA held off the bus by an interrupt.
+  have its DMA held off the bus by an interrupt. Three pieces are missing, not
+  one: the chain model has no `i_dma_int_en` input or `o_dma_int` output
+  (`im2_device.vhd:151`: `state /= S_0 and i_dma_int_en`), the NMI term needs
+  `nmi_activated`, and `o_dma_delay` (`im2_control.vhd:238`) is true in the
+  `S_ED_T4`, `S_ED4D_T4`, `S_ED45_T4` and `S_SRL_T1/T2` states, which are
+  sub-instruction positions of the RETI pop. Wiring the first two without the
+  third would hold the DMA off for too short a time, which is the approximation
+  this item forbids.
 - **`o_reti_decode`** (`im2_control.vhd:233`): high for the single T-state
   between the `ED` prefix and its second byte. The CPU still cannot give that
   window. Nothing in the current chain needs it; it is the first thing to check
@@ -697,9 +717,10 @@ Next steps, in order:
 
 Kept so they are not re-proposed.
 
-- [⊘] **Real Wi-Fi / TCP networking.** The UART register interface, FIFOs
-  and AT-command responder are implemented; a live network stack is out of
-  scope for a reference emulator (`pkg/next/uart/doc.go`).
+- [⊘] **Real Wi-Fi / TCP networking.** A live network stack is out of scope for
+  a reference emulator. The UART register block (`$133B`..`$173B`) is not, and is
+  not yet modelled: see item 2. What exists today is the PHY and an AT-command
+  stub at the wrong registers (`pkg/next/uart/doc.go`).
 - [⊘] **Interface 1 RS-232 / SinclairNET.** The NET port is decoded
   (`pkg/if1/ula.go:8`); bit-banging an external serial device is out of
   scope, same rationale as the UART. The microdrive, the IF1's primary
@@ -823,6 +844,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-14 | Next: a port `$FF` write now sets the ULA interrupt disable (bit 6) and shows in NR$22 and NR$C4. Verified NR$C4's read composition and reset against `zxnext.vhd`. Found that the guest-visible UART (ports `$133B`..`$173B`) is not modelled and that the stub at NR$A8/A9 is on the ESP GPIO0 registers. |
 | 2026-11-14 | Next: NR$0A `sd_swap` now needs the bit 2 lock bit (public VHDL 3.02.04). Item 8 step 1 done: 3.02.03 vs 3.02.05 diffed, five guest-visible changes found, one taken. Item 2 rewritten against the code. |
 | 2026-11-10 | Next: the CTC (four channels, fixed 28 MHz clock, zero-count chaining) and the IM2 chain are wired to the guest, with NR$C0, C4, C5, C6 and the NR$C8 to CA status registers. 60 Hz video timing via NR$05 bit 2. The RETN hook now fires for `ED 45` only, which fixed a TX-1696 crash. |
 | 2026-11-10 | Next: targets System/Next 26.11a and identifies as core 3.03.03 (version registers only; 3.03 hardware is not emulated, see item 8). |
@@ -834,6 +856,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Item 2: UART finding (wrong registers, ports not decoded) and the three missing pieces of `dma_delay_i`. Catalogued Wi-Fi entry corrected. |
 | 2026-11-14 | minor | Item 2 rewritten to what is actually unwired (UART request lines, `dma_delay_i`). Item 8 step 1 done with a results table. |
 | 2026-11-11 | minor | Added the release targets table (26.11a, NextZXOS 2.10a, core 3.03.03 achieved; 3.03 hardware open) and item 8. |
 | 2026-11-11 | minor | Roadmap restructured to the stage line, headline numbers, by-machine and by-dimension tables, upcoming list, progress log and revision history. Open-work text unchanged. Item 2 flagged as predating the 2026-11-10 wiring commit. |

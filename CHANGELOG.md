@@ -6,6 +6,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A port `$FF` write now disables the ULA frame interrupt when bit 6 is set.**
+  On the Next that bit is the same signal as NR$22 bit 2, so it also shows in
+  the NR$22 and NR$C4 read-backs. It was stored as a screen mode and ignored.
+
 ### Changed
 
 - **NextReg `$0A` bit 5 (SD swap) now needs bit 2 set in the same write.**

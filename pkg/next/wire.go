@@ -144,6 +144,19 @@ func WireJoystickIOMode(d *nextregs.Dispatcher) {
 // triggers the existing NR$22 OnWrite handler to recompute
 // cpu.LineIntOffsetTstates.
 func WireInterruptEnable0(d *nextregs.Dispatcher) {
+	// NR$C4 bits 1:0 read back ula_int_en (zxnext.vhd:6239, :6711), which
+	// NR$22 and port $FF also write, so keep them in step with NR$22.
+	chainOnWrite(d, 0x22, func(byte) {
+		nr22 := d.Raw(0x22)
+		alias := byte(0)
+		if nr22&0x04 == 0 {
+			alias |= 0x01
+		}
+		if nr22&0x02 != 0 {
+			alias |= 0x02
+		}
+		d.Store(0xC4, d.Raw(0xC4)&^0x03|alias)
+	})
 	d.SetOnWrite(0xC4, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0xC4, val&0x83) // bits 7, 1, 0 retained
 		// NR$C4 bits 1:0 alias NR$22 bits 1 and 2: bit 1 writes
@@ -164,6 +177,21 @@ func WireInterruptEnable0(d *nextregs.Dispatcher) {
 			disp.WriteReg(0x22, newNR22)
 		}
 	})
+}
+
+// PortFFWrite applies a port $FF write to the one bit of it that is not
+// video: bit 6 is port_ff_interrupt_disable, which port_ff_reg shares with
+// NR$22 bit 2 (zxnext.vhd:3612-3635), so it disables the ULA frame INT and
+// shows in the NR$22 and NR$C4 read-backs. Only the Next calls this.
+func PortFFWrite(d *nextregs.Dispatcher, val byte) {
+	old := d.Raw(0x22)
+	nr22 := old &^ 0x04
+	if val&0x40 != 0 {
+		nr22 |= 0x04
+	}
+	if nr22 != old {
+		d.WriteReg(0x22, nr22)
+	}
 }
 
 // WireInterruptControl installs the NextReg $C0 OnWrite handler.

@@ -581,19 +581,37 @@ func TestSpec_NRC0_ReadShape_NotImplemented(t *testing.T) {
 	t.Skip("NR$C0 read shape (z80_im_mode synthesis at bits 2:1) not implemented")
 }
 
-// TestSpec_NRC4_Bit0_ULAIntEn_NotDerived documents that NR$C4 bit 0
-// read returns the stored value rather than the derived
-// (NOT port_ff_interrupt_disable) signal that the FPGA composes.
-// Per VHDL line 6239 read is:
-//
-//	nr_c4_int_en_0_expbus & "00000" & ula_int_en   (ula_int_en is 2 bits)
-//
-// where ula_int_en(0) = NOT port_ff_interrupt_disable. We don't
-// model that signal; software polling NR$C4 bit 0 for the ULA INT
-// state will not see external-state changes. Skip-test marks the
-// gap.
-func TestSpec_NRC4_Bit0_ULAIntEn_NotDerived(t *testing.T) {
-	t.Skip("NR$C4 bit 0 ULA INT enable derived from port_ff_interrupt_disable not implemented")
+// TestSpec_NRC4_Bit0_FollowsPortFFBit6.
+// zxnext.vhd:3612-3635: port_ff_reg is written whole by a port $FF write,
+// so its bit 6 (port_ff_interrupt_disable) disables the ULA frame INT.
+// NR$C4 reads back ula_int_en(0) = NOT port_ff_interrupt_disable (:6239,
+// :6711) and NR$22 bit 2 reads the same signal (:5992).
+func TestSpec_NRC4_Bit0_FollowsPortFFBit6(t *testing.T) {
+	cpu := newSpecTestCPU(t)
+	disp := nextregs.New()
+	WireCPUSpeed(disp, cpu)
+	WireLineInterrupt(disp, cpu)
+	WireInterruptEnable0(disp)
+
+	if got := disp.ReadReg(0xC4); got != 0x81 {
+		t.Fatalf("NR$C4 at reset = $%02X, want $81", got)
+	}
+
+	PortFFWrite(disp, 0x40)
+	if !cpu.FrameIntDisabled {
+		t.Error("port $FF bit 6 set: frame INT still enabled")
+	}
+	if got := disp.ReadReg(0xC4); got&0x01 != 0 {
+		t.Errorf("port $FF bit 6 set: NR$C4 = $%02X, want bit 0 clear", got)
+	}
+	if got := disp.ReadReg(0x22); got&0x04 == 0 {
+		t.Errorf("port $FF bit 6 set: NR$22 = $%02X, want bit 2 set", got)
+	}
+
+	PortFFWrite(disp, 0x3F) // other TMX bits do not touch it
+	if cpu.FrameIntDisabled || disp.ReadReg(0xC4)&0x01 == 0 {
+		t.Errorf("port $FF bit 6 clear: frame INT still disabled (NR$C4 = $%02X)", disp.ReadReg(0xC4))
+	}
 }
 
 // TestSpec_NR0B_JoystickIOMode verifies storage layout for NR$0B

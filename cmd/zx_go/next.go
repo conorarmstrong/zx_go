@@ -1844,7 +1844,10 @@ sdReady:
 	if e.ula != nil {
 		loresState := e.nextLoResState
 		loresState.SetTimexSource(func() bool { return e.ula.TimexScreenMode()&0x01 != 0 })
-		e.ula.SetTimexModeObserver(func(byte) { loresState.Refresh() })
+		e.ula.SetTimexModeObserver(func(v byte) {
+			loresState.Refresh()
+			next.PortFFWrite(disp, v)
+		})
 	}
 
 	// ULA+. The layer's ulap_en_i is the enable ANDed with NOT ULAnext
