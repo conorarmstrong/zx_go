@@ -61,6 +61,14 @@ func TestIM2DriverStateRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestIM2LoadStateRejectsOutOfRangeVector(t *testing.T) {
+	a := NewIM2Driver()
+	a.chain.vector = 16
+	if err := NewIM2Driver().LoadState(a.SaveState()); err == nil {
+		t.Fatal("vector 16 accepted")
+	}
+}
+
 func TestIM2LoadStateDoesNotFireTheListener(t *testing.T) {
 	a := NewIM2Driver()
 	a.SetMode(true)

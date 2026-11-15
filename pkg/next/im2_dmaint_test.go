@@ -81,6 +81,7 @@ func TestNRCCCDCEMapToTheRightSources(t *testing.T) {
 		WirePeripheralMasks(disp)
 		WireDMAInterruptEnables(disp, d)
 		disp.WriteReg(c.reg, 1<<c.bit)
+		d.DMAInt() // refreshes the enables from the registers
 		for src := 0; src < IM2NumPeriph; src++ {
 			// Put exactly one device out of idle at a time.
 			one := NewIM2Driver()
@@ -137,5 +138,21 @@ func TestNRCCCDCEResetClearsTheEnables(t *testing.T) {
 	disp.Reset()
 	if d.dmaEnabled != [IM2NumPeriph]bool{} {
 		t.Errorf("enables survived a reset: %v", d.dmaEnabled)
+	}
+}
+
+// Wiring order must not matter: the enables follow the registers either way.
+func TestWireDMAInterruptEnablesIsOrderIndependent(t *testing.T) {
+	disp := nextregs.New()
+	d := NewIM2Driver()
+	WireDMAInterruptEnables(disp, d)
+	WirePeripheralMasks(disp)
+	d.SetMode(true)
+	d.SetEnabled(IM2SourceULA, true)
+	disp.WriteReg(0xCC, 0x01)
+	d.Raise(IM2SourceULA)
+	d.Lower(IM2SourceULA)
+	if !d.DMAInt() {
+		t.Fatal("NR$CC bit 0 did not enable the ULA hold when wired in the other order")
 	}
 }

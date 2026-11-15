@@ -43,6 +43,7 @@ type IM2Driver struct {
 	req         [IM2NumPeriph]bool
 	enabled     [IM2NumPeriph]bool
 	dmaEnabled  [IM2NumPeriph]bool // i_dma_int_en, from NR$CC/$CD/$CE
+	dmaSync     func()             // refreshes dmaEnabled from those registers
 	statusClr   [IM2NumPeriph]bool // one-shot i_int_status_clear inputs
 	intListener func(bool)         // /INT state observer for the CPU latch
 }
@@ -206,7 +207,16 @@ func (d *IM2Driver) SetDMAEnabled(source int, on bool) {
 }
 
 // DMAInt is the chain's o_dma_int: some enabled device is out of idle.
-func (d *IM2Driver) DMAInt() bool { return d.chain.DMAInt(d.dmaEnabled) }
+func (d *IM2Driver) DMAInt() bool {
+	if d.dmaSync != nil {
+		d.dmaSync()
+	}
+	return d.chain.DMAInt(d.dmaEnabled)
+}
+
+// SetDMAEnableSync installs the function that refreshes the dma-interrupt
+// enables from NR$CC/$CD/$CE just before each DMAInt.
+func (d *IM2Driver) SetDMAEnableSync(f func()) { d.dmaSync = f }
 
 // DMADelay is the zxnDMA's dma_delay_i pin at an instruction boundary
 // (zxnext.vhd:2001-2010):

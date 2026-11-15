@@ -182,9 +182,9 @@ func WireIM2(d *nextregs.Dispatcher, im2 *IM2Driver, cpu *z80.CPU) {
 }
 
 // WireDMAInterruptEnables connects NR$CC, NR$CD and NR$CE to the chain's
-// dma-interrupt enables. It must run after WirePeripheralMasks, which stores
-// the registers, because it chains onto those handlers. A register reset
-// drives each of them through a write of zero, so the enables clear with it.
+// dma-interrupt enables. The chain reads the registers when it is asked for
+// o_dma_int, so wiring order does not matter and a register reset, which
+// zeroes them, clears the enables with it.
 func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
 	if im2 == nil {
 		return
@@ -198,8 +198,15 @@ func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
 	//	3..10 ctc 0..7 <- CD.0..7
 	//
 	// CC.7 is the NMI term and is read by the DMA delay, not mapped here.
+	var last [3]byte
+	var primed bool
 	syncDMAEnables := func() {
 		cc, cd, ce := d.Raw(0xCC), d.Raw(0xCD), d.Raw(0xCE)
+		// Called every instruction: do the work only when a register moved.
+		if primed && last == [3]byte{cc, cd, ce} {
+			return
+		}
+		last, primed = [3]byte{cc, cd, ce}, true
 		bit := func(v byte, n uint) bool { return v&(1<<n) != 0 }
 		im2.SetDMAEnabled(IM2SourceLine, bit(cc, 1))
 		im2.SetDMAEnabled(IM2SourceULA, bit(cc, 0))
@@ -211,9 +218,5 @@ func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
 			im2.SetDMAEnabled(IM2SourceCTC0+int(ch), bit(cd, ch))
 		}
 	}
-	// WirePeripheralMasks stores the three registers with the FPGA's masks
-	// (zxnext.vhd:5628-5637); this chains onto those handlers.
-	chainOnWrite(d, 0xCC, func(byte) { syncDMAEnables() })
-	chainOnWrite(d, 0xCD, func(byte) { syncDMAEnables() })
-	chainOnWrite(d, 0xCE, func(byte) { syncDMAEnables() })
+	im2.SetDMAEnableSync(syncDMAEnables)
 }

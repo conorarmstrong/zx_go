@@ -66,6 +66,9 @@ func (d *IM2Driver) LoadState(data []byte) error {
 			return fmt.Errorf("im2: peripheral %d: bad state %d", i, p.State)
 		}
 	}
+	if s.Vector < 0 || s.Vector > 0x0F {
+		return fmt.Errorf("im2: bad vector %d", s.Vector)
+	}
 	d.hwIM2, d.vectorBase = s.HWIM2, s.VectorBase
 	d.req, d.enabled, d.dmaEnabled, d.statusClr = s.Req, s.Enabled, s.DMAEnabled, s.StatusClr
 	d.chain.intN, d.chain.vector, d.chain.ieo, d.chain.status = s.IntN, s.Vector, s.Ieo, s.Status
