@@ -33,7 +33,15 @@ type Ticker struct {
 	im2  *IM2Driver
 	dma  func() BusDelayer
 	last uint64 // the T-state the CTC and the UARTs have been advanced to
+	nmi  HotkeyApplier
 }
+
+// HotkeyApplier applies NMI button presses queued from the UI goroutine.
+type HotkeyApplier interface{ ApplyHotkeys() }
+
+// SetHotkeys installs the NMI buttons' apply step, run at every instruction
+// boundary, halted ones included.
+func (t *Ticker) SetHotkeys(h HotkeyApplier) { t.nmi = h }
 
 // NewTicker builds a Ticker. dma is a function because the machine builds the
 // DMA after the hook is installed; it may be nil or return nil.
@@ -43,7 +51,12 @@ func NewTicker(cpu TickerCPU, ctc *CTCClock, uart *UARTSystem, im2 *IM2Driver, d
 
 // Instruction is the CPU's instruction hook. The delta it is given is ignored:
 // the clock is the reference.
-func (t *Ticker) Instruction(int) { t.syncTo(t.cpu.Tstates()) }
+func (t *Ticker) Instruction(int) {
+	if t.nmi != nil {
+		t.nmi.ApplyHotkeys()
+	}
+	t.syncTo(t.cpu.Tstates())
+}
 
 // DMAByte is the DMA's byte hook. elapsed is the bus time the block has taken
 // in this run, which the CPU clock will be charged only when the run ends, so

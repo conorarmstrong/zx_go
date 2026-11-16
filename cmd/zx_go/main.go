@@ -1234,7 +1234,9 @@ func cpuSpeedMenuItem(emu *emulator) *fyne.MenuItem {
 func (e *emulator) dispatchJoystick(direction int, pressed bool) {
 	// On the Next the host joystick is the left connector, and its fire button
 	// is button B, which NR$0B can route to a UART's CTS_n (zxnext.vhd:3539).
-	if direction == 4 && e.nextUART != nil && e.effectiveJoystick() != JoystickNone {
+	// A release is always forwarded, so a joystick-type change while fire is
+	// held cannot leave the button stuck down.
+	if direction == 4 && e.nextUART != nil && (!pressed || e.effectiveJoystick() != JoystickNone) {
 		e.nextUART.SetJoystickButtons(0, pressed, false)
 	}
 	switch e.effectiveJoystick() {

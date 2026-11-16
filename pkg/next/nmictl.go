@@ -30,8 +30,8 @@ const (
 type NMISource byte
 
 const (
-	NMISourceMF     NMISource = iota // M1 button, F9 hotkey, NR$02 bit 3
-	NMISourceDivMMC                  // DRIVE button, F10 hotkey, NR$02 bit 2
+	NMISourceMF     NMISource = iota // M1 button (board F9 hotkey; host F12), NR$02 bit 3
+	NMISourceDivMMC                  // DRIVE button (board F10 hotkey; host F8), NR$02 bit 2
 )
 
 // NMIInputs are the signals the arbiter reads.

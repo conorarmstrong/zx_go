@@ -1173,6 +1173,7 @@ func wireNextSubsystems(e *emulator) error {
 	})
 	cpu.SetInstructionHook(ticker.Instruction)
 	dmaEngine.SetByteHook(ticker.DMAByte)
+	ticker.SetHotkeys(resetControl)
 
 	// FPGA bootrom mode — the hardware-faithful path. Real Spectrum
 	// Next hardware always boots through the FPGA loader at

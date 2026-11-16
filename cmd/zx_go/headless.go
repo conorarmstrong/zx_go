@@ -489,7 +489,7 @@ func runHeadless(f *cliFlags) {
 		fmt.Printf("FD|TAG|%s\n", tag)
 		nrAll := ""
 		for r := 0; r < 256; r++ {
-			nrAll += fmt.Sprintf("%02X", emu.nextRegs.ReadReg(byte(r)))
+			nrAll += fmt.Sprintf("%02X", emu.nextRegs.Peek(byte(r)))
 		}
 		fmt.Printf("FD|NR|%s\n", nrAll)
 		c := emu.cpu
@@ -690,7 +690,7 @@ func runHeadless(f *cliFlags) {
 						// exits immediately after.
 						nrAll := ""
 						for r := 0; r < 256; r++ {
-							nrAll += fmt.Sprintf("%02X", emu.nextRegs.ReadReg(byte(r)))
+							nrAll += fmt.Sprintf("%02X", emu.nextRegs.Peek(byte(r)))
 						}
 						fmt.Printf("FD|NR|%s\n", nrAll)
 						c := emu.cpu
@@ -759,7 +759,7 @@ func runHeadless(f *cliFlags) {
 						pregs := []byte{0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0a, 0x0b, 0x0e, 0x0f, 0x10, 0x11, 0x8c, 0x8e}
 						ps := ""
 						for _, r := range pregs {
-							ps += fmt.Sprintf("%02X=%02X ", r, emu.nextRegs.ReadReg(r))
+							ps += fmt.Sprintf("%02X=%02X ", r, emu.nextRegs.Peek(r))
 						}
 						p7, p1, sp := emu.mem.GetPortState()
 						ks := ""
@@ -813,7 +813,7 @@ func runHeadless(f *cliFlags) {
 					if pl := os.Getenv("ZX_GO_POSTLAUNCH"); pl != "" {
 						if n, e := strconv.Atoi(pl); e == nil && i == navAct+n {
 							c := emu.cpu
-							nrf := func(r byte) string { return fmt.Sprintf("%02X", emu.nextRegs.ReadReg(r)) }
+							nrf := func(r byte) string { return fmt.Sprintf("%02X", emu.nextRegs.Peek(r)) }
 							slog.Info("POSTLAUNCH", "frame", i,
 								"pc", fmt.Sprintf("%04X", c.PC),
 								"nr8c", nrf(0x8C), "nr50", nrf(0x50), "nr51", nrf(0x51),
@@ -945,7 +945,7 @@ func runHeadless(f *cliFlags) {
 						_ = p1
 						mmu := ""
 						for s := 0; s < 8; s++ {
-							mmu += fmt.Sprintf("%02X ", emu.nextRegs.ReadReg(byte(0x50+s)))
+							mmu += fmt.Sprintf("%02X ", emu.nextRegs.Peek(byte(0x50+s)))
 						}
 						slog.Info("screen-banks", "frame", i, "ScreenPage", emu.mem.ScreenPage,
 							"7FFD", fmt.Sprintf("$%02X", p7), "nzAttrBank5", nz(5), "nzAttrBank7", nz(7),
@@ -953,8 +953,8 @@ func runHeadless(f *cliFlags) {
 							"nzPixBank7", nzpix(7), "nzPixBank5", nzpix(5),
 							"attrSample7", attrSample(7),
 							"MMU50-57", mmu,
-							"NR69", fmt.Sprintf("$%02X", emu.nextRegs.ReadReg(0x69)),
-							"NR6B", fmt.Sprintf("$%02X", emu.nextRegs.ReadReg(0x6B)))
+							"NR69", fmt.Sprintf("$%02X", emu.nextRegs.Peek(0x69)),
+							"NR6B", fmt.Sprintf("$%02X", emu.nextRegs.Peek(0x6B)))
 						slog.Info("post-launch", "frame", i, "pc", fmt.Sprintf("$%04X", emu.cpu.PC),
 							"rombank", emu.mem.GetROMBank(),
 							"FRAMES", fmt.Sprintf("$%06X", frames24),

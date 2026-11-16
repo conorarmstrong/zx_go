@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 )
 
 // `watch-nextreg` halts on a write to a named NextReg.
@@ -34,6 +36,7 @@ type nrWatchSpec struct {
 	reg      byte
 	matchVal *byte
 	logOnly  bool
+	dir      watchDir
 }
 
 // nrWatchSet protects the live watch list. A telnet command mutates it under
@@ -58,11 +61,11 @@ func (s *nrWatchSet) clear() {
 // match reports whether a write to reg with value val satisfies any armed
 // watch, and whether any of the satisfied ones halts. A log-only watch and a
 // halting watch on the same register both report; halt wins.
-func (s *nrWatchSet) match(reg, val byte) (matched, halt bool) {
+func (s *nrWatchSet) match(reg, val byte, write bool) (matched, halt bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, w := range s.watches {
-		if w.reg != reg {
+		if w.reg != reg || !w.dir.fires(write) {
 			continue
 		}
 		if w.matchVal != nil && *w.matchVal != val {
@@ -91,7 +94,11 @@ func (s *nrWatchSet) list() []nrWatchSpec {
 //	watch-nextreg REG[,REG…]       halt on any write to those registers
 //	watch-nextreg REG =VAL         halt only when the byte written equals VAL
 //	watch-nextreg REG[,REG…] log   log every write, do NOT halt
+//	watch-nextreg REG read | rw    fire on guest reads, or reads and writes
 //	watch-nextreg off              clear all
+//
+// Reads are the guest's own: the debuggers read through Dispatcher.Peek, which
+// does not reach the tracer.
 //
 // Registers are hex, with or without a leading $, matching nr-trace.
 func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
@@ -102,14 +109,10 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 	// "log" is a mode, never a register, so it is stripped wherever it is the
 	// last argument. Guarding on there being another argument left made a bare
 	// `watch-nextreg log` fall through and fail as a bad hex register.
-	logOnly := false
-	if len(args) >= 1 && strings.ToLower(args[len(args)-1]) == "log" {
-		logOnly = true
-		args = args[:len(args)-1]
-	}
 	// `watch-nextreg log` asked to arm something and named nothing, which is a
 	// mistake to report rather than a request to list.
-	if logOnly && len(args) == 0 {
+	args, dir, logOnly := parseWatchKeywords(args)
+	if (logOnly || dir != watchWrite) && len(args) == 0 {
 		return "ERR watch-nextreg: no register given"
 	}
 	if len(args) < 1 {
@@ -125,9 +128,9 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 				mode = "log-only"
 			}
 			if w.matchVal != nil {
-				fmt.Fprintf(&b, "  NR$%02X val=$%02X (%s)\r\n", w.reg, *w.matchVal, mode)
+				fmt.Fprintf(&b, "  NR$%02X %s val=$%02X (%s, %s)\r\n", w.reg, nextregs.Name(w.reg), *w.matchVal, w.dir, mode)
 			} else {
-				fmt.Fprintf(&b, "  NR$%02X (any value, %s)\r\n", w.reg, mode)
+				fmt.Fprintf(&b, "  NR$%02X %s (any value, %s, %s)\r\n", w.reg, nextregs.Name(w.reg), w.dir, mode)
 			}
 		}
 		return strings.TrimRight(b.String(), "\r\n")
@@ -181,7 +184,7 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 	}
 	added := make([]string, 0, len(regs))
 	for _, reg := range regs {
-		d.nrWatches.add(nrWatchSpec{reg: reg, matchVal: matchVal, logOnly: logOnly})
+		d.nrWatches.add(nrWatchSpec{reg: reg, matchVal: matchVal, logOnly: logOnly, dir: dir})
 		added = append(added, fmt.Sprintf("$%02X", reg))
 	}
 	d.ensureNRWatchHook()
@@ -191,10 +194,10 @@ func (d *remoteDebugger) cmdWatchNextReg(args []string) string {
 		mode = "log-only"
 	}
 	if matchVal != nil {
-		return fmt.Sprintf("OK watching NR%s for val=$%02X (%s)",
-			strings.Join(added, ","), *matchVal, mode)
+		return fmt.Sprintf("OK watching NR%s for val=$%02X (%s, %s)",
+			strings.Join(added, ","), *matchVal, dir, mode)
 	}
-	return fmt.Sprintf("OK watching NR%s (any value, %s)", strings.Join(added, ","), mode)
+	return fmt.Sprintf("OK watching NR%s (any value, %s, %s)", strings.Join(added, ","), dir, mode)
 }
 
 // ensureNRWatchHook chains a tracer onto the NextReg dispatcher on the first
@@ -210,16 +213,15 @@ func (d *remoteDebugger) ensureNRWatchHook() {
 		if prior != nil {
 			prior(reg, val, isWrite)
 		}
-		if !isWrite {
-			return
-		}
-		matched, halt := d.nrWatches.match(reg, val)
+		matched, halt := d.nrWatches.match(reg, val, isWrite)
 		if !matched {
 			return
 		}
 		by, where := d.nextRegWriter()
 		slog.Info("watch-nextreg hit",
 			"reg", fmt.Sprintf("$%02X", reg),
+			"name", nextregs.Name(reg),
+			"write", isWrite,
 			"val", fmt.Sprintf("$%02X", val),
 			"by", by,
 			"at", where)

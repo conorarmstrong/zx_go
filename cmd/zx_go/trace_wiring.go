@@ -168,7 +168,7 @@ func dumpState(emu *emulator) {
 	if emu.nextRegs != nil {
 		fmt.Printf("\nNextRegs (non-zero):\n")
 		for r := 0; r < 256; r++ {
-			v := emu.nextRegs.ReadReg(byte(r))
+			v := emu.nextRegs.Peek(byte(r))
 			if v != 0 {
 				fmt.Printf("  $%02X = $%02X\n", r, v)
 			}

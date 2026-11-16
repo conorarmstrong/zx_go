@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 
 	"github.com/conorarmstrong/zx_go/pkg/ay"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
@@ -1666,6 +1667,9 @@ type ResetControl struct {
 	fireNMI   func(NMISource)
 	// hotkeyDriveEn is port_divmmc_io_en for the DRIVE hotkey (zxnext.vhd:6349).
 	hotkeyDriveEn func() bool
+	// hotkeys holds button presses from the UI goroutine until the emulation
+	// goroutine applies them at its next opcode fetch: bit 0 M1, bit 1 DRIVE.
+	hotkeys atomic.Uint32
 }
 
 // requestNMI asserts a source at the arbiter and fires it if it latches.
@@ -1675,15 +1679,32 @@ func (r *ResetControl) requestNMI(src NMISource) {
 	}
 }
 
-// Hotkey is a press of the M1 button (F9 hotkey, drive false) or the DRIVE
-// button (F10 hotkey, drive true). The DRIVE hotkey also needs the divMMC
-// ports enabled (zxnext.vhd:6349, NR$83 bit 0).
+// Hotkey is a press of the M1 button (drive false) or the DRIVE button (drive
+// true); on the board these are also the PS/2 F9 and F10 hotkeys
+// (zxnext.vhd:6348-6349), and the emulator maps them to the host's F12 and F8.
+// It is safe to call from any goroutine: the press is queued and applied by the
+// emulation goroutine at its next instruction boundary.
 func (r *ResetControl) Hotkey(drive bool) {
-	if !drive {
-		r.requestNMI(NMISourceMF)
+	bit := uint32(1)
+	if drive {
+		bit = 2
+	}
+	r.hotkeys.Or(bit)
+}
+
+// ApplyHotkeys runs the queued button presses through the arbiter. The DRIVE
+// button also needs the divMMC ports enabled (zxnext.vhd:6349, NR$83 bit 0).
+// It runs on the emulation goroutine at every instruction boundary, halted
+// ones included (Ticker), so a press reaches a CPU sitting in HALT.
+func (r *ResetControl) ApplyHotkeys() {
+	if r.hotkeys.Load() == 0 {
 		return
 	}
-	if r.hotkeyDriveEn == nil || r.hotkeyDriveEn() {
+	k := r.hotkeys.Swap(0)
+	if k&1 != 0 {
+		r.requestNMI(NMISourceMF)
+	}
+	if k&2 != 0 && (r.hotkeyDriveEn == nil || r.hotkeyDriveEn()) {
 		r.requestNMI(NMISourceDivMMC)
 	}
 }
@@ -1808,6 +1829,13 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		if rc.nmi.Busy() {
 			rc.nmi.Fetch(pc, rc.nmiInputs())
 		}
+	})
+	// The core reset clears the arbiter (zxnext.vhd:2097-2100, :2154-2155),
+	// whichever path resets the machine, and a press still queued from before
+	// the reset belongs to the machine that went away.
+	d.SetOnReset(func() {
+		rc.nmi.Reset()
+		rc.hotkeys.Store(0)
 	})
 	// rc.nmiSource latches the NMI-source read-back bits (bit 4 = i/o
 	// trap, bit 3 = multiface, bit 2 = divmmc; nextreg.txt:41-43). A

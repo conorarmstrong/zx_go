@@ -52,32 +52,25 @@ A live, interactive debugger that runs inside the GUI process. It refreshes at ~
 
 ### Layout
 
-Four main panels arranged in a 2×2 grid, plus a top toolbar and (on Spectrum Next) a right-hand sidebar.
+A top toolbar, then two rows: registers, disassembly and the hex dump on top; the paging diagram and the tools tabs below.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Toolbar  [Pause] [Step] [Step Frame] [Run] [Go to PC]  │
-│           [Edit Regs...] [Write Mem...] [Clear BPs]     │
-├──────────────────────┬───────────────────────────────────┤
-│                      │                                   │
-│   REGISTERS panel    │     DISASSEMBLY panel             │
-│   (PC, AF/BC/DE/HL,  │     (Z80 disassembly from PC,     │
-│    alt set, I/R, SP, │      click line = breakpoint)     │
-│    flags, etc.)      │                                   │
-│                      │                                   │
-├──────────────────────┼───────────────────────────────────┤
-│                      │                                   │
-│   MEMORY hex dump    │     PAGE MAP diagram              │
-│   ($0000-$FFFF, hex  │     +                             │
-│    + ASCII, address  │     TOOLS TABS (Next State /      │
-│    entry at top)     │     Bank / Backtrace / History /  │
-│                      │     NextReg / Breakpoints /       │
-│                      │     Palette / Sprites / Layer 2 / │
-│                      │     Tilemap)                      │
-└──────────────────────┴───────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│  Toolbar  [Pause] [Step] [Step Over] [Run] [Go to PC] …           │
+├────────────┬──────────────────────┬───────────────────────────────┤
+│ REGISTERS  │  DISASSEMBLY         │  MEMORY hex dump              │
+│ and flags  │  (click = breakpoint)│  ($0000-$FFFF, hex + ASCII)   │
+├────────────┴───┬──────────────────┴───────────────────────────────┤
+│  PAGE MAP      │ CPU  │ Bank Inspect / Backtrace / History /       │
+│  diagram       │      │ Breakpoints / Watchpoints / Heatmap /      │
+│                │      │ Time Travel / Reverse                      │
+│                │ Next │ State / NextRegs / Interrupts / DMA /      │
+│                │      │ UART/CTC / Copper / NextReg R/W / Palette /│
+│                │      │ Sprites / Layer 2 / Tilemap                │
+└────────────────┴──────┴────────────────────────────────────────────┘
 ```
 
-Splits between panels are draggable. The graphical Palette / Sprites / Layer 2 / Tilemap tabs are only meaningful on Spectrum Next.
+Splits between panels are draggable. The tools tabs are in two groups, picked on the left: **CPU** holds the debugging tools every machine has, and **Next** holds the Spectrum Next hardware, which is empty on the other machines.
 
 ### Toolbar
 
@@ -169,7 +162,19 @@ Slots that are write-protected (ROM) are shown in a different colour from RAM sl
 
 ### Tools tabs
 
-The bottom-right area is an icon-led tab strip (Next State, Bank Inspect, Backtrace, History, NextReg, Breakpoints, Watchpoints, Heatmap, Time Travel, Reverse, Palette, Sprites, Layer 2, Tilemap). The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent; the last four are **graphical** Next inspectors, live-rendered each tick:
+The bottom-right area holds two tab groups. **CPU**: Bank Inspect, Backtrace, History, Breakpoints, Watchpoints, Heatmap, Time Travel, Reverse. **Next**: State, NextRegs, Interrupts, DMA, UART/CTC, Copper, NextReg R/W, Palette, Sprites, Layer 2, Tilemap. The text panels mirror a feature of the telnet debugger so the two surfaces stay feature-equivalent.
+
+The Next hardware text tabs show the same views the telnet commands print, refreshed only while on screen:
+
+- **NextRegs** — every named NextReg with its name, value and decoded fields (`nr-list`).
+- **Interrupts** — the IM2 chain: mode, vector base, the vector it would place on the bus, `dma_int`, and per source its state (idle, requesting, acknowledged, in service), interrupt enable, DMA enable (NR$CC/$CD/$CE), latched request and sticky status. Below it, the NMI arbiter: state, owner, the NR$02 source bits and its inputs (`im2`, `nmi-state`).
+- **DMA** — the zxnDMA's ports, counter, timing, status byte, `dma_delay_i`, and whether a block is moving, parked by the delay or streaming as a burst (`dma`).
+- **UART/CTC** — both UARTs' prescaler, frame, FIFO fill, status outputs and lines, and the ESP peer; then the four CTC channels (`uart`, `ctc`).
+- **Copper** — the live copper program (`copper-disasm`).
+
+Every register value the GUI shows is read through the dispatcher's `Peek`: the register's read handler runs, but the trace hooks do not, so a 20 Hz refresh never shows up in `nr-trace`, `nr-deltas` or a NextReg read watch.
+
+The last four Next tabs are **graphical** inspectors, live-rendered each tick:
 
 - **🎨 Palette** — the active 256-entry palette as a 16×16 colour-swatch grid (each cell the real expanded RGB of that entry).
 - **▦ Sprites** — every *visible* sprite's 16×16 pattern drawn as actual pixels through the sprite palette, tiled into a sheet, with a live count.
@@ -225,29 +230,7 @@ Only meaningful when the emulator is in `ModelNext`. Lists:
 
 - **MMU shadow** — slots 0..7 with their current 8-KB page indices.
 - **divMMC state** — `paged_in` / `mapram` / `automap`.
-- **Selected NextRegs** — a fixed set of the most useful registers, listed below.
-
-The fixed NextReg view (chosen for boot-debugging value):
-
-| Reg | Name |
-| --- | --- |
-| $00 | Machine ID |
-| $01 | Core version |
-| $02 | Reset reason / state |
-| $07 | Turbo control |
-| $08 | Peripheral 1 |
-| $09 | Peripheral 4 |
-| $0A | Peripheral 5 (divMMC automap on bit 4) |
-| $14 | Transparency colour |
-| $15 | Sprite & layers system |
-| $18 | Layer 2 control |
-| $19 | Sprite control |
-| $43 | Palette control |
-| $50–$57 | MMU slots 0–7 |
-| $69 | Layer 2 + ULA enables |
-| $6B | Tilemap control |
-| $80–$87 | Internal port-decode flags |
-| $B8 | divMMC enable / automap mask |
+- **Selected NextRegs** — a short list with names and decoded fields: $00–$03, $05–$0B, $14, $15, $22, $43, the MMU slots $50–$57, $68, $69, $6B, $70, the port enables $80 and $82–$85, $8C, $8E, $B8, $C0, $C4 and $CC. The **NextRegs** tab has the rest.
 
 #### Bank Inspect
 
@@ -387,7 +370,7 @@ reach. A smaller `EVERY` avoids it.
 
 #### NextReg
 
-Equivalent to the telnet `nextreg-read` / `nextreg-write` commands. Type a **Reg** index, hit **Read** to dump the value (also shown in binary), or type a **Val** and hit **Write** to commit it (firing any OnWrite hooks just like a real `NEXTREG $XX,$YY`).
+Equivalent to the telnet `nextreg-read` / `nextreg-write` commands. Type a **Reg** index, hit **Read** to dump the value with the register's name, the value in binary and its decoded fields, or type a **Val** and hit **Write** to commit it (firing any OnWrite hooks just like a real `NEXTREG $XX,$YY`).
 
 #### Breakpoints
 
@@ -530,8 +513,14 @@ Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, 
 | `disassemble [ADDR [N]]` | `disasm`, `d` | N-instruction window starting at ADDR. ADDR defaults to current PC. N defaults to 6, capped at 64. | `OK\r\n  XXXX  bb …  MNEMONIC\r\n  …` |
 | `get-mmu` | `mmu` | Current ROM bank index plus all 8 8-K MMU slot values. | `OK rom_bank=N slots=XX XX XX XX XX XX XX XX` |
 | `get-divmmc` | `divmmc` | divMMC overlay state. | `OK paged_in=BOOL mapram=BOOL automap=BOOL` |
-| `nextreg-read REG` | `nr-r` | Read a Spectrum Next NextReg by index. | `OK $XX` (or `ERR no nextregs`) |
-| `nr-panel` | `nrp` | Decoded NextReg dashboard — machine/timing ($03), CPU speed ($07), peripherals ($05/$06 incl. divMMC-enable), altrom ($8C), paging ($8E), automap ($0A), the MMU8 slot table ($50–$57), Layer 2 ($12/$13/$70), sprite-select ($34) and palette-control ($43), all human-readable. | `OK NextReg panel\r\n  $07 CPU speed = $03 (28MHz)\r\n  …` |
+| `nextreg-read REG` | `nr-r` | Read a Spectrum Next NextReg by index, through `Peek`: the read handler runs, the trace hooks do not. | `OK $XX` (or `ERR no nextregs`) |
+| `nr-panel` | `nrp` | Decoded NextReg dashboard: machine and timing, peripherals, CPU speed, joystick I/O mode, Alt ROM, paging, Layer 2, layers, line interrupt, palette, ULA and tilemap control, and the interrupt block ($C0, $C4-$C6, $CC-$CE), each with its name and decoded fields, plus the MMU8 slot table. | `OK NextReg panel\r\n  $07 CPU Speed                    = $33  actual=28MHz programmed=28MHz\r\n  …` |
+| `nr-list [REG…]` | `nrl` | Every named NextReg, or the ones given, with name, value and decoded fields. | `OK\r\n  $00 Machine ID                   = $08\r\n  …` |
+| `im2` | — | The IM2 chain: mode, vector base, bus vector, `dma_int`, and one row per source with state, enable, DMA enable, request and status. | `OK\r\n  mode hardware IM2  vector base $A0 …\r\n  …` |
+| `nmi-state` | — | The NMI arbiter: idle / fetch / hold, owner, the NR$02 source bits and the arbiter's inputs (NR$06 enables, conmem, Multiface active, divMMC hold, config mode). (`nmi` fires an NMI.) | `OK\r\n  arbiter idle  owner none  activated false\r\n  …` |
+| `dma` | — | The zxnDMA: ports A and B (start, current, memory or IO, step, cycle length), length, counter, status byte, `dma_delay_i` and the transfer engine's state. | `OK\r\n  mode zxn  A->B  continuous …\r\n  …` |
+| `uart` | — | Both UARTs: prescaler and baud, frame, FIFO fill, status outputs, lines, and the ESP peer. | `OK\r\n  selected UART 0 …\r\n  …` |
+| `ctc` | — | The four CTC channels: FSM state, mode, prescaler, time constant, count, interrupt enable, zero-count output. | `OK\r\n  ch0  run      timer   presc 256 …\r\n  …` |
 | `copper-disasm` | `copper` | Disassemble the live Copper program: header (write cursor + decoded start-mode) then one line per instruction (`MOVE NR$rr,$vv` / `WAIT line=Y hpos=X` / `HALT`), stopping at the first HALT so trailing NOOPs aren't dumped. | `OK Copper  cursor=$XXX  mode=OnVBL\r\n  000: MOVE  NR$40,$07\r\n  …` |
 | `layer-state` | `layers` | Decoded video-layer panel — SLU layer-priority order (NR$15, incl. blend modes), sprite enable / over-border / priority, ULA enable (NR$68), Layer 2 resolution (NR$70) and tilemap enable (NR$6B). | `OK Layers\r\n  $15 layer priority = S>L>U\r\n  …` |
 | `sprite-list` | `sprites` | List the visible sprites in the live bank: header (enable + selected slot) then one line per VISIBLE sprite (X/Y/pattern/palette). Invisible slots are skipped; reports `(no visible sprites)` when the bank is empty. | `OK Sprites: enabled  sel=N\r\n  003: X=100 Y=50 pat=7 pal=2\r\n  …` |
@@ -579,8 +568,8 @@ Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, 
 | `watch-read ram BANK FROM TO` | — | Mirror of `watch-mem` for **reads**: halt on any guest read from ram bank BANK at offset FROM..TO, at the reading instruction's PC. This is what catches a validation/parse routine reading a buffer byte and rejecting it — invisible to the write watch. Installed only on first use (reads are hot — every opcode fetch is a read — so the chained hook no-ops when no spec is set). Fires `snapshot-on-bp` with reason="watch-read". |
 | `clear-watch-read` | — | Clear the active read watch. |
 | `watch-zero on/off` | — | Halt as soon as M1 fetches from a region where the next 16 bytes ahead of PC all read as $00. Pinpoints the moment a guest JP / RET / JR lands in uninitialised RAM or an empty config-mode backing buffer. Fires `snapshot-on-bp` with reason="watch-zero". |
-| `watch-port PORT [=VAL]` | — | Halt on guest port writes. Ports < $100 match the low byte of the actual port (so `watch-port $FE` catches `OUT ($FE),A` regardless of A); ports >= $100 match exactly. `=VAL` filters by byte value. `watch-port off` clears all; no-arg lists active. Z80N `NEXTREG nn,nn` opcodes bypass the port path — use `nr-trace` for NextReg visibility. |
-| `watch-nextreg REG[,REG…] [=VAL] [log]` | — | Halt on a write to a named NextReg. `watch-port` cannot do this: a NextReg write is a select on `$243B` followed by a value on `$253B`, so a watch on either port sees half a transaction, and a `=VAL` on `$253B` matches the value whatever register it lands in. This keys on the register instead, and so also catches the Z80N `NEXTREG nn,nn` opcodes and the single-write `$57` path, which never touch the ports. `=VAL` fires only on that byte; `log` reports without halting, for a register written every frame. `watch-nextreg off` clears all; no-arg lists active. Next-only: NextRegs do not exist on the other machines, and on those the command refuses with an error rather than arming. Copper MOVEs trip it too — the hit line names the writer (`by=cpu at=$8123` or `by=copper at=copper instruction 7`) so a MOVE is never reported against whatever address the Z80 happened to be at. |
+| `watch-port PORT[/MASK] [=VAL] [read\|rw] [log]` | — | Halt on guest port accesses, writes by default. Ports < $100 match the low byte of the actual port (so `watch-port $FE` catches `OUT ($FE),A` regardless of A); ports >= $100 match exactly. `/MASK` compares only the address bits set in MASK, so `watch-port $003B/$00FF` catches every `$xx3B` port. `=VAL` filters by byte value. `read` watches reads instead, `rw` both. `log` reports without halting. `watch-port off` clears all; no-arg lists active. Z80N `NEXTREG nn,nn` opcodes bypass the port path — use `watch-nextreg` for NextRegs. |
+| `watch-nextreg REG[,REG…] [=VAL] [read\|rw] [log]` | — | Halt on a write to a named NextReg, or with `read` on a guest read, `rw` both. Debugger reads go through `Peek` and never trip a read watch. `watch-port` cannot do this: a NextReg write is a select on `$243B` followed by a value on `$253B`, so a watch on either port sees half a transaction, and a `=VAL` on `$253B` matches the value whatever register it lands in. This keys on the register instead, and so also catches the Z80N `NEXTREG nn,nn` opcodes and the single-write `$57` path, which never touch the ports. `=VAL` fires only on that byte; `log` reports without halting, for a register written every frame. `watch-nextreg off` clears all; no-arg lists active. Next-only: NextRegs do not exist on the other machines, and on those the command refuses with an error rather than arming. Copper MOVEs trip it too — the hit line names the writer (`by=cpu at=$8123` or `by=copper at=copper instruction 7`) so a MOVE is never reported against whatever address the Z80 happened to be at. |
 
 #### Tracepoints (non-halting)
 
@@ -589,7 +578,7 @@ Any command that moves the machine (`continue`, `step`, `step-over`, `forward`, 
 | `tp ADDR` | — | Arm a tracepoint at ADDR. When PC hits ADDR, the debugger emits an `slog.Info("tp-hit")` line with full register state (PC, SP, AF, BC, DE, HL, IX, IY, IFF1, insns) and **does not halt**. A hit counter accrues per-PC. |
 | `list-tp` | — | Show every active tracepoint with its hit count. |
 | `clear-tp [ADDR]` | — | Remove one (by ADDR) or all. |
-| `nr-trace REG[,REG…]` | — | Add NextReg numbers to the runtime trace set. Each guest write to a watched NR emits an `slog.Info("nr-trace")` line with reg + value + CPU PC. `nr-trace` (no arg) lists active. `nr-trace off` clears all. Next-only, same as `watch-nextreg`. Chained on top of any tracer the `ZX_GO_NEXTREG_WATCH` env var installed at startup. Logs only; `watch-nextreg` is the halting counterpart. |
+| `nr-trace REG[,REG…]` | — | Add NextReg numbers to the runtime trace set. Each guest write to a watched NR emits an `slog.Info("nr-trace")` line with reg, register name, value and CPU PC. `nr-trace` (no arg) lists active. `nr-trace off` clears all. Next-only, same as `watch-nextreg`. Chained on top of any tracer the `ZX_GO_NEXTREG_WATCH` env var installed at startup. Logs only; `watch-nextreg` is the halting counterpart. |
 | `trace-divmmc-ram [BANK\|all\|any] [OFF\|LO-HI]` | — | Log every write that lands in divMMC RAM matching the filter. `slog.Info("divmmc-ram-trace")` per match with bank/addr/val/pc/insns. `trace-divmmc-ram` (no args) shows current filter + hit count. `trace-divmmc-ram off` disables. Replaces any prior `pager.SetWriteLogger` callback, so env-var diagnostics that share the slot are clobbered while this is armed. |
 | `trace-writes $LO[-$HI] [limit=N]` | — | Log every CPU write (Memory.Write path) into the virtual address range, with the RESOLVED destination: 8K slot + MMU8 bank value + override flag + ROM bank. Distinguishes config-mode NR$04 routing from MMU8 mapping from alt-rom redirects — `bank=0` could mean three different physical destinations and the existing `watch-mem` doesn't disambiguate. `slog.Info("write-trace")` per match. `trace-writes off` disarms; no-arg shows armed range + hit count; `limit=N` caps log lines (counter still tracks hits beyond the cap). |
 | `trace-nextreg-deltas REG[,REG…]\|all` | `nr-deltas` | Log only NextReg writes that ACTUALLY CHANGE the stored value — silently drops idempotent writes. NR$04 (RAMPAGE) can take tens of thousands of writes per boot via the FPGA-bootrom INIR loop; this filter cuts the log volume by >100x while still capturing every transition. Each line is one `slog.Info("nr-delta")` with reg/old/new/pc/insns. First observation per reg shows `old=init` to distinguish a fresh capture from a real value change. `trace-nextreg-deltas off` clears; no-arg shows armed set + hit count. |
@@ -820,7 +809,8 @@ authority; it covers, with their aliases:
 ```
 get-registers, get-stack, backtrace, history, prev, get-memory, hexdump,
 read-memory, write-memory, set-reg, cold-reset, disassemble, disasm-bank,
-get-mmu, get-divmmc, nextreg-read, nextreg-write, nr-panel, nr-snap, nr-diff,
+get-mmu, get-divmmc, nextreg-read, nextreg-write, nr-panel, nr-list, im2,
+nmi-state, dma, uart, ctc, nr-snap, nr-diff,
 copper-disasm, layer-state, sprite-list, palette-dump, bank-peek, bank-poke,
 pool-scan, load-bin, compare-foreign, step-over, hot, callgraph, retgraph,
 rstgraph, why-pc, snapshot-on-bp, irq-stats, catch, crash-detect, nmi,

@@ -17,8 +17,63 @@ import (
 // frames without freezing on the first write.
 type portWatchSpec struct {
 	port     uint16
+	mask     uint16 // 0: the default rule (low byte below $100, else exact)
 	matchVal *byte
 	logOnly  bool
+	dir      watchDir
+}
+
+// watchDir is which accesses a port or NextReg watch fires on.
+type watchDir byte
+
+const (
+	watchWrite watchDir = iota
+	watchRead
+	watchBoth
+)
+
+func (w watchDir) fires(write bool) bool {
+	return w == watchBoth || (w == watchWrite) == write
+}
+
+func (w watchDir) String() string {
+	return [...]string{"write", "read", "read+write"}[w]
+}
+
+// parseWatchDir strips a trailing read / rw / write keyword.
+func parseWatchDir(args []string) ([]string, watchDir) {
+	if len(args) == 0 {
+		return args, watchWrite
+	}
+	switch strings.ToLower(args[len(args)-1]) {
+	case "read":
+		return args[:len(args)-1], watchRead
+	case "rw":
+		return args[:len(args)-1], watchBoth
+	case "write":
+		return args[:len(args)-1], watchWrite
+	}
+	return args, watchWrite
+}
+
+// parseWatchKeywords strips the trailing direction and log keywords, in
+// either order.
+func parseWatchKeywords(args []string) (rest []string, dir watchDir, logOnly bool) {
+	dir = watchWrite
+	for len(args) > 0 {
+		last := strings.ToLower(args[len(args)-1])
+		if last == "log" {
+			logOnly = true
+			args = args[:len(args)-1]
+			continue
+		}
+		shorter, d := parseWatchDir(args)
+		if len(shorter) == len(args) {
+			break
+		}
+		args, dir = shorter, d
+	}
+	return args, dir, logOnly
 }
 
 // portWatchSet protects the live watch list. A telnet command
@@ -48,11 +103,18 @@ func (s *portWatchSet) clear() {
 // so a watch on $FE catches every border write regardless of A.
 // Ports >= $100 require exact match (e.g. $243B / $253B for NextReg
 // port pair).
-func (s *portWatchSet) match(port uint16, val byte) (matched, halt bool) {
+func (s *portWatchSet) match(port uint16, val byte, write bool) (matched, halt bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, w := range s.watches {
-		if w.port < 0x100 {
+		if !w.dir.fires(write) {
+			continue
+		}
+		if w.mask != 0 {
+			if port&w.mask != w.port&w.mask {
+				continue
+			}
+		} else if w.port < 0x100 {
 			if byte(w.port) != byte(port) {
 				continue
 			}
@@ -78,21 +140,25 @@ func (s *portWatchSet) list() []portWatchSpec {
 	return out
 }
 
-// cmdWatchPort arms a port-write watch.
+// cmdWatchPort arms a port watch.
 //
-//	watch-port PORT          fire on any write to PORT (halts CPU)
-//	watch-port PORT =VAL     halt only when the byte equals VAL
-//	watch-port PORT log       log every write to PORT, do NOT halt
-//	watch-port off           clear all
+//	watch-port PORT              fire on any write to PORT (halts CPU)
+//	watch-port PORT/MASK         compare only the address bits in MASK
+//	watch-port PORT =VAL         halt only when the byte equals VAL
+//	watch-port PORT read | rw    fire on reads, or on reads and writes
+//	watch-port PORT log          log every access to PORT, do NOT halt
+//	watch-port off               clear all
+//
+// The keywords can be combined, in either order: `watch-port $FE
+// read log`.
 func (d *remoteDebugger) cmdWatchPort(args []string) string {
 	if len(args) >= 1 && strings.ToLower(args[0]) == "off" {
 		d.portWatches.clear()
 		return "OK port watches cleared"
 	}
-	logOnly := false
-	if len(args) >= 2 && strings.ToLower(args[len(args)-1]) == "log" {
-		logOnly = true
-		args = args[:len(args)-1]
+	args, dir, logOnly := parseWatchKeywords(args)
+	if (logOnly || dir != watchWrite) && len(args) == 0 {
+		return "ERR watch-port: no port given"
 	}
 	if len(args) < 1 {
 		ws := d.portWatches.list()
@@ -102,10 +168,14 @@ func (d *remoteDebugger) cmdWatchPort(args []string) string {
 		var b strings.Builder
 		b.WriteString("OK\r\n")
 		for _, w := range ws {
+			port := fmt.Sprintf("$%04X", w.port)
+			if w.mask != 0 {
+				port += fmt.Sprintf("/$%04X", w.mask)
+			}
 			if w.matchVal != nil {
-				fmt.Fprintf(&b, "  port=$%04X val=$%02X\r\n", w.port, *w.matchVal)
+				fmt.Fprintf(&b, "  port=%s val=$%02X (%s)\r\n", port, *w.matchVal, w.dir)
 			} else {
-				fmt.Fprintf(&b, "  port=$%04X (any)\r\n", w.port)
+				fmt.Fprintf(&b, "  port=%s (any, %s)\r\n", port, w.dir)
 			}
 		}
 		return strings.TrimRight(b.String(), "\r\n")
@@ -120,11 +190,20 @@ func (d *remoteDebugger) cmdWatchPort(args []string) string {
 	} else {
 		portStr = raw
 	}
+	var mask uint16
+	if i := strings.Index(portStr, "/"); i >= 0 {
+		m, err := parseHex(strings.TrimSpace(portStr[i+1:]))
+		if err != nil || m == 0 {
+			return "ERR bad mask: " + portStr[i+1:]
+		}
+		mask = m
+		portStr = strings.TrimSpace(portStr[:i])
+	}
 	port, err := parseHex(portStr)
 	if err != nil {
 		return "ERR bad port: " + err.Error()
 	}
-	spec := portWatchSpec{port: port, logOnly: logOnly}
+	spec := portWatchSpec{port: port, mask: mask, logOnly: logOnly, dir: dir}
 	if valStr != "" {
 		v, err := parseHex(valStr)
 		if err != nil {
@@ -139,10 +218,14 @@ func (d *remoteDebugger) cmdWatchPort(args []string) string {
 	if logOnly {
 		mode = "log-only"
 	}
-	if spec.matchVal != nil {
-		return fmt.Sprintf("OK watching port $%04X for val=$%02X (%s)", spec.port, *spec.matchVal, mode)
+	what := fmt.Sprintf("$%04X", spec.port)
+	if mask != 0 {
+		what += fmt.Sprintf("/$%04X", mask)
 	}
-	return fmt.Sprintf("OK watching port $%04X (any value, %s)", spec.port, mode)
+	if spec.matchVal != nil {
+		return fmt.Sprintf("OK watching port %s for val=$%02X (%s, %s)", what, *spec.matchVal, dir, mode)
+	}
+	return fmt.Sprintf("OK watching port %s (any value, %s, %s)", what, dir, mode)
 }
 
 // ensurePortWatchHook chains a tracer onto the ULA on the first
@@ -159,15 +242,13 @@ func (d *remoteDebugger) ensurePortWatchHook() {
 		if prior != nil {
 			prior(addr, val, write, handled)
 		}
-		if !write {
-			return
-		}
-		matched, halt := d.portWatches.match(addr, val)
+		matched, halt := d.portWatches.match(addr, val, write)
 		if !matched {
 			return
 		}
 		slog.Info("watch-port hit",
 			"port", fmt.Sprintf("$%04X", addr),
+			"write", write,
 			"val", fmt.Sprintf("$%02X", val),
 			"pc", fmt.Sprintf("$%04X", d.emu.cpu.PC))
 		if halt {

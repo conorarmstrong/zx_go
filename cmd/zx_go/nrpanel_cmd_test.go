@@ -23,20 +23,45 @@ func TestFormatNextRegPanel(t *testing.T) {
 	out := formatNextRegPanel(func(r byte) byte { return regs[r] })
 
 	for _, want := range []string{
-		"NextReg",                // header
-		"$07", "CPU speed", "28", // decoded CPU speed
+		"NextReg",                           // header
+		"$07 CPU Speed", "programmed=28MHz", // decoded CPU speed
 		"MMU8", "$50", "$57", "DF", // slot table incl. slot 7 value
-		"$8E",            // paging reg present
-		"automap en=1",   // $0A bit4 is the real divMMC-automap gate
-		"drive-nmi en=1", // $06 bit4 is only the DRIVE-button NMI enable
+		"$8E 128K Memory Mapping", // paging reg present
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("panel missing %q\n---\n%s", want, out)
 		}
 	}
-	// $06 bit4 must NOT be mislabelled as the divMMC enable — that gate
-	// lives at $0A bit4 (see the automap en= check above).
-	if strings.Contains(out, "divMMC en=") {
-		t.Errorf("panel mislabels NR$06 bit4 as \"divMMC en\"; that gate is NR$0A bit4:\n%s", out)
+	line := func(reg string) string {
+		for _, l := range strings.Split(out, "\r\n") {
+			if strings.Contains(l, reg+" ") {
+				return l
+			}
+		}
+		return ""
+	}
+	// $0A bit 4 is the divMMC automap gate; $06 bit 4 is only the DRIVE-button
+	// NMI enable.
+	if l := line("$0A"); !strings.Contains(l, " automap") {
+		t.Errorf("$0A line %q does not decode automap", l)
+	}
+	if l := line("$06"); !strings.Contains(l, "drive-nmi") || strings.Contains(l, "automap") {
+		t.Errorf("$06 line %q: want drive-nmi and no automap", l)
+	}
+}
+
+func TestFormatNextRegListNamesEveryRegister(t *testing.T) {
+	out := formatNextRegList(func(byte) byte { return 0 }, nil)
+	for _, want := range []string{"$00 Machine ID", "$CE DMA INT EN 2", "$A9 ESP GPIO0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("nr-list missing %q", want)
+		}
+	}
+	if strings.Contains(out, "$E0 ") {
+		t.Error("nr-list printed a reserved register")
+	}
+	one := formatNextRegList(func(byte) byte { return 0xAD }, []byte{0xC0})
+	if !strings.Contains(one, "vector=5 stackless im=2 hw-im2") {
+		t.Errorf("nr-list C0: %q", one)
 	}
 }

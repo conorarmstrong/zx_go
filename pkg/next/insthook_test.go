@@ -116,3 +116,22 @@ func TestTickerClockGoingBackRunsNothing(t *testing.T) {
 		t.Error("the CTC moved when the clock went back")
 	}
 }
+
+type countApplier struct{ n int }
+
+func (c *countApplier) ApplyHotkeys() { c.n++ }
+
+// Queued NMI presses are applied at every instruction boundary, which the CPU
+// also reports for each halted step, so a press reaches a CPU in HALT.
+func TestTickerAppliesHotkeysEveryBoundary(t *testing.T) {
+	tk, cpu, _, _ := newTickerRig(t, nil)
+	a := &countApplier{}
+	tk.SetHotkeys(a)
+	for i := 0; i < 3; i++ {
+		cpu.t += 4
+		tk.Instruction(4)
+	}
+	if a.n != 3 {
+		t.Errorf("applied %d times over 3 boundaries", a.n)
+	}
+}

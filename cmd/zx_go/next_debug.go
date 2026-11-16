@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"strings"
 
 	"github.com/conorarmstrong/zx_go/pkg/debugger"
+	"github.com/conorarmstrong/zx_go/pkg/next/copper"
 	"github.com/conorarmstrong/zx_go/pkg/next/divmmc"
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
 	"github.com/conorarmstrong/zx_go/pkg/next/sprite"
 	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
+	"github.com/conorarmstrong/zx_go/pkg/ula"
 )
 
 // nextDebugProvider feeds the debugger's Next-state panel from an
@@ -47,8 +50,67 @@ func (p *nextDebugProvider) NextRegs() map[uint8]byte {
 	if p.emu.nextRegs == nil {
 		return out
 	}
+	// Peek, not ReadReg: the read handlers run, but a 20 Hz refresh must not
+	// fill nr-trace and NextReg read watches with reads the guest never made.
 	for _, r := range debugger.NextRegsOfInterest {
-		out[r] = p.emu.nextRegs.ReadReg(r)
+		out[r] = p.emu.nextRegs.Peek(r)
+	}
+	return out
+}
+
+// HardwareView implements debugger.HardwareProvider: the text views behind
+// the Next hardware tabs, the same ones the telnet commands print.
+func (p *nextDebugProvider) HardwareView(view string) []string {
+	e := p.emu
+	switch view {
+	case debugger.HardwareViewNextRegs:
+		if e.nextRegs == nil {
+			return nil
+		}
+		return nextRegListLines(e.nextRegs.Peek, nil)
+	case debugger.HardwareViewInterrupts:
+		var out []string
+		if e.nextIM2 != nil {
+			out = append(out, "IM2 chain")
+			out = append(out, indent(e.nextIM2.DebugLines())...)
+		}
+		if e.nextReset != nil {
+			out = append(out, "", "NMI arbiter")
+			out = append(out, indent(e.nextReset.NMIDebugLines())...)
+		}
+		return out
+	case debugger.HardwareViewDMA:
+		if e.nextDMA == nil {
+			return nil
+		}
+		return e.nextDMA.DebugLines()
+	case debugger.HardwareViewSerial:
+		var out []string
+		if e.nextUART != nil {
+			out = append(out, "UART")
+			out = append(out, indent(e.nextUART.Block.DebugLines())...)
+		}
+		if e.nextCTC != nil {
+			out = append(out, "", "CTC")
+			out = append(out, indent(e.nextCTC.DebugLines())...)
+		}
+		return out
+	case debugger.HardwareViewCopper:
+		c := e.nextCopper
+		if c == nil {
+			return nil
+		}
+		text := formatCopperDisasm(c.Instruction, c.Cursor(), c.Mode(), copper.MaxInstructions,
+			ula.LinesPerFrameFor(e.mem.GetCurrentModel()))
+		return strings.Split(strings.TrimRight(text, "\r\n"), "\r\n")
+	}
+	return nil
+}
+
+func indent(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = "  " + l
 	}
 	return out
 }

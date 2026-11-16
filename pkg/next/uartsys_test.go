@@ -493,6 +493,10 @@ func TestJoystickButtonsDriveTheRoutedUARTPins(t *testing.T) {
 			t.Errorf("NR$0B=$%02X: idle pins rx=%v cts_n=%v, want both high", c.nr0b, rx, ctsN)
 		}
 		s.SetJoystickButtons(c.connector, true, true) // B and C pressed
+		if rx, ctsN = s.Block.Lines(c.uart); !rx || !ctsN {
+			t.Errorf("NR$0B=$%02X: the UI-side press reached the pins before the emulation step", c.nr0b)
+		}
+		s.Advance(0, 1) // the emulation goroutine applies it
 		rx, ctsN = s.Block.Lines(c.uart)
 		if rx || ctsN {
 			t.Errorf("NR$0B=$%02X: pressed pins rx=%v cts_n=%v, want both low", c.nr0b, rx, ctsN)
@@ -500,6 +504,7 @@ func TestJoystickButtonsDriveTheRoutedUARTPins(t *testing.T) {
 		// The other connector's buttons do nothing.
 		s.SetJoystickButtons(c.connector, false, false)
 		s.SetJoystickButtons(1-c.connector, true, true)
+		s.Advance(0, 1)
 		if rx, ctsN = s.Block.Lines(c.uart); !rx || !ctsN {
 			t.Errorf("NR$0B=$%02X: other connector moved the pins", c.nr0b)
 		}
@@ -514,9 +519,28 @@ func TestJoystickButtonsDriveTheRoutedUARTPins(t *testing.T) {
 func TestJoystickButtonsIgnoredWhenNotRouted(t *testing.T) {
 	s, _, _ := newUARTRig(t)
 	s.SetJoystickButtons(0, true, true)
+	s.Advance(0, 1)
 	for u := 0; u < 2; u++ {
 		if rx, ctsN := s.Block.Lines(u); !rx || ctsN {
 			t.Errorf("UART %d: rx=%v cts_n=%v with routing off", u, rx, ctsN)
 		}
 	}
+}
+
+// The UI goroutine presses buttons while the emulation goroutine runs; run
+// under -race this must stay quiet.
+func TestJoystickButtonsAreSafeFromAnotherGoroutine(t *testing.T) {
+	s, d, _ := newUARTRig(t)
+	d.WriteReg(0x0B, 0xA1)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			s.SetJoystickButtons(0, i&1 != 0, false)
+		}
+		close(done)
+	}()
+	for i := 0; i < 1000; i++ {
+		s.Advance(4, 1)
+	}
+	<-done
 }

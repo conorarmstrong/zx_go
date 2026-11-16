@@ -82,7 +82,7 @@ func newNext() (*Harness, error) {
 	dacBank := dac.New()
 	im2 := next.NewIM2Driver()
 	ctcBank := ctc.NewBank()
-	next.Wire(next.WireOpts{
+	_, resetControl := next.Wire(next.WireOpts{
 		Dispatcher: disp,
 		Memory:     mem,
 		CPU:        cpu,
@@ -116,6 +116,7 @@ func newNext() (*Harness, error) {
 	u.SetNextUART(uartSys)
 	ticker := next.NewTicker(cpu, ctcClock, uartSys, im2, func() next.BusDelayer { return dmaEngine })
 	cpu.SetInstructionHook(ticker.Instruction)
+	ticker.SetHotkeys(resetControl)
 	dmaEngine.SetByteHook(ticker.DMAByte)
 	u.SetNextAY(ayEngine)
 	comp := compositor.New(pal, l2)

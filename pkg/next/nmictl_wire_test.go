@@ -60,24 +60,41 @@ func TestNR02ResetClearsTheNMIArbiter(t *testing.T) {
 }
 
 // The DRIVE hotkey needs the divMMC ports (NR$83 bit 0, zxnext.vhd:6349); the
-// M1 hotkey does not.
+// M1 hotkey does not. A press is queued and applied by the emulation goroutine.
 func TestNMIHotkeys(t *testing.T) {
 	d, cpu, _, rc := nmiRig(t)
 	d.Store(0x83, 0x00)
 	rc.Hotkey(true)
+	rc.ApplyHotkeys()
 	if cpu.PendingNMI.Load() {
 		t.Error("DRIVE hotkey fired with the divMMC ports off")
 	}
 	d.Store(0x83, 0x01)
 	rc.Hotkey(true)
+	if cpu.PendingNMI.Load() {
+		t.Fatal("the press fired before the emulation side applied it")
+	}
+	rc.ApplyHotkeys()
 	if !cpu.PendingNMI.Load() || !rc.nmi.DivMMC() {
 		t.Error("DRIVE hotkey did not fire the divMMC NMI")
 	}
 	d2, cpu2, _, rc2 := nmiRig(t)
 	d2.Store(0x83, 0x00)
 	rc2.Hotkey(false)
+	rc2.ApplyHotkeys()
 	if !cpu2.PendingNMI.Load() || !rc2.nmi.MF() {
 		t.Error("M1 hotkey did not fire the Multiface NMI")
+	}
+}
+
+// A register-file reset (any machine reset) clears the arbiter, so an NMI that
+// never reached its $0066 fetch cannot lock the arbiter out.
+func TestDispatcherResetClearsTheNMIArbiter(t *testing.T) {
+	d, _, _, rc := nmiRig(t)
+	d.WriteReg(0x02, 0x04)
+	d.Reset()
+	if rc.NMIActivated() {
+		t.Error("register reset left the NMI active")
 	}
 }
 
@@ -106,5 +123,33 @@ func TestDMADelayNMITerm(t *testing.T) {
 		if got := d.DMADelay(); got != c.want {
 			t.Errorf("CC.7=%v activated=%v: delay %v, want %v", c.cc, c.active, got, c.want)
 		}
+	}
+}
+
+func TestNMIHotkeysAreSafeFromAnotherGoroutine(t *testing.T) {
+	_, _, _, rc := nmiRig(t)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			rc.Hotkey(i&1 != 0)
+		}
+		close(done)
+	}()
+	for i := 0; i < 1000; i++ {
+		rc.ApplyHotkeys()
+	}
+	<-done
+}
+
+// A press queued before a reset does not fire after it.
+func TestResetDropsAQueuedHotkey(t *testing.T) {
+	d, cpu, _, rc := nmiRig(t)
+	rc.Hotkey(false)
+	d.Reset()
+	d.Store(0x06, 0x18)
+	cpu.PendingNMI.Store(false)
+	rc.ApplyHotkeys()
+	if cpu.PendingNMI.Load() {
+		t.Error("a press from before the reset fired after it")
 	}
 }

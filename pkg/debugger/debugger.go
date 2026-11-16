@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/z80"
 )
 
@@ -82,30 +83,14 @@ type TilemapFrameProvider interface {
 	TilemapFrame() (img image.Image, status string)
 }
 
-// NextRegsOfInterest is the fixed set of NextReg numbers the
-// debugger panel displays. Picked for boot-debugging value:
-//
-//	0x00 machine ID
-//	0x01 version
-//	0x02 reset reason / state
-//	0x07 turbo control
-//	0x08 peripheral 1
-//	0x09 peripheral 4
-//	0x0A peripheral 5
-//	0x14 transparency colour
-//	0x15 sprite & Layers system
-//	0x18 Layer 2 control
-//	0x19 sprite control
-//	0x43 palette control
-//	0x50..0x57 MMU slots
-//	0x69 Layer 2 + ULA enables
-//	0x6B tilemap control
-//	0x80..0x87 internal port decode flags
-//	0xB8 divMMC enable / automap mask
+// NextRegsOfInterest is the short list the Next State tab shows, each with its
+// name and decoded fields (pkg/next/nextregs). The NextRegs tab shows every
+// named register.
 var NextRegsOfInterest = []uint8{
-	0x00, 0x01, 0x02, 0x07, 0x08, 0x09, 0x0A, 0x14, 0x15, 0x18, 0x19,
-	0x43, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
-	0x69, 0x6B, 0x80, 0x82, 0x83, 0x84, 0x85, 0xB8,
+	0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x14, 0x15,
+	0x22, 0x43, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+	0x68, 0x69, 0x6B, 0x70, 0x80, 0x82, 0x83, 0x84, 0x85, 0x8C, 0x8E,
+	0xB8, 0xC0, 0xC4, 0xCC,
 }
 
 type Debugger struct {
@@ -200,6 +185,14 @@ type Debugger struct {
 	// fed from Layer2FrameProvider / TilemapFrameProvider.
 	layer2View  *ImageView
 	tilemapView *ImageView
+
+	// Next hardware text tabs, fed by a HardwareProvider. hwTabs maps each
+	// view's tab item to the view so Refresh repaints only the one on screen.
+	hwViews  map[string]*TextView
+	hwTabs   map[*container.TabItem]*TextView
+	nextTabs *container.AppTabs
+	toolTabs *container.AppTabs
+	nextTab  *container.TabItem
 
 	// pageMap is the graphical 4-cell (classic) / 8-cell (Next)
 	// memory-paging diagram. Constructed at debugger build time;
@@ -381,6 +374,16 @@ func (d *Debugger) SetNextProvider(p NextProvider) {
 			d.layer2View.SetRender(nil)
 		}
 	}
+	// Feed the Next hardware text tabs.
+	hp, _ := p.(HardwareProvider)
+	for name, v := range d.hwViews {
+		if hp == nil {
+			v.SetLines(nil)
+			continue
+		}
+		name := name
+		v.SetLines(func() []string { return hp.HardwareView(name) })
+	}
 	// Feed the tilemap viewer.
 	if d.tilemapView != nil {
 		if tp, ok := p.(TilemapFrameProvider); ok && tp != nil {
@@ -427,6 +430,7 @@ func (d *Debugger) Refresh() {
 	if d.tilemapView != nil {
 		d.tilemapView.Refresh()
 	}
+	d.refreshHardwareTab()
 	if d.bpW != nil {
 		d.bpW.Refresh()
 	}
@@ -821,60 +825,62 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 	d.layer2View = NewImageView("Layer 2 framebuffer", 256, 192, nil)
 	d.tilemapView = NewImageView("Tilemap", 320, 240, nil)
 
-	// Tabbed tools area replaces the single NEXT STATE panel so we
-	// can host parity surfaces (bank inspector, NextReg explorer,
-	// backtrace, history) without crowding the four-pane layout.
-	toolsTabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Next State", theme.ComputerIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  NEXT STATE", colRegName), widget.NewSeparator()),
-			nil, nil, nil, nextScroll,
-		))),
-		container.NewTabItemWithIcon("Bank Inspect", theme.StorageIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  BANK INSPECT", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.bankInspect.Root(),
-		))),
-		container.NewTabItemWithIcon("Backtrace", theme.NavigateBackIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  BACKTRACE", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.backtrace.Root(),
-		))),
-		container.NewTabItemWithIcon("History", theme.HistoryIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  M1 HISTORY", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.history.Root(),
-		))),
-		container.NewTabItemWithIcon("NextReg", theme.SettingsIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  NEXTREG R/W", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.nextRegW.Root(),
-		))),
-		container.NewTabItemWithIcon("Breakpoints", theme.MediaRecordIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  BREAKPOINTS", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.bpW.Root(),
-		))),
-		container.NewTabItemWithIcon("Watchpoints", theme.VisibilityIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  REGISTER WATCHPOINTS", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.watchW.Root(),
-		))),
-		container.NewTabItemWithIcon("Heatmap", theme.GridIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  M1 HEATMAP", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.heatmapW.Root(),
-		))),
-		container.NewTabItemWithIcon("Time Travel", theme.HistoryIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  TIME TRAVEL", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.ttW.Root(),
-		))),
-		container.NewTabItemWithIcon("Reverse", theme.MediaFastRewindIcon(), panelBG(container.NewBorder(
-			container.NewVBox(headerText("  REVERSE DEBUGGING", colRegName), widget.NewSeparator()),
-			nil, nil, nil, d.revW.Root(),
-		))),
-		container.NewTabItemWithIcon("Palette", theme.ColorPaletteIcon(),
-			panelBG(d.paletteView.Root())),
-		container.NewTabItemWithIcon("Sprites", theme.GridIcon(),
-			panelBG(d.spriteView.Root())),
-		container.NewTabItemWithIcon("Layer 2", theme.MediaPhotoIcon(),
-			panelBG(d.layer2View.Root())),
-		container.NewTabItemWithIcon("Tilemap", theme.ViewFullScreenIcon(),
-			panelBG(d.tilemapView.Root())),
+	// The tools area is two groups of tabs. CPU holds the debugging
+	// surfaces every machine has; Next holds the Next's hardware, so the
+	// fourteen-odd tabs no longer share one strip.
+	tab := func(title string, icon fyne.Resource, header string, body fyne.CanvasObject) *container.TabItem {
+		return container.NewTabItemWithIcon(title, icon, panelBG(container.NewBorder(
+			container.NewVBox(headerText("  "+header, colRegName), widget.NewSeparator()),
+			nil, nil, nil, body,
+		)))
+	}
+	cpuTabs := container.NewAppTabs(
+		tab("Bank Inspect", theme.StorageIcon(), "BANK INSPECT", d.bankInspect.Root()),
+		tab("Backtrace", theme.NavigateBackIcon(), "BACKTRACE", d.backtrace.Root()),
+		tab("History", theme.HistoryIcon(), "M1 HISTORY", d.history.Root()),
+		tab("Breakpoints", theme.MediaRecordIcon(), "BREAKPOINTS", d.bpW.Root()),
+		tab("Watchpoints", theme.VisibilityIcon(), "REGISTER WATCHPOINTS", d.watchW.Root()),
+		tab("Heatmap", theme.GridIcon(), "M1 HEATMAP", d.heatmapW.Root()),
+		tab("Time Travel", theme.HistoryIcon(), "TIME TRAVEL", d.ttW.Root()),
+		tab("Reverse", theme.MediaFastRewindIcon(), "REVERSE DEBUGGING", d.revW.Root()),
 	)
-	toolsTabs.SetTabLocation(container.TabLocationTop)
+	cpuTabs.SetTabLocation(container.TabLocationTop)
+
+	// Next hardware text views, fed by SetNextProvider when the provider
+	// implements HardwareProvider.
+	d.hwViews = map[string]*TextView{}
+	d.hwTabs = map[*container.TabItem]*TextView{}
+	hwTab := func(title string, icon fyne.Resource, header, view string) *container.TabItem {
+		v := NewTextView("  (not a Next machine)")
+		d.hwViews[view] = v
+		t := tab(title, icon, header, v.Root())
+		d.hwTabs[t] = v
+		return t
+	}
+	d.nextTabs = container.NewAppTabs(
+		tab("State", theme.ComputerIcon(), "NEXT STATE", nextScroll),
+		hwTab("NextRegs", theme.ListIcon(), "NEXTREGS (decoded)", HardwareViewNextRegs),
+		hwTab("Interrupts", theme.WarningIcon(), "IM2 CHAIN AND NMI ARBITER", HardwareViewInterrupts),
+		hwTab("DMA", theme.MailForwardIcon(), "ZXNDMA", HardwareViewDMA),
+		hwTab("UART/CTC", theme.UploadIcon(), "UART AND CTC", HardwareViewSerial),
+		hwTab("Copper", theme.ViewRefreshIcon(), "COPPER", HardwareViewCopper),
+		tab("NextReg R/W", theme.SettingsIcon(), "NEXTREG R/W", d.nextRegW.Root()),
+		container.NewTabItemWithIcon("Palette", theme.ColorPaletteIcon(), panelBG(d.paletteView.Root())),
+		container.NewTabItemWithIcon("Sprites", theme.GridIcon(), panelBG(d.spriteView.Root())),
+		container.NewTabItemWithIcon("Layer 2", theme.MediaPhotoIcon(), panelBG(d.layer2View.Root())),
+		container.NewTabItemWithIcon("Tilemap", theme.ViewFullScreenIcon(), panelBG(d.tilemapView.Root())),
+	)
+	d.nextTabs.SetTabLocation(container.TabLocationTop)
+	d.nextTabs.OnSelected = func(*container.TabItem) { d.refreshHardwareTab() }
+
+	d.nextTab = container.NewTabItemWithIcon("Next", theme.ComputerIcon(), d.nextTabs)
+	toolsTabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("CPU", theme.SearchIcon(), cpuTabs),
+		d.nextTab,
+	)
+	toolsTabs.SetTabLocation(container.TabLocationLeading)
+	toolsTabs.OnSelected = func(*container.TabItem) { d.refreshHardwareTab() }
+	d.toolTabs = toolsTabs
 
 	// Two-row layout so the window fits a standard display and every
 	// divider is draggable. Previously all four panes sat side-by-side
@@ -905,6 +911,18 @@ func (d *Debugger) buildUI() fyne.CanvasObject {
 		container.NewVBox(widget.NewSeparator(), panelBG(d.statusTxt)),
 		nil, nil, mainSplit,
 	)
+}
+
+// refreshHardwareTab repaints the Next hardware text view on screen, if one
+// is. The others are left alone: each costs a walk of its block, and nobody is
+// looking at them.
+func (d *Debugger) refreshHardwareTab() {
+	if d.toolTabs == nil || d.nextTabs == nil || d.toolTabs.Selected() != d.nextTab {
+		return
+	}
+	if v, ok := d.hwTabs[d.nextTabs.Selected()]; ok {
+		v.Refresh()
+	}
 }
 
 // refreshNextPanel updates the Next state panel from the current
@@ -948,7 +966,11 @@ func (d *Debugger) refreshNextPanel() {
 	regs := d.nextProvider.NextRegs()
 	for _, r := range NextRegsOfInterest {
 		v := regs[r]
-		addLine(fmt.Sprintf("  $%02X = $%02X", r, v), colRegVal)
+		line := fmt.Sprintf("  $%02X %-24s $%02X", r, nextregs.Name(r), v)
+		if dec := nextregs.Decode(r, v); dec != "" {
+			line += "  " + dec
+		}
+		addLine(line, colRegVal)
 	}
 	d.nextPanelBox.Refresh()
 }

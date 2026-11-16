@@ -561,6 +561,7 @@ func (c *CPU) popC() uint16 {
 
 // Reset resets the CPU to its initial state.
 func (c *CPU) Reset() {
+	c.frameOriginValid = false
 	c.A, c.F, c.B, c.C, c.D, c.E, c.H, c.L = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.A_, c.F_, c.B_, c.C_, c.D_, c.E_, c.H_, c.L_ = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.IX, c.IY = 0xFFFF, 0xFFFF

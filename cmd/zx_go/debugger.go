@@ -887,6 +887,13 @@ var commandsNeedingPause = map[string]bool{
 	"crash-detect":         true,
 	"nr-panel":             true,
 	"nrp":                  true,
+	"nr-list":              true,
+	"nrl":                  true,
+	"im2":                  true,
+	"dma":                  true,
+	"uart":                 true,
+	"ctc":                  true,
+	"nmi-state":            true,
 	"copper-disasm":        true,
 	"copper":               true,
 	"layer-state":          true,
@@ -945,7 +952,7 @@ func (d *remoteDebugger) handleCommand(line string) string {
 	case "help", "?":
 		return "OK [step-back walks the recorded M1 ring: instant, registers only, NO memory. " +
 			"replay-back re-executes from a tt-on checkpoint: the whole machine, memory included.] " +
-			"pause set-pause-timeout break-on-sd continue step step-over step-back replay-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace watch-nextreg trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
+			"pause set-pause-timeout break-on-sd continue step step-over step-back replay-back step-forward run-back to-present reverse-status get-registers get-stack backtrace history prev hot callgraph retgraph rstgraph get-memory hexdump read-memory write-memory set-breakpoint clear-breakpoint list-breakpoints bp-first-entry disassemble disasm-bank get-mmu get-divmmc nr-panel nr-list im2 nmi-state dma uart ctc copper-disasm layer-state sprite-list palette-dump nextreg-read nextreg-write nr-snap nr-diff bank-peek bank-poke pool-scan load-bin list-banks watch-reg list-watches clear-watch watch-mem clear-watch-mem watch-read clear-watch-read watch-zero watch-port tp list-tp clear-tp nr-trace watch-nextreg trace-divmmc-ram trace-writes trace-nextreg-deltas irq-stats catch snapshot-on-bp compare-foreign crash-detect tt-on tt-off tt-status tt-snap tt-rewind tt-find-pc tt-clear quit"
 	case "set-pause-timeout":
 		// Query form (no arg) reports the current value; otherwise set
 		// the pause-ack wait to N seconds. Used to await a `continue`
@@ -1103,6 +1110,12 @@ func (d *remoteDebugger) handleCommand(line string) string {
 		return "OK " + d.fmtDivMMC()
 	case "nr-panel", "nrp":
 		return d.cmdNRPanel()
+	case "nr-list", "nrl":
+		return d.cmdNRList(args)
+	case "im2", "dma", "uart", "ctc":
+		return d.cmdHardware(cmd)
+	case "nmi-state":
+		return d.cmdHardware("nmi")
 	case "copper-disasm", "copper":
 		return d.cmdCopperDisasm()
 	case "layer-state", "layers":
@@ -1882,7 +1895,9 @@ func (d *remoteDebugger) cmdNextregRead(args []string) string {
 	if d.emu.nextRegs == nil {
 		return "ERR no nextregs (not a Next model)"
 	}
-	return fmt.Sprintf("OK $%02X", d.emu.nextRegs.ReadReg(byte(reg)))
+	// Peek: the read handler runs, but the tracer (nr-trace, read watches)
+	// does not see a read the guest never made.
+	return fmt.Sprintf("OK $%02X", d.emu.nextRegs.Peek(byte(reg)))
 }
 
 func (d *remoteDebugger) cmdNextregWrite(args []string) string {

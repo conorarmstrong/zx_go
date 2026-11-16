@@ -856,6 +856,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-16 | Debugger: NextReg names and decoded fields everywhere; `im2`, `nmi-state`, `dma`, `uart`, `ctc`, `nr-list`; port masks and read watches; GUI tools split into CPU and Next groups with Interrupts, DMA, UART/CTC, Copper and NextRegs tabs; debugger reads no longer reach the trace hooks. |
 | 2026-11-16 | Next: the NMI arbiter (NR$06 enables, first-come latch, `$0066` hold) drives NR$02, the F12/F8 keys and the NMI term of `dma_delay_i`; the CTC, UARTs and ULA interrupts run during a continuous DMA block and can park it mid-block; joystick buttons B and C drive a routed UART; NR$0B resets to `$01`. |
 | 2026-11-15 | Next: the CTC and IM2 chain are in save states; NR$CC/CD/CE hold the zxnDMA off the bus through `dma_delay_i` (tested from a Z80 guest); NR$C0 bits 2:1 report the IM mode; a UART can be routed to the joystick port; NR$A0 follows 3.02.05. |
 | 2026-11-15 | Next: the UART register block (`serial/uart.vhd`) is modelled and wired: ports `$133B`..`$163B`, both UARTs, the FIFOs, the status and error logic, an ESP8266 on UART 0 over the real serial lines, the four request lines into the IM2 chain, reset, and save states. Replayed against a GHDL golden of 17,334 output changes and 3,325 reads, with the idle skip replayed against the same golden. NR$A8 and NR$A9 are now the ESP GPIO0 pair; the AT stub that sat there is gone. Mutation testing found a per-UART gating error in the Rx FIFO write. |

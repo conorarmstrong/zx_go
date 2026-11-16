@@ -57,3 +57,15 @@ func TestPollIntSourcesFeedsTheLineInt(t *testing.T) {
 		t.Errorf("line INT fired %d times, want 1", fired)
 	}
 }
+
+func TestResetInvalidatesTheFrameOrigin(t *testing.T) {
+	cpu := newPulseCPU(t)
+	cpu.frameOrigin, cpu.frameOriginValid = 0, true
+	cpu.Reset()
+	fired := false
+	cpu.SetFrameIntHook(func() { fired = true })
+	cpu.PollIntSources(110)
+	if fired {
+		t.Error("poll used a frame origin from before the reset")
+	}
+}

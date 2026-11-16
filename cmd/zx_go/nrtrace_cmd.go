@@ -126,6 +126,7 @@ func (d *remoteDebugger) ensureNRTraceHook() {
 		}
 		slog.Info("nr-trace",
 			"reg", fmt.Sprintf("$%02X", reg),
+			"name", nextregs.Name(reg),
 			"val", fmt.Sprintf("$%02X", val),
 			"pc", fmt.Sprintf("$%04X", d.emu.cpu.PC))
 	})

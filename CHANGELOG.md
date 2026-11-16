@@ -63,8 +63,24 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **NR$A0 follows core 3.02.05.** Bit 1 (Pi SPI slave enable) reads back and is
   the one bit a reset leaves alone; bits 7, 6 and 2 read as zero.
 
+- **The debugger knows the Next's registers and hardware.** Every NextReg has
+  a name and decoded fields, shown by `nr-panel`, the new `nr-list`, `nr-trace`,
+  `watch-nextreg` and the GUI. New telnet commands `im2`, `nmi-state`, `dma`,
+  `uart` and `ctc` show the IM2 chain (state, enables and status per source),
+  the NMI arbiter, the zxnDMA, both UARTs and the CTC. The GUI's tools tabs are
+  split into a CPU group and a Next group, with new NextRegs, Interrupts, DMA,
+  UART/CTC and Copper tabs.
+- **Read watches and port masks.** `watch-port` takes `/MASK` to compare only
+  some address bits, and `read` or `rw` to watch reads; `watch-nextreg` takes
+  `read` and `rw`.
+
 ### Fixed
 
+- **Debugger NextReg reads no longer reach the trace hooks.** The GUI read its
+  register list through the guest read path 20 times a second, so `nr-trace`,
+  `nr-deltas` and the raster journal saw reads the guest never made. The GUI,
+  `nextreg-read` and `nr-panel` now use a read that runs the register's read
+  handler without tracing.
 - **A RETN that ends a Multiface session no longer pages the divMMC out.** The
   divMMC sees a RETN only while the Multiface is not active
   (`zxnext.vhd:4111`).

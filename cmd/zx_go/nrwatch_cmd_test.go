@@ -457,3 +457,90 @@ func TestNRTraceArmsNothingWhenItRefuses(t *testing.T) {
 		}
 	})
 }
+
+// `read` arms a watch on guest reads; a debugger Peek is not one.
+func TestWatchNextReg_ReadWatch(t *testing.T) {
+	d := newRemoteForNRWatch(t)
+	if got := d.cmdWatchNextReg([]string{"12", "read"}); !strings.Contains(got, "read") {
+		t.Fatalf("arm reply %q", got)
+	}
+	d.emu.nextRegs.Select(0x12)
+	d.emu.nextRegs.WriteData(0x2A)
+	if d.paused.Load() {
+		t.Fatal("a write halted a read watch")
+	}
+	_ = d.emu.nextRegs.Peek(0x12)
+	if d.paused.Load() {
+		t.Fatal("a debugger Peek halted a read watch")
+	}
+	_ = d.emu.nextRegs.ReadData()
+	if !d.paused.Load() {
+		t.Error("a guest read did not halt the read watch")
+	}
+}
+
+func TestWatchNextReg_RWWatchFiresOnBoth(t *testing.T) {
+	for _, write := range []bool{true, false} {
+		d := newRemoteForNRWatch(t)
+		d.cmdWatchNextReg([]string{"12", "rw"})
+		d.emu.nextRegs.Select(0x12)
+		if write {
+			d.emu.nextRegs.WriteData(1)
+		} else {
+			_ = d.emu.nextRegs.ReadData()
+		}
+		if !d.paused.Load() {
+			t.Errorf("rw watch did not fire on write=%v", write)
+		}
+	}
+}
+
+// Port watches: an address mask, and read watches.
+func TestPortWatchMaskAndDirection(t *testing.T) {
+	var s portWatchSet
+	s.add(portWatchSpec{port: 0x003B, mask: 0x00FF}) // any $xx3B write
+	if m, _ := s.match(0x243B, 0, true); !m {
+		t.Error("$243B write missed a $003B/$00FF watch")
+	}
+	if m, _ := s.match(0x243C, 0, true); m {
+		t.Error("$243C write matched a $003B/$00FF watch")
+	}
+	if m, _ := s.match(0x243B, 0, false); m {
+		t.Error("a read matched a write watch")
+	}
+	var r portWatchSet
+	r.add(portWatchSpec{port: 0xFE, dir: watchRead})
+	if m, _ := r.match(0x7FFE, 0, false); !m {
+		t.Error("a read of $7FFE missed a $FE read watch")
+	}
+	if m, _ := r.match(0x7FFE, 0, true); m {
+		t.Error("a write matched a read watch")
+	}
+}
+
+func TestParseWatchDir(t *testing.T) {
+	cases := map[string]watchDir{"read": watchRead, "rw": watchBoth, "write": watchWrite, "=$10": watchWrite}
+	for kw, want := range cases {
+		rest, got := parseWatchDir([]string{"$FE", kw})
+		if got != want {
+			t.Errorf("%s: dir %v, want %v", kw, got, want)
+		}
+		if want != watchWrite || kw == "write" {
+			if len(rest) != 1 {
+				t.Errorf("%s: keyword not stripped: %v", kw, rest)
+			}
+		}
+	}
+}
+
+func TestParseWatchKeywordsInEitherOrder(t *testing.T) {
+	for _, args := range [][]string{{"$FE", "read", "log"}, {"$FE", "log", "read"}} {
+		rest, dir, logOnly := parseWatchKeywords(args)
+		if len(rest) != 1 || dir != watchRead || !logOnly {
+			t.Errorf("%v: rest %v dir %v log %v", args, rest, dir, logOnly)
+		}
+	}
+	if rest, dir, logOnly := parseWatchKeywords([]string{"$FE"}); len(rest) != 1 || dir != watchWrite || logOnly {
+		t.Errorf("plain: rest %v dir %v log %v", rest, dir, logOnly)
+	}
+}

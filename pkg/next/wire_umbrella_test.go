@@ -316,3 +316,36 @@ func TestWireConnectsTheNMITermOfTheDMADelay(t *testing.T) {
 		t.Error("an active NMI with NR$CC bit 7 did not hold the DMA off")
 	}
 }
+
+// Peek runs every register's read handler. None of them may move state: a
+// second Peek returns the same value and the register file is unchanged. The
+// debugger peeks every named register 20 times a second.
+func TestPeekOfEveryRegisterIsSideEffectFree(t *testing.T) {
+	installtest.RedirectConfig(t)
+	mem, err := memory.New(wireUmbrellaTestROMs(t), roms.Model128K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disp := nextregs.New()
+	Wire(WireOpts{
+		Dispatcher: disp, Memory: mem, CPU: z80.New(mem, stubULA{}),
+		AYEngine: ay.NewEngine(), Layer2: layer2.New(mem), Palette: palette.NewBank(),
+		Priority: NewLayerPriority(), Sprites: sprite.New(), Copper: copper.New(),
+		RTC: rtc.New(), IM2: NewIM2Driver(),
+	})
+	var before [256]byte
+	for r := 0; r < 256; r++ {
+		before[r] = disp.Raw(byte(r))
+	}
+	for r := 0; r < 256; r++ {
+		a, b := disp.Peek(byte(r)), disp.Peek(byte(r))
+		if a != b {
+			t.Errorf("NR$%02X: two Peeks read $%02X then $%02X", r, a, b)
+		}
+	}
+	for r := 0; r < 256; r++ {
+		if got := disp.Raw(byte(r)); got != before[r] {
+			t.Errorf("NR$%02X: Peek changed the stored value $%02X -> $%02X", r, before[r], got)
+		}
+	}
+}

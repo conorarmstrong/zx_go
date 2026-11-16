@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/next/uart"
@@ -43,8 +44,12 @@ type UARTSystem struct {
 	owed  int     // clocks already spent inside register accesses
 	req   [4]bool // last request levels given to the chain
 	// joyB and joyC are the B and C buttons of the left (0) and right (1)
-	// joystick connectors, active high (zxnext.vhd:90).
+	// joystick connectors, active high (zxnext.vhd:90), as last applied.
 	joyB, joyC [2]bool
+	// joyIn is the host's button state, written from the UI goroutine and
+	// applied on the emulation goroutine (applyJoystick): bit 0 left B, bit 1
+	// left C, bit 2 right B, bit 3 right C.
+	joyIn atomic.Uint32
 }
 
 // NewUARTSystem builds the system with an ESP module on UART 0. speed returns
@@ -109,11 +114,37 @@ func (s *UARTSystem) route(nr0b byte) {
 
 // SetJoystickButtons sets the B and C buttons of a joystick connector, 0 for
 // left and 1 for right. They reach a UART only while NR$0B routes one there.
+// It is safe to call from any goroutine: the state is handed over atomically
+// and applied by the emulation goroutine at its next UART step or access.
 func (s *UARTSystem) SetJoystickButtons(connector int, b, c bool) {
 	if connector < 0 || connector > 1 {
 		return
 	}
-	s.joyB[connector], s.joyC[connector] = b, c
+	shift := uint(connector * 2)
+	for {
+		old := s.joyIn.Load()
+		v := old &^ (3 << shift)
+		if b {
+			v |= 1 << shift
+		}
+		if c {
+			v |= 2 << shift
+		}
+		if s.joyIn.CompareAndSwap(old, v) {
+			return
+		}
+	}
+}
+
+// applyJoystick brings the routed UART's pins up to the host's buttons.
+func (s *UARTSystem) applyJoystick() {
+	v := s.joyIn.Load()
+	b := [2]bool{v&1 != 0, v&4 != 0}
+	c := [2]bool{v&2 != 0, v&8 != 0}
+	if b == s.joyB && c == s.joyC {
+		return
+	}
+	s.joyB, s.joyC = b, c
 	s.route(s.d.Raw(0x0B))
 }
 
@@ -148,6 +179,7 @@ func (s *UARTSystem) ReadPort(addr uint16) (byte, bool) {
 	if !ok {
 		return 0, false
 	}
+	s.applyJoystick()
 	s.Block.SetIO(reg, true, false, 0)
 	n := s.ioClocks()
 	for i := 0; i < n; i++ {
@@ -183,6 +215,7 @@ func (s *UARTSystem) Advance(tstates, speed int) {
 	if speed < 1 {
 		speed = 1
 	}
+	s.applyJoystick()
 	n := tstates*8/speed - s.owed
 	s.owed = 0
 	if n < 0 {

@@ -8,15 +8,16 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 )
 
-// NextRegAccessor exposes the raw read / write operations on the
-// Spectrum Next's NextReg space. The dispatcher in pkg/next
-// satisfies this interface, but the widget doesn't take a direct
-// dependency on that package — pass any implementation through
-// SetAccessor.
+// NextRegAccessor exposes read / write operations on the Spectrum Next's
+// NextReg space. The dispatcher in pkg/next/nextregs satisfies it. Peek is the
+// debugger read: it runs the register's read handler without firing the
+// tracer, so a read from this panel never trips nr-trace or a read watch.
 type NextRegAccessor interface {
-	ReadReg(reg byte) byte
+	Peek(reg byte) byte
 	WriteReg(reg byte, val byte)
 }
 
@@ -94,8 +95,12 @@ func (w *NextRegWidget) onRead() {
 		w.status.SetText("reg out of range")
 		return
 	}
-	v := w.access.ReadReg(byte(reg))
-	w.appendOut(fmt.Sprintf("R  NR$%02X = $%02X  (%08b  %d)", reg, v, v, v))
+	v := w.access.Peek(byte(reg))
+	line := fmt.Sprintf("R  NR$%02X %s = $%02X  (%08b  %d)", reg, nextregs.Name(byte(reg)), v, v, v)
+	if dec := nextregs.Decode(byte(reg), v); dec != "" {
+		line += "  " + dec
+	}
+	w.appendOut(line)
 	w.status.SetText(fmt.Sprintf("read NR$%02X = $%02X", reg, v))
 	w.valE.SetText(fmt.Sprintf("$%02X", v))
 }

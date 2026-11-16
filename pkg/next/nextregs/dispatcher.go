@@ -271,6 +271,17 @@ func (d *Dispatcher) Store(reg, val byte) { d.regs[reg] = val }
 // recompute reads from stored state.
 func (d *Dispatcher) Raw(reg byte) byte { return d.regs[reg] }
 
+// Peek returns what a guest read of reg would return, running its OnRead
+// handler, but without firing the tracer. It is for debuggers, whose periodic
+// refresh would otherwise fill nr-trace, nr-deltas and NextReg watches with
+// reads the guest never made.
+func (d *Dispatcher) Peek(reg byte) byte {
+	if fn := d.onRead[reg]; fn != nil {
+		return fn(d)
+	}
+	return d.regs[reg]
+}
+
 // GetTracer returns the currently-installed TraceFunc (or nil).
 // Used by chained-tracer patterns so a new caller can wrap the
 // existing tracer rather than replace it.
