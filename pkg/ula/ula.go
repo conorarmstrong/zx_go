@@ -1147,6 +1147,12 @@ func (u *ULA) render() *image.RGBA {
 	return u.img
 }
 
+// nextFrameRowBias maps a row of the 240-line image to a row of the Next's
+// 256-line frame: the image starts this many lines into it. The tilemap, the
+// hi-res Layer 2 and the sprites are all addressed by the frame row (the wide
+// vertical counter, zxula_timing.vhd:477-499).
+const nextFrameRowBias = (256 - TotalHeight) / 2
+
 // renderNextFullHeight returns the 320×256 over-border Next frame: the standard
 // 320×240 render copied into the centre (rows 8..247 = sprite frame Y 8..247)
 // plus the two 8-px strips the classic border crops — the top (frame Y 0..7)
@@ -1227,7 +1233,7 @@ func (u *ULA) renderWide() *image.RGBA {
 				rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
 			}
 		}
-		u.nextCompositor.ComposeWideTilemapRow(y, rowWide)
+		u.nextCompositor.ComposeWideTilemapRow(y+nextFrameRowBias, rowWide)
 		dstStart := y * wide.Stride
 		copy(wide.Pix[dstStart:dstStart+ww*4], rowWide)
 	}
@@ -1377,7 +1383,7 @@ func (u *ULA) renderHiResLayer2() *image.RGBA {
 		for y := 0; y < TotalHeight; y++ {
 			start := y * u.img.Stride
 			copy(row, u.img.Pix[start:start+w*4])
-			u.nextCompositor.ComposeWideLayer2Row(y, row)
+			u.nextCompositor.ComposeWideLayer2Row(y+nextFrameRowBias, row)
 			copy(u.img.Pix[start:start+w*4], row)
 		}
 		return u.img
@@ -1419,7 +1425,7 @@ func (u *ULA) renderHiResLayer2() *image.RGBA {
 				rowWide[d+4], rowWide[d+5], rowWide[d+6], rowWide[d+7] = r, g, b, a
 			}
 		}
-		u.nextCompositor.ComposeWideLayer2Row(y, rowWide)
+		u.nextCompositor.ComposeWideLayer2Row(y+nextFrameRowBias, rowWide)
 		dstStart := y * wide.Stride
 		copy(wide.Pix[dstStart:dstStart+ww*4], rowWide)
 	}
@@ -2327,11 +2333,8 @@ func (u *ULA) applyNextCompositor() {
 		for y := 0; y < TotalHeight; y++ {
 			imgRowStart := y * u.img.Stride
 			copy(rowFull, u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4])
-			// Tilemap y origin = top of image (y=0). The tilemap
-			// itself is 256 lines tall; rows 0..239 of the image
-			// map to tilemap rows 0..239 (the bottom 16 rows of
-			// the 256-line tilemap are cropped out of the 240-line
-			// image).
+			// The tilemap is 256 lines tall, addressed by the frame
+			// row; image row y is frame row y+nextFrameRowBias.
 			inBorder := func(x int) bool {
 				return x < BorderLeft || x >= BorderLeft+ScreenWidth
 			}
@@ -2340,7 +2343,7 @@ func (u *ULA) applyNextCompositor() {
 				// border, paint the whole row.
 				inBorder = func(int) bool { return true }
 			}
-			u.nextCompositor.ComposeBorderRow(y, rowFull, inBorder)
+			u.nextCompositor.ComposeBorderRow(y+nextFrameRowBias, rowFull, inBorder)
 			copy(u.img.Pix[imgRowStart:imgRowStart+TotalWidth*4], rowFull)
 		}
 	}

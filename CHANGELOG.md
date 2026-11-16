@@ -76,6 +76,11 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The tilemap and the 320x256 Layer 2 are drawn at the right height.** Both
+  are addressed by the FPGA's wide vertical counter, which is 0 thirty-two
+  lines above the paper. Inside the paper the tilemap was read by paper row,
+  which drew it 32 pixels low. The border pass and the hi-res Layer 2 pass
+  were 8 pixels low. Sonic stood in mid air above a level drawn too low.
 - **Sonic is visible again.** Three faults combined to hide every sprite in
   the game. First, the line interrupt counted its target line from the frame
   interrupt. The FPGA counts it from the top of the paper, so every line

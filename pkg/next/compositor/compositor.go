@@ -555,7 +555,10 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 			// 320-pixel video framing — tilemap is anchored to the
 			// full screen including the 32-px border, not to the
 			// inner 256-wide rectangle.
-			c.tilemap.RenderScanlineFlags(y, c.tilemapScratch[:], c.tilemapEn[:], c.tilemapBelow[:])
+			// Vertically the tilemap is addressed by the wide counter wvc,
+			// 0 thirty-two lines above the paper (zxnext.vhd:4390,
+			// zxula_timing.vhd:477-499), the same frame rows sprites use.
+			c.tilemap.RenderScanlineFlags(y+SpriteFrameYTop, c.tilemapScratch[:], c.tilemapEn[:], c.tilemapBelow[:])
 			tilemapScan = c.tilemapScratch[BorderOffsetX : BorderOffsetX+Width]
 			tilemapEn = c.tilemapEn[BorderOffsetX : BorderOffsetX+Width]
 			tilemapBelow = c.tilemapBelow[BorderOffsetX : BorderOffsetX+Width]

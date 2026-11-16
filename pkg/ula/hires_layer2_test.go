@@ -31,7 +31,7 @@ func (m *hiResL2Mock) HiResLayer2Active() bool                 { return true }
 func (m *hiResL2Mock) Layer2Width() int                        { return m.width }
 func (m *hiResL2Mock) ComposeWideLayer2Row(y int, dst []byte) {
 	m.wideL2Calls++
-	if y == 0 { // marker at row 0, x 0 — must survive into the frame
+	if y == nextFrameRowBias { // marker at the image's first row, x 0 — must survive into the frame
 		dst[0], dst[1], dst[2], dst[3] = 0xAB, 0xCD, 0xEF, 0xFF
 	}
 }
