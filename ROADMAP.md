@@ -1,6 +1,6 @@
 # zx_go Roadmap
 
-**Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
+**Stage: released (v1.13.1)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
 > **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (item 2: NMI arbiter and in-block arbitration done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
@@ -99,7 +99,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-11-11, v1.13.0)
+## CURRENT STATE (2026-11-16, v1.13.1)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an

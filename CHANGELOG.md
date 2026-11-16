@@ -6,6 +6,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.13.1]
+
+**The Next UART, a Next-aware debugger, and Sonic fixed.**
+
 ### Added
 
 - **The Next's UART register block.** Ports `$133B` (Tx and status), `$143B`
