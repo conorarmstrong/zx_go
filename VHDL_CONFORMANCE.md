@@ -75,7 +75,7 @@ Every `nr_XX_* <= value` in the reset process. Read-back byte composed per the
 | $BA divmmc ep_timing | $00 | $00 | ✅ | |
 | $BB divmmc ep1 | $CD | $CD | ✅ | |
 | $C4 int en 0 | bit expbus=1 | $81 | ✅ | reset and read composition (`expbus & 00000 & ula_int_en`, `:6239`) verified 2026-11-14; bit 0 follows port $FF bit 6 and NR$22 bit 2, bit 1 follows NR$22 bit 1. `TestSpec_NRC4_Bit0_FollowsPortFFBit6` |
-| $C0 im2/nmi | $00 | $00 | ⚠️ | wired since 2026-11-10: bit 0 hands /INT to the IM2 chain, bits 7:5 set the vector base; NR$C4/C5/C6 enables and NR$C8-CA status drive it. The UART request lines are wired (2026-11-15). NR$CC/$CD/$CE drive `dma_delay_i` (2026-11-15), bits 2:1 read the IM mode, and the CTC and chain are in save states. Still open: the NMI term. ROADMAP item 2 |
+| $C0 im2/nmi | $00 | $00 | ⚠️ | wired since 2026-11-10: bit 0 hands /INT to the IM2 chain, bits 7:5 set the vector base; NR$C4/C5/C6 enables and NR$C8-CA status drive it. The UART request lines are wired (2026-11-15). NR$CC/$CD/$CE drive `dma_delay_i` (2026-11-15), bits 2:1 read the IM mode, and the CTC and chain are in save states. The NMI term is driven by the NMI arbiter (2026-11-16) and the pin is also sampled after every byte of a continuous block. ROADMAP item 2 |
 | $0A peripheral 1 | $00 | $00 | ✅ | bit 5 (`sd_swap`) needs bit 2 set in the same config-mode write (public VHDL 3.02.04, `6395c28`); `TestSpec_NR0A_SDSwapNeedsLockBit`. Bits 7:6 (`mf_type`) are config-mode only. 3.03 VHDL is not public, so this is checked to 3.02.05 only |
 | (all others) | $00 | $00 | ✅ | clip/scroll/copper/dma-int reset to 0. The dma-int bits are stored-only for the same reason as NR$C0 |
 

@@ -989,3 +989,20 @@ func TestReleaseAllLiftsHeldKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestNMIKeyCallbackTellsTheKeysApart(t *testing.T) {
+	kbd := New()
+	var got []bool
+	plain := false
+	kbd.SetNMICallback(func() { plain = true })
+	kbd.SetNMIKeyCallback(func(drive bool) { got = append(got, drive) })
+	kbd.HandleKeyWithModifiers(fyne.KeyF8, true, false, false, false, false)
+	kbd.HandleKeyWithModifiers(fyne.KeyF12, true, false, false, false, false)
+	kbd.HandleKeyWithModifiers(fyne.KeyF8, false, false, false, false, false)
+	if len(got) != 2 || !got[0] || got[1] {
+		t.Errorf("key callback saw %v, want [true false]", got)
+	}
+	if plain {
+		t.Error("plain NMI callback fired alongside the key callback")
+	}
+}

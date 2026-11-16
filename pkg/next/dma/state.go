@@ -49,7 +49,7 @@ import (
 //     the machine, not this device's state; both capture themselves under their
 //     own identifiers, and a rewind must not re-point the controller at
 //     different objects.
-//   - cycleSink and clock, the callbacks into the CPU clock, installed by the
+//   - cycleSink, byteHook and clock, the callbacks into the machine, installed by the
 //     emulator at construction. Same argument. Note that nextDue is captured as
 //     an absolute reading of that clock, which is meaningful only because the
 //     CPU restores its T-state counter from the same capture; a rewind that

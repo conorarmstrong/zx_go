@@ -42,6 +42,9 @@ type UARTSystem struct {
 	speed func() int
 	owed  int     // clocks already spent inside register accesses
 	req   [4]bool // last request levels given to the chain
+	// joyB and joyC are the B and C buttons of the left (0) and right (1)
+	// joystick connectors, active high (zxnext.vhd:90).
+	joyB, joyC [2]bool
 }
 
 // NewUARTSystem builds the system with an ESP module on UART 0. speed returns
@@ -80,33 +83,38 @@ func (s *UARTSystem) Reset() {
 	s.syncIM2()
 }
 
-// Joystick pins as the connector idles: nothing pressed. joy_uart_rx is the
-// inverse of a pressed button, so an idle pin reads as a high line, and
-// joy_uart_cts_n likewise reads as not clear to send.
-const (
-	joyIdleRx   = true
-	joyIdleCtsN = true
-)
-
-// route applies NR$0B. The routed UART takes its Rx and CTS from the joystick
-// pins. UART 0 loses the ESP: its peer is cut and sees an idle line. The
-// other UART keeps its own lines.
+// route applies NR$0B (zxnext.vhd:3340-3350, :3536-3539). With bit 7 and mode
+// bit 5 set, the UART bit 0 picks takes its Rx and CTS_n from the joystick
+// connector bit 4 picks: Rx is the inverse of button C and CTS_n the inverse of
+// button B. UART 0 loses the ESP: its peer is cut and sees an idle line. The
+// other UART keeps its own idle lines.
 func (s *UARTSystem) route(nr0b byte) {
 	on := nr0b&0x80 != 0 && nr0b&0x20 != 0
 	routed := -1
 	if on {
 		routed = int(nr0b & 1)
 	}
+	conn := int(nr0b >> 4 & 1)
 	for u := 0; u < 2; u++ {
 		if u == routed {
-			s.Block.SetRx(u, joyIdleRx)
-			s.Block.SetCTSn(u, joyIdleCtsN)
+			s.Block.SetRx(u, !s.joyC[conn])
+			s.Block.SetCTSn(u, !s.joyB[conn])
 		} else {
 			s.Block.SetRx(u, true)
 			s.Block.SetCTSn(u, false)
 		}
 	}
 	s.Block.SetPeerCut(routed == 0)
+}
+
+// SetJoystickButtons sets the B and C buttons of a joystick connector, 0 for
+// left and 1 for right. They reach a UART only while NR$0B routes one there.
+func (s *UARTSystem) SetJoystickButtons(connector int, b, c bool) {
+	if connector < 0 || connector > 1 {
+		return
+	}
+	s.joyB[connector], s.joyC[connector] = b, c
+	s.route(s.d.Raw(0x0B))
 }
 
 // decode returns the register a port address selects, or false.

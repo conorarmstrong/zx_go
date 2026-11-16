@@ -156,3 +156,19 @@ func TestWireDMAInterruptEnablesIsOrderIndependent(t *testing.T) {
 		t.Fatal("NR$CC bit 0 did not enable the ULA hold when wired in the other order")
 	}
 }
+
+// NR$CC bit 7 reaches the NMI term's enable.
+func TestNRCCBit7EnablesTheNMITerm(t *testing.T) {
+	disp := nextregs.New()
+	d := NewIM2Driver()
+	WirePeripheralMasks(disp)
+	WireDMAInterruptEnables(disp, d)
+	d.SetNMIActivated(func() bool { return true })
+	if d.DMADelay() {
+		t.Fatal("delay with NR$CC bit 7 clear")
+	}
+	disp.WriteReg(0xCC, 0x80)
+	if !d.DMADelay() {
+		t.Error("NR$CC bit 7 did not enable the NMI term")
+	}
+}

@@ -320,7 +320,8 @@ on `P` on the ZX81. Details and the per-machine keymap:
 |-----|--------|
 | **F2** | Quick save state |
 | **F4** | Quick load state |
-| **F12** | Trigger NMI (Multiface freezer) |
+| **F12** | Trigger NMI (Multiface freezer); on the Next, the M1 button |
+| **F8** | Next only: the DRIVE button (divMMC NMI) |
 | **Esc** | Exit full screen |
 | Arrow keys | Joystick directions (when a joystick is enabled) |
 | Right Alt / Right Ctrl | Joystick fire |

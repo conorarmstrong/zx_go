@@ -114,8 +114,9 @@ func newNext() (*Harness, error) {
 	// Built after Wire so it can chain onto the NR$02 and NR$C6 handlers.
 	uartSys := next.NewUARTSystem(disp, im2, cpu.SpeedMultiplier)
 	u.SetNextUART(uartSys)
-	cpu.SetInstructionHook(next.InstructionHook(cpu.SpeedMultiplier, ctcClock, uartSys, im2,
-		func() next.BusDelayer { return dmaEngine }))
+	ticker := next.NewTicker(cpu, ctcClock, uartSys, im2, func() next.BusDelayer { return dmaEngine })
+	cpu.SetInstructionHook(ticker.Instruction)
+	dmaEngine.SetByteHook(ticker.DMAByte)
 	u.SetNextAY(ayEngine)
 	comp := compositor.New(pal, l2)
 	comp.SetSprites(sprites)

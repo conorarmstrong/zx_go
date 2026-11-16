@@ -124,6 +124,9 @@ func (b *Block) SetLoopback(u int, on bool) { b.loop[u] = on }
 // SetCTSn drives i_Tx_x_cts_n: false means the far end is ready to receive.
 func (b *Block) SetCTSn(u int, ctsN bool) { b.ctsN[u] = ctsN }
 
+// Lines reports the outside world's drive on UART u: the Rx line and CTS_n.
+func (b *Block) Lines(u int) (rx, ctsN bool) { return b.rxDrv[u], b.ctsN[u] }
+
 func (b *Block) sel() int {
 	if b.selectR {
 		return 1

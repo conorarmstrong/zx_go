@@ -47,6 +47,7 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		0x55: 0x05,
 		0x56: 0x00,
 		0x57: 0x01,
+		0x0B: 0x01, // joystick I/O mode bit 0 (zxnext.vhd:4941)
 		0x98: 0xFF, // Pi GPIO output (zxnext.vhd:5070 nr_98_pi_gpio_o <= X"FF")
 		0x99: 0x01, // Pi GPIO output (zxnext.vhd:5071 nr_99_pi_gpio_o <= X"01")
 		0xB8: 0x83,
@@ -307,6 +308,7 @@ func TestResetRestoresDefaults(t *testing.T) {
 		0x54: 0x04,
 		0x55: 0x05,
 		0x57: 0x01,
+		0x0B: 0x01, // joystick I/O mode bit 0 (zxnext.vhd:4941)
 		0x98: 0xFF, // Pi GPIO output (zxnext.vhd:5070)
 		0x99: 0x01, // Pi GPIO output (zxnext.vhd:5071)
 		0xB8: 0x83,

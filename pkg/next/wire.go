@@ -113,12 +113,11 @@ type MAPRAMClearer interface {
 //	bits 6, 3:1 = reserved
 //
 // The register is modelled exactly (writable bits 7, 5:4, 0 = mask 0xB1,
-// matching the FPGA write at zxnext.vhd:5200-5203). The I/O-mode BEHAVIOUR
-// — repurposing the physical joystick-port pins as GPIO / a UART for
-// hardware add-ons (zxnext.vhd:3340-3347 routes them to uart0/1) — is out
-// of scope: it serves external hardware via the (also out-of-scope) UART
-// path, and no software/game uses it. The Kempston/Sinclair joystick is
-// unaffected in the normal (I/O-mode-disabled) case.
+// matching the FPGA write at zxnext.vhd:5200-5203), and bit 0 resets to 1
+// (:4941). The UART mode (bit 7 with bit 5) is wired in UARTSystem.route: it
+// hands a UART to the joystick pins (:3340-3350, :3536-3539). The bit-bang and
+// clock modes drive the connector as GPIO for external hardware and are out of
+// scope. The Kempston/Sinclair joystick is unaffected in the normal case.
 func WireJoystickIOMode(d *nextregs.Dispatcher) {
 	d.SetOnWrite(0x0B, func(disp *nextregs.Dispatcher, val byte) {
 		disp.Store(0x0B, val&0xB1)
@@ -939,6 +938,9 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 	WireConfigModeRAMPage(opts.Dispatcher, opts.Memory)
 	spiReset, _ := opts.DivMMCPager.(SPIResetter)
 	resetControl := WireReset(opts.Dispatcher, opts.Memory, opts.CPU, spiReset)
+	if opts.IM2 != nil {
+		opts.IM2.SetNMIActivated(resetControl.NMIActivated)
+	}
 	WireCPUSpeed(opts.Dispatcher, opts.CPU)
 	WireLineInterrupt(opts.Dispatcher, opts.CPU, opts.Video60Hz)
 	WireContentionDisable(opts.Dispatcher, opts.Memory)
@@ -1659,7 +1661,36 @@ func WireAltROM(d *nextregs.Dispatcher, mem *memory.Memory) {
 type ResetControl struct {
 	resetType byte // 3-bit shift history; reads expose bits 1:0
 	nmiSource byte // read-back source latch: bit 3 multiface, bit 2 divMMC
+	nmi       NMIController
+	nmiInputs func() NMIInputs
+	fireNMI   func(NMISource)
+	// hotkeyDriveEn is port_divmmc_io_en for the DRIVE hotkey (zxnext.vhd:6349).
+	hotkeyDriveEn func() bool
 }
+
+// requestNMI asserts a source at the arbiter and fires it if it latches.
+func (r *ResetControl) requestNMI(src NMISource) {
+	if r.nmi.Request(src, r.nmiInputs()) {
+		r.fireNMI(src)
+	}
+}
+
+// Hotkey is a press of the M1 button (F9 hotkey, drive false) or the DRIVE
+// button (F10 hotkey, drive true). The DRIVE hotkey also needs the divMMC
+// ports enabled (zxnext.vhd:6349, NR$83 bit 0).
+func (r *ResetControl) Hotkey(drive bool) {
+	if !drive {
+		r.requestNMI(NMISourceMF)
+		return
+	}
+	if r.hotkeyDriveEn == nil || r.hotkeyDriveEn() {
+		r.requestNMI(NMISourceDivMMC)
+	}
+}
+
+// NMIActivated is nmi_activated (zxnext.vhd:2093), the NMI term of the DMA's
+// dma_delay_i.
+func (r *ResetControl) NMIActivated() bool { return r.nmi.Activated() }
 
 // WireReset wires NextReg $02 (Reset). Per the SpecNext wiki at
 // https://wiki.specnext.dev/Next_Reset_Register the register acts
@@ -1741,6 +1772,43 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	if mem.FPGABootROMActive() {
 		rc.resetType = 0b100
 	}
+	rc.nmiInputs = func() NMIInputs {
+		in := NMIInputs{
+			MFEnable:   d.Raw(0x06)&0x08 != 0,
+			DivEnable:  d.Raw(0x06)&0x10 != 0,
+			MFActive:   mem.MultifaceActive(),
+			MFHold:     mem.MultifaceActive(),
+			ConfigMode: mem.ConfigModeActive(),
+		}
+		if q, ok := divmmcSPI.(interface{ LastE3() byte }); ok {
+			in.E3Conmem = q.LastE3()&0x80 != 0
+		}
+		if q, ok := divmmcSPI.(interface{ DisableNMI() bool }); ok {
+			in.DivHold = q.DisableNMI()
+		}
+		return in
+	}
+	// A source that latches drops /NMI (zxnext.vhd:2168) and pulses its
+	// owner's button (:2169-2170): the Multiface pages in so the NMI vectors
+	// into its ROM, and the divMMC latches button_nmi so its $0066 automap
+	// engages (divmmc.vhd:110-120).
+	rc.hotkeyDriveEn = func() bool { return d.Raw(0x83)&0x01 != 0 }
+	rc.fireNMI = func(src NMISource) {
+		if src == NMISourceMF {
+			mem.SetMultifaceActive(true)
+		} else if q, ok := divmmcSPI.(interface{ AssertNMIButton() }); ok {
+			q.AssertNMIButton()
+		}
+		cpu.PendingNMI.Store(true)
+	}
+	// The FSM steps at opcode fetches: FETCH -> HOLD on the $0066 vector
+	// fetch, HOLD -> idle once the owner drops its hold (RETN pages the
+	// Multiface and the divMMC out).
+	cpu.AddPreFetchHook("next-nmi", func(pc uint16) {
+		if rc.nmi.Busy() {
+			rc.nmi.Fetch(pc, rc.nmiInputs())
+		}
+	})
 	// rc.nmiSource latches the NMI-source read-back bits (bit 4 = i/o
 	// trap, bit 3 = multiface, bit 2 = divmmc; nextreg.txt:41-43). A
 	// write that sets bit 3/2 fires the NMI and latches the source bit;
@@ -1789,22 +1857,25 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		// RETN (see CPU.RETN). nextreg.txt:56: the MF NMI is ignored if an
 		// NMI master is already active — so only arm/fire when the MF
 		// isn't already paged in.
-		if val&0x08 != 0 && !mem.MultifaceActive() { // bit 3 = Generate multiface NMI
-			rc.nmiSource |= 0x08
-			mem.SetMultifaceActive(true) // page MF ROM in so the NMI vectors into it
-			cpu.PendingNMI.Store(true)
-		} else if val&0x08 == 0 {
+		// The arbiter decides whether the NMI fires (zxnext.vhd:2088-2112):
+		// NR$06 bits 3/4 enable the sources, the first to latch wins, and
+		// each is refused while the other side holds. The read-back source
+		// bits latch whenever the FSM accepts a cause (:3845, :3858), which
+		// does not depend on the arbiter firing.
+		accept := rc.nmi.AcceptCause()
+		if val&0x08 != 0 { // bit 3 = Generate multiface NMI
+			if accept {
+				rc.nmiSource |= 0x08
+			}
+			rc.requestNMI(NMISourceMF)
+		} else {
 			rc.nmiSource &^= 0x08
 		}
 		if val&0x04 != 0 { // bit 2 = Generate divmmc NMI
-			rc.nmiSource |= 0x04
-			cpu.PendingNMI.Store(true)
-			// Latch button_nmi so the $0066 NMI-vector automap engages for
-			// the divMMC NMI (divmmc.vhd:110-120). Only the divMMC NMI does
-			// this — a Multiface NMI (bit 3) owns its own $0066 vector.
-			if q, ok := divmmcSPI.(interface{ AssertNMIButton() }); ok {
-				q.AssertNMIButton()
+			if accept {
+				rc.nmiSource |= 0x04
 			}
+			rc.requestNMI(NMISourceDivMMC)
 		} else {
 			rc.nmiSource &^= 0x04
 		}
@@ -1843,6 +1914,9 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 			divmmcSPI.ResetSPI()
 		}
 		if hardFire || softFire {
+			// The core reset clears the NMI arbiter (zxnext.vhd:2097-2100,
+			// :2154-2155).
+			rc.nmi.Reset()
 			// NR$8C Alt-ROM staged-nibble promote (zxnext.vhd:2255): the
 			// core `reset` signal — asserted for BOTH reset types
 			// (zxnext_top_issue5.vhd:880 reset <= reset_hard or

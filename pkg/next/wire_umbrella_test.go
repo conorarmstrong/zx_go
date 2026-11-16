@@ -289,3 +289,30 @@ func TestWirePalette44StateMachine(t *testing.T) {
 		t.Errorf("Index after three 9-bit writes = %d, want 3", pal.Index())
 	}
 }
+
+// Wire connects the NMI arbiter to the IM2 driver's dma_delay_i NMI term: a
+// Multiface NMI with NR$CC bit 7 holds the DMA off (zxnext.vhd:2007).
+func TestWireConnectsTheNMITermOfTheDMADelay(t *testing.T) {
+	installtest.RedirectConfig(t)
+	mem, err := memory.New(wireUmbrellaTestROMs(t), roms.Model128K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	im2 := NewIM2Driver()
+	disp := nextregs.New()
+	Wire(WireOpts{
+		Dispatcher: disp, Memory: mem, CPU: z80.New(mem, stubULA{}),
+		AYEngine: ay.NewEngine(), Layer2: layer2.New(mem), Palette: palette.NewBank(),
+		Priority: NewLayerPriority(), Sprites: sprite.New(), Copper: copper.New(),
+		RTC: rtc.New(), IM2: im2,
+	})
+	disp.WriteReg(0x06, 0x08) // M1 button NMI enable
+	disp.WriteReg(0xCC, 0x80)
+	if im2.DMADelay() {
+		t.Fatal("delay before any NMI")
+	}
+	disp.WriteReg(0x02, 0x08) // Multiface NMI
+	if !im2.DMADelay() {
+		t.Error("an active NMI with NR$CC bit 7 did not hold the DMA off")
+	}
+}

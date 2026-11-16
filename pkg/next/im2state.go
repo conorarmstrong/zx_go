@@ -27,6 +27,7 @@ type im2State struct {
 	Req        [IM2NumPeriph]bool
 	Enabled    [IM2NumPeriph]bool
 	DMAEnabled [IM2NumPeriph]bool
+	DMANMIEn   bool
 	StatusClr  [IM2NumPeriph]bool
 	Per        [IM2NumPeriph]im2PeripheralState
 	IntN       bool
@@ -42,7 +43,7 @@ func (d *IM2Driver) StateID() string { return "next.im2" }
 func (d *IM2Driver) SaveState() []byte {
 	s := im2State{
 		HWIM2: d.hwIM2, VectorBase: d.vectorBase,
-		Req: d.req, Enabled: d.enabled, DMAEnabled: d.dmaEnabled, StatusClr: d.statusClr,
+		Req: d.req, Enabled: d.enabled, DMAEnabled: d.dmaEnabled, DMANMIEn: d.dmaNMIEn, StatusClr: d.statusClr,
 		IntN: d.chain.intN, Vector: d.chain.vector, Ieo: d.chain.ieo, Status: d.chain.status,
 	}
 	for i, p := range d.chain.per {
@@ -71,6 +72,7 @@ func (d *IM2Driver) LoadState(data []byte) error {
 	}
 	d.hwIM2, d.vectorBase = s.HWIM2, s.VectorBase
 	d.req, d.enabled, d.dmaEnabled, d.statusClr = s.Req, s.Enabled, s.DMAEnabled, s.StatusClr
+	d.dmaNMIEn = s.DMANMIEn
 	d.chain.intN, d.chain.vector, d.chain.ieo, d.chain.status = s.IntN, s.Vector, s.Ieo, s.Status
 	for i, p := range s.Per {
 		d.chain.per[i] = im2Peripheral{

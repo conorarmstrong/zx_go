@@ -474,3 +474,49 @@ func TestJoystickRoutingSurvivesAStateRoundTrip(t *testing.T) {
 		t.Errorf("restored system let the ESP answer: %q", got)
 	}
 }
+
+// The routed UART's pins are the joystick buttons (zxnext.vhd:3538-3539): Rx is
+// the inverse of button C and CTS_n the inverse of button B, both active-high
+// inputs. NR$0B bit 4 picks the connector (0 left, 1 right); bit 0 picks the
+// UART. The unrouted UART keeps its own idle lines.
+func TestJoystickButtonsDriveTheRoutedUARTPins(t *testing.T) {
+	type tc struct {
+		nr0b      byte
+		connector int
+		uart      int
+	}
+	for _, c := range []tc{{0xA0, 0, 0}, {0xA1, 0, 1}, {0xB0, 1, 0}, {0xB1, 1, 1}} {
+		s, d, _ := newUARTRig(t)
+		d.WriteReg(0x0B, c.nr0b)
+		rx, ctsN := s.Block.Lines(c.uart)
+		if !rx || !ctsN {
+			t.Errorf("NR$0B=$%02X: idle pins rx=%v cts_n=%v, want both high", c.nr0b, rx, ctsN)
+		}
+		s.SetJoystickButtons(c.connector, true, true) // B and C pressed
+		rx, ctsN = s.Block.Lines(c.uart)
+		if rx || ctsN {
+			t.Errorf("NR$0B=$%02X: pressed pins rx=%v cts_n=%v, want both low", c.nr0b, rx, ctsN)
+		}
+		// The other connector's buttons do nothing.
+		s.SetJoystickButtons(c.connector, false, false)
+		s.SetJoystickButtons(1-c.connector, true, true)
+		if rx, ctsN = s.Block.Lines(c.uart); !rx || !ctsN {
+			t.Errorf("NR$0B=$%02X: other connector moved the pins", c.nr0b)
+		}
+		// The unrouted UART keeps rx high and cts_n low.
+		if rx, ctsN = s.Block.Lines(1 - c.uart); !rx || ctsN {
+			t.Errorf("NR$0B=$%02X: unrouted UART rx=%v cts_n=%v", c.nr0b, rx, ctsN)
+		}
+	}
+}
+
+// Without routing the buttons reach neither UART.
+func TestJoystickButtonsIgnoredWhenNotRouted(t *testing.T) {
+	s, _, _ := newUARTRig(t)
+	s.SetJoystickButtons(0, true, true)
+	for u := 0; u < 2; u++ {
+		if rx, ctsN := s.Block.Lines(u); !rx || ctsN {
+			t.Errorf("UART %d: rx=%v cts_n=%v with routing off", u, rx, ctsN)
+		}
+	}
+}

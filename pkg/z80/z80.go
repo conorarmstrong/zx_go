@@ -219,7 +219,12 @@ type CPU struct {
 	// line interrupt request, before the CPU samples it. They feed the
 	// Next's IM2 daisy chain, whose request latches are edge-triggered.
 	frameIntHook func()
-	lineIntHook  func()
+	// frameOrigin is the T-state the current ULA frame began at, set by the
+	// execution loops, so PollIntSources can place the frame and line INTs
+	// while the CPU is held off the bus.
+	frameOrigin      uint64
+	frameOriginValid bool
+	lineIntHook      func()
 
 	// Memory and ULA interfaces
 	mem Memory
@@ -761,6 +766,30 @@ func (c *CPU) SetInstructionHook(fn func(tstates int)) { c.instructionHook = fn 
 // raised at its programmed assert T-state. It feeds the Next IM2 chain.
 func (c *CPU) SetFrameIntHook(fn func()) { c.frameIntHook = fn }
 
+// PollIntSources places the frame and line INTs at T-state now, which may be
+// ahead of the CPU's own clock: a zxnDMA block holds the CPU off the bus and is
+// charged to the clock only when it ends, but the ULA keeps counting while it
+// runs, so its INTs must reach the IM2 chain at the byte they fall on. It does
+// what the execution loops do at an instruction boundary, against now, and is
+// a no-op before a loop has established the frame.
+func (c *CPU) PollIntSources(now uint64) {
+	if !c.frameOriginValid {
+		return
+	}
+	if c.IntPulseTstates > 0 {
+		c.frameIntPulseAt(c.frameOrigin, now)
+	}
+	if off := c.LineIntOffsetTstates; off > 0 && !c.lineIntFired && now >= c.frameOrigin+off {
+		if !c.IRQExternal {
+			c.IRQPending.Store(true)
+		}
+		if c.lineIntHook != nil {
+			c.lineIntHook()
+		}
+		c.lineIntFired = true
+	}
+}
+
 // SetLineIntHook installs a callback fired when the ULA line INT is
 // raised at its programmed scanline. It feeds the Next IM2 chain.
 func (c *CPU) SetLineIntHook(fn func()) { c.lineIntHook = fn }
@@ -878,7 +907,10 @@ func (c *CPU) ExecuteRZXFrame(instructions uint64) {
 // the interrupt. No-op unless IntPulseTstates>0. frameIntFired /
 // frameIntDeasct are the per-frame one-shots, reset at each frame origin
 // by ExecuteFrame / StepInstructionWithIRQ.
-func (c *CPU) frameIntPulse(frameStart uint64) {
+func (c *CPU) frameIntPulse(frameStart uint64) { c.frameIntPulseAt(frameStart, c.tstates) }
+
+// frameIntPulseAt is frameIntPulse evaluated at T-state now.
+func (c *CPU) frameIntPulseAt(frameStart, now uint64) {
 	if c.IntPulseTstates == 0 || c.FrameIntDisabled {
 		return
 	}
@@ -888,17 +920,17 @@ func (c *CPU) frameIntPulse(frameStart uint64) {
 	// generated, even if no M1 sample point falls inside the window: the
 	// daisy-chain request latch is edge-triggered on CLK_28 and holds the
 	// request until the CPU acknowledges it.
-	if !c.frameIntFired && c.tstates >= assertAt && c.frameIntHook != nil {
+	if !c.frameIntFired && now >= assertAt && c.frameIntHook != nil {
 		c.frameIntHook()
 	}
 	switch {
-	case !c.frameIntFired && c.tstates >= assertAt && c.tstates < windowEnd:
+	case !c.frameIntFired && now >= assertAt && now < windowEnd:
 		// An M1 sample point fell inside the pulse window — latch the INT.
 		if !c.IRQExternal {
 			c.IRQPending.Store(true)
 		}
 		c.frameIntFired = true
-	case !c.frameIntFired && c.tstates >= windowEnd:
+	case !c.frameIntFired && now >= windowEnd:
 		// No M1 boundary landed inside the window: a single long/atomic
 		// instruction (e.g. a block of chained DD/FD prefixes, which the
 		// model executes as one uninterruptible unit) spanned the whole
@@ -909,7 +941,7 @@ func (c *CPU) frameIntPulse(frameStart uint64) {
 		// ~0 interrupts, not one per block boundary.)
 		c.frameIntFired = true
 		c.frameIntDeasct = true
-	case c.frameIntFired && !c.frameIntDeasct && c.tstates >= windowEnd:
+	case c.frameIntFired && !c.frameIntDeasct && now >= windowEnd:
 		// pulse window elapsed; interrupt() clears IRQPending on
 		// acceptance, so a still-set latch here means it was missed.
 		if !c.IRQExternal {
@@ -951,6 +983,7 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	// frameIntPulse() inside the loop, so a DI covering the pulse misses
 	// the INT (matches the FPGA, zxnext.vhd:2014-2033).
 	frameStart := tstatesEnd - budget
+	c.frameOrigin, c.frameOriginValid = frameStart, true
 	narrowPulse := c.IntPulseTstates > 0
 	c.frameIntFired = false
 	c.frameIntDeasct = false
@@ -1347,6 +1380,7 @@ func (c *CPU) StepInstructionWithIRQ() {
 		c.frameIntFired = false
 		c.frameIntDeasct = false
 	}
+	c.frameOrigin, c.frameOriginValid = c.nextFrameBoundary-frameBudget, true
 	if narrowPulse {
 		c.frameIntPulse(c.nextFrameBoundary - frameBudget)
 	}

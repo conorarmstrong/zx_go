@@ -153,6 +153,7 @@ func applyResetDefaults(regs *[256]byte) {
 	// of NR$06's read mux composes from bits that reset to 0).
 	regs[0x06] = 0xA0
 	regs[0x08] = 0x10 // Peripheral 3: bit 4 = AY3-8910 enabled
+	regs[0x0B] = 0x01 // joystick I/O mode: nr_0b_joy_iomode_0 resets to 1 (zxnext.vhd:4941)
 	regs[0x12] = 0x08 // Layer 2 RAM base bank
 	regs[0x13] = 0x0B // Layer 2 shadow RAM base bank
 	// NR$10 = Core ID (read-only). Per zxnext.vhd `nr_10_coreid` the

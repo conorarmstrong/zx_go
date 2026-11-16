@@ -1165,13 +1165,14 @@ func wireNextSubsystems(e *emulator) error {
 	u.SetNextUART(uartSys)
 	e.nextUART = uartSys
 	e.nextIM2, e.nextCTC = im2, ctcBank
-	cpu.SetInstructionHook(next.InstructionHook(cpu.SpeedMultiplier, ctcClock, uartSys, im2,
-		func() next.BusDelayer {
-			if e.nextDMA == nil {
-				return nil
-			}
-			return e.nextDMA
-		}))
+	ticker := next.NewTicker(cpu, ctcClock, uartSys, im2, func() next.BusDelayer {
+		if e.nextDMA == nil {
+			return nil
+		}
+		return e.nextDMA
+	})
+	cpu.SetInstructionHook(ticker.Instruction)
+	dmaEngine.SetByteHook(ticker.DMAByte)
 
 	// FPGA bootrom mode — the hardware-faithful path. Real Spectrum
 	// Next hardware always boots through the FPGA loader at
@@ -1544,16 +1545,11 @@ func wireNextSubsystems(e *emulator) error {
 	// RETN (ED $45) clears the automap latch on real hardware
 	// (im2_control.vhd:236 o_retn_seen; zxnext.vhd:4111 feeds it as
 	// i_retn_seen). RETI does not.
-	// RETN (ED 45) pages out BOTH the divMMC and the Next Multiface
-	// (zxnext changelog 3.01.09 — "executing a retn will now disable the
-	// multiface and the divmmc"). The MF $0066 handler ends with a RETN to
-	// return to the interrupted program; that same RETN pages the MF out.
-	cpu.SetRETNHook(func() {
-		if mem.MultifaceActive() {
-			mem.SetMultifaceActive(false)
-		}
-		pager.HandleRETN()
-	})
+	// RETN (ED 45) pages out the Next Multiface, and the divMMC when the
+	// Multiface was not active (see next.RETNHook). The MF $0066 handler ends
+	// with a RETN to return to the interrupted program; that same RETN pages
+	// the MF out.
+	cpu.SetRETNHook(next.RETNHook(mem, pager))
 	// PostStep applies the $1FF8-$1FFF page-out AFTER the M1 fetch
 	// completes — matching FPGA timing where automap_held updates on
 	// the rising edge of MREQ at end-of-M1. The $1FFC opcode must
@@ -1792,6 +1788,11 @@ sdReady:
 	// then either dispatches to Multiface (if enabled) or lets
 	// the running OS service it at $0066.
 	kbd.SetNMICallback(func() { cpu.PendingNMI.Store(true) })
+	// The two NMI keys are the Next's buttons: F12 the M1 (Multiface) button,
+	// F8 the DRIVE (divMMC) button. They go through the NMI arbiter, which
+	// applies the NR$06 enables and the first-come-first-served latch
+	// (zxnext.vhd:2088-2112).
+	kbd.SetNMIKeyCallback(resetControl.Hotkey)
 	cpu.NMICallback = func() {
 		if pm.IsMultifaceEnabled() {
 			pm.HandleNMI()
@@ -1967,6 +1968,7 @@ func unwireNextSubsystems(e *emulator) {
 	// Restore the classic NMI policy: only fire on Multiface
 	// enable. This matches newEmulator's setup so the behaviour
 	// is identical to a cold-started classic model.
+	kbd.SetNMIKeyCallback(nil)
 	kbd.SetNMICallback(func() {
 		if pm.IsMultifaceEnabled() {
 			cpu.PendingNMI.Store(true)

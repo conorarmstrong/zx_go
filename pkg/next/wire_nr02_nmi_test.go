@@ -13,14 +13,23 @@ import (
 // dispatcher and the CPU so tests can observe PendingNMI.
 func nr02NMIHarness(t *testing.T) (*nextregs.Dispatcher, *z80.CPU) {
 	t.Helper()
+	d, cpu, _, _ := nmiRig(t)
+	return d, cpu
+}
+
+// nmiRig also returns the memory and the reset control. NR$06 bits 3 and 4,
+// which enable the two NMI sources (zxnext.vhd:2090-2091), are set.
+func nmiRig(t *testing.T) (*nextregs.Dispatcher, *z80.CPU, *memory.Memory, *ResetControl) {
+	t.Helper()
 	mem, err := memory.New(wireTestROMs(t), roms.ModelNext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	disp := nextregs.New()
 	cpu := z80.New(mem, wireTestULA{})
-	WireReset(disp, mem, cpu, nil)
-	return disp, cpu
+	rc := WireReset(disp, mem, cpu, nil)
+	disp.Store(0x06, 0x18)
+	return disp, cpu, mem, rc
 }
 
 // TestNR02GeneratesMultifaceNMI — nextreg.txt:51 "W bit 3 = Generate

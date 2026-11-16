@@ -44,6 +44,8 @@ type IM2Driver struct {
 	enabled     [IM2NumPeriph]bool
 	dmaEnabled  [IM2NumPeriph]bool // i_dma_int_en, from NR$CC/$CD/$CE
 	dmaSync     func()             // refreshes dmaEnabled from those registers
+	dmaNMIEn    bool               // NR$CC bit 7: an NMI holds the DMA off
+	nmiActive   func() bool        // nmi_activated, from the NMI arbiter
 	statusClr   [IM2NumPeriph]bool // one-shot i_int_status_clear inputs
 	intListener func(bool)         // /INT state observer for the CPU latch
 }
@@ -233,8 +235,17 @@ func (d *IM2Driver) SetDMAEnableSync(f func()) { d.dmaSync = f }
 // is therefore exactly im2_dma_int or the NMI term, and the hold term has
 // nothing left to hold.
 //
-// The NMI term (nmi_activated and NR$CC bit 7) is not modelled: nothing here
-// has the NMI activation latch (zxnext.vhd:2093-2118), which depends on the
-// Multiface and divMMC hold signals. A guest that sets NR$CC bit 7 to have an
-// NMI hold the DMA off the bus gets no hold. See ROADMAP item 2.
-func (d *IM2Driver) DMADelay() bool { return d.DMAInt() }
+// The NMI term is nmi_activated from the NMI arbiter (NMIController, through
+// SetNMIActivated) and NR$CC bit 7.
+func (d *IM2Driver) DMADelay() bool {
+	if d.DMAInt() {
+		return true
+	}
+	return d.dmaNMIEn && d.nmiActive != nil && d.nmiActive()
+}
+
+// SetDMANMIEnabled sets NR$CC bit 7, the NMI term's enable.
+func (d *IM2Driver) SetDMANMIEnabled(on bool) { d.dmaNMIEn = on }
+
+// SetNMIActivated installs the source of nmi_activated.
+func (d *IM2Driver) SetNMIActivated(f func() bool) { d.nmiActive = f }

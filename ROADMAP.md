@@ -2,7 +2,7 @@
 
 **Stage: released (v1.13.0)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (UART register block done; item 2 now `dma_delay_i` and capture) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (item 2: NMI arbiter and in-block arbitration done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -71,7 +71,7 @@ hardware changes are modelled; see item 8.
 Ranked; detail in the open-work items below.
 
 1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **`dma_delay_i` NMI term and in-block arbitration** (item 2): the pin follows the chain and the CTC and IM2 chain are in save states. Left is the NMI activation latch and interrupt sources advancing inside a continuous DMA block.
+2. **IM2 leftovers** (item 2): a frame INT that falls past the frame end inside a DMA block, `o_reti_decode`, and anything on UART 1.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
@@ -122,7 +122,7 @@ The second weak point, the distance between modelled and reachable, is now
 measured rather than assumed. `pkg/next/reachability_test.go` fails the build if
 a subsystem under `pkg/next` is neither wired nor declared unwired, and the
 declared list is empty. What remains unreachable is finer-grained than a
-package: the NMI term of the zxnDMA's `dma_delay_i` pin (item 2).
+package: see item 2.
 
 ---
 
@@ -162,13 +162,13 @@ T-state per DMA block. Until that is understood, the three cycles stay
 uncharged, to avoid knowingly regressing a working title, and that deferral is
 now recorded as a deliberate hold rather than as a fix.
 
-### 2. [correctness] IM2: the NMI term of `dma_delay_i`, and interrupts inside a DMA block
+### 2. [correctness] IM2: what is left after `dma_delay_i`
 
-**Re-checked against the code on 2026-11-15.** The CTC, the IM2 chain, the UART and
-the DMA delay pin are wired and reachable, and the CTC and chain are in save states.
-Two narrow things are left.
+**Re-checked against the code on 2026-11-16.** The CTC, the IM2 chain, the UART,
+the NMI arbiter and the DMA delay pin are wired and reachable, and the CTC and
+chain are in save states. What is left is narrow.
 
-**Wired and reachable** (`pkg/next/wire_im2.go`, `ctcclock.go`, `uartsys.go`, `insthook.go`):
+**Wired and reachable** (`pkg/next/wire_im2.go`, `ctcclock.go`, `uartsys.go`, `insthook.go`, `nmictl.go`):
 
 - The CTC: four channels (`zxnext.vhd:4067` is `NUM_CTC => 4`), ports
   `$183B`..`$1F3B`, zero-count chaining (`:4084`), enables from NR$C5 bits 3:0.
@@ -182,47 +182,53 @@ Two narrow things are left.
 - The UART: the register block at `$133B`..`$163B`, an ESP8266 on UART 0, and the
   four request lines into the chain (`zxnext.vhd:1941-1943`). The lines are levels
   and the chain latches the edge, as in the VHDL. NR$0B can route a UART to the
-  joystick connector, which cuts the ESP off UART 0.
-- `dma_delay_i` (done 2026-11-15). NR$CC, CD and CE choose which sources hold the
-  DMA off, mapped onto chain indices as `zxnext.vhd:1957-1958` lays them out. The
-  chain's `o_dma_int` is `state /= S_0 and i_dma_int_en` per device
-  (`im2_device.vhd:151`). `InstructionHook` samples the pin once per instruction
-  boundary and drives `dma.SetBusDelay`. A DMA started from an interrupt routine
-  with the ULA enable set waits for the RETI (`TestNextDMAStartedInAnISRWaitsForRETIWhenTheULAEnableIsSet`).
-- Save states: the CTC bank (`next.ctc`) and the chain (`next.im2`) are captured
-  and proved by restoring into a fresh device and running both side by side.
+  joystick connector (`:3340-3350`, `:3536-3539`): Rx is button C and CTS_n button
+  B of the connector bit 4 picks, and UART 0 then loses the ESP. The host
+  joystick is the left connector; its fire button is button B.
+- The NMI arbiter (`zxnext.vhd:2088-2170`, `NMIController`): NR$06 bits 3 and 4
+  enable the sources, first come first served, the cross-blocking on port `$E3`
+  bit 7, the divMMC hold and the Multiface, and the FSM that holds the NMI from
+  the request through the `$0066` fetch until the owner's hold drops. NR$02 bits
+  3 and 2 and the F12 (M1) and F8 (DRIVE) keys go through it. The expansion-bus
+  source is absent because there is no expansion bus.
+- `dma_delay_i`. NR$CC, CD and CE choose which sources hold the DMA off, mapped
+  onto chain indices as `zxnext.vhd:1957-1958` lays them out; NR$CC bit 7 adds
+  `nmi_activated`. The chain's `o_dma_int` is `state /= S_0 and i_dma_int_en` per
+  device (`im2_device.vhd:151`). The pin is sampled at every instruction
+  boundary and after every byte of a continuous block (`Ticker`), which is where
+  `TRANSFERING_WRITE_4` reads it (`dma.vhd:427-428`). A DMA started from an
+  interrupt routine waits for the RETI, and a CTC interrupt arriving mid-block
+  parks the block at that byte (`pkg/testharness/next_dmadelay_test.go`).
+- Interrupt sources during a continuous block: the CTC, the UARTs and the ULA's
+  frame and line interrupts are advanced to each byte (`Ticker.DMAByte`,
+  `CPU.PollIntSources`).
+- Save states: the CTC bank (`next.ctc`), the chain (`next.im2`) and the NMI
+  arbiter (inside `next.reset`) are captured.
 
-**Why one sample per boundary is exact.** `im2_dma_delay` is a latch
+**Why one sample per boundary is exact for the RETI.** `im2_dma_delay` is a latch
 (`zxnext.vhd:2007`): it is `im2_dma_int`, or the NMI term, or itself while
 `dma_delay` (`im2_control.vhd:238`) is high. That last term holds the pin up for
 the `ED` prefix fetch through two clocks past the second opcode of `ED 4D` and
 `ED 45`. Every `ED` instruction is at least 8 T-states and the window closes by
 T10 of a 14 T-state RETI or RETN (T7 for the others), so it is shut before the
 instruction ends. At an instruction boundary the pin is therefore exactly
-`im2_dma_int` or the NMI term. What the sampling cannot show is the DMA taking the
-bus part-way through that RETI; the total time is the same, and only a block that
-reads the stack bytes the RETI is popping could tell the order.
+`im2_dma_int` or the NMI term.
 
 **Not done:**
 
-- **The NMI term.** `nmi_activated and NR$CC bit 7` needs the NMI activation latch
-  (`zxnext.vhd:2093-2118`), which depends on the Multiface and divMMC hold signals
-  and on the NMI state machine. We have none of it; the NR$02 bits fire the NMI
-  directly. A guest that sets NR$CC bit 7 gets no hold from an NMI.
-- **Interrupts inside a continuous DMA block.** A continuous transfer runs to
-  completion inside one port write, with the CPU frozen, as on the hardware. In
-  the hardware the CTC, the UARTs and the frame INT keep running during it, so a
-  source can leave idle mid-block and make the DMA yield at the next byte. Here
-  those sources advance only at instruction boundaries, so the yield happens only
-  for an interrupt that was already out of idle when the block started. Fixing it
-  means advancing the CTC, the UART and the frame INT from the DMA's cycle sink.
+- **A frame INT past the frame end, inside a block.** `CPU.ExecuteFrame` starts
+  each frame where the last one actually ended, so a block that runs past the
+  frame end pushes the next frame, and its interrupt, to after the block. On the
+  FPGA the ULA does not wait. Placing that interrupt inside the block needs the
+  frame loop on a fixed grid, which moves every frame's interrupt timing and
+  must be checked against TX-1696 (item 1) first. Interrupts inside the current
+  frame, the line interrupt, the CTC and the UARTs are placed correctly.
 - **`o_reti_decode`** (`im2_control.vhd:233`): high for the single T-state
   between the `ED` prefix and its second byte. The CPU still cannot give that
   window. Nothing in the current chain needs it; it is the first thing to check
   if arbitration comes out wrong.
-- Nothing is attached to UART 1, which has the Raspberry Pi behind it on the real
-  board. The joystick pins are fixed idle; a host joystick does not feed them.
-
+- **UART 1** has the Raspberry Pi behind it on boards that fit one. Nothing is
+  attached here, so its lines idle, as on a board without the Pi.
 **A known approximation, and the line not to cross.** The CTC and the UART are
 advanced from instruction boundaries, `T-states * 8 / SpeedMultiplier` clocks at
 a time. For the CTC that equals continuous ticking, because its channel FSM has
@@ -280,8 +286,8 @@ high and `cpu_bao_n` left open, "no dma controller on the expansion bus at this
 time" (`zxnext.vhd:1787`, `:1791`, `:1822`). Modelling it would mean inventing
 hardware.
 
-The `dma_delay_i` pin is modelled and cannot be driven until the IM2 chain is
-wired; that is tracked as part of item 2 rather than here.
+The `dma_delay_i` pin is modelled and driven from the IM2 chain and the NMI
+arbiter; see item 2.
 
 ### 5. [product] Next game compatibility
 
@@ -731,9 +737,9 @@ Kept so they are not re-proposed.
   (`pkg/if1/ula.go:8`); bit-banging an external serial device is out of
   scope, same rationale as the UART. The microdrive, the IF1's primary
   function, is fully modelled.
-- [⊘] **NR$0B joystick I/O mode.** The register is modelled exactly
-  (writable mask `$B1`, `pkg/next/wire.go:125`); repurposing joystick pins
-  as GPIO for external add-ons is out of scope.
+- [⊘] **NR$0B bit-bang and clock modes.** The register is modelled exactly
+  (writable mask `$B1`, reset `$01`) and its UART mode is wired (item 2);
+  driving the joystick pins as GPIO for external add-ons is out of scope.
 - [⊘] **SAM MIDI, clock and SD/IDE ports** — writes ignored
   (`pkg/sam/io.go`).
 - [⊘] **Beta Disk density bit** (status bit 5) — TR-DOS is always MFM
@@ -850,6 +856,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-16 | Next: the NMI arbiter (NR$06 enables, first-come latch, `$0066` hold) drives NR$02, the F12/F8 keys and the NMI term of `dma_delay_i`; the CTC, UARTs and ULA interrupts run during a continuous DMA block and can park it mid-block; joystick buttons B and C drive a routed UART; NR$0B resets to `$01`. |
 | 2026-11-15 | Next: the CTC and IM2 chain are in save states; NR$CC/CD/CE hold the zxnDMA off the bus through `dma_delay_i` (tested from a Z80 guest); NR$C0 bits 2:1 report the IM mode; a UART can be routed to the joystick port; NR$A0 follows 3.02.05. |
 | 2026-11-15 | Next: the UART register block (`serial/uart.vhd`) is modelled and wired: ports `$133B`..`$163B`, both UARTs, the FIFOs, the status and error logic, an ESP8266 on UART 0 over the real serial lines, the four request lines into the IM2 chain, reset, and save states. Replayed against a GHDL golden of 17,334 output changes and 3,325 reads, with the idle skip replayed against the same golden. NR$A8 and NR$A9 are now the ESP GPIO0 pair; the AT stub that sat there is gone. Mutation testing found a per-UART gating error in the Rx FIFO write. |
 | 2026-11-14 | Next: a port `$FF` write now sets the ULA interrupt disable (bit 6) and shows in NR$22 and NR$C4. Verified NR$C4's read composition and reset against `zxnext.vhd`. Found that the guest-visible UART (ports `$133B`..`$173B`) is not modelled and that the stub at NR$A8/A9 is on the ESP GPIO0 registers. |
@@ -864,6 +871,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Item 2: NMI term and in-block arbitration done; divMMC RETN rule done; left are a frame INT past the frame end inside a block, `o_reti_decode` and UART 1. NR$0B catalogue entry narrowed to the GPIO modes. |
 | 2026-11-15 | minor | Item 2 narrowed to the NMI term and in-block arbitration; item 8 rows for NR$A0 and `spi_active` closed. |
 | 2026-11-15 | minor | Item 2 rewritten: the UART is wired, `dma_delay_i` and save-state capture of the CTC and chain remain. Catalogued Wi-Fi entry corrected again. |
 | 2026-11-14 | minor | Item 2: UART finding (wrong registers, ports not decoded) and the three missing pieces of `dma_delay_i`. Catalogued Wi-Fi entry corrected. |

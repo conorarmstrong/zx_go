@@ -240,7 +240,8 @@ Everything classic just works — pick a model from **Machine**, and load softwa
 | Arrow keys | Arrows (CAPS SHIFT + 5/6/7/8) |
 | DELETE | Backspace |
 | BREAK | F11 |
-| NMI / Multiface | F12 |
+| NMI / Multiface (Next: M1 button) | F12 |
+| Next DRIVE button (divMMC NMI) | F8 |
 | Quick save / load | F2 / F4 |
 
 Pick a joystick scheme from **Peripherals → Joystick** (Kempston, Sinclair left/right, Cursor/Protek); enable **Peripherals → Kempston Mouse** for mouse support. Keymaps are editable and persist in `config.json`. The full menu reference and key tables are in the [manual](docs/manual.md).

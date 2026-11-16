@@ -676,6 +676,21 @@ func TestSpec_NR0B_JoystickIOMode(t *testing.T) {
 	}
 }
 
+// zxnext.vhd:4939-4941 resets nr_0b_joy_iomode_0 to 1, so NR$0B reads $01 after
+// power-on and after a reset (read mux :5915).
+func TestSpec_NR0B_ResetValueIs01(t *testing.T) {
+	disp := nextregs.New()
+	WireJoystickIOMode(disp)
+	if got := disp.ReadReg(0x0B); got != 0x01 {
+		t.Errorf("NR$0B at power-on = $%02X, want $01", got)
+	}
+	disp.WriteReg(0x0B, 0xB0)
+	disp.Reset()
+	if got := disp.ReadReg(0x0B); got != 0x01 {
+		t.Errorf("NR$0B after reset = $%02X, want $01", got)
+	}
+}
+
 // TestSpec_NR50_57_MMU8_RoundTrip verifies that NR$50-$57 store
 // the written byte verbatim and read it back. The VHDL handler is
 // trivial (`nr_mmu_we <= '1'` flags it, then a separate process

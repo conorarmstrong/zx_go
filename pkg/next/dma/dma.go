@@ -176,6 +176,13 @@ type DMA struct {
 	// Step() runs instead.
 	cycleSink func(uint64)
 
+	// byteHook, when set, is called inside a continuous block after each byte
+	// but the last, with the T-states the block has held the bus for so far in
+	// this run. The CPU is frozen but the CTC, the UARTs and the ULA are not;
+	// the hook brings them up to the byte and drives dma_delay_i
+	// (SetBusDelay), which the next TRANSFERING_WRITE_4 samples.
+	byteHook func(elapsed uint64)
+
 	// clock returns the current CPU T-state count. When set, a burst-mode
 	// transfer with a non-zero prescaler is interleaved with the CPU: it pumps
 	// one byte every prescaler T-states from Step(), letting the CPU run in the
@@ -340,14 +347,16 @@ func (d *DMA) SetZ80Mode(on bool) { d.zMode = on }
 // Optional.
 func (d *DMA) SetCycleSink(sink func(uint64)) { d.cycleSink = sink }
 
+// SetByteHook attaches the per-byte callback of a continuous block. Optional.
+func (d *DMA) SetByteHook(fn func(elapsed uint64)) { d.byteHook = fn }
+
 // SetBusDelay drives the controller's dma_delay_i pin (zxnext.vhd:1785). While
 // it is high the DMA will not ask for the bus, and a block already in flight
 // parks itself in START_DMA with its pointers where they stand; dropping it
 // resumes that block from exactly there.
 //
-// It is an injectable input rather than a wire to the IM2 daisy chain because
-// the source is not connected on our side yet: pkg/next.IM2DaisyChain is an
-// unwired reference model and NR$CC/$CD/$CE are stored-only.
+// On the Next it is driven from pkg/next.IM2Driver.DMADelay, at every
+// instruction boundary and after every byte of a continuous block.
 func (d *DMA) SetBusDelay(on bool) {
 	d.busDelay = on
 	if !on && d.stalled {
@@ -796,6 +805,7 @@ func (d *DMA) runBlock() {
 	d.stalled = false
 	srcIsA := d.aToB // port A is the source when transferring A -> B
 	d.inTransfer = true
+	moved := 0 // bytes this call moves, which is what it holds the bus for
 	for d.remaining > 0 {
 		b := d.portRead(srcIsA)
 		// The byte counter goes up in TRANSFERING_WRITE_1 (dma.vhd:361), the
@@ -822,21 +832,35 @@ func (d *DMA) runBlock() {
 		// model re-enters the machine from inside the write. What is answerable
 		// is that a read taken after a byte has moved sees it set.
 		d.atLeastOne = true
+		moved++
+		// The rest of the machine keeps running while the CPU is held off the
+		// bus. The hook lets it catch up to this byte and drive dma_delay_i,
+		// which TRANSFERING_WRITE_4 samples next.
+		if d.byteHook != nil && d.remaining > 0 {
+			d.byteHook(uint64(moved) * d.perByteCycles())
+		}
 		if d.busDelay && d.remaining > 0 {
 			// TRANSFERING_WRITE_4 goes back to START_DMA rather than on to the
 			// next byte when dma_delay_i is high (dma.vhd:427-428), so a delay
 			// raised mid-block parks the transfer and hands the bus back with
-			// the pointers where they stand.
+			// the pointers where they stand. The bytes moved so far held the
+			// CPU off the bus, so they are charged now.
 			d.inTransfer = false
 			d.stalled = true
+			d.charge(moved)
 			return
 		}
 	}
 	d.inTransfer = false
-	if d.cycleSink != nil {
-		d.cycleSink(d.lastDuration)
-	}
+	d.charge(moved)
 	d.finishBlock()
+}
+
+// charge bills the CPU clock for n bytes moved while holding the bus.
+func (d *DMA) charge(n int) {
+	if d.cycleSink != nil && n > 0 {
+		d.cycleSink(uint64(n) * d.perByteCycles())
+	}
 }
 
 // finishBlock applies the auto-restart-or-stop policy after a transfer's last

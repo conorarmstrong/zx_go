@@ -3,21 +3,74 @@ package next
 // BusDelayer is the zxnDMA's dma_delay_i pin.
 type BusDelayer interface{ SetBusDelay(on bool) }
 
-// InstructionHook returns the CPU's per-instruction callback for the Next: it
-// advances the CTC and the UARTs by the instruction's T-states and then samples
-// dma_delay_i (see IM2Driver.DMADelay for why one sample per boundary is
-// exact). dma is a function because the machine builds the DMA after this
-// hook is installed; it may return nil.
-func InstructionHook(speed func() int, ctc *CTCClock, uart *UARTSystem, im2 *IM2Driver, dma func() BusDelayer) func(tstates int) {
-	return func(tstates int) {
-		s := speed()
-		ctc.Advance(tstates, s)
-		uart.Advance(tstates, s)
-		if dma == nil {
-			return
-		}
-		if b := dma(); b != nil {
-			b.SetBusDelay(im2.DMADelay())
-		}
+// TickerCPU is what the Ticker needs from the CPU: its T-state clock, its speed
+// multiplier, and a way to place the frame and line INTs at a T-state the
+// clock has not reached yet.
+type TickerCPU interface {
+	Tstates() uint64
+	SpeedMultiplier() int
+	PollIntSources(now uint64)
+}
+
+// Ticker keeps the parts of the Next that run beside the CPU (the CTC and the
+// UARTs) in step with the CPU clock, and drives the zxnDMA's dma_delay_i pin
+// from the IM2 chain.
+//
+// It runs at every instruction boundary (Instruction, the CPU's instruction
+// hook) and after every byte of a continuous DMA block (DMAByte, the DMA's
+// byte hook). The second matters because a continuous block runs to its end
+// inside one port write with the CPU frozen, while on the FPGA the CTC, the
+// UARTs and the ULA keep running and any of them can leave idle mid-block and
+// make the DMA yield at the next byte (dma.vhd:427-428).
+//
+// It follows the clock rather than the instruction hook's deltas so that time
+// charged to the clock outside an instruction (a parked block resuming at an
+// instruction boundary) is not lost.
+type Ticker struct {
+	cpu  TickerCPU
+	ctc  *CTCClock
+	uart *UARTSystem
+	im2  *IM2Driver
+	dma  func() BusDelayer
+	last uint64 // the T-state the CTC and the UARTs have been advanced to
+}
+
+// NewTicker builds a Ticker. dma is a function because the machine builds the
+// DMA after the hook is installed; it may be nil or return nil.
+func NewTicker(cpu TickerCPU, ctc *CTCClock, uart *UARTSystem, im2 *IM2Driver, dma func() BusDelayer) *Ticker {
+	return &Ticker{cpu: cpu, ctc: ctc, uart: uart, im2: im2, dma: dma, last: cpu.Tstates()}
+}
+
+// Instruction is the CPU's instruction hook. The delta it is given is ignored:
+// the clock is the reference.
+func (t *Ticker) Instruction(int) { t.syncTo(t.cpu.Tstates()) }
+
+// DMAByte is the DMA's byte hook. elapsed is the bus time the block has taken
+// in this run, which the CPU clock will be charged only when the run ends, so
+// the machine's time is the clock plus elapsed. The ULA's INTs are placed
+// first, then the CTC and the UARTs catch up, then the pin is sampled for the
+// next byte (see IM2Driver.DMADelay).
+func (t *Ticker) DMAByte(elapsed uint64) {
+	now := t.cpu.Tstates() + elapsed
+	t.cpu.PollIntSources(now)
+	t.syncTo(now)
+}
+
+func (t *Ticker) syncTo(now uint64) {
+	switch {
+	case now > t.last:
+		n, s := int(now-t.last), t.cpu.SpeedMultiplier()
+		t.ctc.Advance(n, s)
+		t.uart.Advance(n, s)
+		t.last = now
+	case now < t.last:
+		// The clock went back: a state restore or a reset. Nothing to run.
+		t.last = now
+	}
+	if t.dma == nil {
+		return
+	}
+	if b := t.dma(); b != nil {
+		b.SetBusDelay(t.im2.DMADelay())
 	}
 }

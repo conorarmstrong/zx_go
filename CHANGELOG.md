@@ -36,17 +36,42 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   started from an interrupt routine waits for the RETI, and a block in flight
   parks. The pin is sampled once per instruction boundary, which is exact for
   the RETI hold window because it always closes inside the instruction.
-  Not done: the NMI term (NR$CC bit 7).
+  It is also sampled after every byte of a continuous block, so an interrupt
+  that leaves idle mid-block parks the block at that byte, as on the FPGA.
+  NR$CC bit 7 holds the DMA off while an NMI is active.
+- **The Next's NMI arbiter** (`zxnext.vhd:2088-2170`). NR$06 bits 3 and 4 enable
+  the Multiface and divMMC sources, the first source to latch wins, the
+  Multiface request is refused while port `$E3` bit 7 is set or the divMMC
+  holds, the divMMC request is refused while the Multiface is active, and the
+  NMI stays active from the request through the `$0066` fetch until its owner
+  lets go. The NR$02 source bits latch only while the arbiter accepts a cause.
+  On the Next, F12 is now the M1 (Multiface) button and F8 the DRIVE (divMMC)
+  button, and both go through the arbiter; the DRIVE button also needs the
+  divMMC ports enabled (NR$83 bit 0).
+- **The CTC, the UARTs and the ULA's frame and line interrupts keep running
+  during a continuous DMA block**, advanced to each byte instead of catching
+  up when the block ends. A frame interrupt is placed inside the block only
+  when it falls before the end of the current frame: the frame loop starts the
+  next frame when the block ends.
 - **NR$C0 bits 2:1 read the CPU's interrupt mode**, set by executing
   `ED 46/56/5E` and their mirrors, as `im2_control.vhd` tracks it.
 - **A UART can be routed to the joystick connector** with NR$0B (bit 7, bit 5,
-  and bit 0 to pick the UART). UART 0 then loses the ESP and reads the idle
-  joystick pins, as `zxnext.vhd:3340-3350` does.
+  and bit 0 to pick the UART). UART 0 then loses the ESP, as
+  `zxnext.vhd:3340-3350` does. The routed UART's Rx is button C and its CTS is
+  button B of the connector NR$0B bit 4 picks. The host joystick is the left
+  connector and its fire button is button B.
 - **NR$A0 follows core 3.02.05.** Bit 1 (Pi SPI slave enable) reads back and is
   the one bit a reset leaves alone; bits 7, 6 and 2 read as zero.
 
 ### Fixed
 
+- **A RETN that ends a Multiface session no longer pages the divMMC out.** The
+  divMMC sees a RETN only while the Multiface is not active
+  (`zxnext.vhd:4111`).
+- **NR$0B reads `$01` after power-on and reset.** `zxnext.vhd:4941` resets bit 0
+  to 1; it read `$00`.
+- **A zxnDMA block parked by `dma_delay_i` now charges the CPU for the bytes it
+  moved before parking.** They were charged only if the block later finished.
 - **A port `$FF` write now disables the ULA frame interrupt when bit 6 is set.**
   On the Next that bit is the same signal as NR$22 bit 2, so it also shows in
   the NR$22 and NR$C4 read-backs. It was stored as a screen mode and ignored.

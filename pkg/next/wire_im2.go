@@ -197,7 +197,7 @@ func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
 	//	2 uart1 rx <- CE.5 or CE.4   13 uart1 tx <- CE.6
 	//	3..10 ctc 0..7 <- CD.0..7
 	//
-	// CC.7 is the NMI term and is read by the DMA delay, not mapped here.
+	// CC.7 is the NMI term's enable; it maps to no chain index.
 	var last [3]byte
 	var primed bool
 	syncDMAEnables := func() {
@@ -210,6 +210,7 @@ func WireDMAInterruptEnables(d *nextregs.Dispatcher, im2 *IM2Driver) {
 		bit := func(v byte, n uint) bool { return v&(1<<n) != 0 }
 		im2.SetDMAEnabled(IM2SourceLine, bit(cc, 1))
 		im2.SetDMAEnabled(IM2SourceULA, bit(cc, 0))
+		im2.SetDMANMIEnabled(bit(cc, 7))
 		im2.SetDMAEnabled(IM2SourceUART0R, bit(ce, 1) || bit(ce, 0))
 		im2.SetDMAEnabled(IM2SourceUART0T, bit(ce, 2))
 		im2.SetDMAEnabled(IM2SourceUART1R, bit(ce, 5) || bit(ce, 4))

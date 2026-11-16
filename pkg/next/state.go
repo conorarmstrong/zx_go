@@ -101,6 +101,9 @@ func (c *ClipWindows) LoadState(b []byte) error {
 type resetState struct {
 	ResetType byte
 	NMISource byte
+	NMIMF     bool
+	NMIDivMMC bool
+	NMIState  byte
 }
 
 // StateID identifies the NR$02 reset control in a captured machine state.
@@ -116,6 +119,9 @@ func (r *ResetControl) SaveState() []byte {
 	if err := gob.NewEncoder(&buf).Encode(resetState{
 		ResetType: r.resetType,
 		NMISource: r.nmiSource,
+		NMIMF:     r.nmi.mf,
+		NMIDivMMC: r.nmi.divmmc,
+		NMIState:  byte(r.nmi.state),
 	}); err != nil {
 		return nil
 	}
@@ -131,7 +137,11 @@ func (r *ResetControl) LoadState(b []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&s); err != nil {
 		return fmt.Errorf("next: decoding reset state: %w", err)
 	}
+	if s.NMIState > byte(nmiHold) {
+		return fmt.Errorf("next: bad NMI state %d", s.NMIState)
+	}
 	r.resetType = s.ResetType
 	r.nmiSource = s.NMISource
+	r.nmi = NMIController{mf: s.NMIMF, divmmc: s.NMIDivMMC, state: nmiState(s.NMIState)}
 	return nil
 }

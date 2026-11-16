@@ -371,3 +371,44 @@ func TestStatusAtLeastOneIsSetInsideASynchronousBlock(t *testing.T) {
 		t.Errorf("status after the block = $%02X, want $1A", got)
 	}
 }
+
+// The byte hook runs after every byte of a continuous block but the last, with
+// the bus time so far, and a delay it raises parks the block at that byte. The
+// parked part is charged when it parks; the rest when it finishes.
+func TestByteHookCanParkAContinuousBlock(t *testing.T) {
+	mem := memMap{}
+	d := New(mem)
+	var elapsed []uint64
+	var charged []uint64
+	d.SetCycleSink(func(n uint64) { charged = append(charged, n) })
+	d.SetByteHook(func(e uint64) {
+		elapsed = append(elapsed, e)
+		if len(elapsed) == 2 {
+			d.SetBusDelay(true) // an interrupt leaves idle at byte 2
+		}
+	})
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0)) // 4 bytes, 4 T-states each
+	if len(elapsed) != 2 || elapsed[0] != 4 || elapsed[1] != 8 {
+		t.Fatalf("hook saw %v, want [4 8]", elapsed)
+	}
+	if d.ByteCounter() != 2 || len(charged) != 1 || charged[0] != 8 {
+		t.Fatalf("parked with %d bytes, charges %v; want 2 bytes, [8]", d.ByteCounter(), charged)
+	}
+	d.SetByteHook(nil)
+	d.SetBusDelay(false)
+	if d.ByteCounter() != 4 || len(charged) != 2 || charged[1] != 8 {
+		t.Errorf("resumed to %d bytes, charges %v; want 4, [8 8]", d.ByteCounter(), charged)
+	}
+}
+
+// After the last byte the block finishes; there is no next byte to gate, so
+// the hook is not called for it.
+func TestByteHookSkipsTheLastByte(t *testing.T) {
+	d := New(memMap{})
+	calls := 0
+	d.SetByteHook(func(uint64) { calls++ })
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0))
+	if calls != 3 {
+		t.Errorf("hook called %d times for a 4-byte block, want 3", calls)
+	}
+}

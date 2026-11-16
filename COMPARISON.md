@@ -214,7 +214,7 @@ register read-back. Bus arbitration is partly live: every block that runs end
 to end is charged to the CPU clock, burst as much as continuous, because the
 FPGA gives the bus back only in WAITING_CYCLES, which needs a prescaler. The
 dma_delay_i pin that lets an interrupt hold the DMA off the bus is driven from the
-IM2 chain through NR$CC/$CD/$CE (2026-11-15), without the NMI term. The
+IM2 chain through NR$CC/$CD/$CE (2026-11-15), with the NMI term (2026-11-16). The
 interrupt/match logic is absent because the FPGA does not implement it either.
 Four timing defects are open, the prescaler period being the largest: see
 ROADMAP items 1 and 4.
@@ -224,8 +224,9 @@ UART and optionally bridge to host serial / a real device.
 ²⁷ zx_go's IM2 daisy chain is wired to the CPU for the CTC and the ULA frame
 and line interrupts (2026-11-10), pinned by golden vectors captured from the
 FPGA VHDL under GHDL, and the four UART request lines reach it (2026-11-15).
-The DMA delay pin is driven from it (2026-11-15). Not done: the NMI term, and
-interrupt sources advancing inside a continuous DMA block. See ROADMAP item 2.
+The DMA delay pin is driven from it (2026-11-15), and from the NMI arbiter
+(2026-11-16). Interrupt sources keep running inside a continuous DMA block and
+can park it mid-block. See ROADMAP item 2.
 
 ---
 

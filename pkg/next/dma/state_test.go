@@ -732,7 +732,7 @@ func TestEveryControllerFieldIsCaptured(t *testing.T) {
 	// speedMul reads the CPU's current speed rather than remembering one, so
 	// like the clock it is a window onto the machine, not a field of the chip.
 	wiring := map[string]bool{
-		"mem": true, "io": true, "cycleSink": true, "clock": true, "speedMul": true,
+		"mem": true, "io": true, "cycleSink": true, "byteHook": true, "clock": true, "speedMul": true,
 	}
 
 	live := reflect.TypeOf(DMA{})

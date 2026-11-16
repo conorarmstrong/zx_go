@@ -29,6 +29,10 @@ type Keyboard struct {
 	breakHeldCaps  bool
 	breakHeldSpace bool
 	nmiCallback    func() // Callback for NMI (Multiface red button simulation)
+	// nmiKeyCallback, when set, replaces nmiCallback for the two NMI keys and
+	// says which was pressed: drive is true for F8, false for F12. The Next
+	// uses it to tell its DRIVE button from its M1 button.
+	nmiKeyCallback func(drive bool)
 
 	// Typed-character symbol pulse. TypeRune injects the SYMBOL-SHIFT
 	// combination for a typed symbol (e.g. '.', ';', ':') as a brief overlay
@@ -77,6 +81,10 @@ func (k *Keyboard) HandleKeyWithModifiers(keyName fyne.KeyName, isPressed, shift
 	// with it. F8 is a no-op when neither a Multiface nor Next is
 	// active.
 	if keyName == fyne.KeyF12 || keyName == fyne.KeyF8 {
+		if isPressed && k.nmiKeyCallback != nil {
+			k.nmiKeyCallback(keyName == fyne.KeyF8)
+			return
+		}
 		if isPressed && k.nmiCallback != nil {
 			if keyName == fyne.KeyF8 {
 				log.Println("NMI triggered (F8 — Next NMI Browser)")
@@ -537,6 +545,13 @@ func zx8xKeyMap() map[fyne.KeyName][]keyMapping {
 // This is used for Multiface red button simulation
 func (k *Keyboard) SetNMICallback(callback func()) {
 	k.nmiCallback = callback
+}
+
+// SetNMIKeyCallback installs a callback told which NMI key was pressed (drive
+// true for F8, false for F12). It takes precedence over SetNMICallback; pass
+// nil to remove it.
+func (k *Keyboard) SetNMIKeyCallback(callback func(drive bool)) {
+	k.nmiKeyCallback = callback
 }
 
 // IsBreakPressed returns whether the BREAK key is currently pressed
