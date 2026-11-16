@@ -87,6 +87,9 @@ type Memory struct {
 	// Contention: T-state counter reference set by CPU each frame
 	ContentionEnabled bool
 	TStates           *uint64 // Pointer to CPU's T-state counter
+	// FrameEpoch points at the CPU's count of clock discontinuities (the
+	// per-frame rewind, reset, state load). Nil until a CPU is wired.
+	FrameEpoch *uint64
 
 	// contentionDisabled is set by setupModel for machines with no contended
 	// memory (the Pentagon runs at a flat speed). SetTStatePtr and SwitchModel
@@ -710,6 +713,10 @@ func (m *Memory) SetTStatePtr(p *uint64) {
 	m.TStates = p
 	m.ContentionEnabled = !m.contentionDisabled
 }
+
+// SetFrameEpochPtr wires this memory to a CPU's frame epoch. Implements the
+// optional interface z80.New looks for.
+func (m *Memory) SetFrameEpochPtr(p *uint64) { m.FrameEpoch = p }
 
 // Contention delay pattern (repeats every 8 T-states in contended region)
 var contentionPattern = [8]uint64{6, 5, 4, 3, 2, 1, 0, 0}

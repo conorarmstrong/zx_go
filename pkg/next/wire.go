@@ -1524,33 +1524,30 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, sixtyHz ...func() b
 			cpu.LineIntOffsetTstates = 0
 			return
 		}
-		target := uint16(nr23) | (uint16(nr22&0x01) << 8)
-		// The target is an ABSOLUTE raster line, not one relative to the
-		// 256x192 active area. zxula_timing.vhd:
+		target := uint64(nr23) | (uint64(nr22&0x01) << 8)
+		// The target counts from the top of the paper. zxula_timing.vhd
+		// reloads cvc on the first paper line (vc = c_min_vactive, at
+		// ula_max_hc) and lets it run through every line of the frame:
 		//
-		//	if i_int_line = 0 then
-		//	   int_line_num <= c_max_vc;
-		//	else
-		//	   int_line_num <= unsigned(i_int_line) - 1;
+		//	if i_int_line = 0 then int_line_num <= c_max_vc;
+		//	else                   int_line_num <= unsigned(i_int_line) - 1;
 		//	...
 		//	if (i_inten_line = '1') and (hc_ula = 255) and (cvc = int_line_num)
 		//
-		// and cvc is a plain 0..c_max_vc raster counter with no active-area
-		// offset. A target of 0 selects the last line of the frame.
-		//
-		// A previous "+min_vactive" of 64 lines pushed targets near the end
-		// of the frame past the last line, where they could never match:
-		// Eternal Battle asks for line 310 of 311 with the frame interrupt
-		// disabled, waited on line 373, and sat halted in IM 2 forever.
-		lines := linesPerFrame
+		// So target N fires on paper row N-1 (mod the frame), at hc_ula 255.
+		// The CPU counts from the frame interrupt, at vc = c_int_v, hc =
+		// c_int_h. For 128K timing hc_ula 255 is hc 380 and c_int_h is 128,
+		// 126 T-states. Wrapping mod the frame keeps every target reachable;
+		// adding the paper offset without the wrap once asked for line 373 of
+		// 311 and hung Eternal Battle.
+		lines, minVactive, intV := uint64(linesPerFrame), uint64(64), uint64(1)
 		if len(sixtyHz) > 0 && sixtyHz[0] != nil && sixtyHz[0]() {
-			lines = 264
+			lines, minVactive, intV = 264, 40, 0
 		}
-		lineAbs := uint64(lines - 1)
-		if target != 0 {
-			lineAbs = uint64(target - 1)
-		}
-		cpu.LineIntOffsetTstates = lineAbs * tstatesPerScanLine * uint64(cpu.SpeedMultiplier())
+		const hcULA255FromInt = 126         // (380 - 128) / 2
+		row := (target + lines - 1) % lines // cvc = int_line_num
+		line := (minVactive + row + lines - intV) % lines
+		cpu.LineIntOffsetTstates = (line*tstatesPerScanLine + hcULA255FromInt) * uint64(cpu.SpeedMultiplier())
 	}
 	d.SetOnWrite(0x22, func(disp *nextregs.Dispatcher, v byte) {
 		// Per zxnext.vhd:5905 the NR$22 read shape is

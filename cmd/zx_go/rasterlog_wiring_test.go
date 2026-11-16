@@ -150,3 +150,37 @@ func TestDisplayRowTracksTheFrame(t *testing.T) {
 		})
 	}
 }
+
+// TestDisplayRowAndFrameFollowTheVideoClockAtTurbo pins that the journal's row
+// and frame stamps count video time, not CPU time. At 28 MHz the CPU clock
+// runs eight T-states per video T-state, so reading the CPU count as video
+// time put every write below the display and split one frame into eight.
+// Sonic hit it: it writes NR$15 twice in its frame handler, the second write
+// landed in a new "frame" that dropped the first, and the replay rewound
+// NR$15 to sprites-off for the whole display.
+func TestDisplayRowAndFrameFollowTheVideoClockAtTurbo(t *testing.T) {
+	emu := nextEmuForRaster(t)
+	prev := emu.mem.SpeedMultiplier
+	emu.mem.SpeedMultiplier = func() int { return 8 }
+	t.Cleanup(func() { emu.mem.SpeedMultiplier = prev })
+
+	start := roms.DisplayStartTState(roms.ModelNext)
+	perLine := roms.TStatesPerLine(roms.ModelNext)
+	frame := roms.FrameTStatesFor(roms.ModelNext, false)
+
+	*emu.mem.TStates = uint64((start + 100*perLine) * 8)
+	if got := emu.ula.DisplayRow(); got != 100 {
+		t.Errorf("DisplayRow at 28 MHz = %d, want 100", got)
+	}
+
+	*emu.mem.TStates = 0
+	first := emu.ula.FrameID()
+	*emu.mem.TStates = uint64(frame*8 - 1)
+	if got := emu.ula.FrameID(); got != first {
+		t.Errorf("FrameID at the last CPU T-state of the frame = %d, want %d (the same frame)", got, first)
+	}
+	*emu.mem.TStates = uint64(frame * 8)
+	if got := emu.ula.FrameID(); got != first+1 {
+		t.Errorf("FrameID one frame later = %d, want %d", got, first+1)
+	}
+}

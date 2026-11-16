@@ -650,8 +650,11 @@ func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
 // was. See NextRasterLog.
 func (u *ULA) SetNextRasterLog(l NextRasterLog) { u.nextRasterLog = l }
 
-// FrameID identifies the frame currently being executed, as the running
-// T-state counter divided by the model's frame length.
+// FrameID identifies the frame currently being executed: the CPU's frame
+// epoch, paired with the clock in video T-states divided by the model's frame
+// length. The epoch is needed because ExecuteFrame rewinds the clock at every
+// frame end; the video conversion because at a turbo speed the CPU clock runs
+// SpeedMultiplier T-states per video T-state.
 //
 // Derived from the clock rather than from the ULA's own frame bookkeeping on
 // purpose: that bookkeeping only advances when a frame is actually rendered,
@@ -667,7 +670,13 @@ func (u *ULA) FrameID() uint64 {
 	if frame <= 0 {
 		return 0
 	}
-	return *u.mem.TStates / uint64(frame)
+	id := uint64(u.videoTStates(int(*u.mem.TStates))) / uint64(frame)
+	if u.mem.FrameEpoch != nil {
+		// ExecuteFrame rewinds the clock at every frame end, so the clock
+		// alone repeats; the epoch counts the rewinds.
+		id |= *u.mem.FrameEpoch << 32
+	}
+	return id
 }
 
 // NextRasterLogForTest exposes the installed raster journal so an
@@ -683,7 +692,7 @@ func (u *ULA) DisplayRow() int {
 	if u.mem == nil || u.mem.TStates == nil {
 		return -1
 	}
-	t := int(*u.mem.TStates - u.frameStartTstate)
+	t := u.videoTStates(int(*u.mem.TStates - u.frameStartTstate))
 	start := u.displayStartTState()
 	if t < start {
 		return -1

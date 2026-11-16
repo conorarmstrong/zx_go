@@ -148,6 +148,7 @@ func (c *CPU) LoadState(b []byte) error {
 		return fmt.Errorf("z80: decoding state: %w", err)
 	}
 	c.frameOriginValid = false // the execution loop re-establishes the frame
+	c.frameEpoch++
 
 	c.A, c.F, c.B, c.C = s.A, s.F, s.B, s.C
 	c.D, c.E, c.H, c.L = s.D, s.E, s.H, s.L

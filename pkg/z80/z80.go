@@ -225,6 +225,11 @@ type CPU struct {
 	frameOrigin      uint64
 	frameOriginValid bool
 	lineIntHook      func()
+	// frameEpoch counts the clock's discontinuities: the rewind at the end
+	// of every ExecuteFrame, Reset and LoadState. The clock alone cannot tell
+	// one ExecuteFrame frame from the next, so anything keyed on "which frame
+	// is this" pairs it with the epoch. Shared with memory (frameEpochWirer).
+	frameEpoch uint64
 
 	// Memory and ULA interfaces
 	mem Memory
@@ -391,6 +396,12 @@ type contentionWirer interface {
 	SetTStatePtr(p *uint64)
 }
 
+// frameEpochWirer is implemented by memory backends that want the CPU's frame
+// epoch (see CPU.frameEpoch). Optional, like contentionWirer.
+type frameEpochWirer interface {
+	SetFrameEpochPtr(p *uint64)
+}
+
 // New creates a new Z80 CPU instance.
 func New(mem Memory, ula ULA) *CPU {
 	c := &CPU{
@@ -403,6 +414,9 @@ func New(mem Memory, ula ULA) *CPU {
 	// memory backend supports it.
 	if cw, ok := mem.(contentionWirer); ok {
 		cw.SetTStatePtr(&c.tstates)
+	}
+	if ew, ok := mem.(frameEpochWirer); ok {
+		ew.SetFrameEpochPtr(&c.frameEpoch)
 	}
 	if mc, ok := mem.(memContender); ok {
 		c.contender = mc
@@ -562,6 +576,7 @@ func (c *CPU) popC() uint16 {
 // Reset resets the CPU to its initial state.
 func (c *CPU) Reset() {
 	c.frameOriginValid = false
+	c.frameEpoch++
 	c.A, c.F, c.B, c.C, c.D, c.E, c.H, c.L = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.A_, c.F_, c.B_, c.C_, c.D_, c.E_, c.H_, c.L_ = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.IX, c.IY = 0xFFFF, 0xFFFF
@@ -1108,6 +1123,7 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	}
 
 	c.tstates -= tstatesEnd
+	c.frameEpoch++
 }
 
 func (c *CPU) executeInstruction() {

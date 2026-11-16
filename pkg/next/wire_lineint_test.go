@@ -9,11 +9,10 @@ import (
 
 // TestWireLineInterruptNR22EnableComputesOffset verifies the
 // NR$22/$23 → cpu.LineIntOffsetTstates pipeline. Per nextreg.txt 0x22
-// bit 1 enables line interrupt. The target is an ABSOLUTE raster line and
-// fires at target-1, per zxula_timing.vhd — see
-// TestLineInterruptTargetIsAnAbsoluteRasterLine for the quoted source and
-// for why the earlier "+min_vactive" reading was wrong. So target 192 →
-// 191 × 228.
+// bit 1 enables line interrupt. The target counts from the top of the paper
+// and fires on paper row target-1 at hc_ula 255, per zxula_timing.vhd — see
+// TestLineInterruptTargetCountsFromThePaper for the quoted source. So target
+// 192 → line 254 after the frame INT, plus 126 T.
 func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -25,7 +24,7 @@ func TestWireLineInterruptNR22EnableComputesOffset(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x02) // bit 1 = enable, bit 0 = 0
 
-	want := uint64(192-1) * 228
+	want := uint64(254*228 + 126)
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
@@ -73,8 +72,8 @@ func TestWireLineInterruptNR22FrameDisable(t *testing.T) {
 }
 
 // TestWireLineInterruptNR22MSBCombines verifies bit 0 of NR$22
-// concatenates with NR$23 to form the 9-bit target. Line 256
-// (MSB=1, LSB=0) with bit 1 enable → (256-1+64) × 228 T-states.
+// concatenates with NR$23 to form the 9-bit target. Target 256
+// (MSB=1, LSB=0) → (256+62) mod 311 = line 7 after the frame INT.
 func TestWireLineInterruptNR22MSBCombines(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -86,14 +85,14 @@ func TestWireLineInterruptNR22MSBCombines(t *testing.T) {
 	disp.Select(0x22)
 	disp.WriteData(0x03) // bit 1 enable + bit 0 MSB
 
-	want := uint64(256-1) * 228
+	want := uint64(7*228 + 126)
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates = %d, want %d", got, want)
 	}
 }
 
 // TestWireLineInterruptScalesWithSpeed locks in NR$07 speed-multiplier
-// scaling. At 28 MHz (multiplier 8), target 100 → line 99 → 99 × 228 × 8.
+// scaling. At 28 MHz (multiplier 8), target 100 → line 162 → (162 × 228 + 126) × 8.
 func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
@@ -107,7 +106,7 @@ func TestWireLineInterruptScalesWithSpeed(t *testing.T) {
 	disp.Select(0x07)
 	disp.WriteData(0x03) // 28 MHz, multiplier 8
 
-	want := uint64(100-1) * 228 * 8
+	want := uint64(162*228+126) * 8
 	if got := cpu.LineIntOffsetTstates; got != want {
 		t.Errorf("LineIntOffsetTstates @ 28MHz = %d, want %d", got, want)
 	}

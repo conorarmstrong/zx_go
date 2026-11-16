@@ -95,7 +95,10 @@ func TestNextULARandLineSourcesReachIM2(t *testing.T) {
 	}
 	h.CPU().IFF1 = false
 	h.NextRegs().WriteReg(0xC0, 0x01) // hardware IM2
-	h.NextRegs().WriteReg(0xC4, 0x03) // ULA + line enables
+	// ULA source only for this phase: the boot ROM enables a line interrupt
+	// at target 0, which fires 62 lines into the frame and would be
+	// acknowledged ahead of the ULA.
+	h.NextRegs().WriteReg(0xC4, 0x01)
 
 	h.RunFrames(1)
 	if !h.NextIM2().Status(next.IM2SourceULA) {
@@ -118,7 +121,9 @@ func TestNextULARandLineSourcesReachIM2(t *testing.T) {
 	}
 
 	// Now disable the frame INT and schedule a line INT instead. The
-	// target is absolute raster line 100; the line source must latch.
+	// target is line 100 from the top of the paper; the line source must
+	// latch.
+	h.NextRegs().WriteReg(0xC4, 0x02) // line source only
 	h.NextRegs().WriteReg(0x22, 0x06) // frame disable + line enable
 	h.NextRegs().WriteReg(0x23, 100)
 	h.RunFrames(1)

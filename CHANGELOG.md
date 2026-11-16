@@ -76,6 +76,17 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Sonic is visible again.** Three faults combined to hide every sprite in
+  the game. First, the line interrupt counted its target line from the frame
+  interrupt. The FPGA counts it from the top of the paper, so every line
+  interrupt fired 63 lines early, and target 1 never fired at all. Sonic's
+  handler, which hides the sprites while it updates them, ran mid-screen
+  instead of below it. Second, at 7 to 28 MHz the raster journal read CPU
+  T-states as video T-states, so it stamped mid-frame writes on the wrong row
+  and split one frame into several. That dropped the write that turns the
+  sprites back on. Third, the journal could not tell one frame from the next,
+  because the CPU clock rewinds at every frame end. Frames run without a render
+  piled into one journal, and the next replay rewound to old state.
 - **Debugger NextReg reads no longer reach the trace hooks.** The GUI read its
   register list through the guest read path 20 times a second, so `nr-trace`,
   `nr-deltas` and the raster journal saw reads the guest never made. The GUI,
