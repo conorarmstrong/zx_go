@@ -32,7 +32,7 @@ import (
 //     and RZX observers installed from outside. They are the observer's
 //     property, not the machine's, and a rewind must not silently reattach or
 //     detach one.
-//   - img, wideImg, wideRow, nextFullImg and the compositor* scratch buffers
+//   - img, wideImg, wideRow, nextFrame and the compositorScan scratch buffer
 //     are derived: every pixel in them is recomputed from scratch by the next
 //     Render from the state that IS captured here. Carrying ~600 KB of pixels
 //     per rewind point to hold a value that is about to be overwritten would

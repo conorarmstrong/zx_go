@@ -10,6 +10,10 @@ type TickerCPU interface {
 	Tstates() uint64
 	SpeedMultiplier() int
 	PollIntSources(now uint64)
+	// Clock is the running T-state count, unbroken by the frame rewinds;
+	// ClockGeneration changes where it jumps (reset, state load).
+	Clock() uint64
+	ClockGeneration() uint64
 }
 
 // Ticker keeps the parts of the Next that run beside the CPU (the CTC and the
@@ -32,7 +36,8 @@ type Ticker struct {
 	uart *UARTSystem
 	im2  *IM2Driver
 	dma  func() BusDelayer
-	last uint64 // the T-state the CTC and the UARTs have been advanced to
+	last uint64 // the Clock the CTC and the UARTs have been advanced to
+	gen  uint64 // the ClockGeneration last seen
 	nmi  HotkeyApplier
 }
 
@@ -46,7 +51,7 @@ func (t *Ticker) SetHotkeys(h HotkeyApplier) { t.nmi = h }
 // NewTicker builds a Ticker. dma is a function because the machine builds the
 // DMA after the hook is installed; it may be nil or return nil.
 func NewTicker(cpu TickerCPU, ctc *CTCClock, uart *UARTSystem, im2 *IM2Driver, dma func() BusDelayer) *Ticker {
-	return &Ticker{cpu: cpu, ctc: ctc, uart: uart, im2: im2, dma: dma, last: cpu.Tstates()}
+	return &Ticker{cpu: cpu, ctc: ctc, uart: uart, im2: im2, dma: dma, last: cpu.Clock(), gen: cpu.ClockGeneration()}
 }
 
 // Instruction is the CPU's instruction hook. The delta it is given is ignored:
@@ -55,7 +60,7 @@ func (t *Ticker) Instruction(int) {
 	if t.nmi != nil {
 		t.nmi.ApplyHotkeys()
 	}
-	t.syncTo(t.cpu.Tstates())
+	t.syncTo(t.cpu.Clock())
 }
 
 // DMAByte is the DMA's byte hook. elapsed is the bus time the block has taken
@@ -64,12 +69,17 @@ func (t *Ticker) Instruction(int) {
 // first, then the CTC and the UARTs catch up, then the pin is sampled for the
 // next byte (see IM2Driver.DMADelay).
 func (t *Ticker) DMAByte(elapsed uint64) {
-	now := t.cpu.Tstates() + elapsed
-	t.cpu.PollIntSources(now)
-	t.syncTo(now)
+	t.cpu.PollIntSources(t.cpu.Tstates() + elapsed)
+	t.syncTo(t.cpu.Clock() + elapsed)
 }
 
+// syncTo runs the CTC and the UARTs up to now, a Clock value. Across a reset
+// or a state load the clock jumps, and there is nothing to run.
 func (t *Ticker) syncTo(now uint64) {
+	if g := t.cpu.ClockGeneration(); g != t.gen {
+		t.gen = g
+		t.last = now
+	}
 	switch {
 	case now > t.last:
 		n, s := int(now-t.last), t.cpu.SpeedMultiplier()
@@ -77,7 +87,7 @@ func (t *Ticker) syncTo(now uint64) {
 		t.uart.Advance(n, s)
 		t.last = now
 	case now < t.last:
-		// The clock went back: a state restore or a reset. Nothing to run.
+		// Only a clock set back by hand gets here; follow it.
 		t.last = now
 	}
 	if t.dma == nil {

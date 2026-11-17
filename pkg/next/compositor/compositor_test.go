@@ -104,7 +104,7 @@ func TestComposeScanlineTransparencyPassesULA(t *testing.T) {
 	// Fill ULA with magenta.
 	for i := 0; i < Width; i++ {
 		ulaRGBA[i*4+0] = 0xFF
-		ulaRGBA[i*4+2] = 0xFF
+		ulaRGBA[i*4+2] = 0xB6 // RGB332 $E2: not the default transparency $E3
 		ulaRGBA[i*4+3] = 0xFF
 	}
 	dst := make([]byte, Width*4)
@@ -116,8 +116,8 @@ func TestComposeScanlineTransparencyPassesULA(t *testing.T) {
 		b := dst[x*4+2]
 		if x%2 == 0 {
 			// transparent: should show ULA magenta
-			if r != 0xFF || g != 0 || b != 0xFF {
-				t.Errorf("x=%d transparent: rgb=%d/%d/%d, want 255/0/255", x, r, g, b)
+			if r != 0xFF || g != 0 || b != 0xB6 {
+				t.Errorf("x=%d transparent: rgb=%d/%d/%d, want 255/0/182", x, r, g, b)
 				break
 			}
 		} else {
@@ -169,7 +169,7 @@ func TestSpriteOverLayer2OverULA(t *testing.T) {
 	ulaRGBA := make([]byte, Width*4)
 	for i := 0; i < Width; i++ {
 		ulaRGBA[i*4+0] = 0xFF
-		ulaRGBA[i*4+2] = 0xFF
+		ulaRGBA[i*4+2] = 0xB6 // RGB332 $E2: not the default transparency $E3
 		ulaRGBA[i*4+3] = 0xFF
 	}
 	dst := make([]byte, Width*4)
@@ -293,18 +293,6 @@ func (f fakedPrio) Mode() PriorityMode { return f.m }
 // SetTilemap, HasActiveTilemap, SetSpriteTransparency, and the
 // ComposeBorderRow early-exit guard were 0%-cov.
 
-func TestSetTilemapNilDetachable(t *testing.T) {
-	c := New(nil, nil)
-	if c.HasActiveTilemap() {
-		t.Errorf("HasActiveTilemap on fresh compositor = true, want false")
-	}
-	// Attaching nil tilemap = no-op.
-	c.SetTilemap(nil)
-	if c.HasActiveTilemap() {
-		t.Errorf("HasActiveTilemap after SetTilemap(nil) = true")
-	}
-}
-
 func TestSetSpriteTransparency(t *testing.T) {
 	c := New(nil, nil)
 	c.SetSpriteTransparency(0x77)
@@ -312,23 +300,6 @@ func TestSetSpriteTransparency(t *testing.T) {
 	// or simply prove the call doesn't panic. Either suffices for
 	// coverage; the behavioural effect is covered by sprite tests
 	// when the value matters.
-}
-
-func TestComposeBorderRow_NoTilemapNoOp(t *testing.T) {
-	c := New(nil, nil)
-	// No tilemap attached → ComposeBorderRow must short-circuit.
-	dst := make([]byte, FullWidth*4)
-	// Pre-fill so we can confirm dst is untouched.
-	for i := range dst {
-		dst[i] = 0xAB
-	}
-	c.ComposeBorderRow(0, dst, func(x int) bool { return true })
-	for i, b := range dst {
-		if b != 0xAB {
-			t.Errorf("ComposeBorderRow with no tilemap modified dst[%d] = %02X", i, b)
-			break
-		}
-	}
 }
 
 func TestSetTransparency(t *testing.T) {
@@ -352,37 +323,12 @@ func (f *fakeBankReader) GetPage(bank int) []byte {
 	return f.banks[bank]
 }
 
-// TestComposeBorderRow_ActivePathTouchesDst (iter 309) — wire up a
-// real tilemap + palette so the inner ComposeBorderRow body
-// executes. The disabled-tilemap path is covered separately by
-// TestComposeBorderRow_NoTilemapNoOp; this hits the active branch.
-func TestComposeBorderRow_ActivePathTouchesDst(t *testing.T) {
-	br := &fakeBankReader{}
-	br.banks[5] = make([]byte, 16384) // empty map → all-zero indices
-	tm := tilemap.New(br)
-	tm.SetEnabled(true)
-	tm.SetStripFlags(true)
-	tm.SetControl(0x21) // strip_flags + on_top
-
-	pal := palette.NewBank()
-	c := New(pal, nil)
-	c.SetTilemap(tm)
-	if !c.HasActiveTilemap() {
-		t.Skip("HasActiveTilemap is false after wiring; PaletteForLayer may be nil")
-	}
-
-	dst := make([]byte, FullWidth*4)
-	c.ComposeBorderRow(0, dst, func(int) bool { return true })
-	// Just ensure it runs without panic; we can't easily assert
-	// content without a populated palette, but coverage is the goal.
-}
-
 // TestComposeWideTilemapRow_NR4CTransparency verifies the 80-column wide
 // path honours the live NR$4C transparency nibble. NextGuide's intro
 // text has pixels whose palette index low-nibble is $F; with the
 // hardcoded $0F default they were wrongly transparent (the ULA bled
 // through). With the real NR$4C=$08 they must be opaque.
-func TestComposeWideTilemapRow_NR4CTransparency(t *testing.T) {
+func TestWideTilemapNR4CTransparency(t *testing.T) {
 	br := &fakeBankReader{}
 	bank := make([]byte, 16384)
 	bank[0] = 0x01    // cell 0 → tile 1
@@ -401,16 +347,17 @@ func TestComposeWideTilemapRow_NR4CTransparency(t *testing.T) {
 	pal.Select(0)
 	c := New(pal, nil)
 	c.SetTilemap(tm)
-	if !c.TilemapIs80Col() {
-		t.Skip("TilemapIs80Col false (palette wiring); cannot exercise wide path")
+	if c.WideScale() != 2 {
+		t.Fatal("an 80-column tilemap must ask for a 640-pixel row")
 	}
 
 	render := func() byte {
-		dst := make([]byte, 2*FullWidth*4)
-		for i := range dst {
-			dst[i] = 0x11 // sentinel base (the doubled lower layers)
+		ula := make([]byte, 2*FullWidth*4)
+		for i := range ula {
+			ula[i] = 0x11 // sentinel base (the doubled lower layers)
 		}
-		c.ComposeWideTilemapRow(0, dst)
+		dst := make([]byte, 2*FullWidth*4)
+		c.ComposeFrameRowRange(0, ula, dst, 2, 0, 2*FullWidth)
 		return dst[0] // pixel 0 = the fg pixel (index $0F)
 	}
 
@@ -463,7 +410,7 @@ func sulLusFixture(t *testing.T, mode PriorityMode) []byte {
 	ulaRGBA := make([]byte, Width*4)
 	for i := 0; i < Width; i++ {
 		ulaRGBA[i*4+0] = 0xFF
-		ulaRGBA[i*4+2] = 0xFF
+		ulaRGBA[i*4+2] = 0xB6 // RGB332 $E2: not the default transparency $E3
 		ulaRGBA[i*4+3] = 0xFF
 	}
 	dst := make([]byte, Width*4)
@@ -541,7 +488,7 @@ func TestPriorityModeLUSULAOverSprite(t *testing.T) {
 	ulaRGBA := make([]byte, Width*4)
 	for i := 0; i < Width; i++ {
 		ulaRGBA[i*4+0] = 0xFF
-		ulaRGBA[i*4+2] = 0xFF
+		ulaRGBA[i*4+2] = 0xB6 // RGB332 $E2: not the default transparency $E3
 		ulaRGBA[i*4+3] = 0xFF
 	}
 	dst := make([]byte, Width*4)
@@ -568,7 +515,7 @@ func TestPriorityModeLUSULAOverSprite(t *testing.T) {
 
 // TestComposeWideLayer2Row320 verifies the wide-L2 path colours a 320-wide
 // hi-res Layer 2 row via the L2 palette, overlaying onto dst.
-func TestComposeWideLayer2Row320(t *testing.T) {
+func TestFrameRowLayer2At320(t *testing.T) {
 	pal := palette.NewBank()
 	pal.Select(palette.PaletteLayer2First)
 	pal.Active().Set(5, 0b1_1100_0000) // entry 5 = red
@@ -584,7 +531,7 @@ func TestComposeWideLayer2Row320(t *testing.T) {
 
 	c := New(pal, l2)
 	dst := make([]byte, 320*4)
-	c.ComposeWideLayer2Row(0, dst)
+	c.ComposeFrameRowRange(0, make([]byte, 320*4), dst, 1, 0, 320)
 	// Pixel 0 (col 0) = index 5 = red opaque.
 	if dst[0] == 0 || dst[1] != 0 || dst[2] != 0 || dst[3] != 0xFF {
 		t.Errorf("wide L2 px0: r=%d g=%d b=%d a=%d, want red opaque", dst[0], dst[1], dst[2], dst[3])
@@ -597,7 +544,7 @@ func TestComposeWideLayer2Row320(t *testing.T) {
 // it clears Layer 2 to index 0 and loads pal[0]→$13 with NR$14=$13, so index-0
 // areas are transparent and the tilemap shows through. Ours previously compared
 // the raw index (0 != $13 → opaque blue covering the level).
-func TestComposeWideLayer2Row_PaletteMappedTransparency(t *testing.T) {
+func TestFrameRowLayer2PaletteMappedTransparency(t *testing.T) {
 	pal := palette.NewBank()
 	pal.Select(palette.PaletteLayer2First)
 	// index 0 maps to 8-bit colour $13 (9-bit $026) == NR$14 → transparent.
@@ -625,7 +572,9 @@ func TestComposeWideLayer2Row_PaletteMappedTransparency(t *testing.T) {
 		dst[x*4+2] = 0xFF
 		dst[x*4+3] = 0xFF
 	}
-	c.ComposeWideLayer2Row(0, dst)
+	out := make([]byte, 320*4)
+	c.ComposeFrameRowRange(0, dst, out, 1, 0, 320)
+	dst = out
 
 	// Pixel 0 (index 0, maps to NR$14) must be transparent → still magenta.
 	if dst[0] != 0xFF || dst[1] != 0x00 || dst[2] != 0xFF {
@@ -713,7 +662,7 @@ func TestSpriteTransparencyIndex(t *testing.T) {
 	// ULA = magenta, so transparent sprite pixels show magenta through.
 	ula := make([]byte, Width*4)
 	for i := 0; i < Width; i++ {
-		ula[i*4+0], ula[i*4+2], ula[i*4+3] = 0xFF, 0xFF, 0xFF
+		ula[i*4+0], ula[i*4+2], ula[i*4+3] = 0xFF, 0xB6, 0xFF // RGB332 $E2, opaque
 	}
 	dst := make([]byte, Width*4)
 	c.ComposeScanline(0, ula, dst)
@@ -723,7 +672,7 @@ func TestSpriteTransparencyIndex(t *testing.T) {
 		t.Errorf("paper px0 (shape $C4): rgb=%d/%d/%d, want red", dst[0], dst[1], dst[2])
 	}
 	// Paper pixel 1 = $E3 (transparent) -> ULA magenta shows through.
-	if dst[4] != 0xFF || dst[5] != 0 || dst[6] != 0xFF {
+	if dst[4] != 0xFF || dst[5] != 0 || dst[6] != 0xB6 {
 		t.Errorf("paper px1 ($E3 transparent): rgb=%d/%d/%d, want magenta (ULA)", dst[4], dst[5], dst[6])
 	}
 }
@@ -732,7 +681,7 @@ func TestSpriteTransparencyIndex(t *testing.T) {
 // way Nextoid puts its SHIPS/SCORE HUD at frame Y 224-225). The border pass
 // must render it (over-border is on by default in the engine here) while
 // leaving inner-screen pixels for the main pass.
-func TestComposeSpriteBorderRow(t *testing.T) {
+func TestFrameRowSpriteInTheBorder(t *testing.T) {
 	pal := palette.NewBank()
 	pal.Select(palette.PaletteSpritesFirst)
 	pal.Active().Set(0x60, 0b0_0011_1000) // green HUD colour
@@ -749,8 +698,7 @@ func TestComposeSpriteBorderRow(t *testing.T) {
 	c.SetSprites(sp)
 
 	dst := make([]byte, FullWidth*4)
-	border := func(int) bool { return true } // a border row: whole width
-	c.ComposeSpriteBorderRow(224, dst, border)
+	c.ComposeFrameRowRange(224, make([]byte, FullWidth*4), dst, 1, 0, FullWidth)
 
 	// Frame X 40 should be green (the HUD pixel).
 	if dst[40*4+0] != 0 || dst[40*4+1] == 0 || dst[40*4+2] != 0 {
@@ -812,6 +760,47 @@ func TestComposeScanlineRangeWithNoLayersPaintsAFullRow(t *testing.T) {
 	for x := 0; x < Width; x++ {
 		if got := dst[x*4]; got != 0x22 {
 			t.Fatalf("dst[%d] = $%02X, want $22", x, got)
+		}
+	}
+}
+
+// The 320x256 Layer 2 takes its place in the NR$15 order like any other layer.
+// It used to be painted over the finished frame, so in SLU (sprites on top,
+// the reset default) it covered every sprite.
+func TestHiResLayer2HonoursThePriorityOrder(t *testing.T) {
+	pal := palette.NewBank()
+	pal.Select(palette.PaletteLayer2First)
+	pal.Active().Set(5, 0b1_1100_0000) // Layer 2 red
+	pal.Select(palette.PaletteSpritesFirst)
+	pal.Active().Set(0x60, 0b0_0011_1000) // sprite green
+	pal.Select(0)
+
+	bank := make([]byte, 16384)
+	bank[40*256+64] = 5 // 320x256 column-major: col 40, row 64
+	l2 := layer2.New(&fakeBanks{banks: map[int][]byte{0: bank}})
+	l2.SetActiveBank(0)
+	l2.SetEnabled(true)
+	l2.SetResolution(1)
+
+	sp := sprite.New()
+	sp.SetEnabled(true)
+	sp.SetPatternAddr(0)
+	sp.WritePatternByte(0x60)
+	sp.Set(0, sprite.Attr{X: 40, Y: 64, Pattern: 0, Visible: true})
+
+	for _, tc := range []struct {
+		mode      PriorityMode
+		wantGreen bool
+	}{{ModeSLU, true}, {ModeLSU, false}} {
+		c := New(pal, l2)
+		c.SetSprites(sp)
+		c.SetPrioritySource(fakedPrio{tc.mode})
+		dst := make([]byte, FullWidth*4)
+		c.ComposeFrameRowRange(64, make([]byte, FullWidth*4), dst, 1, 0, FullWidth)
+		green := dst[40*4+1] != 0 && dst[40*4+0] == 0
+		if green != tc.wantGreen {
+			t.Errorf("mode %d: pixel rgb=%d/%d/%d, want sprite on top = %v",
+				tc.mode, dst[40*4+0], dst[40*4+1], dst[40*4+2], tc.wantGreen)
 		}
 	}
 }

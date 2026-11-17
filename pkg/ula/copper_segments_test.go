@@ -53,7 +53,7 @@ func TestCopperWalksEveryColumnOfTheLine(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	if len(c.steps) == 0 {
 		t.Fatal("the Copper was never stepped")
@@ -91,7 +91,7 @@ func TestCopperStepsStayWithinTheLineBudget(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	perLine := TStatesPerLineFor(u.mem.GetCurrentModel()) * 2 * 4 / 2
 	if c.maxPerLine > perLine {
@@ -114,7 +114,7 @@ func TestCopperIsPacedAtFourClocksPerColumn(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	for _, s := range c.steps {
 		if s.clocks != copperClocksPerHCount {
@@ -180,7 +180,7 @@ type stateStampCompositor struct {
 	state *byte
 }
 
-func (c *stateStampCompositor) ComposeScanlineRange(_ int, _, dst []byte, from, to int) {
+func (c *stateStampCompositor) ComposeFrameRowRange(_ int, _, dst []byte, _, from, to int) {
 	for x := from; x < to; x++ {
 		dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = *c.state, 0, 0, 0xFF
 	}
@@ -203,7 +203,7 @@ func TestComposeSplitsAtThePixelTheCopperWroteIn(t *testing.T) {
 	u.SetNextCopper(&writeAtCopper{atHCount: writePixel + copperHCountOrigin, state: &state})
 	u.SetNextCompositor(&stateStampCompositor{state: &state})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	row := u.img.Pix[BorderTop*u.img.Stride+BorderLeft*4:]
 	for x := 0; x < ScreenWidth; x++ {
@@ -251,7 +251,7 @@ func TestAStraddlingMOVEIsPaidForOutOfTheNextColumn(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	want := []int{4, 3, 4, 4}
 	for i, w := range want {
@@ -271,17 +271,12 @@ func TestAStraddlingMOVEIsPaidForOutOfTheNextColumn(t *testing.T) {
 // stubCompositor satisfies the ULA's compositor contract without drawing.
 type stubCompositor struct{}
 
-func (stubCompositor) ComposeScanline(int, []byte, []byte)                {}
-func (stubCompositor) ComposeScanlineRange(int, []byte, []byte, int, int) {}
-func (stubCompositor) ComposeBorderRow(int, []byte, func(int) bool)       {}
-func (stubCompositor) ComposeSpriteBorderRow(int, []byte, func(int) bool) {}
-func (stubCompositor) ComposeWideTilemapRow(int, []byte)                  {}
-func (stubCompositor) ComposeWideLayer2Row(int, []byte)                   {}
-func (stubCompositor) HasActiveTilemap() bool                             { return false }
-func (stubCompositor) HasActiveSprites() bool                             { return false }
-func (stubCompositor) TilemapIs80Col() bool                               { return false }
-func (stubCompositor) HiResLayer2Active() bool                            { return false }
-func (stubCompositor) Layer2Width() int                                   { return 256 }
+func (stubCompositor) ComposeScanline(int, []byte, []byte)                     {}
+func (stubCompositor) ComposeScanlineRange(int, []byte, []byte, int, int)      {}
+func (stubCompositor) ComposeFrameRowRange(int, []byte, []byte, int, int, int) {}
+func (stubCompositor) HasActiveSprites() bool                                  { return false }
+func (stubCompositor) HiResLayer2Active() bool                                 { return false }
+func (stubCompositor) WideScale() int                                          { return 1 }
 
 // TestCopperIsClockedOnEveryLineOfTheFrame pins that the Copper gets the whole
 // frame's clocks, not just the 192 displayed rows.
@@ -302,7 +297,7 @@ func TestCopperIsClockedOnEveryLineOfTheFrame(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	model := u.mem.GetCurrentModel()
 	columns := TStatesPerLineFor(model) * 2
@@ -363,8 +358,8 @@ func TestAStraddlingMOVEIsPaidForAcrossTheFrameBoundary(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(stubCompositor{})
 
-	u.applyNextCompositor()
-	u.applyNextCompositor()
+	u.renderNext()
+	u.renderNext()
 
 	want := []int{copperClocksPerHCount, copperClocksPerHCount - 1}
 	if len(c.firstColumnOffered) != len(want) {

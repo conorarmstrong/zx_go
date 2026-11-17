@@ -606,6 +606,9 @@ func TestEnablingLoResChangesThePicture(t *testing.T) {
 		t.Skip("Next ROMs not installed")
 	}
 	emu := quietEmulator(t, roms.ModelNext)
+	// The palettes are the boot firmware's to load (the palette RAM has no
+	// initial contents); this machine has not booted, so load them here.
+	emu.nextPalette.LoadFirmwareDefaults()
 
 	// A pattern in bank 5, which is where the layer reads its display from.
 	bank5 := emu.mem.GetPage(5)

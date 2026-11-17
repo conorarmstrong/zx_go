@@ -230,6 +230,18 @@ type CPU struct {
 	// one ExecuteFrame frame from the next, so anything keyed on "which frame
 	// is this" pairs it with the epoch. Shared with memory (frameEpochWirer).
 	frameEpoch uint64
+	// clockBase is the T-states the frame rewinds have taken off tstates, so
+	// clockBase+tstates runs on without a break across frames. clockGen
+	// counts the discontinuities that are real (Reset, LoadState), which a
+	// consumer must resynchronise across rather than run through.
+	clockBase uint64
+	clockGen  uint64
+	// frameBudget is the current frame's length in CPU T-states. polledOrigin
+	// is the start of a frame PollIntSources has already moved into during a
+	// DMA block; the execution loop keeps that frame's interrupt state.
+	frameBudget  uint64
+	polledOrigin uint64
+	polledValid  bool
 
 	// Memory and ULA interfaces
 	mem Memory
@@ -577,6 +589,8 @@ func (c *CPU) popC() uint16 {
 func (c *CPU) Reset() {
 	c.frameOriginValid = false
 	c.frameEpoch++
+	c.clockGen++
+	c.polledValid = false
 	c.A, c.F, c.B, c.C, c.D, c.E, c.H, c.L = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.A_, c.F_, c.B_, c.C_, c.D_, c.E_, c.H_, c.L_ = 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	c.IX, c.IY = 0xFFFF, 0xFFFF
@@ -792,9 +806,28 @@ func (c *CPU) PollIntSources(now uint64) {
 	if !c.frameOriginValid {
 		return
 	}
+	// A block that runs past the frame end holds the CPU while the next
+	// frame begins on the grid. Close the current frame's interrupts at its
+	// end and move on to the next frame's, at their own times.
+	for c.frameBudget > 0 && now >= c.frameOrigin+c.frameBudget {
+		end := c.frameOrigin + c.frameBudget
+		if c.IntPulseTstates > 0 {
+			c.frameIntPulseAt(c.frameOrigin, end)
+		}
+		c.pollLineInt(end - 1)
+		c.frameOrigin = end
+		c.frameIntFired, c.frameIntDeasct, c.lineIntFired = false, false, false
+		c.polledOrigin, c.polledValid = end, true
+	}
 	if c.IntPulseTstates > 0 {
 		c.frameIntPulseAt(c.frameOrigin, now)
 	}
+	c.pollLineInt(now)
+}
+
+// pollLineInt raises the line interrupt if now has reached it in the current
+// frame.
+func (c *CPU) pollLineInt(now uint64) {
 	if off := c.LineIntOffsetTstates; off > 0 && !c.lineIntFired && now >= c.frameOrigin+off {
 		if !c.IRQExternal {
 			c.IRQPending.Store(true)
@@ -973,7 +1006,16 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	// 3.5 MHz reference. SpeedMultiplier returns 1 on every other
 	// model so this is a no-op there.
 	budget := uint64(tstatesPerFrame) * uint64(c.SpeedMultiplier())
-	tstatesEnd := c.tstates + budget
+	// Frames sit on a fixed grid. An instruction that ran past the last
+	// frame's end has already spent part of this one, so the frame starts at
+	// its nominal T-state, not where that instruction ended: its interrupt
+	// then asserts inside the straddling instruction, as on hardware.
+	frameStart := c.tstates
+	if budget > 0 {
+		frameStart -= c.tstates % budget
+	}
+	tstatesEnd := frameStart + budget
+	c.frameBudget = budget
 
 	// ULA INT line: asserted at the start of every ULA frame and
 	// held until the CPU acknowledges or the next frame begins.
@@ -998,11 +1040,18 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	// (IntPulseTstates>0): raise/withdraw a fixed-width pulse via
 	// frameIntPulse() inside the loop, so a DI covering the pulse misses
 	// the INT (matches the FPGA, zxnext.vhd:2014-2033).
-	frameStart := tstatesEnd - budget
 	c.frameOrigin, c.frameOriginValid = frameStart, true
 	narrowPulse := c.IntPulseTstates > 0
-	c.frameIntFired = false
-	c.frameIntDeasct = false
+	if c.polledValid && c.polledOrigin == frameStart {
+		// A DMA block already reached this frame's interrupts while it
+		// held the CPU (PollIntSources); they are not raised twice.
+		c.polledValid = false
+	} else {
+		c.polledValid = false
+		c.frameIntFired = false
+		c.frameIntDeasct = false
+		c.lineIntFired = false
+	}
 	if !c.FrameIntDisabled && !narrowPulse && !c.IRQExternal {
 		c.IRQPending.Store(true)
 	}
@@ -1015,7 +1064,6 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	if off := c.LineIntOffsetTstates; off > 0 {
 		lineIntAt = frameStart + off
 	}
-	c.lineIntFired = false
 
 	for c.tstates < tstatesEnd {
 		// Narrow-pulse frame INT: raise at the pulse start, withdraw once
@@ -1123,8 +1171,21 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	}
 
 	c.tstates -= tstatesEnd
+	c.clockBase += tstatesEnd
+	if c.polledValid {
+		c.polledOrigin -= tstatesEnd
+	}
 	c.frameEpoch++
 }
+
+// Clock is the machine's running T-state count: Tstates plus everything the
+// frame rewinds have taken off it. It never goes back except across a Reset or
+// a LoadState, which ClockGeneration reports.
+func (c *CPU) Clock() uint64 { return c.clockBase + c.tstates }
+
+// ClockGeneration changes on every Reset and LoadState, the points where
+// Clock jumps arbitrarily.
+func (c *CPU) ClockGeneration() uint64 { return c.clockGen }
 
 func (c *CPU) executeInstruction() {
 	before := c.tstates
@@ -1393,10 +1454,16 @@ func (c *CPU) StepInstructionWithIRQ() {
 			c.IRQPending.Store(true)
 		}
 		c.nextFrameBoundary = ((c.tstates / frameBudget) + 1) * frameBudget
-		c.lineIntFired = false
-		c.frameIntFired = false
-		c.frameIntDeasct = false
+		if c.polledValid && c.polledOrigin == c.nextFrameBoundary-frameBudget {
+			c.polledValid = false // reached already by PollIntSources
+		} else {
+			c.polledValid = false
+			c.lineIntFired = false
+			c.frameIntFired = false
+			c.frameIntDeasct = false
+		}
 	}
+	c.frameBudget = frameBudget
 	c.frameOrigin, c.frameOriginValid = c.nextFrameBoundary-frameBudget, true
 	if narrowPulse {
 		c.frameIntPulse(c.nextFrameBoundary - frameBudget)

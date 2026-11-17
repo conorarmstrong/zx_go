@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
@@ -182,5 +183,34 @@ func TestDisplayRowAndFrameFollowTheVideoClockAtTurbo(t *testing.T) {
 	*emu.mem.TStates = uint64(frame * 8)
 	if got := emu.ula.FrameID(); got != first+1 {
 		t.Errorf("FrameID one frame later = %d, want %d", got, first+1)
+	}
+}
+
+// The display start is measured from the frame interrupt (pkg/roms/timing.go,
+// cross-checked by simulating zxula_timing.vhd: o_int_ula to the first ULA
+// fetch is 14362 T on 128K timing). So the first paper row must begin exactly
+// that long after the CPU raises the interrupt, on every model the narrow
+// pulse is configured for. The CPU used to raise it at the raw counter
+// position of the pulse, (c_int_v*(c_max_hc+1)+c_int_h)/2 = 291 on +3 timing,
+// while the video counted from the frame start, which put the paper 291 T
+// early relative to the interrupt.
+func TestPaperStartsDisplayStartAfterTheFrameInterrupt(t *testing.T) {
+	for _, model := range []roms.SpectrumModel{roms.ModelNext, roms.Model128K, roms.ModelPlus3} {
+		t.Run(fmt.Sprint(model), func(t *testing.T) {
+			emu, err := newEmulator(model)
+			if err != nil {
+				t.Skipf("model unavailable: %v", err)
+			}
+			intAt := int(emu.cpu.IntAssertTstate)
+			start := roms.DisplayStartTState(model)
+			*emu.mem.TStates = uint64(intAt + start - 1)
+			if got := emu.ula.DisplayRow(); got != rasterlog.RowBeforeDisplay {
+				t.Errorf("one T before the paper (INT at %d): row %d, want before the display", intAt, got)
+			}
+			*emu.mem.TStates = uint64(intAt + start)
+			if got := emu.ula.DisplayRow(); got != 0 {
+				t.Errorf("DisplayStart after the INT (at %d): row %d, want 0", intAt, got)
+			}
+		})
 	}
 }

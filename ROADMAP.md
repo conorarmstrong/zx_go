@@ -1,8 +1,8 @@
 # zx_go Roadmap
 
-**Stage: released (v1.13.1)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
+**Stage: released (v1.13.2)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (item 2: NMI arbiter and in-block arbitration done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (item 2: frame INT past the frame end done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -71,7 +71,7 @@ hardware changes are modelled; see item 8.
 Ranked; detail in the open-work items below.
 
 1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **IM2 leftovers** (item 2): a frame INT that falls past the frame end inside a DMA block, `o_reti_decode`, and anything on UART 1.
+2. **IM2 leftovers** (item 2): `o_reti_decode`, and anything on UART 1.
 3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
 4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
 5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
@@ -99,7 +99,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-11-16, v1.13.1)
+## CURRENT STATE (2026-11-17, v1.13.2)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -216,13 +216,11 @@ instruction ends. At an instruction boundary the pin is therefore exactly
 
 **Not done:**
 
-- **A frame INT past the frame end, inside a block.** `CPU.ExecuteFrame` starts
-  each frame where the last one actually ended, so a block that runs past the
-  frame end pushes the next frame, and its interrupt, to after the block. On the
-  FPGA the ULA does not wait. Placing that interrupt inside the block needs the
-  frame loop on a fixed grid, which moves every frame's interrupt timing and
-  must be checked against TX-1696 (item 1) first. Interrupts inside the current
-  frame, the line interrupt, the CTC and the UARTs are placed correctly.
+- ~~**A frame INT past the frame end, inside a block.**~~ Done 2026-11-17.
+  Frames now sit on a fixed grid (`CPU.ExecuteFrame` starts each frame at its
+  nominal T-state), and `PollIntSources` moves into the next frame when a
+  block runs past the frame end, raising that frame's interrupts at their own
+  times; the loop does not raise them again.
 - **`o_reti_decode`** (`im2_control.vhd:233`): high for the single T-state
   between the `ED` prefix and its second byte. The CPU still cannot give that
   window. Nothing in the current chain needs it; it is the first thing to check

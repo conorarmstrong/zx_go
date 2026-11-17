@@ -21,8 +21,8 @@ func TestNext60HzSwitchUpdatesULAMemoryAndINT(t *testing.T) {
 	if got := h.ULA().FrameTStates(); got != 70908 {
 		t.Fatalf("initial frame = %d, want 70908", got)
 	}
-	if got := h.CPU().IntAssertTstate; got != 291 {
-		t.Fatalf("initial INT assert = %d, want 291 (+3 50 Hz)", got)
+	if got := h.CPU().IntPulseTstates; got != 32 {
+		t.Fatalf("initial INT pulse = %d, want 32 (+3)", got)
 	}
 
 	// Write NR$05 bit 2 (60 Hz). The joystick/scandoubler bits are 0.
@@ -34,8 +34,8 @@ func TestNext60HzSwitchUpdatesULAMemoryAndINT(t *testing.T) {
 	if got := h.ULA().FrameTStates(); got != 60192 {
 		t.Errorf("60 Hz frame = %d, want 60192 (+3 264x456/2)", got)
 	}
-	if got := h.CPU().IntAssertTstate; got != 63 {
-		t.Errorf("60 Hz INT assert = %d, want 63 (+3 c_int_h 126/2)", got)
+	if got := h.CPU().IntAssertTstate; got != 0 {
+		t.Errorf("60 Hz INT assert = %d, want 0 (the frame origin)", got)
 	}
 	// NR$05 bit 2 reads back; the unmodelled scandoubler bit 0 does not.
 	if got := h.NextRegs().ReadReg(0x05); got != 0x04 {
@@ -50,7 +50,7 @@ func TestNext60HzSwitchUpdatesULAMemoryAndINT(t *testing.T) {
 	if got := h.ULA().FrameTStates(); got != 70908 {
 		t.Errorf("back to 50 Hz frame = %d, want 70908", got)
 	}
-	if got := h.CPU().IntAssertTstate; got != 291 {
-		t.Errorf("back to 50 Hz INT assert = %d, want 291", got)
+	if got := h.CPU().IntAssertTstate; got != 0 {
+		t.Errorf("back to 50 Hz INT assert = %d, want 0", got)
 	}
 }

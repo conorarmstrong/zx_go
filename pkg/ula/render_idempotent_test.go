@@ -133,8 +133,8 @@ func TestLastFrameReturnsTheFrameRenderReturned(t *testing.T) {
 	}
 }
 
-// wide80Compositor is a stub compositor that reports 80-column tilemap mode,
-// which is what routes Render through the 640-pixel path.
+// wide80Compositor is a stub compositor that asks for a 640-pixel row, as the
+// 80-column tilemap does.
 type wide80Compositor struct{ stubCompositor }
 
-func (wide80Compositor) TilemapIs80Col() bool { return true }
+func (wide80Compositor) WideScale() int { return 2 }

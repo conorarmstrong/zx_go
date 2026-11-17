@@ -1,7 +1,6 @@
 package compositor
 
 import (
-	"image/color"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
@@ -36,16 +35,14 @@ func TestComposeScanlineSULStencilAndFallback(t *testing.T) {
 
 	c := New(pal, l2)
 	c.SetPrioritySource(fixedPriority{ModeSUL})
-	var ulaPal [16]color.RGBA
-	ulaPal[7] = color.RGBA{R: 0x11, G: 0x22, B: 0x33, A: 0xFF} // transparency colour
-	c.SetULAPalette(ulaPal)
-	c.SetTransparency(7) // NR$14 = 7 (< 16 → ULA transparency active)
+	c.SetTransparency(7) // NR$14 = RGB332 000 001 11
 	c.SetFallbackColour(0x99, 0x88, 0x77)
 
-	// Both pixels: the ULA is the transparency colour (transparent ULA).
+	// Both pixels: the ULA is the transparency colour (transparent ULA): a
+	// colour whose RGB332 is NR$14.
 	ulaRGBA := make([]byte, Width*4)
 	for _, off := range []int{0, 4} {
-		ulaRGBA[off+0], ulaRGBA[off+1], ulaRGBA[off+2], ulaRGBA[off+3] = 0x11, 0x22, 0x33, 0xFF
+		ulaRGBA[off+0], ulaRGBA[off+1], ulaRGBA[off+2], ulaRGBA[off+3] = expand3(0), expand3(1), expand3(7), 0xFF
 	}
 	dst := make([]byte, Width*4)
 	c.ComposeScanline(0, ulaRGBA, dst)

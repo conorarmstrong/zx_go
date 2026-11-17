@@ -69,6 +69,10 @@ func newNext() (*Harness, error) {
 	}
 	l2 := layer2.New(mem)
 	pal := palette.NewBank()
+	// The harness builds a Next without running the boot firmware, which is
+	// what loads the palettes on hardware (the palette RAM has no initial
+	// contents), so start from the state it leaves.
+	pal.LoadFirmwareDefaults()
 	prio := next.NewLayerPriority()
 	sprites := sprite.New()
 	// The engine's per-scanline time budget follows the machine's line
@@ -123,6 +127,7 @@ func newNext() (*Harness, error) {
 	comp.SetSprites(sprites)
 	comp.SetPrioritySource(prio)
 	u.SetNextCompositor(comp)
+	u.SetNextULAColour(next.NewULAColour(disp, pal))
 	u.SetNextSpritePort(sprites) // port $303B select (write) / status (read); $5B/$57 upload
 	u.SetNextDMA(dmaEngine)
 	u.SetNextCopper(cop)

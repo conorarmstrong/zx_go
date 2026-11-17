@@ -54,3 +54,27 @@ func TestFrameEpochAdvancesOnResetAndLoad(t *testing.T) {
 		t.Error("LoadState left the epoch unchanged")
 	}
 }
+
+// Clock runs on across the frame rewind; ClockGeneration moves only where it
+// really jumps.
+func TestClockIsUnbrokenAcrossFrames(t *testing.T) {
+	m := &epochMem{fiMem: fiMem{b: make([]byte, 0x10000)}}
+	c := New(m, fiULA{})
+	c.PC = 0x8000
+	g := c.ClockGeneration()
+	before := c.Clock()
+	c.ExecuteFrame(1000)
+	mid := c.Clock()
+	c.ExecuteFrame(1000)
+	after := c.Clock()
+	if mid < before+1000 || after < mid+1000 {
+		t.Errorf("Clock %d -> %d -> %d across two 1000 T frames", before, mid, after)
+	}
+	if c.ClockGeneration() != g {
+		t.Error("a frame rewind changed the clock generation")
+	}
+	c.Reset()
+	if c.ClockGeneration() == g {
+		t.Error("Reset left the clock generation unchanged")
+	}
+}

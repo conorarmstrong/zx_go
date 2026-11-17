@@ -41,10 +41,13 @@ func TestHALTRefreshInExecuteFrame(t *testing.T) {
 	// budget/4 halted M1 cycles fit in the frame. Asserting the bump count
 	// pins both halves of the behaviour at once: that R advances at all, and
 	// that a halted M1 costs 4 T-states rather than 1.
+	// Frames are on a fixed grid, so the T-states the HALT step already spent
+	// count against this frame.
 	const budget = 400
+	ticks := (budget - int(cpu.tstates)) / 4
 	cpu.ExecuteFrame(budget)
 
-	if want := wantRAfter(rBefore, budget/4); cpu.R != want {
+	if want := wantRAfter(rBefore, ticks); cpu.R != want {
 		t.Errorf("R after a halted frame = $%02X, want $%02X (one bump per 4 T-states)", cpu.R, want)
 	}
 }

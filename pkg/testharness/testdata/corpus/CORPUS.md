@@ -145,43 +145,34 @@ Two real bugs were found by adding them:
   takes the X coordinates as 2-pixel units (video/layer2.vhd:129-135). x1=1
   therefore becomes column 2. The golden was regenerated on 2026-08-22 when
   the clip window was first honoured; before that Layer 2 drew full-frame
-  however a program clipped it.
+  however a program clipped it. On 2026-11-17 the border went black: the
+  program selects USL (ULA on top) and makes only bright-black paper
+  transparent (ULA palette entry 24 = $E3), so the opaque black border covers
+  Layer 2 there. The 320x256 Layer 2 used to be painted over everything.
 - **zxnext_tilemap** — tilemap layer with scrolling.
 - **SpecBong** — hardware sprites + tilemap-text HUD over a Layer 2 playfield;
-  captured at its pre-start frame (no input is injected in the slice).
+  captured at its pre-start frame (no input is injected in the slice). Until
+  2026-11-17 the golden showed a flat grey screen: the ULA drew with the
+  classic palette and was never transparent, so it covered the playfield. With
+  the Next ULA palette its paper matches NR$14 and the playfield shows.
 
 - **ccffrm** — reads **"No error ✓"**: we pass the SCF/CCF undocumented-flag
   (bits 3/5) stability test.
 - **DIHalt** — green border (the CPU stays HALTed with interrupts disabled and
   no NMI, as it should): pass.
 - **z80bltst** — some pass/fail cells are red. Mixed; captured as-is.
-- **int_skip** — reports **`!ERR! allows ISR`** for DD/FD prefix blocks.
-  Investigated (2026-07-09): the original "interrupt accepted mid-prefix-chain"
-  hypothesis was DISPROVEN — the model executes a chained DD/FD block as one
-  atomic instruction (confirmed), so an interrupt cannot be taken mid-chain.
-  The real cause is the classic 48K interrupt model: it uses the deliberate
-  legacy "held-INT for the whole frame" approximation (`cmd/zx_go/main.go`,
-  `IntPulseTstates == 0`), whereas the test expects a ~32T narrow /INT pulse
-  that a long prefix block would span and lose. Making it pass would require
-  migrating the classic 48K/128K INT model to a narrow pulse AND finer INT
-  sampling across atomic instructions — a broad change to a proven,
-  FPGA-bit-exact CPU that a conscious decision currently avoids. Left as a
-  documented limitation; the golden guards the current behaviour. A related
-  genuine narrow-pulse bug found during this hunt (an atomic instruction
-  spanning the pulse window raised the INT late) WAS fixed in
-  `pkg/z80` `frameIntPulse` — it improves the Next/128K/+3 narrow-pulse models
-  but does not change this 48K golden.
-- **int_skip (narrow /INT)** — the same test with a faithful ~32T narrow /INT
-  pulse (`intAssert=58`, `intPulse=32`) instead of the held-INT approximation.
-  Here the DD/FD/DDFD prefix blocks read **`0 !OK inhibits ISR`** — the correct
-  hardware result — because the atomic prefix block spans the narrow pulse and
-  the interrupt is lost, exactly as the frameIntPulse window fix models. This
-  golden is the end-to-end guard for that fix: reverting it flips the blocks
-  back to `43 !ERR! allows ISR` (verified). It represents the interrupt
-  behaviour of the 128K/+3/Next, which the 48K memory model can host because
-  int_skip is a ZX48/ZX128 program (a real 128K memory model renders 48K
-  snapshots as garbage, so the memory stays 48K while only the INT timing is
-  switched to the narrow pulse those machines use).
+- **int_skip** reads **`0 |OK |inhibits ISR`** for the DD and FD prefix
+  blocks, the hardware result, on the 48K and the 128K alike. It reported
+  `!ERR! allows ISR` until 2026-11-17 for two reasons. The 48K held its
+  interrupt for the whole frame instead of the ULA's 32 T-state pulse. And
+  every frame started where the last instruction ended, so the interrupt
+  always fell on an instruction boundary and was sampled at once; with frames
+  on a fixed grid it asserts inside the atomic prefix block that spans it and
+  is lost, as on hardware.
+- **int_skip (narrow /INT)** is the same test with the narrow pulse set
+  explicitly (`intPulse=32`). Now that the 48K has the pulse by default this
+  matches the entry above; it is kept as the guard for the pulse-window logic
+  in `pkg/z80` `frameIntPulse`.
 - **ULAvsSJS** — interactive keyboard test; the captured frame is the idle
   (no-key) state.
 

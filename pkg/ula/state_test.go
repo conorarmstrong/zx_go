@@ -653,7 +653,7 @@ func driveEverything(u *ULA, ts *uint64) {
 	// way it can be made to differ between capture and restore.
 	u.dc.SetLimit(int32(beeperHigh) / 3)
 	// The copper straddle debt is only ever moved by a Copper stepped through
-	// applyNextCompositor, which this 48K fixture has none of, so it is set by
+	// renderNext, which this 48K fixture has none of, so it is set by
 	// hand for the same reason the DC clamp above is.
 	u.copperDebt = 1
 }
@@ -749,8 +749,7 @@ func decodeULAState(t *testing.T, b []byte) ulaState {
 // exists.
 type wideCompositor struct{ stubCompositor }
 
-func (wideCompositor) ComposeScanline(y int, ulaRGBA, dst []byte) { copy(dst, ulaRGBA) }
-func (wideCompositor) ComposeScanlineRange(y int, ulaRGBA, dst []byte, x0, x1 int) {
-	copy(dst[x0*4:x1*4], ulaRGBA[x0*4:x1*4])
+func (wideCompositor) ComposeFrameRowRange(fy int, ula, dst []byte, scale, x0, x1 int) {
+	copy(dst[x0*4:x1*4], ula[x0*4:x1*4])
 }
-func (wideCompositor) TilemapIs80Col() bool { return true }
+func (wideCompositor) WideScale() int { return 2 }

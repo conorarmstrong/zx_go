@@ -55,7 +55,7 @@ func TestCopperListLandsItsWritesWhereTheRasterIs(t *testing.T) {
 	u.SetNextCopper(c)
 	u.SetNextCompositor(&stateStampCompositor{state: &writes})
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	row := u.img.Pix[BorderTop*u.img.Stride+BorderLeft*4:]
 	for x := 0; x < ScreenWidth; x++ {
@@ -90,8 +90,8 @@ type boundsCheckingCompositor struct {
 	bad   []string
 }
 
-func (c *boundsCheckingCompositor) ComposeScanlineRange(y int, _, dst []byte, from, to int) {
-	if from < 0 || from > to || to > ScreenWidth {
+func (c *boundsCheckingCompositor) ComposeFrameRowRange(y int, _, dst []byte, _, from, to int) {
+	if from < 0 || from > to || to > TotalWidth {
 		c.bad = append(c.bad, fmt.Sprintf("row %d: range [%d,%d)", y, from, to))
 		return
 	}
@@ -117,7 +117,7 @@ func TestACopperWriteBeforePixelZeroComposesTheWholeRow(t *testing.T) {
 	u.SetNextCopper(&writeAtCopper{atHCount: writeHCount, state: &state})
 	u.SetNextCompositor(comp)
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	if len(comp.bad) != 0 {
 		t.Fatalf("the compositor was handed %d unusable ranges, first %s",
@@ -147,7 +147,7 @@ func TestACopperWriteAfterTheLastPixelComposesNothing(t *testing.T) {
 	u.SetNextCopper(&writeAtCopper{atHCount: writeHCount, state: &state})
 	u.SetNextCompositor(comp)
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	if len(comp.bad) != 0 {
 		t.Fatalf("the compositor was handed %d unusable ranges, first %s",

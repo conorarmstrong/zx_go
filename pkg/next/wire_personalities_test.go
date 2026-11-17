@@ -53,11 +53,11 @@ func TestNR03AllPersonalities(t *testing.T) {
 					c.name, (got>>4)&0x07, c.wantTiming, got)
 			}
 
-			// The same byte must drive a sensible frame-INT timing
-			// (assert tstate > 0, pulse width > 0).
+			// The same byte must drive a narrow frame-INT pulse, asserted
+			// at the frame origin.
 			assert, pulse := FrameIntTiming(c.write, false)
-			if assert <= 0 || pulse <= 0 {
-				t.Errorf("%s: FrameIntTiming($%02X) = assert %d pulse %d, want both > 0",
+			if assert != 0 || pulse <= 0 {
+				t.Errorf("%s: FrameIntTiming($%02X) = assert %d pulse %d, want 0 and > 0",
 					c.name, c.write, assert, pulse)
 			}
 		})

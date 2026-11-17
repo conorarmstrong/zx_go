@@ -13,28 +13,21 @@ import (
 // the bottom over-border strip (frame Y 250).
 type overBorderMock struct{ rows map[int]bool }
 
-func (m *overBorderMock) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
-	m.ComposeScanline(y, ulaRGBA, dst)
-}
-
-func (m *overBorderMock) ComposeScanline(y int, ula, dst []byte)               {}
-func (m *overBorderMock) HasActiveTilemap() bool                               { return false }
-func (m *overBorderMock) ComposeBorderRow(y int, dst []byte, f func(int) bool) {}
-func (m *overBorderMock) HasActiveSprites() bool                               { return true }
-func (m *overBorderMock) ComposeSpriteBorderRow(y int, dst []byte, f func(int) bool) {
+func (m *overBorderMock) ComposeScanline(int, []byte, []byte)                {}
+func (m *overBorderMock) ComposeScanlineRange(int, []byte, []byte, int, int) {}
+func (m *overBorderMock) ComposeFrameRowRange(fy int, ula, dst []byte, scale, x0, x1 int) {
 	if m.rows == nil {
 		m.rows = map[int]bool{}
 	}
-	m.rows[y] = true
-	if y == 250 { // bottom over-border strip — paint a marker at x=0
+	m.rows[fy] = true
+	copy(dst[x0*4:x1*4], ula[x0*4:x1*4])
+	if fy == 250 { // bottom over-border strip: paint a marker at x=0
 		dst[0], dst[1], dst[2], dst[3] = 0x12, 0x34, 0x56, 0xFF
 	}
 }
-func (m *overBorderMock) TilemapIs80Col() bool                    { return false }
-func (m *overBorderMock) ComposeWideTilemapRow(y int, dst []byte) {}
-func (m *overBorderMock) HiResLayer2Active() bool                 { return false }
-func (m *overBorderMock) Layer2Width() int                        { return 320 }
-func (m *overBorderMock) ComposeWideLayer2Row(y int, dst []byte)  {}
+func (m *overBorderMock) HasActiveSprites() bool  { return true }
+func (m *overBorderMock) HiResLayer2Active() bool { return false }
+func (m *overBorderMock) WideScale() int          { return 1 }
 
 // TestNextRenderShowsOverBorderSprites locks in that, when the Next sprite
 // layer is active, the display returns the full 320x256 over-border frame (not
@@ -65,7 +58,7 @@ func TestNextRenderShowsOverBorderSprites(t *testing.T) {
 	if p := img.Pix[off : off+4]; p[0] != 0x12 || p[1] != 0x34 || p[2] != 0x56 {
 		t.Errorf("over-border sprite at frame Y 250 missing from frame: got % X", img.Pix[off:off+4])
 	}
-	// Both cropped strips must have been offered to the sprite pass.
+	// Both cropped strips must have been composed.
 	if !m.rows[0] || !m.rows[255] {
 		t.Errorf("over-border strips not painted: sawY0=%v sawY255=%v", m.rows[0], m.rows[255])
 	}
@@ -91,19 +84,4 @@ func TestNextRenderNoSpritesStaysClassicHeight(t *testing.T) {
 	}
 }
 
-type noSpriteMock struct{}
-
-func (m *noSpriteMock) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0, x1 int) {
-	m.ComposeScanline(y, ulaRGBA, dst)
-}
-
-func (m *noSpriteMock) ComposeScanline(y int, ula, dst []byte)                     {}
-func (m *noSpriteMock) HasActiveTilemap() bool                                     { return false }
-func (m *noSpriteMock) ComposeBorderRow(y int, dst []byte, f func(int) bool)       {}
-func (m *noSpriteMock) HasActiveSprites() bool                                     { return false }
-func (m *noSpriteMock) ComposeSpriteBorderRow(y int, dst []byte, f func(int) bool) {}
-func (m *noSpriteMock) TilemapIs80Col() bool                                       { return false }
-func (m *noSpriteMock) ComposeWideTilemapRow(y int, dst []byte)                    {}
-func (m *noSpriteMock) HiResLayer2Active() bool                                    { return false }
-func (m *noSpriteMock) Layer2Width() int                                           { return 320 }
-func (m *noSpriteMock) ComposeWideLayer2Row(y int, dst []byte)                     {}
+type noSpriteMock struct{ stubCompositor }

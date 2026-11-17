@@ -6,6 +6,43 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.13.2]
+
+**One Next pixel pipeline, the Next ULA palette, and frame-exact interrupts.**
+
+### Fixed
+
+- **The Next's layers are composed in one pixel pipeline, border included.**
+  Every frame row, border and paper together, now goes through the NR$15 layer
+  order, as the FPGA's mixer does. Before, the 320x256 and 640x256 Layer 2 and
+  the 80-column tilemap were painted over the finished frame whatever NR$15
+  said, so in the default order Layer 2 covered every sprite. The border took
+  the tilemap and then the sprites on top, also ignoring NR$15. A 320x256 or
+  640x256 Layer 2 now shows all 256 of its lines.
+- **The Next ULA draws through the Next ULA palette.** It used the classic
+  fixed palette, so palette writes, ULANext (NR$42/$43) and ULA+ never changed
+  the ULA's colours. The ULA now forms the palette index the FPGA does and
+  looks it up in the active ULA palette. A ULA pixel is transparent when that
+  colour's RGB332 equals NR$14, as on hardware. The old test treated NR$14 as a
+  colour number from 0 to 15, so with the default $E3 nothing was ever
+  transparent. SpecBong's playfield and the Layer 2 demo now show through the
+  ULA as they should.
+- **The frame interrupt is at the frame origin.** The display start, the
+  contention window and the beam are all measured from the interrupt, but the
+  CPU raised it 291 T-states into the frame on 128K, +3 and Next timing. The
+  paper came 1.3 lines early relative to the interrupt.
+- **Frames sit on a fixed grid.** Each frame started where the last instruction
+  ended, so the interrupt always fell on an instruction boundary. A long prefix
+  block now misses the narrow pulse it spans, as on hardware. A DMA block that
+  runs past the frame end now meets the next frame's interrupt at its own
+  time, inside the block.
+- **The 48K has the narrow interrupt pulse.** It held the interrupt for the
+  whole frame. The int_skip conformance test now passes on the 48K as well as
+  the 128K.
+- **The CTC and the UARTs no longer lose time at each frame.** They followed
+  the CPU's frame-relative T-state count, which rewinds at every frame end,
+  and dropped the first instruction of each frame.
+
 ## [v1.13.1]
 
 **The Next UART, a Next-aware debugger, and Sonic fixed.**

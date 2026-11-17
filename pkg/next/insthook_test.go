@@ -11,13 +11,16 @@ type pin struct{ calls []bool }
 
 func (p *pin) SetBusDelay(on bool) { p.calls = append(p.calls, on) }
 
-// fakeCPU is a CPU clock the test moves by hand, recording INT polls.
+// fakeCPU is a CPU clock the test moves by hand, recording INT polls. base is
+// what the frame rewinds have taken off t; gen counts resets and loads.
 type fakeCPU struct {
-	t     uint64
-	polls []uint64
+	t, base, gen uint64
+	polls        []uint64
 }
 
 func (c *fakeCPU) Tstates() uint64           { return c.t }
+func (c *fakeCPU) Clock() uint64             { return c.base + c.t }
+func (c *fakeCPU) ClockGeneration() uint64   { return c.gen }
 func (c *fakeCPU) SpeedMultiplier() int      { return 1 }
 func (c *fakeCPU) PollIntSources(now uint64) { c.polls = append(c.polls, now) }
 
@@ -104,16 +107,46 @@ func TestTickerCountsBlockTimeOnce(t *testing.T) {
 	}
 }
 
-// A clock that goes back (a state restore) runs nothing.
-func TestTickerClockGoingBackRunsNothing(t *testing.T) {
+// A state restore or a reset moves the clock arbitrarily; it runs nothing.
+func TestTickerClockDiscontinuityRunsNothing(t *testing.T) {
 	tk, cpu, _, bank := newTickerRig(t, nil)
 	bank.WritePort(0x183B, 0x05)
 	bank.WritePort(0x183B, 0x10)
 	before, _ := bank.ReadPort(0x183B)
-	cpu.t = 10
-	tk.Instruction(4)
-	if after, _ := bank.ReadPort(0x183B); after != before {
-		t.Error("the CTC moved when the clock went back")
+	for _, v := range []uint64{10, 90000} { // back, then forward
+		cpu.t = v
+		cpu.gen++
+		tk.Instruction(4)
+		if after, _ := bank.ReadPort(0x183B); after != before {
+			t.Errorf("the CTC moved across a discontinuity to T=%d", v)
+		}
+	}
+}
+
+// ExecuteFrame rewinds the T-state counter by a frame at every frame end. That
+// is not lost time: the CTC and the UARTs must see the instruction that
+// straddles the rewind in full, exactly as if no rewind had happened.
+func TestTickerCountsTimeAcrossAFrameRewind(t *testing.T) {
+	a, cpuA, _, bankA := newTickerRig(t, nil)
+	b, cpuB, _, bankB := newTickerRig(t, nil)
+	for _, bk := range []*ctc.Bank{bankA, bankB} {
+		bk.WritePort(0x183B, 0x05) // timer mode, prescaler 16, time constant follows
+		bk.WritePort(0x183B, 0xFF) // time constant 255: the count shows every 16 clocks
+	}
+	for i := 0; i < 50; i++ {
+		cpuA.t += 7
+		a.Instruction(7)
+		cpuB.t += 7
+		b.Instruction(7)
+		if i == 20 {
+			cpuA.t -= 1000 // the frame rewind
+			cpuA.base += 1000
+		}
+	}
+	ga, _ := bankA.ReadPort(0x183B)
+	gb, _ := bankB.ReadPort(0x183B)
+	if ga != gb {
+		t.Errorf("CTC after a rewind %d, without %d", ga, gb)
 	}
 }
 

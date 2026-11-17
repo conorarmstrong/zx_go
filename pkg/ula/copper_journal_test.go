@@ -59,7 +59,7 @@ func TestCopperWritesAreNeverJournalled(t *testing.T) {
 	u.SetNextCompositor(stubCompositor{})
 	u.SetNextRasterLog(log)
 
-	u.applyNextCompositor()
+	u.renderNext()
 
 	if len(c.recordableRows) != 0 {
 		t.Errorf("the Copper was clocked on %d row(s) where its writes would have "+

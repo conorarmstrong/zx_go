@@ -1349,10 +1349,10 @@ func wireNextSubsystems(e *emulator) error {
 	comp.SetTilemap(tilemapLayer)
 	comp.SetPrioritySource(prio)
 	u.SetNextCompositor(comp)
-	// Give the compositor the ULA's 16-colour palette so it can resolve
-	// the ULA transparency colour for the SUL per-pixel stencil + the
-	// NR$4A fallback (a transparent ULA pixel carries u.palette[NR$14]).
-	comp.SetULAPalette(u.Palette())
+	// The ULA draws through the Next ULA palette, with the index the FPGA
+	// forms (standard, ULANext, ULA+). The compositor then judges ULA
+	// transparency on that colour against NR$14.
+	u.SetNextULAColour(next.NewULAColour(disp, pal))
 	// Wire the live NR$4C (tilemap transparency nibble) into the
 	// compositor: a tilemap pixel is transparent when its palette
 	// index's low nibble == NR$4C(3:0) (FPGA tilemap.vhd:427). NextZXOS
@@ -1956,6 +1956,7 @@ func unwireNextSubsystems(e *emulator) {
 	u.SetNextRegs(nil)
 	u.SetNextAY(nil)
 	u.SetNextCompositor(nil)
+	u.SetNextULAColour(nil)
 	u.SetNextDMA(nil)
 	u.SetNextI2C(nil)
 	u.SetNextCopper(nil)

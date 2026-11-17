@@ -26,7 +26,7 @@ func wideULA(t *testing.T) *ULA {
 	for i := 0x1800; i < 0x1B00; i++ {
 		page[i] = 0x07 // white ink, black paper
 	}
-	u.SetNextCompositor(stubCompositor{})
+	u.SetNextCompositor(wideCompositor{})
 	return u
 }
 
@@ -35,15 +35,13 @@ func wideULA(t *testing.T) *ULA {
 // ULA pixel.
 func TestFineScrollShiftsTheWideFrameByOneUnit(t *testing.T) {
 	plain := wideULA(t)
-	plain.Render()
-	a := plain.renderWide()
+	a := plain.Render()
 	base := make([]byte, len(a.Pix))
 	copy(base, a.Pix)
 
 	fine := wideULA(t)
 	fine.SetULAFineScrollX(true)
-	fine.Render()
-	b := fine.renderWide()
+	b := fine.Render()
 
 	if string(base) == string(b.Pix) {
 		t.Fatal("NR$68 bit 2 changed nothing in the 640-pixel frame")
@@ -70,14 +68,12 @@ func TestFineScrollShiftsTheWideFrameByOneUnit(t *testing.T) {
 // and the Next at reset have the bit clear, and must render exactly as before.
 func TestFineScrollOffLeavesTheFrameAlone(t *testing.T) {
 	u := wideULA(t)
-	u.Render()
-	before := u.renderWide()
+	before := u.Render()
 	a := make([]byte, len(before.Pix))
 	copy(a, before.Pix)
 
 	u.SetULAFineScrollX(false)
-	u.Render()
-	after := u.renderWide()
+	after := u.Render()
 	if string(a) != string(after.Pix) {
 		t.Error("with NR$68 bit 2 clear the wide frame changed")
 	}

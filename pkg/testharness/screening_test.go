@@ -362,9 +362,12 @@ func TestProbeInputIgnoresSelfAnimation(t *testing.T) {
 		t.Fatalf("never reached BASIC: %v", err)
 	}
 
-	// LD HL,$4000 / (loop) INC (HL) / INC HL / JR loop — scribbles across the
-	// display for ever, touching no port.
-	for i, b := range []byte{0x21, 0x00, 0x40, 0x34, 0x23, 0x18, 0xFC} {
+	// LD HL,$4000 / (loop) INC (HL) / INC HL / LD A,H / CP $58 / JR NZ,loop /
+	// LD H,$40 / JR loop: scribbles over the bitmap for ever, touching no
+	// port. Kept inside the bitmap so it changes the screen at the same rate
+	// in every probe window; wandering the whole 64K made the amount of
+	// display a window saw depend on where the pointer happened to be.
+	for i, b := range []byte{0x21, 0x00, 0x40, 0x34, 0x23, 0x7C, 0xFE, 0x58, 0x20, 0xF9, 0x26, 0x40, 0x18, 0xF5} {
 		h.WriteMemory(uint16(0x8000+i), b)
 	}
 	h.CPU().PC = 0x8000

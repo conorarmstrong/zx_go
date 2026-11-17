@@ -71,7 +71,7 @@ var corpusPrograms = []corpusProgram{
 	// integration guard for the pkg/z80 frameIntPulse window fix: reverting
 	// that fix flips these blocks back to the !ERR! state. assert=58/pulse=32
 	// are the 48K machine's own narrow-pulse constants (next.FrameIntTiming).
-	{name: "mrk_int_skip_narrowint", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2, intAssert: 58, intPulse: 32},
+	{name: "mrk_int_skip_narrowint", file: "int_skip.sna", model: roms.Model48K, kind: loadSnapshot, frames: 200, minColours: 2, intPulse: 32},
 
 	// The same conformance tests on the 128K family. Until v1.6.0 every entry
 	// here was 48K, which is exactly how a 230-T-state error in the 128K

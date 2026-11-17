@@ -40,16 +40,12 @@
 // block where it stands. The per-block bus acquisition is derived but not
 // charged; see busAcquisitionCycles.
 //
-// What is modelled but never exercised: the dma_delay_i pin and everything
-// behind it (SetBusDelay, BusRequested, the stalled state and its capture).
-// Nothing in the emulator drives that pin, because its source does not exist as
-// a live signal here -- pkg/next.IM2DaisyChain is a GHDL-golden reference model
-// that is itself unwired, and NR$CC/$CD/$CE are stored-only. The behaviour is
-// kept because it is the device's, and pinned by tests so it stays correct
-// until the IM2 chain is connected, but no guest can reach it today. Do not
-// read the presence of this code as a claim that a Next program's DMA can be
-// held off the bus by an interrupt here. Recorded as ROADMAP item 2, which is
-// the work that makes it reachable.
+// The dma_delay_i pin (SetBusDelay, BusRequested, the stalled state and its
+// capture) is driven by pkg/next.Ticker from the IM2 chain and the NMI
+// arbiter: the chain's DMA-enabled sources (NR$CC/$CD/$CE) and NR$CC bit 7's
+// active NMI. It is sampled at every instruction boundary and after every
+// byte of a continuous block, which is where TRANSFERING_WRITE_4 reads it
+// (dma.vhd:427-428).
 //
 // The Z80 DMA's interrupt and match logic is deliberately absent, because the
 // FPGA does not implement it either. The entity has no interrupt output and no

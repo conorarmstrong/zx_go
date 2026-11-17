@@ -1,7 +1,6 @@
 package compositor
 
 import (
-	"image/color"
 	"testing"
 
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
@@ -40,8 +39,8 @@ const (
 	fxL2R, fxL2G, fxL2B = 5, 1, 0
 	// Sprite colour: 3-bit (0,7,0) — green, distinguishable from L2.
 	fxSpR, fxSpG, fxSpB = 0, 7, 0
-	// The ULA transparency colour: 3-bit (7,0,7), magenta.
-	fxTransR, fxTransG, fxTransB = 7, 0, 7
+	// The ULA transparency colour: 3-bit (0,1,7), whose RGB332 is fxTrans.
+	fxTransR, fxTransG, fxTransB = 0, 1, 7
 	// The opaque ULA colour: 3-bit (4,2,0). Kept 3-bit-clean so the blend
 	// modes can state their expectations in hardware channel terms.
 	fxULAR, fxULAG, fxULAB = 4, 2, 0
@@ -81,11 +80,6 @@ func newModeFixture(t *testing.T, mode PriorityMode, withSprite bool) *modeFixtu
 		c.SetSprites(sp)
 	}
 
-	var ulaPal [16]color.RGBA
-	ulaPal[fxTrans] = color.RGBA{
-		R: expand3(fxTransR), G: expand3(fxTransG), B: expand3(fxTransB), A: 0xFF,
-	}
-	c.SetULAPalette(ulaPal)
 	c.SetTransparency(fxTrans)
 	c.SetFallbackColour(0x99, 0x88, 0x77)
 
