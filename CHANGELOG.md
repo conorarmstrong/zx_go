@@ -6,6 +6,17 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v1.13.3]
+
+**NR$7F keeps its value across resets.**
+
+### Fixed
+
+- **NR$7F (User Register 0) powers on at $FF and survives resets.** It
+  started at $00 and a reboot cleared it. On the FPGA its only initialiser
+  is the power-on value, so software can use it to tell a cold boot from a
+  reset.
+
 ## [v1.13.2]
 
 **One Next pixel pipeline, the Next ULA palette, and frame-exact interrupts.**

@@ -59,6 +59,7 @@ func TestNewDispatcherDefaults(t *testing.T) {
 		// post-load FX snapshot diff vs the FPGA-faithful oracle (ours=$00,
 		// oracle=$81). The WireInterruptEnable0 OnWrite masks to bits 7,1,0.
 		0xC4: 0x81,
+		0x7F: 0xFF, // User Register 0 (zxnext.vhd:1216)
 	}
 	for reg := 0; reg < 256; reg++ {
 		want, hasOverride := expectDefault[byte(reg)]
@@ -313,7 +314,8 @@ func TestResetRestoresDefaults(t *testing.T) {
 		0x99: 0x01, // Pi GPIO output (zxnext.vhd:5071)
 		0xB8: 0x83,
 		0xBB: 0xCD,
-		0xC4: 0x81, // INT EN 0 — nextreg.txt soft reset = 0x81
+		0xC4: 0x81,        // INT EN 0 — nextreg.txt soft reset = 0x81
+		0x7F: 0x7F ^ 0xA5, // User Register 0 keeps the stomped value (keptByReset)
 	}
 	for reg := 0; reg < 256; reg++ {
 		want, has := expect[byte(reg)]
@@ -410,5 +412,25 @@ func TestCoreVersionIsLatestRelease(t *testing.T) {
 	}
 	if got := d.ReadReg(0x0E); got != 0x03 {
 		t.Errorf("NR$0E = $%02X, want $03 (sub-minor .03)", got)
+	}
+}
+
+// NR$7F, User Register 0, is $FF at power-on and no reset touches it: the
+// signal's only initialiser is its declaration (zxnext.vhd:1216), and the
+// reset block never assigns it. nextreg.txt's "hard reset = 0xff" means the
+// power-on hard reset; F1 and NR$02 bit 1 do not reload the bitstream.
+func TestUserRegister0IsFFAtPowerOnAndSurvivesReset(t *testing.T) {
+	d := New()
+	if got := d.ReadReg(0x7F); got != 0xFF {
+		t.Fatalf("NR$7F at power-on = %#02x, want 0xFF", got)
+	}
+	d.Reset()
+	if got := d.ReadReg(0x7F); got != 0xFF {
+		t.Fatalf("NR$7F after reset from power-on = %#02x, want 0xFF", got)
+	}
+	d.WriteReg(0x7F, 0x5A)
+	d.Reset()
+	if got := d.ReadReg(0x7F); got != 0x5A {
+		t.Errorf("NR$7F after reset = %#02x, want 0x5A kept", got)
 	}
 }

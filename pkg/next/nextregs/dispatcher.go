@@ -98,7 +98,9 @@ func (d *Dispatcher) Reset() {
 	// so handlers see the "back to defaults" event. Direct backing
 	// writes alone wouldn't notify the tilemap layer / L2 / etc.
 	for r := 0; r < 256; r++ {
-		d.write(byte(r), 0)
+		if !keptByReset(byte(r)) {
+			d.write(byte(r), 0)
+		}
 	}
 	// Phase 2: re-apply the non-zero tbblue_reset_common defaults,
 	// again through write() so any handler that interprets the byte
@@ -106,7 +108,7 @@ func (d *Dispatcher) Reset() {
 	var defaults [256]byte
 	applyResetDefaults(&defaults)
 	for r := 0; r < 256; r++ {
-		if defaults[r] != 0 {
+		if defaults[r] != 0 && !keptByReset(byte(r)) {
 			d.write(byte(r), defaults[r])
 		}
 	}
@@ -125,10 +127,17 @@ func (d *Dispatcher) Reset() {
 // otherwise clear along with the rest.
 func (d *Dispatcher) InReset() bool { return d.resetting }
 
+// keptByReset reports whether the FPGA's reset block leaves a register alone,
+// so only power-on sets it. NR$7F (User Register 0) has no assignment there:
+// its one initialiser is the signal declaration (zxnext.vhd:1216). A hard
+// reset does not reload the bitstream, so it keeps the user's value.
+func keptByReset(reg byte) bool { return reg == 0x7F }
+
 // applyResetDefaults seeds the FPGA's tbblue_reset_common power-on
 // values. Shared between New() and Reset() so they cannot drift.
 func applyResetDefaults(regs *[256]byte) {
 	regs[0x00] = defaultMachineID
+	regs[0x7F] = 0xFF // User Register 0, power-on only (see keptByReset)
 	regs[0x01] = defaultCoreVersion
 	// NR$02 = "Reset". Per the Spectrum Next wiki:
 	//   bit 0 = soft reset (read: last was soft; write 1: trigger soft)
