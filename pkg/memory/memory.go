@@ -121,6 +121,10 @@ type Memory struct {
 	betaActive    bool
 	betaBasicPage int
 	betaROM       [PageSize]byte
+	// betaROMBase keeps the pristine partner ROM so every Reset restores it —
+	// Fuse pentagon_reset reloads the partner with machine_load_rom_bank on
+	// every machine reset (pentagon.c:157-160).
+	betaROMBase [PageSize]byte
 
 	// RAMContentionDisabled, when set, overrides ContentionEnabled
 	// and suppresses the per-T-state contention pattern on RAM
@@ -1240,8 +1244,13 @@ func (m *Memory) EnableBeta(rom []byte) {
 			m.betaROM[i] = 0
 		}
 	}
+	m.betaROMBase = m.betaROM
 	m.betaEnabled = true
-	m.betaActive = false
+	// Pentagon: Fuse pentagon_reset (pentagon.c:157) sets beta_active = 1
+	// directly at reset — the TR-DOS ROM boots mapped over $0000-$3FFF
+	// (the Beta banner) and pages out only later via the trap ($7FFD bit4
+	// set + a fetch at $4000+). Other models start unpaged.
+	m.betaActive = m.currentModel == roms.ModelPentagon
 	// The 48 BASIC ROM is ROM 0 on the 48K and the second editor/BASIC ROM
 	// (ROM 1 → read-map page 17) on the 128/+2/Pentagon.
 	switch m.currentModel {
@@ -1289,24 +1298,58 @@ func (m *Memory) SetOpus(o OpusOverlay) { m.opus = o }
 
 // BetaPreFetch advances the Beta Disk auto-paging state machine for an
 // instruction fetch at pc. Call it from the CPU's pre-fetch hook so the byte
-// fetched at $3Dxx already comes from the TR-DOS ROM. It pages the TR-DOS ROM
-// in on a fetch in the $3D00-$3DFF entry vector (while the 48 BASIC ROM is
-// selected) and pages it out on a fetch at $4000+.
+// fetched in the entry window already comes from the TR-DOS ROM.
+//
+// Fuse z80/z80_ops.c:169-182 verbatim:
+//
+//	#define NOT_128_TYPE_OR_IS_48_TYPE ( !( machine_current->capabilities &
+//	            LIBSPECTRUM_MACHINE_CAPABILITY_128_MEMORY ) || \
+//	            machine_current->ram.current_rom )
+//
+//	if( beta_active ) {
+//	  if( NOT_128_TYPE_OR_IS_48_TYPE && PC >= 16384 ) beta_unpage();
+//	} else if( ( PC & beta_pc_mask ) == beta_pc_value &&
+//	           NOT_128_TYPE_OR_IS_48_TYPE ) beta_page();
+//
+// On 128-memory-class machines (incl. the Pentagon's built-in Beta) the
+// gate is ram.current_rom — the latched bit4 of $7FFD (spec128_select_rom
+// sets it on every memory_map, spec128.c:139). Pentagon_reset leaves it 0
+// (trap inert), but Fuse's ui_drive_autoload on a .trd mount writes
+// last_byte |= 0x10 (beta.c:403-417), and from that moment the trap is live
+// on Pentagon too: the partner pages OUT at any fetch >= $4000 and back IN
+// at the $3Dxx entry page.
+//
+// 48K-class hosts use the wider window (beta_reset: beta_pc_mask 0xfe00 /
+// beta_pc_value 0x3c00 -> page IN on $3C00-$3DFF, OUT at $4000+); 128-class
+// machines gate on the latched ROM select (slot0 == betaBasicPage is
+// ram.current_rom != 0) with the page window 0xff00/0x3d00 -> $3D00-$3DFF.
 func (m *Memory) BetaPreFetch(pc uint16) {
 	if !m.betaEnabled {
 		return
 	}
-	switch {
-	case pc >= 0x3D00 && pc <= 0x3DFF:
-		if m.betaActive || m.memoryPageReadMap[0] == m.betaBasicPage {
+	// The gate is ram.current_rom != 0, represented here as "the 48 BASIC
+	// (48K) or editor/BASIC ROM 1 (128-class) is selected in the $0000
+	// read-map slot".
+	if m.betaActive {
+		if pc >= 0x4000 && m.memoryPageReadMap[0] == m.betaBasicPage {
+			m.betaActive = false // Fuse beta_unpage
+		}
+		return
+	}
+	if m.currentModel == roms.Model48K {
+		if pc&0xFE00 == 0x3C00 { // Fuse beta_pc_mask 0xfe00 / value 0x3c00 (48-class, beta_reset)
 			m.betaActive = true
 		}
-	case pc >= 0x4000:
-		m.betaActive = false
+		return
+	}
+	// 128-class (incl. Pentagon built-in): Fuse beta_pc_mask 0xff00 / value
+	// 0x3d00 (beta.c:209-210), gated by NOT_128_TYPE_OR_IS_48_TYPE.
+	if pc&0xFF00 == 0x3D00 && m.memoryPageReadMap[0] == m.betaBasicPage {
+		m.betaActive = true
 	}
 }
 
-// GetCurrentModel returns the current Spectrum model
+// GetCurrentModel returns the current Spectrum model// GetCurrentModel returns the current Spectrum model
 func (m *Memory) GetCurrentModel() roms.SpectrumModel {
 	return m.currentModel
 }
@@ -1351,6 +1394,14 @@ func (m *Memory) Reset() error {
 	// configuration that the OS toggles at runtime.
 	defaults := m.altROMReg & 0x0F
 	m.altROMReg = defaults | (defaults << 4)
+	// Fuse reloads the Beta partner ROM bank at every machine reset
+	// (pentagon_reset -> machine_load_rom_bank); the partner may have been
+	// corrupted by writable-roms-style stores, and beta_active follows the
+	// model's reset law (Pentagon boots mapped IN, pentagon.c:157).
+	if m.betaEnabled {
+		m.betaROM = m.betaROMBase
+		m.betaActive = m.currentModel == roms.ModelPentagon
+	}
 	if err := m.setupModel(m.currentModel); err != nil {
 		return err
 	}
@@ -1645,6 +1696,17 @@ func (m *Memory) Write(addr uint16, val byte) {
 	// owns $0000-$3FFF, so its RAM, the WD1770 and the PIA all take writes
 	// there. The 8 KB ROM itself absorbs them.
 	if m.opus != nil && addr < 0x4000 && m.opus.Write(addr, val) {
+		return
+	}
+	// Beta ROMCS: while the TR-DOS ROM is paged over $0000-$3FFF, writes to
+	// that window are dropped. Fuse's romcs pages come from
+	// machine_load_rom_bank with writable=0/source=rom, and writable_roms
+	// defaults to 0 (settings.c:305), so memory_writebyte_internal drops
+	// every store there (memory_pages.c:507-511) — routing them to RAM or
+	// mirroring them into the ROM image would diverge from Fuse. Scoped to
+	// classic models: the Beta is classic-bus hardware (betaSupported
+	// excludes the Next).
+	if m.betaActive && addr < 0x4000 && m.currentModel != roms.ModelNext {
 		return
 	}
 	// divMMC overlay WRITE priority. Per zxnext.vhd's final memory mux
