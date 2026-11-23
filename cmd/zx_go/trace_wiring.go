@@ -126,6 +126,9 @@ func isInterestingPort(addr uint16) bool {
 		return true
 	case 0xFE: // ULA: border, mic, speaker, keyboard rows
 		return true
+	case 0x1F, 0x3F, 0x5F, 0x7F, 0xFF: // Beta 128: command/status, track,
+		// sector, data, system — the full TR-DOS floppy register set.
+		return true
 	}
 	switch addr {
 	case 0x7FFD, 0x1FFD: // 128K / +3 paging
@@ -168,7 +171,7 @@ func dumpState(emu *emulator) {
 	if emu.nextRegs != nil {
 		fmt.Printf("\nNextRegs (non-zero):\n")
 		for r := 0; r < 256; r++ {
-			v := emu.nextRegs.Peek(byte(r))
+			v := emu.nextRegs.ReadReg(byte(r))
 			if v != 0 {
 				fmt.Printf("  $%02X = $%02X\n", r, v)
 			}

@@ -51,7 +51,7 @@ func TestFDCReadSector(t *testing.T) {
 	f.SetSide(1)
 	// Seek the head to cylinder 5, point the sector register at sector 3.
 	f.WriteData(5)
-	f.WriteCommand(0x10) // Seek
+	f.WriteCommand(0x14) // Seek with verify — loads the head (Fuse wd_fdc.c:514)
 	f.WriteSectorReg(3)
 
 	f.WriteCommand(0x80) // Read Sector (Type II)
@@ -83,7 +83,7 @@ func TestFDCWriteSectorRoundTrip(t *testing.T) {
 	f.SelectDrive(0)
 	f.SetSide(0)
 	f.WriteData(7)
-	f.WriteCommand(0x10) // Seek to cylinder 7
+	f.WriteCommand(0x14) // Seek with verify to cylinder 7 — loads the head
 	f.WriteSectorReg(9)
 
 	f.WriteCommand(0xA0) // Write Sector
@@ -115,6 +115,7 @@ func TestFDCWriteProtected(t *testing.T) {
 	f.SetWriteProtect(0, true)
 	f.SelectDrive(0)
 	f.WriteSectorReg(1)
+	f.WriteCommand(0x04) // Restore with verify — loads the head (Fuse wd_fdc.c:514)
 	f.WriteCommand(0xA0) // Write Sector
 	if f.ReadStatus()&statusWrProt == 0 {
 		t.Error("write-protect status bit not set")
@@ -131,7 +132,7 @@ func TestFDCReadAddress(t *testing.T) {
 	f.Mount(0, NewImage(80, 2))
 	f.SelectDrive(0)
 	f.WriteData(11)
-	f.WriteCommand(0x10) // Seek to cylinder 11 → track register = 11
+	f.WriteCommand(0x14) // Seek with verify to cylinder 11 → track register = 11
 	f.WriteCommand(0xC0) // Read Address
 	first := f.ReadData()
 	if first != 11 {
@@ -148,6 +149,7 @@ func TestFDCRecordNotFound(t *testing.T) {
 	f.Mount(0, NewImage(80, 2))
 	f.SelectDrive(0)
 	f.WriteSectorReg(99) // no such sector
+	f.WriteCommand(0x04) // Restore with verify — loads the head (Fuse wd_fdc.c:514)
 	f.WriteCommand(0x80) // Read Sector
 	if f.ReadStatus()&statusRNF == 0 {
 		t.Error("RNF status bit not set for a missing sector")
@@ -170,6 +172,7 @@ func TestFDCForceInterrupt(t *testing.T) {
 	f.Mount(0, NewImage(80, 2))
 	f.SelectDrive(0)
 	f.WriteSectorReg(1)
+	f.WriteCommand(0x04) // Restore with verify — loads the head (Fuse wd_fdc.c:514)
 	f.WriteCommand(0x80) // Read Sector — starts a transfer
 	if f.ReadStatus()&statusBusy == 0 {
 		t.Fatal("expected Busy mid-transfer")

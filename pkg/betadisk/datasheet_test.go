@@ -3,9 +3,11 @@ package betadisk
 // Datasheet-faithful test suite for the WD1793 floppy-disk controller.
 //
 // The oracle throughout is the Western Digital WD1793 / FD179X-02 datasheet
-// ("FD179X-02 Floppy Disk Formatter/Controller Family"). Every assertion below
-// cites the datasheet behaviour it pins. No emulator is used as a reference;
-// these are derived purely from the published chip specification.
+// ("FD179X-02 Floppy Disk Formatter/Controller Family") as REALISED by Fuse's
+// wd_fdc.c for the Beta 128 wiring — where Fuse's code narrows or picks a
+// wiring-specific reading (bit meanings, the READY = head_load law at
+// :198-201, the never-written bit-5 SPINUP) Fuse wins, per the standing
+// rule for this repo: TR-DOS boots on Fuse, so Fuse is the behavior to match.
 //
 // Command encoding (WD1793 datasheet, "Command Summary"):
 //
@@ -96,8 +98,22 @@ func TestTypeIRestoreToTrack0(t *testing.T) {
 	if st&statusTrack0 == 0 {
 		t.Errorf("Track-0 status bit (bit 2) not set: %02X", st)
 	}
-	if st&statusHeadDmp == 0 {
-		t.Errorf("Head-Loaded status bit (bit 5) not set: %02X", st)
+	// Fuse wd_fdc_type_i's completion tail (:545-552) touches only bit 2
+	// (tr00 mirror) and bit 0 (Busy clear) — bit 5 is wd_fdc.h's
+	// WD_FDC_SR_SPINUP "Record type / Spin-up" and the FD1793/Beta never
+	// writes it (no status_register bit-5 store exists in wd_fdc.c). The
+	// head-load state lives in head_load and shows on bit 7 via sr_read's
+	// disk_ready recompute (:388-391). This Restore had V=0, so the spinup
+	// SEEK branch (:890-895) holds the head UNloaded: not-ready must read
+	// back set.
+	if st&statusHeadDmp != 0 {
+		t.Errorf("bit 5 (Fuse SPINUP) set by Restore — Fuse never writes it: %02X", st)
+	}
+	if f.headLoad {
+		t.Error("head_load set by Restore with V=0 — Fuse :890 unloads the head")
+	}
+	if f.ReadStatus()&statusNotRdy == 0 {
+		t.Errorf("Ready bit 7 clear with unloaded head — Beta READY is head_load (Fuse :198-201): %02X", f.statusReg)
 	}
 }
 
@@ -127,7 +143,12 @@ func TestTypeISeekUpdatesTrackRegisterAndTrack0(t *testing.T) {
 
 // WD1793 Step-In (Type I): moves the head one track toward the spindle (higher
 // track numbers). With the update-track-register (u) flag, bit 4 of the
-// command, the Track Register is incremented to match.
+// command, the Track Register is INCREMENTED — relative to itself, at command
+// issue — not copied from the physical head. Fuse wd_fdc.c:478-480: u jumps
+// straight to type_i_update (`track_register += direction`); the head moves
+// separately on every step (fdd_step), so after a u=0 step the register
+// legitimately sits one behind the head and a following u=1 step lands it on
+// 1, not 2.
 func TestTypeIStepInUpdateFlag(t *testing.T) {
 	f := NewFDC()
 	f.Mount(0, trdImage(t, 80, 2))
@@ -143,13 +164,15 @@ func TestTypeIStepInUpdateFlag(t *testing.T) {
 		t.Errorf("Track Register changed to %d with u=0, want unchanged 0", f.ReadTrackReg())
 	}
 
-	// Step In WITH the update flag (bit 4): Track Register tracks the head.
+	// Step In WITH the update flag (bit 4): the register increments itself.
+	// It was left at 0 by the u=0 step, so it lands on 1 — the head (now
+	// physically on track 2) does not pull it along (Fuse :493-494).
 	f.WriteCommand(0x50) // Step In, u=1
 	if f.headTrack[0] != 2 {
 		t.Errorf("head at %d after second Step-In, want 2", f.headTrack[0])
 	}
-	if f.ReadTrackReg() != 2 {
-		t.Errorf("Track Register = %d after Step-In u=1, want 2", f.ReadTrackReg())
+	if f.ReadTrackReg() != 1 {
+		t.Errorf("Track Register = %d after Step-In u=1, want 1 (0 + direction, not head)", f.ReadTrackReg())
 	}
 }
 
@@ -226,7 +249,11 @@ func TestTypeINotReady(t *testing.T) {
 	f := NewFDC()
 	f.SelectDrive(0) // no disk mounted
 	f.WriteCommand(0x00)
-	if f.statusReg&statusNotRdy == 0 {
+	// Bit 7 is recomputed by Fuse sr_read on EVERY status read (:388-391),
+	// and disk_ready() on the Beta IS head_load (:198-201). A Restore with
+	// V=0 leaves the head unloaded (spinup SEEK branch :890-895), so the
+	// guest sees Not-Ready through the port read.
+	if f.ReadStatus()&statusNotRdy == 0 {
 		t.Errorf("Not-Ready bit (bit 7) not set with no disk: %02X", f.statusReg)
 	}
 }
@@ -247,7 +274,7 @@ func TestTypeIIReadSectorDRQHandshake(t *testing.T) {
 	f.SelectDrive(0)
 	f.SetSide(1)
 	f.WriteData(12)
-	f.WriteCommand(0x10) // Seek to cylinder 12
+	f.WriteCommand(0x14) // Seek with verify to cylinder 12
 	f.WriteSectorReg(5)
 
 	want, err := img.ReadSector(12, 1, 5)
@@ -299,6 +326,7 @@ func TestTypeIIReadSectorRecordNotFound(t *testing.T) {
 	f.Mount(0, trdImage(t, 80, 2))
 	f.SelectDrive(0)
 	f.WriteSectorReg(99) // out of the 1..16 range — no such ID field
+	f.WriteCommand(0x04) // Restore with verify — loads the head
 	f.WriteCommand(0x80) // Read Sector
 	if f.statusReg&statusRNF == 0 {
 		t.Errorf("Record-Not-Found bit (bit 4) not set: %02X", f.statusReg)
@@ -321,7 +349,7 @@ func TestTypeIIWriteSectorDRQHandshake(t *testing.T) {
 	f.SelectDrive(0)
 	f.SetSide(0)
 	f.WriteData(20)
-	f.WriteCommand(0x10) // Seek to cylinder 20
+	f.WriteCommand(0x14) // Seek with verify to cylinder 20
 	f.WriteSectorReg(8)
 
 	f.WriteCommand(0xA0) // Write Sector
@@ -361,6 +389,7 @@ func TestTypeIIWriteProtect(t *testing.T) {
 	f.SetWriteProtect(0, true)
 	f.SelectDrive(0)
 	f.WriteSectorReg(1)
+	f.WriteCommand(0x04) // Restore with verify — loads the head
 	f.WriteCommand(0xA0) // Write Sector
 	if f.statusReg&statusWrProt == 0 {
 		t.Errorf("Write-Protect bit (bit 6) not set: %02X", f.statusReg)
@@ -375,9 +404,22 @@ func TestTypeIIWriteSectorNotReady(t *testing.T) {
 	f := NewFDC()
 	f.SelectDrive(2) // empty
 	f.WriteSectorReg(1)
+	f.WriteCommand(0x04) // Restore with verify — Fuse loads the head even with no disk (wd_fdc.c:511-514)
 	f.WriteCommand(0xA0)
-	if f.statusReg&statusNotRdy == 0 {
-		t.Errorf("Not-Ready bit (bit 7) not set on write with no disk: %02X", f.statusReg)
+	// The READY gate passed (head_load set by the verify), so on the Beta
+	// bit 7 must read CLEAR — disk_ready IS head_load (:198-201), media
+	// presence is not part of it. The empty drive manifests the Fuse way:
+	// the track walk fails with sticky RNF and INTRQ (:589/:601/:740).
+	if f.statusReg&statusRNF == 0 {
+		t.Errorf("empty-drive write did not set sticky RNF: %02X", f.statusReg)
+	}
+	// Fuse sr_read RESETS INTRQ on every status read (:374) — check the
+	// line first, then read.
+	if !f.Intrq() {
+		t.Error("INTRQ not raised on the failed walk")
+	}
+	if f.ReadStatus()&statusNotRdy != 0 {
+		t.Errorf("Not-Ready bit set although head_load — Beta READY is head_load alone (Fuse :198-201): %02X", f.statusReg)
 	}
 }
 
@@ -391,12 +433,27 @@ func TestTypeIIReadSectorSelectsBySectorRegister(t *testing.T) {
 	f.SelectDrive(0)
 	f.SetSide(0)
 	f.WriteData(4)
-	f.WriteCommand(0x10) // Seek to cylinder 4
+	f.WriteCommand(0x14) // Seek with verify to cylinder 4
 
+	// The transfer must be DRAINED before the next command: cr_write ignores
+	// any command while BUSY (:955-956), so abandoning a read mid-stream
+	// leaves the controller serving the OLD sector — the first byte of the
+	// next read would be byte 1 of the previous one. A real guest (and
+	// TR-DOS) consumes all 256 DRQ bytes.
 	read := func(sec int) byte {
 		f.WriteSectorReg(byte(sec))
 		f.WriteCommand(0x80)
-		return f.ReadData() // first byte of the sector
+		var first byte
+		for i := 0; i < 256; i++ {
+			v := f.ReadData()
+			if i == 0 {
+				first = v
+			}
+		}
+		if f.statusReg&statusBusy != 0 {
+			t.Fatalf("still Busy after draining sector %d", sec)
+		}
+		return first
 	}
 	b1 := read(1)
 	b2 := read(2)
@@ -427,7 +484,7 @@ func TestTypeIIIReadAddressIDField(t *testing.T) {
 	f.SelectDrive(0)
 	f.SetSide(1)
 	f.WriteData(27)
-	f.WriteCommand(0x10) // Seek to track 27 (sets Track Register = 27)
+	f.WriteCommand(0x14) // Seek with verify to track 27 (sets Track Register = 27, loads the head)
 
 	f.WriteCommand(0xC0) // Read Address
 	if f.statusReg&statusBusy == 0 || f.statusReg&statusDRQ == 0 {
@@ -464,10 +521,17 @@ func TestTypeIIIReadAddressIDField(t *testing.T) {
 // WD1793 Read Address with no disk sets the Not-Ready bit.
 func TestTypeIIIReadAddressNotReady(t *testing.T) {
 	f := NewFDC()
-	f.SelectDrive(0) // empty
+	f.SelectDrive(0)     // empty
+	f.WriteCommand(0x04) // Restore with verify — head load (Fuse wd_fdc.c:514)
 	f.WriteCommand(0xC0)
-	if f.statusReg&statusNotRdy == 0 {
-		t.Errorf("Not-Ready bit not set on Read Address with no disk: %02X", f.statusReg)
+	// Same law as the write case: head_load made the drive READY, so bit 7
+	// is CLEAR (Fuse :198-201); the empty drive answers with sticky RNF +
+	// INTRQ from the failed ID walk (:589/:601/:740/:1068).
+	if f.statusReg&statusRNF == 0 {
+		t.Errorf("empty-drive Read Address did not set sticky RNF: %02X", f.statusReg)
+	}
+	if f.ReadStatus()&statusNotRdy != 0 {
+		t.Errorf("Not-Ready bit set although head_load — Beta READY is head_load alone: %02X", f.statusReg)
 	}
 }
 
@@ -483,6 +547,7 @@ func TestTypeIVForceInterruptAbortsTransfer(t *testing.T) {
 	f.Mount(0, trdImage(t, 80, 2))
 	f.SelectDrive(0)
 	f.WriteSectorReg(1)
+	f.WriteCommand(0x04) // Restore with verify — loads the head
 	f.WriteCommand(0x80) // Read Sector — Busy + DRQ
 	f.ReadData()         // consume one byte; transfer mid-flight
 	if f.statusReg&statusBusy == 0 {
@@ -500,9 +565,13 @@ func TestTypeIVForceInterruptAbortsTransfer(t *testing.T) {
 
 // WD1793 Force Interrupt issued while IDLE: "the Busy Status bit is reset and
 // the rest of the status bits are updated or cleared. In this case, Status
-// reflects the Type I commands." So with a ready drive whose head is at track 0
-// the status register must show the Type-I Head-Loaded and Track-0 bits, and
-// the controller's status-bit interpretation must switch to Type I (DRQ inert).
+// reflects the Type I commands." Fuse cr_write (:930-953) implements exactly
+// that: clear Busy/WRPROT/CRCERR/IDX_DRQ, mirror tr00 into LOST (bit 2 —
+// the same bit, wd_fdc.h:43 "Lost data OR TRACK00"), sticky status_type=
+// TYPE1, and spinUp with the h bit masked (:950) — which head-LOADS (state
+// NONE takes the else branch, :898-906). Bit 5 is Fuse's SPINUP and is never
+// written; READY (bit 7) follows head_load through sr_read's recompute
+// (:388-391), so after the spin-up it reads CLEAR.
 func TestTypeIVForceInterruptIdleReflectsTypeI(t *testing.T) {
 	f := NewFDC()
 	f.Mount(0, trdImage(t, 80, 2))
@@ -516,12 +585,17 @@ func TestTypeIVForceInterruptIdleReflectsTypeI(t *testing.T) {
 	if st&statusBusy != 0 {
 		t.Errorf("Busy set after idle Force Interrupt: %02X", st)
 	}
-	// Type I status while idle and ready: Head Loaded (bit 5) and Track 0 (bit 2).
-	if st&statusHeadDmp == 0 {
-		t.Errorf("Head-Loaded bit (bit 5) not set after idle Force Interrupt: %02X", st)
+	if st&statusHeadDmp != 0 {
+		t.Errorf("bit 5 (Fuse SPINUP) set — Fuse never writes it on FD1793: %02X", st)
 	}
 	if st&statusTrack0 == 0 {
 		t.Errorf("Track-0 bit (bit 2) not set after idle Force Interrupt at track 0: %02X", st)
+	}
+	if !f.headLoad {
+		t.Error("Force Interrupt did not spin the drive up (Fuse :950 -> :899)")
+	}
+	if f.ReadStatus()&statusNotRdy != 0 {
+		t.Errorf("Not-Ready still set after spin-up head-load (READY = head_load, :198-201): %02X", st)
 	}
 	// The status register now carries Type I meanings, so the Type II/III DRQ
 	// reading must be inert.
@@ -530,14 +604,23 @@ func TestTypeIVForceInterruptIdleReflectsTypeI(t *testing.T) {
 	}
 }
 
-// WD1793 Force Interrupt issued while idle with the drive not ready reflects
-// Type I status with the Not-Ready bit set.
+// WD1793 Force Interrupt issued while idle on the BETA: cr_write spins the
+// drive up at :950 (state NONE -> else branch head-loads, :898-906), and the
+// Beta's READY IS head_load (:198-201) — media presence is not part of it.
+// So even an empty drive reads READY after an idle Force Interrupt; emptiness
+// only ever surfaces as sticky RNF through a failed transfer walk.
 func TestTypeIVForceInterruptIdleNotReady(t *testing.T) {
 	f := NewFDC()
 	f.SelectDrive(0) // no disk
 	f.WriteCommand(0xD0)
-	if f.statusReg&statusNotRdy == 0 {
-		t.Errorf("Not-Ready bit not set on idle Force Interrupt with no disk: %02X", f.statusReg)
+	if !f.headLoad {
+		t.Error("idle Force Interrupt must head-load (Fuse spinup :898-906 via :950)")
+	}
+	if f.ReadStatus()&statusNotRdy != 0 {
+		t.Errorf("Not-Ready set on Beta after spin-up head-load — READY is head_load alone (Fuse :198-201): %02X", f.statusReg)
+	}
+	if f.statusReg&statusBusy != 0 {
+		t.Errorf("Busy set after Force Interrupt: %02X", f.statusReg)
 	}
 }
 
@@ -631,10 +714,20 @@ func TestSystemRegisterSideSelectRoutesRead(t *testing.T) {
 	readSide := func(sysSide byte) byte {
 		// bits: drive 0, bit2=1 (no reset), bit4 = sysSide.
 		it.WritePort(0xFF, 0x04|sysSide)
-		it.WritePort(0x3F, 0) // Track Register = 0
-		it.WritePort(0x5F, 1) // Sector Register = 1
+		it.WritePort(0x3F, 0)    // Track Register = 0
+		it.WritePort(0x5F, 1)    // Sector Register = 1
+		it.WritePort(0x1F, 0x04) // Restore with verify — loads the head
 		it.WritePort(0x1F, 0x80)
-		return it.ReadPort(0x7F)
+		var first byte
+		// Drain all 256 DRQ bytes — BUSY swallows the next READ SECTOR
+		// (Fuse cr_write :955-956) if the transfer is abandoned.
+		for i := 0; i < 256; i++ {
+			v := it.ReadPort(0x7F)
+			if i == 0 {
+				first = v
+			}
+		}
+		return first
 	}
 	side0 := readSide(0x10) // bit4 set → side 0
 	side1 := readSide(0x00) // bit4 clear → side 1
@@ -648,30 +741,13 @@ func TestSystemRegisterSideSelectRoutesRead(t *testing.T) {
 	}
 }
 
-// Beta system register reset (bit 2 clear) performs a WD1793 master reset:
-// any in-flight transfer is aborted and Busy clears.
-func TestSystemRegisterMasterReset(t *testing.T) {
-	it := NewInterface()
-	it.FDC.Mount(0, trdImage(t, 80, 2))
-	it.WritePort(0xFF, 0x04) // no reset
-	it.FDC.WriteSectorReg(1)
-	it.FDC.WriteCommand(0x80) // Read Sector — Busy
-	if it.ReadPort(0x1F)&statusBusy == 0 {
-		t.Fatal("setup: expected Busy before reset")
-	}
-	it.WritePort(0xFF, 0x00) // bit2 clear → master reset
-	if it.ReadPort(0x1F)&statusBusy != 0 {
-		t.Error("Busy not cleared by master reset")
-	}
-}
-
 // Beta $FF read reports INTRQ in bit 7 and DRQ in bit 6, the two WD1793 output
 // lines the Beta hardware wires into the system-register read.
 func TestSystemRegisterReadIntrqDrq(t *testing.T) {
 	it := NewInterface()
 	it.FDC.Mount(0, trdImage(t, 80, 2))
 	it.WritePort(0xFF, 0x04)
-	it.FDC.WriteCommand(0x00) // Restore → INTRQ
+	it.FDC.WriteCommand(0x04) // Restore with verify → INTRQ + head load (Fuse wd_fdc.c:514)
 	if it.ReadPort(0xFF)&0x80 == 0 {
 		t.Error("INTRQ (bit 7) not reported by $FF read")
 	}
@@ -691,7 +767,7 @@ func TestEndToEndReadThroughPorts(t *testing.T) {
 	it.WritePort(0xFF, 0x10|0x04) // drive 0, side 0, no reset
 	// Seek to cylinder 6 via Data Register + Seek.
 	it.WritePort(0x7F, 6)
-	it.WritePort(0x1F, 0x10) // Seek
+	it.WritePort(0x1F, 0x14) // Seek with verify — loads the head
 	it.WritePort(0x5F, 11)   // Sector Register = 11
 	it.WritePort(0x1F, 0x80) // Read Sector
 

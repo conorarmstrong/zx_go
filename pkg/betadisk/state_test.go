@@ -155,7 +155,7 @@ func TestReplayingFromCapturedStateFinishesTheSameWrite(t *testing.T) {
 
 	it.WritePort(0x00FF, 0x05) // drive 1, side 1
 	it.WritePort(0x007F, 9)
-	it.WritePort(0x001F, 0x10) // Seek to track 9
+	it.WritePort(0x001F, 0x14) // Seek with verify to track 9 — loads the head
 	it.WritePort(0x005F, 7)    // sector 7
 	it.WritePort(0x001F, 0xA0) // Write Sector
 	for i := 0; i < 100; i++ {
@@ -186,7 +186,7 @@ func TestReplayingFromCapturedStateFinishesTheSameWrite(t *testing.T) {
 	// capture that had not recorded that target would pass by accident.
 	it.WritePort(0x00FF, 0x14) // drive 0, side 0
 	it.WritePort(0x007F, 2)
-	it.WritePort(0x001F, 0x10) // Seek to track 2
+	it.WritePort(0x001F, 0x14) // Seek with verify to track 2 — loads the head
 	it.WritePort(0x005F, 4)    // sector 4
 	it.WritePort(0x001F, 0xA0) // Write Sector
 	for i := 0; i < SectorSize; i++ {
@@ -232,7 +232,7 @@ func TestRestoreDoesNotRollBackTheMedium(t *testing.T) {
 
 	it.WritePort(0x00FF, 0x05)
 	it.WritePort(0x007F, 2)
-	it.WritePort(0x001F, 0x10) // Seek to track 2
+	it.WritePort(0x001F, 0x14) // Seek with verify to track 2 — loads the head
 	it.WritePort(0x005F, 4)
 	it.WritePort(0x001F, 0xA0) // Write Sector
 	for i := 0; i < SectorSize; i++ {

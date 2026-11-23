@@ -31,6 +31,8 @@ type fdcState struct {
 	Drive       int
 	Intrq       bool
 	LastStepDir int
+	HeadLoad    bool
+	StatusType1 bool
 
 	HeadTrack [4]int
 
@@ -73,15 +75,21 @@ func (it *Interface) SaveState() []byte {
 	s := betaState{
 		SysReg: it.sysReg,
 		FDC: fdcState{
-			StatusReg:   f.statusReg,
-			TrackReg:    f.trackReg,
-			SectorReg:   f.sectorReg,
-			DataReg:     f.dataReg,
-			CmdType1:    f.cmdType1,
+			StatusReg: f.statusReg,
+			TrackReg:  f.trackReg,
+			SectorReg: f.sectorReg,
+			DataReg:   f.dataReg,
+			CmdType1:  f.cmdType1,
+			// Fuse's sticky status_type (wd_fdc.c) selects the TYPE1 vs
+			// TYPE2 status word until the next command — it is first-class
+			// state; without it a restored controller answers status reads
+			// with the wrong word (index bit mirror gone).
+			StatusType1: f.statusType1,
 			Side:        f.side,
 			Drive:       f.drive,
 			Intrq:       f.intrq,
 			LastStepDir: f.lastStepDir,
+			HeadLoad:    f.headLoad,
 			HeadTrack:   f.headTrack,
 			Buf:         f.buf,
 			BufPos:      f.bufPos,
@@ -112,6 +120,12 @@ func (it *Interface) LoadState(b []byte) error {
 	f.sectorReg = s.FDC.SectorReg
 	f.dataReg = s.FDC.DataReg
 	f.cmdType1 = s.FDC.CmdType1
+	f.statusType1 = s.FDC.StatusType1
+	// Fuse carries head_load as first-class FDC state (wd_fdc_t). Without
+	// restoring it the captured-and-restored controller answers status
+	// reads with a stale head-load bit — the state round trip visibly
+	// diverges (drive sequence test, stream index 1).
+	f.headLoad = s.FDC.HeadLoad
 	f.side = s.FDC.Side
 	f.drive = s.FDC.Drive
 	f.intrq = s.FDC.Intrq

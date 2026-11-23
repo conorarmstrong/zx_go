@@ -49,6 +49,7 @@ func TestInterfaceSystemRegisterRead(t *testing.T) {
 	}
 	// A read sector raises DRQ.
 	it.FDC.WriteSectorReg(1)
+	it.FDC.WriteCommand(0x04) // Restore with verify — loads the head (Fuse wd_fdc.c:514)
 	it.FDC.WriteCommand(0x80) // Read Sector
 	if it.ReadPort(0xFF)&0x40 == 0 {
 		t.Error("DRQ (bit 6) not reported in $FF read")
@@ -70,6 +71,7 @@ func TestInterfaceReadSectorThroughPorts(t *testing.T) {
 	it.FDC.Mount(0, img)
 	it.WritePort(0xFF, 0x10|0x04) // drive 0, side 0, no reset
 	it.WritePort(0x3F, 0)         // track register = 0 (head already at 0)
+	it.WritePort(0x1F, 0x04)      // Restore with verify — loads the head (Fuse wd_fdc.c:514)
 	it.WritePort(0x5F, 1)         // sector register = 1
 	it.WritePort(0x1F, 0x80)      // command: Read Sector
 
@@ -84,14 +86,23 @@ func TestInterfaceReadSectorThroughPorts(t *testing.T) {
 	}
 }
 
-// A system-register write with the reset bit (bit 2) clear performs a master
-// reset of the controller.
-func TestInterfaceMasterReset(t *testing.T) {
+// Fuse's beta_sp_write (beta.c:340-353) performs NO controller reset — the
+// WD1793 is master-reset only at machine reset (beta_reset →
+// wd_fdc_master_reset). A system-register write must leave an in-flight
+// transfer untouched; an earlier fork version cleared it on a low bit 2,
+// which is not in Fuse and TR-DOS does not rely on.
+func TestInterfaceSystemWriteDoesNotReset(t *testing.T) {
 	it := NewInterface()
 	it.FDC.Mount(0, NewImage(80, 2))
 	it.FDC.WriteSectorReg(1)
+	it.FDC.WriteCommand(0x04) // Restore with verify — loads the head
 	it.FDC.WriteCommand(0x80) // start a read transfer (Busy)
-	it.WritePort(0xFF, 0x00)  // bit2 clear → reset
+	it.WritePort(0xFF, 0x00)  // select drive 0, side 1, FM
+	if it.ReadPort(0x1F)&statusBusy == 0 {
+		t.Error("system-register write wrongly reset an in-flight read")
+	}
+	// The real master reset (machine reset) does abort the transfer:
+	it.FDC.Reset()
 	if it.ReadPort(0x1F)&statusBusy != 0 {
 		t.Error("controller still busy after master reset")
 	}

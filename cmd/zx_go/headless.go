@@ -48,6 +48,22 @@ func runHeadless(f *cliFlags) {
 			os.Exit(1)
 		}
 		slog.Info("headless: mounted TR-DOS disk in drive A", "path", f.trdPath)
+		// mountTRD has already run Fuse's ui_drive_autoload (beta.c:
+		// 403-417): reboot, $7FFD bit4 set (latching ram.current_rom so
+		// the $3Dxx/$4000 trap is LIVE, z80_ops.c:176), Beta paged over
+		// $0000, PC=0 — the Pentagon boots the TR-DOS banner, then A>.
+		// ZX_TRDOS_AUTOBOOT=0 emulates the Beta switch "off": the interface
+		// stays wired, but the partner is paged out and bit4 is cleared so
+		// the trap cannot page it back in — the Pentagon boot menu shows
+		// cleanly and the Beta ports read floating values.
+		if model == roms.ModelPentagon && os.Getenv("ZX_TRDOS_AUTOBOOT") == "0" {
+			if emu.betaDisk != nil {
+				emu.mem.SetBetaActive(false)
+				p7, _, _ := emu.mem.GetPortState()
+				emu.mem.PageMemory(p7 & 0xEF) // clear bit4: trap stays dead
+			}
+			slog.Info("headless: autoboot disabled (ZX_TRDOS_AUTOBOOT=0) — Beta unpaged, booting Pentagon menu")
+		}
 	}
 	if f.tape != "" {
 		if err := loadTapeFile(emu, f.tape); err != nil {
