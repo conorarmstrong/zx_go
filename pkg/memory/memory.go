@@ -2205,14 +2205,7 @@ func (m *Memory) selectROM(source string) {
 		m.currentModel == roms.ModelPlus2A ||
 		m.currentModel == roms.ModelNext
 	prev := m.memoryPageReadMap[0]
-	if m.portEFF7Reg3 {
-		// zxnext.vhd:4636-4644: port_eff7 bit 3 is a standalone
-		// override of MMU0/1 that takes precedence over the ROM-index
-		// selection entirely — RAM bank 0 (not a ROM index) is
-		// revealed at $0000-$3FFF regardless of the 7FFD/1FFD ROM
-		// bits, until bit 3 is cleared again.
-		m.memoryPageReadMap[0] = 0
-	} else if plus3Style {
+	if plus3Style {
 		// 4 ROMs: low bit from 7FFD bit 4, high bit from 1FFD bit 2
 		romIndex := int((m.port7FFD >> 4) & 1)
 		romIndex |= int((m.port1FFD >> 1) & 2)
@@ -2225,6 +2218,16 @@ func (m *Memory) selectROM(source string) {
 		}
 	}
 	m.syncMMUFromPage(0)
+	if m.portEFF7Reg3 && m.currentModel == roms.ModelNext {
+		// zxnext.vhd:4636-4644: on a paging-port write with $EFF7 bit 3 set
+		// the core loads MMU0/1 with $00/$01, RAM bank 0, instead of $FF.
+		// That is all it does: the ROM index above stays what 7FFD/1FFD
+		// select, so a later NR$50/$51 write of $FF shows that ROM again.
+		// Replacing the ROM index here instead left MMU0 = $FF reading an
+		// empty RAM bank, which is how NextZXOS's snapshot loader failed.
+		m.slotBank[0], m.slotBank[1] = 0x00, 0x01
+		m.mmuOverride[0], m.mmuOverride[1] = true, true
+	}
 	if m.bankTracer != nil && m.memoryPageReadMap[0] != prev {
 		if m.memoryPageReadMap[0] >= 16 {
 			m.bankTracer(0xFF, m.memoryPageReadMap[0]-16, source)

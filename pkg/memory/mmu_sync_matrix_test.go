@@ -369,3 +369,28 @@ func TestEFF7_NotGatedByPagingEnabled(t *testing.T) {
 		t.Errorf("EFF7 write with PagingEnabled=false: slot 0 = %#x, want $00 (EFF7 isn't gated by the paging lock)", got)
 	}
 }
+
+// $EFF7 bit 3 acts by loading MMU0/1 with $00/$01 when a paging port is
+// written (zxnext.vhd:4619-4644, inside port_memory_change_dly); it is not
+// consulted again. A later NR$50/$51 write of $FF puts the ROM back at
+// $0000-$3FFF, the ROM the 7FFD/1FFD bits select, even with bit 3 still set.
+// The override used to replace the ROM index in the page map, so MMU0 = $FF
+// then read an empty RAM bank: NextZXOS's snapshot loader does exactly this
+// and ran into zeros.
+func TestEFF7_ANextRegFFWriteRestoresTheROM(t *testing.T) {
+	m := newMemoryForMMUTest(t, roms.ModelNext)
+	rom := m.Read(0x0000)
+	m.SetEFF7(0x08)
+	m.Write(0x0000, rom^0xFF) // RAM bank 0 is writable here
+	if got := m.Read(0x0000); got != rom^0xFF {
+		t.Fatalf("with EFF7 bit 3 set, $0000 = %#02x, want RAM bank 0's %#02x", got, rom^0xFF)
+	}
+	m.SetMMU(0, 0xFF)
+	m.SetMMU(1, 0xFF)
+	if got := m.Read(0x0000); got != rom {
+		t.Errorf("after NR$50/$51 = $FF, $0000 = %#02x, want the ROM's %#02x", got, rom)
+	}
+	if got := m.GetROMBank(); got < 0 {
+		t.Errorf("GetROMBank = %d, want the selected ROM", got)
+	}
+}
