@@ -963,10 +963,15 @@ func runHeadless(f *cliFlags) {
 				}
 			}
 			rdbg.WaitIfPaused()
+			// Held for the frame, as the GUI loop does, so a debugger
+			// command that moves the machine (replay-back, a rewind)
+			// cannot run inside one.
+			emu.coreMu.Lock()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
 				emu.renderFrame() // GUI-parity probe
 			}
+			emu.coreMu.Unlock()
 			if snap != nil {
 				snap.Tick()
 			}
@@ -992,10 +997,15 @@ func runHeadless(f *cliFlags) {
 			"frames", "unlimited")
 		for {
 			rdbg.WaitIfPaused()
+			// Held for the frame, as the GUI loop does, so a debugger
+			// command that moves the machine (replay-back, a rewind)
+			// cannot run inside one.
+			emu.coreMu.Lock()
 			runOneFrameHeadless(emu, model)
 			if os.Getenv("ZX_GO_RENDER_EVERY_FRAME") != "" {
 				emu.renderFrame() // GUI-parity probe
 			}
+			emu.coreMu.Unlock()
 			if snap != nil {
 				snap.Tick()
 			}
@@ -1037,9 +1047,9 @@ func runOneFrameHeadless(emu *emulator, model roms.SpectrumModel) {
 	}
 	if os.Getenv("ZX_GO_STEP_FRAME") == "" {
 		budget := frameTStatesForModel(model, emu.video60Hz)
-		if emu.timeTravel != nil {
+		if tt := emu.timeTravel; tt != nil {
 			// Recorded, so replay-back can re-run it as it ran.
-			emu.timeTravel.runFrame(func() { emu.cpu.ExecuteFrame(budget) })
+			tt.runFrame(func() { emu.cpu.ExecuteFrame(budget) })
 			return
 		}
 		emu.cpu.ExecuteFrame(budget)

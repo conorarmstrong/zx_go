@@ -29,7 +29,7 @@ var frameTickers = []struct {
 	tick func(*emulator, roms.SpectrumModel)
 }{
 	{"headless", func(e *emulator, m roms.SpectrumModel) { runOneFrameHeadless(e, m) }},
-	{"gui", func(e *emulator, _ roms.SpectrumModel) { e.runGUIFrame() }},
+	{"gui", func(e *emulator, _ roms.SpectrumModel) { e.runGUIFrame(nil) }},
 }
 
 func TestReplayStepBackReachesIntoFramesTheLoopRan(t *testing.T) {
@@ -67,26 +67,26 @@ func assertFrameReplayLandsOnAFrameEnd(t *testing.T, model roms.SpectrumModel, t
 	passed := reg.Capture()
 	passedAt := emu.cpu.InstructionCount()
 
-	// Count the instruction boundaries the next two frames pass. Each is a
-	// place the debugger could have stopped, and each is an instant replay can
-	// land on; so is the end of the whole frame.
-	calls := 0
-	emu.cpu.BreakpointCheck = func(uint16) bool { calls++; return false }
+	// Count the instants the next two frames pass: each instruction boundary
+	// the debugger could have stopped at, and the end of each frame. A
+	// frame's first boundary is the instant before it when no interrupt was
+	// taken at the frame start, and counts once.
+	n := newInstantCounter(emu)
+	emu.cpu.BreakpointCheck = n.check(0)
 	tick(emu, model)
-	inFrame4 := calls
+	n.frameEnd()
 	const stopAfter = 300
-	calls = 0
-	emu.cpu.BreakpointCheck = func(uint16) bool { calls++; return calls > stopAfter }
+	emu.cpu.BreakpointCheck = n.check(stopAfter)
 	tick(emu, model)
 	emu.cpu.BreakpointCheck = nil
-	if calls != stopAfter+1 {
-		t.Fatalf("the fifth frame passed %d boundaries, want it stopped at %d", calls, stopAfter+1)
+	if !n.stopped {
+		t.Fatalf("the fifth frame was not stopped at its boundary %d", stopAfter+1)
 	}
 	if bytes.Equal(reg.Capture().Bytes(), passed.Bytes()) {
 		t.Fatal("the machine did not move after the capture; the fixture proves nothing")
 	}
 
-	back := inFrame4 + 1 + stopAfter + 1
+	back := n.instants
 	landed, err := tt.replayBack(back)
 	if err != nil {
 		t.Fatalf("replay-back %d: %v", back, err)
@@ -99,16 +99,140 @@ func assertFrameReplayLandsOnAFrameEnd(t *testing.T, model roms.SpectrumModel, t
 	}
 }
 
+// instantCounter counts the instants a run passes, as replay numbers them.
+type instantCounter struct {
+	emu      *emulator
+	last     replayPoint
+	instants int
+	calls    int
+	stopped  bool
+}
+
+func newInstantCounter(e *emulator) *instantCounter {
+	return &instantCounter{emu: e, last: here(e)}
+}
+
+func here(e *emulator) replayPoint {
+	return replayPoint{tstates: e.cpu.Tstates(), insn: e.cpu.InstructionCount()}
+}
+
+// check returns a BreakpointCheck that counts distinct instants and, when
+// stopAfter is positive, stops the frame at the boundary after that many calls.
+// The stopping boundary is an instant of its own: it is where the frame ends.
+func (n *instantCounter) check(stopAfter int) func(uint16) bool {
+	n.calls = 0
+	return func(uint16) bool {
+		n.calls++
+		at := here(n.emu)
+		if at != n.last {
+			n.instants++
+			n.last = at
+		}
+		if stopAfter > 0 && n.calls > stopAfter {
+			n.stopped = true
+			return true
+		}
+		return false
+	}
+}
+
+// frameEnd counts the end of a frame that ran whole.
+func (n *instantCounter) frameEnd() {
+	if at := here(n.emu); at != n.last {
+		n.instants++
+		n.last = at
+	}
+}
+
+// Landing inside a frame the headless loop ran is landing on the live machine:
+// that loop does nothing after a frame, so stopping a frame at a boundary leaves
+// the machine exactly as the live run had it there. The capture taken inside the
+// live frame, at that boundary, is the oracle. (The GUI loop renders after a
+// frame, so a landing inside one of its frames is the machine as a breakpoint
+// there leaves it, render included, which is not an instant the live run passed
+// through.)
+func TestReplayStepBackLandsInsideAHeadlessFrame(t *testing.T) {
+	for _, model := range []roms.SpectrumModel{roms.Model48K, roms.Model128K} {
+		t.Run(roms.GetModelName(model), func(t *testing.T) {
+			emu, tt := armReplayFixture(t, model, 20000, 16)
+			for i := 0; i < 3; i++ {
+				runOneFrameHeadless(emu, model)
+			}
+			reg := emu.stateRegistry()
+			const at, stopAfter = 120, 400
+			var passed []byte
+			var passedAt uint64
+			n := newInstantCounter(emu)
+			inner := n.check(stopAfter)
+			emu.cpu.BreakpointCheck = func(pc uint16) bool {
+				stop := inner(pc)
+				if n.calls == at {
+					passed = reg.Capture().Bytes()
+					passedAt = emu.cpu.InstructionCount()
+				}
+				return stop
+			}
+			runOneFrameHeadless(emu, model)
+			emu.cpu.BreakpointCheck = nil
+			if passed == nil || !n.stopped {
+				t.Fatal("the fixture did not reach its capture and stop boundaries")
+			}
+			// From the stop back to boundary `at`: one instant per distinct
+			// boundary in between. The counter numbers instants from the
+			// frame start, so the distance is the count at the stop less the
+			// count at `at`.
+			back := stopAfter + 1 - at
+			landed, err := tt.replayBack(back)
+			if err != nil {
+				t.Fatalf("replay-back %d: %v", back, err)
+			}
+			if landed != passedAt {
+				t.Errorf("landed on instruction %d, want %d", landed, passedAt)
+			}
+			if !bytes.Equal(reg.Capture().Bytes(), passed) {
+				t.Error("landed on the boundary but not on the machine the live frame had there")
+			}
+		})
+	}
+}
+
+// One step back from a machine stopped inside a frame lands on the boundary
+// before it, not on the same instant.
+func TestReplayOneStepBackMovesOneBoundary(t *testing.T) {
+	emu, tt := armReplayFixture(t, roms.Model128K, 20000, 16)
+	for i := 0; i < 3; i++ {
+		runOneFrameHeadless(emu, roms.Model128K)
+	}
+	var prev, cur replayPoint
+	calls := 0
+	emu.cpu.BreakpointCheck = func(uint16) bool {
+		calls++
+		prev, cur = cur, here(emu)
+		return calls > 250
+	}
+	runOneFrameHeadless(emu, roms.Model128K)
+	emu.cpu.BreakpointCheck = nil
+	if here(emu) != cur {
+		t.Fatalf("the frame stopped at %+v, not at the boundary that stopped it, %+v", here(emu), cur)
+	}
+	if _, err := tt.replayBack(1); err != nil {
+		t.Fatalf("replay-back 1: %v", err)
+	}
+	if got := here(emu); got != prev {
+		t.Errorf("one step back landed on %+v, want the previous boundary %+v", got, prev)
+	}
+}
+
 // After stepping back into a frame the loop ran, the next step back walks from
 // there: the walk proves itself against the new present each time.
 func TestReplayStepBackTwiceInsideAFrame(t *testing.T) {
 	emu, tt := armReplayFixture(t, roms.Model128K, 20000, 16)
 	for i := 0; i < 3; i++ {
-		emu.runGUIFrame()
+		emu.runGUIFrame(nil)
 	}
 	calls := 0
 	emu.cpu.BreakpointCheck = func(uint16) bool { calls++; return calls > 200 }
-	emu.runGUIFrame()
+	emu.runGUIFrame(nil)
 	emu.cpu.BreakpointCheck = nil
 
 	first, err := tt.replayBack(1)
@@ -129,7 +253,7 @@ func TestReplayStepBackTwiceInsideAFrame(t *testing.T) {
 func TestReplayStepBackRefusesFramesRunOutsideTheLoop(t *testing.T) {
 	emu, tt := armReplayFixture(t, roms.Model128K, 20000, 8)
 	for i := 0; i < 3; i++ {
-		emu.runGUIFrame()
+		emu.runGUIFrame(nil)
 	}
 	for i := 0; i < 2; i++ {
 		emu.cpu.ExecuteFrame(frameTStatesForModel(roms.Model128K, false))
@@ -152,7 +276,7 @@ func TestReplayStepBackRefusesFramesRunOutsideTheLoop(t *testing.T) {
 func TestTheRingSharesUnchangedMemoryBetweenCheckpoints(t *testing.T) {
 	emu, tt := armReplayFixture(t, roms.Model128K, 50000, 64)
 	for i := 0; i < 200; i++ {
-		emu.runGUIFrame()
+		emu.runGUIFrame(nil)
 	}
 	snaps := tt.Snapshots()
 	if len(snaps) < 16 {

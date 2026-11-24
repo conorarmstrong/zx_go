@@ -75,6 +75,10 @@ func (d *remoteDebugger) ttOn(args []string) string {
 			return "ERR tt-on: bad KEEP value " + args[1]
 		}
 	}
+	// The frame loop reads emu.timeTravel and the CPU's hook list inside a
+	// frame; swap them only between frames.
+	d.emu.coreMu.Lock()
+	defer d.emu.coreMu.Unlock()
 	if d.emu.timeTravel != nil {
 		d.emu.cpu.RemovePreFetchHook("debug-time-travel")
 		d.emu.timeTravel = nil
@@ -89,6 +93,8 @@ func (d *remoteDebugger) ttOn(args []string) string {
 }
 
 func (d *remoteDebugger) ttOff() string {
+	d.emu.coreMu.Lock()
+	defer d.emu.coreMu.Unlock()
 	if d.emu.timeTravel == nil {
 		return "OK time-travel already off"
 	}
@@ -113,7 +119,11 @@ func (d *remoteDebugger) ttSnap(args []string) string {
 	if len(args) > 0 {
 		label = strings.Join(args, " ")
 	}
+	// Between frames only: a checkpoint inside a running frame could not
+	// start a replay of the rest of it.
+	d.emu.coreMu.Lock()
 	d.emu.timeTravel.capture(label, d.emu.cpu.InstructionCount())
+	d.emu.coreMu.Unlock()
 	return fmt.Sprintf("OK snap captured insn=%d PC=$%04X label=%q",
 		d.emu.cpu.InstructionCount(), d.emu.cpu.PC, label)
 }

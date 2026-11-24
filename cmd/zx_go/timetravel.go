@@ -114,6 +114,10 @@ type ttController struct{ emu *emulator }
 func (c ttController) Enabled() bool { return c.emu.timeTravel != nil }
 
 func (c ttController) Enable(everyInsns, keep int) {
+	// The frame loop reads emu.timeTravel and the CPU's hook list inside a
+	// frame; swap them only between frames.
+	c.emu.coreMu.Lock()
+	defer c.emu.coreMu.Unlock()
 	if c.emu.timeTravel != nil {
 		c.emu.cpu.RemovePreFetchHook("debug-time-travel")
 		c.emu.timeTravel = nil
@@ -127,6 +131,8 @@ func (c ttController) Enable(everyInsns, keep int) {
 }
 
 func (c ttController) Disable() {
+	c.emu.coreMu.Lock()
+	defer c.emu.coreMu.Unlock()
 	if c.emu.timeTravel == nil {
 		return
 	}
@@ -135,6 +141,8 @@ func (c ttController) Disable() {
 }
 
 func (c ttController) Snap(label string) {
+	c.emu.coreMu.Lock()
+	defer c.emu.coreMu.Unlock()
 	if c.emu.timeTravel != nil {
 		c.emu.timeTravel.capture(label, c.emu.cpu.InstructionCount())
 	}

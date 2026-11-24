@@ -242,15 +242,16 @@ func TestReplayStepBackCrossesFromFramesIntoSteps(t *testing.T) {
 	passed := reg.Capture()
 	passedAt := emu.cpu.InstructionCount()
 
-	calls := 0
-	emu.cpu.BreakpointCheck = func(uint16) bool { calls++; return false }
+	n := newInstantCounter(emu)
+	emu.cpu.BreakpointCheck = n.check(0)
 	for i := 0; i < 3; i++ {
 		runOneFrameHeadless(emu, roms.Model128K)
+		n.frameEnd()
 	}
 	emu.cpu.BreakpointCheck = nil
 
 	// Each frame's boundaries are instants, and so is each frame's end.
-	landed, err := tt.replayBack(calls + 3)
+	landed, err := tt.replayBack(n.instants)
 	if err != nil {
 		t.Fatalf("replay-back across three recorded frames: %v", err)
 	}

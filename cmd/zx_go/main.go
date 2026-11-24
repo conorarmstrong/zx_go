@@ -1390,6 +1390,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					// Execution paths: ZX80/ZX81 (CPU-generated video),
 					// RZX playback, RZX recording, or normal frame.
 					var newImage *image.RGBA
+					counted := false // the normal path counts its own frame
 					switch {
 					case e.zx8x != nil:
 						e.zx8x.RunFrame()
@@ -1473,56 +1474,57 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							e.ula.SetFastLoad(e.tapeAudioMuted())
 						}
 						heavyReads := false
-						for k := 0; k < n; k++ {
+						// The loop's own bookkeeping after the frames, before
+						// the per-frame work: next tick's turbo decision, the
+						// tape auto-pause and the frame counters.
+						afterFrames := func() {
+							// Drive next tick's turbo decision from this tick's
+							// read rate. The first loading tick runs at 1x
+							// (n=1) and sees the heavy reads, so turbo engages
+							// on the next tick.
+							e.tapeReadActive = heavyReads
+							e.tapeAutoPause(heavyReads)
+							frameCount++
+							atomic.AddInt32(&e.frameCounter, 1)
+						}
+						if n == 1 {
+							// One frame and its per-frame work, as one turn the
+							// time-travel ring can record and replay. The
+							// bookkeeping between them is the loop's, not the
+							// machine's, and runs live only.
 							var before uint64
 							if e.ula != nil {
 								before = e.ula.FEReadCount()
 							}
-							if n == 1 {
-								// One frame and its per-frame work, as one turn
-								// the time-travel ring can record and replay.
-								newImage = e.runGUIFrame()
-							} else {
+							newImage = e.runGUIFrame(func() {
+								if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
+									heavyReads = true
+								}
+								afterFrames()
+							})
+						} else {
+							for k := 0; k < n; k++ {
+								var before uint64
+								if e.ula != nil {
+									before = e.ula.FEReadCount()
+								}
 								e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
-							}
-							if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
-								heavyReads = true
-							}
-							if k+1 < n && e.peripherals != nil {
-								e.peripherals.Frame()
-							}
-						}
-						// Drive next tick's turbo decision from this tick's read
-						// rate. The first loading tick runs at 1x (n=1) and sees
-						// the heavy reads, so turbo engages on the next tick.
-						e.tapeReadActive = heavyReads
-
-						// Loader-activity auto-pause: while the running program is
-						// not reading tape edges (a multi-load game's menu, or
-						// inter-block processing), pause the tape so it doesn't
-						// advance past the next part — which would mis-load it
-						// (garbled audio, no music). Resume the instant the loader
-						// starts reading again. This also stops the residual
-						// loading sound once a part has finished loading.
-						if e.ula != nil && os.Getenv("ZX_GO_NO_TAPE_AUTOPAUSE") == "" {
-							if tp := e.ula.GetTapePlayer(); tp != nil && tp.HasMoreBlocks() {
-								if heavyReads {
-									e.tapeIdleTicks = 0
-									if !tp.IsPlaying() {
-										tp.Resume()
-									}
-								} else if tp.IsPlaying() {
-									e.tapeIdleTicks++
-									if e.tapeIdleTicks > tapeAutoPauseTicks {
-										tp.Stop()
-									}
+								if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
+									heavyReads = true
+								}
+								if k+1 < n && e.peripherals != nil {
+									e.peripherals.Frame()
 								}
 							}
+							afterFrames()
 						}
+						counted = true
 					}
 
-					frameCount++
-					atomic.AddInt32(&e.frameCounter, 1)
+					if !counted {
+						frameCount++
+						atomic.AddInt32(&e.frameCounter, 1)
+					}
 					// Render every frame the pacer runs. Each render also
 					// pushes the frame's audio, so a wall-clock gate here
 					// dropped about a third of the audio frames to timer
@@ -1581,19 +1583,21 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 // that reaches the machine, and returns the rendered picture.
 //
 // While the time-travel ring replays a recorded turn, the work driven from
-// outside the machine is skipped: the NEXLOAD macro's keystrokes and the user's
-// CPU-speed override are inputs, not consequences of the machine's state, and
-// doing them again would change what is being replayed. If they changed the
+// outside the machine is skipped: the typed-character pulse, the ZX Printer's
+// drum (not part of the captured machine), the NEXLOAD macro's keystrokes and
+// the user's CPU-speed override are inputs or host state, not consequences of
+// the machine's state, and doing them again would change what is being
+// replayed or advance state a rewind does not restore. If they changed the
 // machine the first time, replay's proof pass sees the difference and refuses.
 func (e *emulator) frameTail() *image.RGBA {
-	// Advance the typed-character symbol pulse (no-op when idle).
-	if e.kbd != nil {
-		e.kbd.Tick()
-	}
-	if e.peripherals != nil {
-		e.peripherals.Frame()
-	}
-	if e.timeTravel == nil || !e.timeTravel.replaying {
+	if tt := e.timeTravel; tt == nil || !tt.replaying {
+		// Advance the typed-character symbol pulse (no-op when idle).
+		if e.kbd != nil {
+			e.kbd.Tick()
+		}
+		if e.peripherals != nil {
+			e.peripherals.Frame()
+		}
 		// Advance the NextZXOS .nexload driver (File -> Open), one step per
 		// executed frame; keys it presses are seen by the next frame's
 		// keyboard scan.
@@ -1609,21 +1613,52 @@ func (e *emulator) frameTail() *image.RGBA {
 	return e.renderFrame()
 }
 
-// runGUIFrame is one turn of the GUI frame loop: a frame and frameTail. With
-// the time-travel ring armed it is recorded, so replay-back can re-run it.
-func (e *emulator) runGUIFrame() *image.RGBA {
+// runGUIFrame is one turn of the GUI frame loop: a frame, then between (the
+// loop's own bookkeeping, run live only and never replayed), then frameTail.
+// With the time-travel ring armed it is recorded, so replay-back can re-run it.
+func (e *emulator) runGUIFrame(between func()) *image.RGBA {
 	budget := frameTStatesForModel(e.model, e.video60Hz)
 	var img *image.RGBA
 	turn := func() {
 		e.cpu.ExecuteFrame(budget)
+		if tt := e.timeTravel; between != nil && (tt == nil || !tt.replaying) {
+			between()
+		}
 		img = e.frameTail()
 	}
-	if e.timeTravel != nil {
-		e.timeTravel.runFrame(turn)
+	if tt := e.timeTravel; tt != nil {
+		tt.runFrame(turn)
 	} else {
 		turn()
 	}
 	return img
+}
+
+// tapeAutoPause is the loader-activity auto-pause: while the running program
+// is not reading tape edges (a multi-load game's menu, or inter-block
+// processing), pause the tape so it doesn't advance past the next part — which
+// would mis-load it (garbled audio, no music). Resume the instant the loader
+// starts reading again. This also stops the residual loading sound once a part
+// has finished loading.
+func (e *emulator) tapeAutoPause(heavyReads bool) {
+	if e.ula == nil || os.Getenv("ZX_GO_NO_TAPE_AUTOPAUSE") != "" {
+		return
+	}
+	tp := e.ula.GetTapePlayer()
+	if tp == nil || !tp.HasMoreBlocks() {
+		return
+	}
+	if heavyReads {
+		e.tapeIdleTicks = 0
+		if !tp.IsPlaying() {
+			tp.Resume()
+		}
+	} else if tp.IsPlaying() {
+		e.tapeIdleTicks++
+		if e.tapeIdleTicks > tapeAutoPauseTicks {
+			tp.Stop()
+		}
+	}
 }
 
 // reboot resets the machine. It takes coreMu, so it must not be called from

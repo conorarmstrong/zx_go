@@ -19,7 +19,10 @@ import (
 //   - replay-back re-executes from a time-travel checkpoint. It gives the WHOLE
 //     machine, memory included, because the machine really is at that
 //     instruction again; it needs `tt-on`, reaches back only as far as the
-//     oldest checkpoint, and costs one walk of the checkpoint interval.
+//     oldest checkpoint, and costs one walk of the checkpoint interval. Inside
+//     a frame the GUI loop ran, "at that instruction" means as a breakpoint
+//     there leaves the machine: the frame stops there and the loop's per-frame
+//     work, the render, runs after it, as it does when the debugger stops.
 //
 // Conflating them would mean one command that sometimes carries memory. Someone
 // would eventually read a byte off the wrong one, and nothing on screen would

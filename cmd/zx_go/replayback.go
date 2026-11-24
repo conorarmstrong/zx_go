@@ -241,7 +241,10 @@ func (t *timeTravelBuffer) rewriteHistory(cp *ttEntry, ran []ttFrame, at replayP
 // steps. Within a turn, every instruction boundary the frame passes is an
 // instant, the boundary a breakpoint could have stopped it at; stopping the
 // walk at one stops that frame there, as a breakpoint would, and lets the turn
-// finish its per-frame work. The end of a turn is an instant too.
+// finish its per-frame work. The end of a turn is an instant too. For the
+// headless loop, which does nothing after a frame, a landing inside one is the
+// machine the live run had at that boundary; for the GUI loop it is that
+// machine with the render applied, as a breakpoint there leaves it.
 //
 // It also returns the turns it ran, the last of them cut short where the walk
 // stopped inside it, which is the history of the machine it leaves.
@@ -336,6 +339,12 @@ func (t *timeTravelBuffer) replayFrame(points []replayPoint, f ttFrame, stop int
 		if f.stopped && at == f.end {
 			return true // where the breakpoint stopped it the first time
 		}
+		if at == points[len(points)-1] {
+			// The frame's first boundary, when no interrupt was taken at
+			// its start, is the instant the walk is already standing on:
+			// one instant, not two, or a step back would not move.
+			return false
+		}
 		points = append(points, at)
 		if stop == len(points)-1 {
 			reached = true
@@ -347,16 +356,20 @@ func (t *timeTravelBuffer) replayFrame(points []replayPoint, f ttFrame, stop int
 		t.emu.ula.HoldAudio(true)
 	}
 	t.replaying = true
+	defer func() {
+		t.replaying = false
+		if t.emu.ula != nil {
+			t.emu.ula.HoldAudio(false)
+		}
+		cpu.BreakpointCheck = saved
+	}()
 	f.run()
-	t.replaying = false
-	if t.emu.ula != nil {
-		t.emu.ula.HoldAudio(false)
-	}
-	cpu.BreakpointCheck = saved
 	if reached {
 		return points, true, true
 	}
-	points = append(points, t.here())
+	if at := t.here(); at != points[len(points)-1] {
+		points = append(points, at)
+	}
 	return points, false, stop == len(points)-1
 }
 
