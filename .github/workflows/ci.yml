@@ -77,8 +77,11 @@ jobs:
         # Cringle Z80 exerciser — single-goroutine, so nothing for the race
         # detector to find, and over an hour of runtime. The conformance
         # job below still runs it, at full speed and without -short.
-        timeout-minutes: 30
-        run: go test -race -short -timeout 25m ./...
+        # pkg/testharness alone took 1004 s of the 1500 s budget on
+        # 2026-11-24 and timed out twice when runners ran ~1.5x slower
+        # (pkg/audio, which imports nothing of ours, went 27 s -> 42 s).
+        timeout-minutes: 50
+        run: go test -race -short -timeout 45m ./...
 
   conformance:
     name: Z80 conformance (zexdoc + zexall)
