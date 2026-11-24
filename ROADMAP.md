@@ -493,8 +493,8 @@ card is `roms/next/sd.img`, which knows nothing of new folders.
   through NEXLOAD the CPU is running through memory with interrupts off, RAM in
   slots 0 and 1 and SP at $0037. The single-step driver ran 400 million
   instructions from the same launch without reaching it, so the frame loop is
-  the first suspect. Needs a reference trace; ZEsarUX runs it (the title ships
-  bundled with it).
+  the first suspect. Needs a reference trace; the title ships bundled with a
+  reference emulator it runs on.
 - [ ] **Formats the screening does not drive yet:** Next tapes and tape-driven
   adventures, `.snx` snapshots, +3 and CP/M disks. 20 titles.
 

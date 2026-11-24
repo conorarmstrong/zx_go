@@ -341,9 +341,9 @@ their earlier screening.
 | basnake | **Boots** | Screened 2026-11-24. NextBASIC: `basnake.bas` renders its title or game screen. |
 | basoko | **Boots** | Screened 2026-11-24. NextBASIC: `BaSoko.bas` renders its title or game screen. |
 | battle-tanks-the-next-generation-zx-spectrum-next | **Boots** | Screened 2026-11-24. NEXLOAD: `BattleTanks/BattleTanks.nex` launch and render. |
-| bean-brothers | **Boots** | Screened 2026-11-24. NEXLOAD: `beanbros-en-1_1.nex`, `beanbros-es-1_1.nex`, `BeanBros-1.1+ZEsarUX/ZEsarUX/beanbros-es-1_1.nex` and more launch and render. |
+| bean-brothers | **Boots** | Screened 2026-11-24. NEXLOAD: `beanbros-en-1_1.nex` and `beanbros-es-1_1.nex`, and the copies in the package's bundled-emulator folder, all launch and render. |
 | blok-boy | **Boots** | Screened 2026-11-24. NextBASIC: `BLOKBOY.bas` renders its title or game screen. |
-| bomb-jack-zx-spectrum-next-n-go | **Boots** | Screened 2026-11-24. NEXLOAD: `BombJack.nex`, `CSpect/mod_player.nex`, `BombJack/BombJack.nex` and more launch and render. `beast_tmp.nex`, a leftover build in a developer folder, never launched. The CSpect folder's other .nex files are developer demos; one asks for a newer core. |
+| bomb-jack-zx-spectrum-next-n-go | **Boots** | Screened 2026-11-24. NEXLOAD: `BombJack.nex` launches and renders its title screen. The package's developer folder holds five demo `.nex` files, which also render, and `beast_tmp.nex`, a leftover build that NEXLOAD refuses because its header asks for core 52.51.51. |
 | bomber-airships | **Boots** | Screened 2026-11-24. NextBASIC: `Bomber/Bomber.bas` renders its title or game screen. |
 | brickz | **Boots** | Screened 2026-11-24. NextBASIC: `Brickz_GEOMETRICA.bas` renders its title or game screen. |
 | brickz-invaderz | **Boots** | Screened 2026-11-24. NextBASIC: `Brickz_INVADERZ.bas` renders its title or game screen. |
@@ -433,7 +433,7 @@ their earlier screening.
 | timmdi | **Boots** | Screened 2026-11-24. NextBASIC: `timmdi-game-fin11.bas` renders its title or game screen. |
 | tinypeter | **Boots** | Screened 2026-11-24. NextBASIC: `Tiny Peter/Tiny Peter.bas` renders its title or game screen. |
 | torvin-foundation | **Boots** | Screened 2026-11-24. NEXLOAD: `TorvinFoundation/TEMPLATES/MODULES_TEMPLATE/GAME/main.nex`, `TorvinFoundation/TEMPLATES/STANDARD_TEMPLATE/GAME/main.nex`, `TorvinFoundation/EXAMPLES/EXAMPLE - Sprite 001/GAME/main.nex` and more launch and render. A NextBASIC development framework rather than a game; the program picked was a library include. Its example .nex programs render. |
-| trainyard-express | **Boots** | Screened 2026-11-24. NEXLOAD: `TrainyardExpress-1.0+ZEsarUX/ZEsarUX/trainyard-express-ES.nex`, `TrainyardExpress-1.0+ZEsarUX/ZEsarUX/trainyard-express.nex`, `trainyard-express.nex` and more launch and render. |
+| trainyard-express | **Boots** | Screened 2026-11-24. NEXLOAD: `trainyard-express.nex`, `trainyard-express-ES.nex` and the copies in the package's bundled-emulator folder all launch and render. |
 | vicecityblues-spectrum-next | Untested | Screened 2026-11-24. Launched from its own folder layout (.czx data, no .nex or .bas at the top level); not a format the screening drives yet. |
 | webster | **Boots** | Screened 2026-11-24. NEXLOAD: `Webster.nex` launch and render. |
 | zcadia | **Boots** | Screened 2026-11-24. NEXLOAD: `zcadia.nex` launch and render. |
