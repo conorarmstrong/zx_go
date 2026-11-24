@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,6 +33,21 @@ import (
 func TestNexloadSDGames(t *testing.T) {
 	const sdRoot = "../../roms/next/sd"
 	gamesDir := filepath.Join(sdRoot, "games", "Next")
+	// Screening a batch of unknown titles rather than gating the known set:
+	// NEX_SD_GAMES_SUBDIR points at another directory under the card root,
+	// NEX_SD_REPORT_ONLY logs each verdict instead of failing on it, and
+	// NEX_SD_SHARD=i/n runs every n-th title from the i-th, so a large batch
+	// can be split across processes.
+	if d := os.Getenv("NEX_SD_GAMES_SUBDIR"); d != "" {
+		gamesDir = filepath.Join(sdRoot, d)
+	}
+	reportOnly := os.Getenv("NEX_SD_REPORT_ONLY") != ""
+	shard, shards := 0, 1
+	if v := os.Getenv("NEX_SD_SHARD"); v != "" {
+		if _, err := fmt.Sscanf(v, "%d/%d", &shard, &shards); err != nil || shards < 1 || shard < 0 || shard >= shards {
+			t.Fatalf("NEX_SD_SHARD=%q: want i/n with 0 <= i < n", v)
+		}
+	}
 	if _, err := os.Stat(gamesDir); err != nil {
 		t.Skipf("no Next SD games present (gitignored): %v", err)
 	}
@@ -57,13 +73,19 @@ func TestNexloadSDGames(t *testing.T) {
 		}
 	}
 
-	for _, host := range nexFiles {
+	for i, host := range nexFiles {
+		if i%shards != shard {
+			continue
+		}
 		rel, err := filepath.Rel(sdRoot, host)
 		if err != nil {
 			continue
 		}
 		sdPath := "/" + filepath.ToSlash(rel)
 		name := filepath.Base(filepath.Dir(host))
+		if reportOnly {
+			name = strings.TrimPrefix(filepath.ToSlash(rel), filepath.ToSlash(strings.TrimPrefix(gamesDir, sdRoot+"/"))+"/")
+		}
 
 		t.Run(name, func(t *testing.T) {
 			// The launch is driven by typing into the real NextZXOS command
@@ -74,6 +96,10 @@ func TestNexloadSDGames(t *testing.T) {
 			emu := bootNextToMenu(t)
 			launched, err := nexloadFromMenu(emu, sdPath, 1400)
 			if err != nil {
+				if reportOnly {
+					t.Logf("SDVERDICT %-14s %-28s %v", "NotDriven", name, err)
+					return
+				}
 				t.Fatalf("%s: driving the NextZXOS command line: %v", name, err)
 			}
 
@@ -91,7 +117,7 @@ func TestNexloadSDGames(t *testing.T) {
 				_ = os.MkdirAll(dir, 0o755)
 				var buf bytes.Buffer
 				if writeScreenshotPNG(emu, &buf) == nil {
-					safe := strings.ReplaceAll(name, " ", "_")
+					safe := strings.NewReplacer(" ", "_", "/", "__").Replace(name)
 					_ = os.WriteFile(filepath.Join(dir, safe+".png"), buf.Bytes(), 0o644)
 				}
 			}
@@ -118,6 +144,9 @@ func TestNexloadSDGames(t *testing.T) {
 				verdict = "Blank"
 			}
 			t.Logf("SDVERDICT %-14s %-28s PC=%#04x nonblank=%v", verdict, name, verdictPC, nonBlank)
+			if reportOnly {
+				return
+			}
 
 			if !launched {
 				t.Errorf("%s: NEXLOAD never handed the machine over (PC=%#04x) — the game did not launch", name, verdictPC)

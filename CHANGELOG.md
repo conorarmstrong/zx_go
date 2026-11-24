@@ -20,6 +20,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **File > Open on the Next can now type an underscore.** The macro that drives
+  NextZXOS's `.nexload` skipped `_`, so a game whose folder or file name held
+  one (`drug_dealers.nex`) could not be opened.
+
 - **A RETI now releases its interrupt when a higher-priority one is waiting.**
   On the Next's IM2 daisy chain a device waiting to be acknowledged blocks the
   devices below it, except while a RETI is being decoded. That exception was

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,6 +67,20 @@ func runBasicFromMenu(emu *emulator, sdDir, file string, runFrames int) {
 func TestNextBasicSDGames(t *testing.T) {
 	const sdRoot = "../../roms/next/sd"
 	gamesDir := filepath.Join(sdRoot, "games", "Next")
+	// As TestNexloadSDGames: NEX_SD_GAMES_SUBDIR screens another directory
+	// under the card root, and NEX_SD_SHARD=i/n splits it across processes.
+	// For another directory only one program per title is run, the one
+	// mainProgram picks, since a title ships its loader beside the rest.
+	sub := os.Getenv("NEX_SD_GAMES_SUBDIR")
+	if sub != "" {
+		gamesDir = filepath.Join(sdRoot, sub)
+	}
+	shard, shards := 0, 1
+	if v := os.Getenv("NEX_SD_SHARD"); v != "" {
+		if _, err := fmt.Sscanf(v, "%d/%d", &shard, &shards); err != nil || shards < 1 || shard < 0 || shard >= shards {
+			t.Fatalf("NEX_SD_SHARD=%q: want i/n with 0 <= i < n", v)
+		}
+	}
 	if _, err := os.Stat(gamesDir); err != nil {
 		t.Skipf("no Next SD games present (gitignored): %v", err)
 	}
@@ -78,17 +93,27 @@ func TestNextBasicSDGames(t *testing.T) {
 		return nil
 	})
 	sort.Strings(basFiles)
+	if sub != "" {
+		basFiles = mainPrograms(gamesDir, basFiles)
+	}
 	if len(basFiles) == 0 {
 		t.Skip("no .bas games on the SD card")
 	}
 
-	for _, host := range basFiles {
+	for i, host := range basFiles {
+		if i%shards != shard {
+			continue
+		}
 		rel, err := filepath.Rel(sdRoot, filepath.Dir(host))
 		if err != nil {
 			continue
 		}
 		sdDir := "/" + filepath.ToSlash(rel)
 		name := filepath.Base(filepath.Dir(host))
+		if sub != "" {
+			r, _ := filepath.Rel(gamesDir, host)
+			name = filepath.ToSlash(r)
+		}
 
 		t.Run(name, func(t *testing.T) {
 			emu := bootNextToMenu(t)
@@ -100,7 +125,7 @@ func TestNextBasicSDGames(t *testing.T) {
 				_ = os.MkdirAll(dir, 0o755)
 				var buf bytes.Buffer
 				if writeScreenshotPNG(emu, &buf) == nil {
-					safe := strings.ReplaceAll(name, " ", "_")
+					safe := strings.NewReplacer(" ", "_", "/", "__").Replace(name)
 					_ = os.WriteFile(filepath.Join(dir, "bas-"+safe+".png"), buf.Bytes(), 0o644)
 				}
 			}
@@ -111,6 +136,46 @@ func TestNextBasicSDGames(t *testing.T) {
 			t.Logf("BASVERDICT %-10s %-22s PC=%#04x pixels=%d colours=%d", verdict, name, emu.cpu.PC, px, cols)
 		})
 	}
+}
+
+// mainPrograms keeps one .bas per title directory (the first path element
+// under root): the shallowest, preferring a name that says it starts the game
+// or matches the directory, then the first in order.
+func mainPrograms(root string, files []string) []string {
+	best := map[string]string{}
+	score := func(p string) int {
+		rel, _ := filepath.Rel(root, p)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		base := strings.ToLower(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)))
+		s := 10 * len(parts)
+		for _, w := range []string{"run", "start", "load", "main", "autoexec", "boot", "launch"} {
+			if strings.Contains(base, w) {
+				s -= 5
+				break
+			}
+		}
+		title := strings.ToLower(parts[0])
+		if strings.Contains(title, base) || strings.Contains(base, strings.SplitN(title, "-", 2)[0]) {
+			s -= 3
+		}
+		return s
+	}
+	for _, f := range files {
+		rel, err := filepath.Rel(root, f)
+		if err != nil {
+			continue
+		}
+		title := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+		if cur, ok := best[title]; !ok || score(f) < score(cur) {
+			best[title] = f
+		}
+	}
+	out := make([]string, 0, len(best))
+	for _, f := range best {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // drawnInDisplayWindow counts pixels differing from the frame's dominant
