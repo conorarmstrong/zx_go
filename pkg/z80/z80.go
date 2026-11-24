@@ -398,6 +398,25 @@ type Memory interface {
 	ContendPort(port uint16)
 }
 
+// waitedMemory is the CPU's view of its memory bus. Every read through it is a
+// memory read cycle, and at 28 MHz on the Z80N each one costs a wait state: the
+// Next's SRAM pulls sram_wait_n low for one clock on every read request when
+// cpu_speed = "11" (zxnext.vhd:3169-3181; the M1-only condition is the line
+// commented out above it). Writes and I/O cycles are not waited.
+// TestNoInstructionReadsAnAddressTwice pins that no instruction reads an
+// address twice, so a read here is a bus cycle.
+type waitedMemory struct {
+	Memory
+	c *CPU
+}
+
+func (m *waitedMemory) Read(addr uint16) byte {
+	if m.c.Variant == VariantZ80N && m.c.speedSelect == 0x03 {
+		m.c.tstates++
+	}
+	return m.Memory.Read(addr)
+}
+
 // contentionWirer is an optional interface implemented by memory
 // backends that participate in cycle-accurate contention timing. The
 // CPU passes them a pointer to its T-state counter so reads/writes can
@@ -417,9 +436,9 @@ type frameEpochWirer interface {
 // New creates a new Z80 CPU instance.
 func New(mem Memory, ula ULA) *CPU {
 	c := &CPU{
-		mem: mem,
 		ula: ula,
 	}
+	c.mem = &waitedMemory{Memory: mem, c: c}
 	c.initTables()
 	c.Reset()
 	// Enable contention by sharing T-state counter with memory, if the
@@ -731,8 +750,8 @@ func (c *CPU) SetDE(val uint16) { c.D = byte(val >> 8); c.E = byte(val) }
 // the CPU is currently running. Always 1 on non-Next models. On
 // ModelNext, mirrors the NextReg 0x07 speed selector: 0 -> 1,
 // 1 -> 2, 2 -> 4, 3 -> 8. ExecuteFrame scales its per-frame T-state
-// budget by this value, and fetch() adds the 28 MHz M1 wait state
-// when the multiplier is 8.
+// budget by this value, and every memory read adds the 28 MHz wait
+// state when the multiplier is 8 (see waitedMemory).
 func (c *CPU) SpeedMultiplier() int {
 	switch c.speedSelect {
 	case 1:
@@ -4077,14 +4096,8 @@ func (c *CPU) fetch() byte {
 	c.PC++
 	c.R = (c.R & 0x80) | ((c.R + 1) & 0x7f)
 	c.instructionCount++
-	// 28 MHz Z80N adds one CPU T-state per M1 fetch as a wait
-	// state, modelling the FPGA's slower memory bus relative to
-	// the CPU clock. Only Variant==VariantZ80N at speedSelect==3
-	// (28 MHz) triggers it; every other configuration stays
-	// bit-identical to its prior behaviour.
-	if c.Variant == VariantZ80N && c.speedSelect == 0x03 {
-		c.tstates++
-	}
+	// The 28 MHz wait state is charged by waitedMemory, on this read as on
+	// every other.
 	return val
 }
 
