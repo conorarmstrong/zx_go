@@ -314,8 +314,11 @@ const (
 // (NR$1E/$1F), which ran eight times too fast at 28 MHz until 61f329dfc. See
 // TestBusAcquisitionIsCharged and ROADMAP item 1.
 //
-// The interleaved burst path (Step) does not charge it: there the bus is
-// handed back between bytes and the trips overlap the CPU's own time.
+// With a prescaler that outlasts a byte, a continuous block also passes
+// WAITING_ACK between bytes with the bus held, one clock each. The interleaved
+// burst path (Step) hands the bus back between bytes and takes it again through
+// START_DMA and WAITING_ACK for each one, so it charges each byte one clock for
+// its WAITING_ACK and nothing for a release.
 const (
 	busAcquireCycles     = 2 // START_DMA, WAITING_ACK
 	busReleaseCycles     = 1 // FINISH_DMA
@@ -807,6 +810,13 @@ func (d *DMA) runBlock() {
 	moved := 0 // bytes this call moves, which is what it holds the bus for
 	// START_DMA and WAITING_ACK, charged with the bytes when this trip ends.
 	held := uint64(busAcquireCycles)
+	// Fixed for the block: a byte's cost, and whether a prescaler period that
+	// outlasts it sends TRANSFERING_WRITE_4 through WAITING_CYCLES, which
+	// leaves through WAITING_ACK with the bus still held (dma.vhd:424,
+	// :451-458). Taken now because a re-entrant $C3 can rebuild the timing
+	// under the loop.
+	per := d.perByteCycles()
+	waitAck := d.prescalerTStates() > d.byteCycles()
 	for d.remaining > 0 {
 		b := d.portRead(srcIsA)
 		// The byte counter goes up in TRANSFERING_WRITE_1 (dma.vhd:361), the
@@ -821,8 +831,12 @@ func (d *DMA) runBlock() {
 			// that rebuilt the device underneath us. Only an IO endpoint
 			// pointed at the DMA's own command port can reach this. Everything
 			// below is downstream of the transfer states -- status_atleastone,
-			// FINISH_DMA, end-of-block, auto-restart, the bus charge -- and
-			// IDLE reaches none of it (dma.vhd:260-265, :469-495).
+			// FINISH_DMA, end-of-block, auto-restart -- and IDLE reaches none
+			// of it (dma.vhd:260-265, :469-495). The bytes moved, this one
+			// included, and the trip to the bus did hold the CPU off it, and
+			// the byte hook has already run the machine through them, so they
+			// are charged.
+			d.chargeAt(per, moved+1, held)
 			return
 		}
 		// status_atleastone goes up in TRANSFERING_WRITE_4 (dma.vhd:412), the
@@ -834,11 +848,14 @@ func (d *DMA) runBlock() {
 		// is that a read taken after a byte has moved sees it set.
 		d.atLeastOne = true
 		moved++
+		if waitAck && d.remaining > 0 {
+			held++ // WAITING_ACK before the next byte's read
+		}
 		// The rest of the machine keeps running while the CPU is held off the
 		// bus. The hook lets it catch up to this byte and drive dma_delay_i,
 		// which TRANSFERING_WRITE_4 samples next.
 		if d.byteHook != nil && d.remaining > 0 {
-			d.byteHook(held + uint64(moved)*d.perByteCycles())
+			d.byteHook(held + uint64(moved)*per)
 		}
 		if d.busDelay && d.remaining > 0 {
 			// TRANSFERING_WRITE_4 goes back to START_DMA rather than on to the
@@ -848,20 +865,20 @@ func (d *DMA) runBlock() {
 			// CPU off the bus, so they are charged now.
 			d.inTransfer = false
 			d.stalled = true
-			d.charge(moved, held)
+			d.chargeAt(per, moved, held)
 			return
 		}
 	}
 	d.inTransfer = false
-	d.charge(moved, held+busReleaseCycles)
+	d.chargeAt(per, moved, held+busReleaseCycles)
 	d.finishBlock()
 }
 
-// charge bills the CPU clock for n bytes moved while holding the bus, plus the
-// extra clocks of the bus trip they were moved in.
-func (d *DMA) charge(n int, extra uint64) {
+// chargeAt bills the CPU clock for n bytes moved at per T-states each while
+// holding the bus, plus the extra clocks of the bus trip they were moved in.
+func (d *DMA) chargeAt(per uint64, n int, extra uint64) {
 	if d.cycleSink != nil && n > 0 {
-		d.cycleSink(uint64(n)*d.perByteCycles() + extra)
+		d.cycleSink(uint64(n)*per + extra)
 	}
 }
 
@@ -931,11 +948,14 @@ func (d *DMA) Step(now uint64) {
 			return
 		}
 		d.atLeastOne = true // dma.vhd:412, in TRANSFERING_WRITE_4
-		// The byte held the bus for its own cycles. The prescaler gap that
+		// The byte held the bus for its own cycles and for the WAITING_ACK that
+		// took the bus back before it (dma.vhd:276-297; START_DMA only raises
+		// the request, and the CPU runs through it). The prescaler gap that
 		// follows does not: burst mode hands the bus back for it, which is the
-		// only place in the device that ever does.
+		// only place in the device that ever does, and the last byte's
+		// FINISH_DMA runs with the bus already given back.
 		if d.cycleSink != nil {
-			d.cycleSink(d.byteCycles())
+			d.cycleSink(d.byteCycles() + 1)
 		}
 		d.nextDue += per
 	}

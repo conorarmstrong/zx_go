@@ -158,8 +158,14 @@ on each trip to the bus, FINISH_DMA when the block ends (`busAcquireCycles`,
 when it resumes, because TRANSFERING_WRITE_4 goes straight back to START_DMA
 (`dma.vhd:427-428`). The byte hook's elapsed time includes them, so the CTC,
 UARTs and interrupts run through them too. All 12 SD `.nex` titles still launch
-and render. The interleaved burst path does not charge them: the bus is handed
-back between bytes there.
+and render.
+
+A review of that change found three more bus clocks the model left out, now
+charged: a continuous block whose prescaler outlasts a byte passes WAITING_ACK
+between bytes with the bus held (`dma.vhd:451-458`); an interleaved burst takes
+the bus back through WAITING_ACK before every byte (`:441-461`); and a block a
+re-entrant `$83` abandons was charged nothing, though the byte hook had already
+run the CTC and UARTs through its bytes.
 
 ### 2. [correctness] ~~IM2: what is left after `dma_delay_i`~~ — closed 2026-11-24
 
@@ -227,7 +233,9 @@ instruction ends. At an instruction boundary the pin is therefore exactly
   so a lower-priority device in service stayed in service after its RETI
   whenever a higher-priority one was pending, and with its dma-interrupt
   enable on it held the DMA off until the other interrupt had been taken and
-  returned from. `TestIM2DriverRETIReachesPastAPendingHigherPriorityDevice`.
+  returned from. `TestIM2DriverRETIReachesPastAPendingHigherPriorityDevice`,
+  and a new GHDL scenario in `im2_golden.txt` (s7) captured from the real
+  `peripherals.vhd` with `reti_decode` and `reti_seen` raised together.
   The rest of the decode window changes nothing an instruction boundary can
   see: the CPU does not sample `/INT` inside the instruction and no other
   transition reads IEI.

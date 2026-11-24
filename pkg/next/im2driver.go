@@ -31,10 +31,10 @@ const (
 // wants /M1 high again. Acknowledge plays that sequence out, which is what the
 // CPU's own acknowledge cycle does in three T-states.
 //
-// One signal is genuinely out of reach: o_reti_decode (im2_control.vhd:233) is
-// high for the single T-state between the ED prefix and its second byte. No
-// instruction-granular CPU can offer it. Nothing in this chain needs it to
-// arbitrate, but it is the first thing to check if arbitration comes out wrong.
+// o_reti_decode (im2_control.vhd:233) is high in S_ED_T4, from the ED prefix
+// fetch to the second opcode's. The one clock of that window the chain acts on
+// is the one that also carries o_reti_seen, so RETISeen raises both; see it for
+// why the rest of the window changes nothing an instruction boundary can see.
 type IM2Driver struct {
 	chain *IM2DaisyChain
 

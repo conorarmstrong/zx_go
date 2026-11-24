@@ -765,10 +765,10 @@ func (c *CPU) SetRETNHook(fn func()) { c.retnHook = fn }
 // (im2_control.vhd:135, :172-173, :234), so $5D, $6D and $7D execute the same
 // instruction and are not this signal.
 //
-// What this cannot reproduce is o_reti_decode (im2_control.vhd:233), which is
-// high for the single T-state between the ED prefix and its second byte. That
-// is a sub-instruction window, and a peripheral that needs it to arbitrate
-// needs a cycle-stepped CPU rather than this hook.
+// o_reti_decode (im2_control.vhd:233) is high on the clock that carries
+// o_reti_seen, so a consumer raises both from this hook (pkg/next IM2Driver).
+// The rest of its window is inside the instruction, where nothing that reads
+// it changes state.
 //
 // Pass nil to remove.
 func (c *CPU) SetRETISeenHook(fn func()) { c.retiSeenHook = fn }

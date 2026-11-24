@@ -450,3 +450,63 @@ func TestByteHookSkipsTheLastByte(t *testing.T) {
 		t.Errorf("hook called %d times for a 4-byte block, want 3", calls)
 	}
 }
+
+// A continuous block with a prescaler goes TRANSFERING_WRITE_4 -> WAITING_CYCLES
+// -> WAITING_ACK -> TRANSFERING_READ_1 between bytes, holding the bus throughout
+// (dma.vhd:424, :451-458), and DMA_timer_s is cleared only at READ_1 (:309), so
+// that WAITING_ACK clock follows the prescaler period rather than hiding in it.
+// The last byte goes from WAITING_CYCLES to FINISH_DMA instead.
+func TestAContinuousBlockWithAPrescalerPaysWaitingAckBetweenBytes(t *testing.T) {
+	var charged uint64
+	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 10)) // 4 bytes, 2+2 cycles, prescaler 10
+	per := uint64(4 * 10)                                  // the prescaler period outlasts the 4-cycle byte
+	if got, want := d.Duration(), 4*per; got != want {
+		t.Fatalf("Duration = %d, want %d", got, want)
+	}
+	if want := 4*per + 3 + busAcquisitionCycles; charged != want {
+		t.Errorf("charged = %d, want %d: the bytes, a WAITING_ACK after each of the first "+
+			"three, and the bus trip", charged, want)
+	}
+}
+
+// Without the prescaler outlasting the byte, WAITING_CYCLES is never entered and
+// TRANSFERING_WRITE_4 goes straight to the next READ_1, so there is no extra clock.
+func TestAContinuousBlockWithAShortPrescalerPaysNoWaitingAck(t *testing.T) {
+	var charged uint64
+	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
+	feed(d, withTiming(0x4000, 0x6000, 4, 0x00, 0x00, 1)) // 4+4 cycles against a 4 T-state period
+	if want := uint64(4*8) + busAcquisitionCycles; charged != want {
+		t.Errorf("charged = %d, want %d", charged, want)
+	}
+}
+
+// A burst block with a prescaler gives the bus back inside WAITING_CYCLES and
+// takes it again through START_DMA and WAITING_ACK before every byte
+// (dma.vhd:441-461). The CPU runs through START_DMA, which only raises the
+// request, and is held for WAITING_ACK, so each byte costs it one clock on top
+// of its read and write. The last byte's FINISH_DMA runs with the bus already
+// given back.
+func TestABurstByteWithAPrescalerPaysItsWaitingAck(t *testing.T) {
+	mem := memMap{}
+	var now uint64
+	var charged []uint64
+	d := New(mem)
+	d.SetClock(func() uint64 { return now })
+	d.SetCycleSink(func(n uint64) { charged = append(charged, n) })
+	feed(d, burstStream(0x4000, 0x6000, 3, 10))
+	for now = 0; now < 1000; now += 10 {
+		d.Step(now)
+	}
+	byteCyc := uint64(resetCycleLen + 2) // port A at reset, port B cycle code 2
+	if len(charged) != 3 {
+		t.Fatalf("charges %v, want one per byte", charged)
+	}
+	for i, c := range charged {
+		if c != byteCyc+1 {
+			t.Errorf("byte %d charged %d, want %d: its read and write and one WAITING_ACK", i, c, byteCyc+1)
+		}
+	}
+}

@@ -127,10 +127,12 @@ func TestReentrantDisableAbandonsTheBlockWithoutFinishing(t *testing.T) {
 		t.Errorf("port A pointer = $%04X, want $4002: auto-restart reloaded the start "+
 			"address, so FINISH_DMA ran for a block that never reached it", d.CurrentA())
 	}
-	if len(charged) != 0 {
-		t.Errorf("CPU charged %v T-states for an abandoned block, want nothing: the bus "+
-			"goes back at the DISABLE (dma.vhd:260-262), it is not held for the "+
-			"bytes the block never moved", charged)
+	// The two bytes it did move held the CPU off the bus, as did the trip to
+	// the bus they were moved in; the six it never moved did not, and with no
+	// FINISH_DMA there is no release clock either (dma.vhd:260-262).
+	if want := uint64(2*(resetCycleLen+resetCycleLen)) + busAcquireCycles; len(charged) != 1 || charged[0] != want {
+		t.Errorf("CPU charged %v T-states for an abandoned block, want [%d]: the two bytes "+
+			"moved and the bus acquisition, and nothing for the bytes never moved", charged, want)
 	}
 }
 
