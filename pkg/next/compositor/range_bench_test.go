@@ -5,6 +5,7 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/next/layer2"
 	"github.com/conorarmstrong/zx_go/pkg/next/palette"
+	"github.com/conorarmstrong/zx_go/pkg/next/tilemap"
 )
 
 // What a row costs to compose, against how many Copper writes land on it.
@@ -102,6 +103,12 @@ func TestComposeFrameRowTailReusesRendersUntilInvalidated(t *testing.T) {
 	l2 := layer2.New(banks)
 	l2.SetEnabled(true)
 	c := New(pal, l2)
+	// A second layer that stays on, so turning Layer 2 off below leaves a
+	// layer to compose and the cache valid: only the key's record of which
+	// layers it rendered can then tell the cache is short of Layer 2.
+	tm := tilemap.New(banks)
+	tm.SetEnabled(true)
+	c.SetTilemap(tm)
 	ula := make([]byte, FullWidth*4)
 	dst := make([]byte, FullWidth*4)
 
@@ -132,7 +139,9 @@ func TestComposeFrameRowTailReusesRendersUntilInvalidated(t *testing.T) {
 	c.ComposeFrameRowTail(65, ula, dst, 1, 100, FullWidth)
 	l2.SetEnabled(true)
 	c.ComposeFrameRowTail(65, ula, dst, 1, 100, FullWidth)
-	if c.renders != 5 {
-		t.Errorf("enabling a layer the cached render lacked made %d renders in all, want 5", c.renders)
+	// Each change to the set of enabled layers re-renders: off (5), on (6).
+	if c.renders != 6 {
+		t.Errorf("turning Layer 2 off and on made %d renders in all, want 6: the cache "+
+			"must not be reused for a set of layers it was not rendered for", c.renders)
 	}
 }

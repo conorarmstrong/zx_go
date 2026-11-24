@@ -51,13 +51,33 @@ func TestLayerCacheGuardCatchesEachRegisterLeftOut(t *testing.T) {
 		if !compositor.LayerRenderReads(r) || r == 0x02 || r == 0x03 {
 			continue
 		}
-		fresh := layerCacheFrameWith(t, r, false, 0)
-		mutant := layerCacheFrameWith(t, r, true, r)
+		fresh := layerCacheFrameWith(t, r, false, 0, false)
+		mutant := layerCacheFrameWith(t, r, true, r, false)
 		if fresh == nil || mutant == nil {
 			return
 		}
 		if bytes.Equal(fresh, mutant) {
 			t.Errorf("NR$%02X: leaving it out of the invalidation set changes nothing", r)
+		}
+	}
+}
+
+// TestLayerCacheMatchesUncachedAtTheEdges is the differential test over the
+// edge list (see layerCacheFrameWith), for the registers that exercise each
+// path: one each from Layer 2, the tilemap and the sprites, the enables, a
+// palette write and one no layer reads.
+func TestLayerCacheMatchesUncachedAtTheEdges(t *testing.T) {
+	for _, reg := range []byte{0x16, 0x30, 0x35, 0x15, 0x6B, 0x69, 0x41, 0x7F} {
+		cached := layerCacheFrameWith(t, reg, true, 0, true)
+		fresh := layerCacheFrameWith(t, reg, false, 0, true)
+		if cached == nil || fresh == nil {
+			return
+		}
+		if len(cached) != 640*256*4 {
+			t.Fatalf("NR$%02X: the edge frame is %d bytes, want a 640x256 frame", reg, len(cached))
+		}
+		if !bytes.Equal(cached, fresh) {
+			t.Errorf("NR$%02X: the cached path differs from the uncached one on the edge list", reg)
 		}
 	}
 }
@@ -81,12 +101,16 @@ const layerCacheRow = 40
 // pixels.
 func layerCacheFrame(t *testing.T, reg byte, cache bool) []byte {
 	t.Helper()
-	return layerCacheFrameWith(t, reg, cache, 0)
+	return layerCacheFrameWith(t, reg, cache, 0, false)
 }
 
 // layerCacheFrameWith is layerCacheFrame with register omit left out of the
-// cache's invalidation set; 0 leaves the set whole.
-func layerCacheFrameWith(t *testing.T, reg byte, cache bool, omit byte) []byte {
+// cache's invalidation set; 0 leaves the set whole. stress selects the edge
+// list instead: an 80-column tilemap from the start, so the frame is composed
+// at 640 pixels, MOVEs back to back in one column, a MOVE every two clocks so
+// the Copper carries debt from column to column, a MOVE on a column's last
+// clock, and writes past the right edge of the frame.
+func layerCacheFrameWith(t *testing.T, reg byte, cache bool, omit byte, stress bool) []byte {
 	t.Helper()
 	emu, err := newEmulator(roms.ModelNext)
 	if err != nil {
@@ -132,7 +156,11 @@ func layerCacheFrameWith(t *testing.T, reg byte, cache bool, omit byte) []byte {
 	}
 	d.WriteReg(0x6E, 0x00)
 	d.WriteReg(0x6F, 0x14)
-	d.WriteReg(0x6B, 0x80)
+	if stress {
+		d.WriteReg(0x6B, 0xC0) // 80 columns: the frame is composed at 640
+	} else {
+		d.WriteReg(0x6B, 0x80)
+	}
 	d.WriteReg(0x4C, 0x00)
 
 	// Sprites: visible, over the border, sixteen of them across the rows,
@@ -177,25 +205,52 @@ func layerCacheFrameWith(t *testing.T, reg byte, cache bool, omit byte) []byte {
 	move := func(r, v byte) uint16 { return uint16(r&0x7F)<<8 | uint16(v) }
 	keepOn := []byte{0x81, 0xFF, 0xA5, 0xC3, 0xE7, 0x99}
 	mixed := []byte{0x00, 0xFF, 0x5A, 0xA5, 0x01, 0x80}
-	writes := func(row int, vals []byte) {
-		for i, v := range vals {
-			put(wait(1+i*3, row))
+	if stress {
+		// Two MOVEs back to back land in one column; a run of MOVEs with no
+		// WAIT between them takes two of a column's four clocks each, so
+		// some columns hold two and the debt carries; the last WAIT is past
+		// the right edge of the frame.
+		put(wait(4, layerCacheRow))
+		put(move(reg, keepOn[0]))
+		put(move(reg, keepOn[1]))
+		put(wait(10, layerCacheRow))
+		for i, v := range mixed {
+			put(move(reg, v))
+			put(move(0x41, byte(i*37))) // a palette write between them
+		}
+		// A WAIT and two NOOPs spend three of the column's clocks, so the
+		// MOVE after them starts on its last one.
+		put(wait(28, layerCacheRow))
+		put(0x0000)
+		put(0x0000)
+		put(move(reg, keepOn[3]))
+		put(wait(40, layerCacheRow))
+		put(move(reg, keepOn[2]))
+		put(wait(2, layerCacheRow+1))
+		for _, v := range keepOn {
 			put(move(reg, v))
 		}
+	} else {
+		writes := func(row int, vals []byte) {
+			for i, v := range vals {
+				put(wait(1+i*3, row))
+				put(move(reg, v))
+			}
+		}
+		writes(layerCacheRow, keepOn)
+		writes(layerCacheRow+2, mixed)
+		put(wait(0, layerCacheRow+3))
+		put(move(0x6B, 0xA0))
+		put(move(0x70, 0x10))
+		put(move(0x15, 0x23))
+		writes(layerCacheRow+4, keepOn)
+		writes(layerCacheRow+6, mixed)
+		// A row that starts with reg cleared, so a layer disabled when the row is
+		// first composed can be enabled partway along it.
+		put(wait(31, layerCacheRow+7))
+		put(move(reg, 0x00))
+		writes(layerCacheRow+8, keepOn)
 	}
-	writes(layerCacheRow, keepOn)
-	writes(layerCacheRow+2, mixed)
-	put(wait(0, layerCacheRow+3))
-	put(move(0x6B, 0xA0))
-	put(move(0x70, 0x10))
-	put(move(0x15, 0x23))
-	writes(layerCacheRow+4, keepOn)
-	writes(layerCacheRow+6, mixed)
-	// A row that starts with reg cleared, so a layer disabled when the row is
-	// first composed can be enabled partway along it.
-	put(wait(31, layerCacheRow+7))
-	put(move(reg, 0x00))
-	writes(layerCacheRow+8, keepOn)
 	put(wait(63, 0x1FF)) // park for the rest of the frame
 	d.WriteReg(0x62, 0x40)
 

@@ -2126,7 +2126,9 @@ func (u *ULA) renderNext() *image.RGBA {
 			// register a render reads. hcount is hc_ula, whose zero point is
 			// twelve columns before displayed paper pixel 0. A write past the
 			// right border stands for the next row but shows on none of this
-			// one.
+			// one. A layer state that owns no pixel of the row is never
+			// rendered, so the sprite engine's sticky collision and overtime
+			// flags record only sprite state that reached the screen.
 			cache.InvalidateLayerRenders()
 			painted := 0
 			paintTo := func(x int) {
