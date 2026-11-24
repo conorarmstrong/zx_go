@@ -391,6 +391,13 @@ func (m *Memory) SetFPGABootROM(rom []byte) {
 	m.configModeActive = true
 }
 
+// SetFPGABootROMLowOnly selects the boot ROM window of core 3.02.05,
+// $0000-$1FFF, with $2000-$3FFF reading the normal SRAM decode (in config
+// mode the NR$04 page). The 30205 branch's zxnext.vhd changed the read mux
+// from `cpu_a(15 downto 14) = "00"` to `cpu_a(15 downto 13) = "000"`; its
+// boot ROM is built for that window. false is 3.02.03's $0000-$3FFF mirror.
+func (m *Memory) SetFPGABootROMLowOnly(on bool) { m.fpgaBootROMLowOnly = on }
+
 // ClearFPGABootROM disables bootrom mode but keeps the loaded
 // image around (cheap to re-enable for a soft reset back into
 // the loader if a peripheral wants to). Idempotent.

@@ -1111,16 +1111,19 @@ func wireNextSubsystems(e *emulator) error {
 	// FPGABootROMActive() true at seed.
 	fpgaBootArmed := os.Getenv("ZX_GO_NO_FPGA_BOOTROM") == ""
 	if fpgaBootArmed {
-		fpgaROM, err := install.LoadROM(install.FPGABootROM)
+		loader, lowOnly := install.BootCore()
+		fpgaROM, err := install.LoadROM(loader)
 		switch {
 		case err == nil:
 			mem.SetFPGABootROM(fpgaROM)
+			mem.SetFPGABootROMLowOnly(lowOnly)
 			slog.Info("FPGA bootrom loaded", "size", len(fpgaROM))
 		case errors.Is(err, install.ErrROMNotInstalled):
-			// LoadROM falls back to the bundled GPLv3 loader, so this
-			// branch should be unreachable in a normal build. If it
-			// fires, the embedded asset is missing (build problem).
-			slog.Warn("next: FPGA loader unavailable (neither installed nor embedded?) — falling back to direct enNextZX boot (will drop to 48K BASIC).")
+			// LoadROM falls back to the bundled GPLv3 loader for the
+			// default core, so this fires only for a core whose loader
+			// is not bundled (ZX_GO_NEXT_CORE=3.02.05) and not installed,
+			// or a build missing the embedded asset.
+			slog.Warn("next: FPGA loader unavailable — falling back to direct enNextZX boot (will drop to 48K BASIC).", "loader", loader)
 			fpgaBootArmed = false
 		default:
 			return fmt.Errorf("next: FPGA bootrom load: %w", err)

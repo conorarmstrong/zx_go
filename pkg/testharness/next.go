@@ -155,9 +155,11 @@ func newNext() (*Harness, error) {
 		// genuinely-installed loader (the boot-integration tests),
 		// NOT the bundled GPL fallback — so video/unit tests that
 		// don't install ROMs keep their hand-set state.
-		fpgaROM, err := install.LoadInstalledROM(install.FPGABootROM)
+		loader, lowOnly := install.BootCore()
+		fpgaROM, err := install.LoadInstalledROM(loader)
 		if err == nil {
 			mem.SetFPGABootROM(fpgaROM)
+			mem.SetFPGABootROMLowOnly(lowOnly)
 		} else if !errors.Is(err, install.ErrROMNotInstalled) {
 			return nil, fmt.Errorf("testharness: FPGA bootrom load: %w", err)
 		}

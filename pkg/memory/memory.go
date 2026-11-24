@@ -196,6 +196,10 @@ type Memory struct {
 	// tbblue.c behaviour (tbblue_bootrom.v=1/0).
 	fpgaBootROM       []byte
 	fpgaBootROMActive bool
+	// fpgaBootROMLowOnly selects the core 3.02.05 boot ROM window,
+	// $0000-$1FFF; false is 3.02.03's $0000-$3FFF. See
+	// SetFPGABootROMLowOnly.
+	fpgaBootROMLowOnly bool
 
 	// Spectrum Next config-mode RAM-page mapping at $0000-$3FFF.
 	//
@@ -1433,7 +1437,7 @@ func (m *Memory) readValue(addr uint16) byte {
 		// the other ModelNext paging machinery (it's what runs
 		// before the user-selectable machine personality is
 		// installed), so it short-circuits everything else.
-		if m.fpgaBootROMActive && addr < 0x4000 && len(m.fpgaBootROM) > 0 {
+		if m.fpgaBootROMActive && len(m.fpgaBootROM) > 0 && (addr < 0x2000 || (addr < 0x4000 && !m.fpgaBootROMLowOnly)) {
 			return m.fpgaBootROM[int(addr)%len(m.fpgaBootROM)]
 		}
 		// divMMC overlay READ priority. Per zxnext.vhd's final memory mux

@@ -210,6 +210,11 @@ const (
 	DistroROM   = "enNextZX.rom"
 	DivMMCROM   = "enNxtmmc.rom"
 	FPGABootROM = "tbblue_loader.rom"
+	// FPGABootROM30205 is the boot loader of core 3.02.05, the 30205
+	// branch's cores/zxnext/src/rom/bootrom.bin, built for that core's
+	// $0000-$1FFF boot ROM window; see BootCore. Not bundled: its boot
+	// code source is not published beside it, so the user installs it.
+	FPGABootROM30205 = "tbblue_loader_30205.rom"
 	// MultifaceROM is the 8 KB Multiface 128 ROM that real boot.bin
 	// loads into RAMPAGE 0x05 lower half. NextZXOS uses Multiface
 	// services (snapshot save, NMI menu) which read from this
@@ -388,4 +393,16 @@ func LoadInstalledROM(filename string) ([]byte, error) {
 		return nil, fmt.Errorf("read %s: %w", full, err)
 	}
 	return data, nil
+}
+
+// BootCore reports which core's boot path to model, from ZX_GO_NEXT_CORE:
+// "3.02.05" selects that core's boot loader and its $0000-$1FFF boot ROM
+// window; anything else, or unset, is 3.02.03, the core the rest of the
+// model follows. It returns the loader's file name and whether the window
+// is the narrow one.
+func BootCore() (loader string, lowOnly bool) {
+	if os.Getenv("ZX_GO_NEXT_CORE") == "3.02.05" {
+		return FPGABootROM30205, true
+	}
+	return FPGABootROM, false
 }
