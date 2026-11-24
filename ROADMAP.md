@@ -17,10 +17,10 @@ compatibility is still the honest weak point, and the Windows ARM64 GUI has neve
 | | Value | Kind |
 |---|---|---|
 | **Machines that boot and are interactive** | **all 9 listed** | measured |
-| **Compatibility rows** (`docs/compatibility.md`) | **266**: 11 Works, 20 Works (caveat), 58 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 15 Untested | measured |
-| **Known issue rows with a third-emulator reference** | **11 of 12** (8 settled as bad dumps; Funky Monkey Kid is new and not yet traced) | measured |
+| **Compatibility rows** (`docs/compatibility.md`) | **266**: 11 Works, 20 Works (caveat), 59 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 14 Untested | measured |
+| **Known issue rows with a third-emulator reference** | **11 of 12** (8 settled as bad dumps; Funky Monkey Kid is traced to NextZXOS's snapshot loader instead) | measured |
 | **Next games on the SD card** | **12 `.nex` launch and render**, 5 NextBASIC programs and NEXTipede also run | measured |
-| **itch.io catalogue of Next titles** | **108**: 98 launch and render, 1 known issue (Funky Monkey Kid), 9 untested (5 paid, 1 without files, 3 with nothing loadable) | measured, screens read by eye |
+| **itch.io catalogue of Next titles** | **108**: 99 launch and render, 1 known issue (Funky Monkey Kid, an OS limit), 8 untested (5 paid, 1 without files, 2 with nothing loadable) | measured, screens read by eye |
 | **Z80N opcode vectors captured from the FPGA HDL** | **8567, all green** | measured |
 | **Open work items** | **4** (1 correctness note, 2 product, 1 research), plus item 2 kept as a closed record | counted from this page |
 | **Time and effort estimates** | none kept | not estimated |
@@ -59,7 +59,7 @@ hardware changes are modelled; see item 8.
 |---|---|---|
 | Next hardware blocks vs the FPGA VHDL | golden suites for the CPU, sprites, paging, DMA and others | `VHDL_CONFORMANCE.md` |
 | Reachability (modelled and wired) | enforced by `pkg/next/reachability_test.go`; declared-unwired list is empty | item 2 |
-| Next game compatibility | weak point, narrowing; 12 of 12 SD `.nex` launch, 98 of the 99 screenable catalogue titles render | item 5 |
+| Next game compatibility | weak point, narrowing; 12 of 12 SD `.nex` launch, 99 of the 100 screenable catalogue titles render | item 5 |
 | Timing fidelity | no known knife-edge title; TX-1696's was the raster counter, fixed in v1.12.4 | Do not re-derive |
 | Performance | a saturated Copper list costs 6.1 ms a frame, 30% of a 50 Hz budget (was 108 ms) | `BenchmarkSaturatedCopperFrame` |
 | Time travel and debugging | reverse debugging, snapshot rewind and `replay-back` on every machine, into frames the loop ran; 256-checkpoint ring with shared memory | `DEBUGGER.md` |
@@ -70,10 +70,10 @@ hardware changes are modelled; see item 8.
 
 Ranked; detail in the open-work items below.
 
-1. **Next game compatibility** (item 5): Funky Monkey Kid's snapshot stops at a BASIC report; trace it and run it
-   on a reference. +3 CP/M disk images are still not driven by the screening.
+1. **Next game compatibility** (item 5): the catalogue is screened end to end; the open part is playing titles,
+   not just booting them.
 2. **Then:** a physical Windows-on-ARM launch (item 6).
-3. **Research (blocked):** the 3.02.05 diff is done (item 8). The boot ROM waits on a retarget decision; 3.03 VHDL is not public.
+3. **Research:** the 3.02.05 diff is done, the boot ROM as an opt-in (item 8). 3.03 VHDL is not public.
 
 ## What this is
 
@@ -247,7 +247,7 @@ arbiter; see item 2.
 ### 5. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **266 title rows: 11 Works, 20 Works
-(caveat), 58 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 15
+(caveat), 59 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 14
 Untested.** It was 36 rows with 13 Untested before automated screening, and 158
 before the itch.io catalogue was screened on 2026-11-24.
 
@@ -478,7 +478,7 @@ NextBASIC through the Command Line, sharded six ways (`NEX_SD_GAMES_SUBDIR`,
 for this (`ZX_GO_NEXT_SD_IMG` pointed at a missing file), because the default
 card is `roms/next/sd.img`, which knows nothing of new folders.
 
-- **98 launch and render** after the fixes below. Every screen was read by eye. That corrected six
+- **99 launch and render** after the fixes below. Every screen was read by eye. That corrected six
   pixel-count verdicts: four sparse but genuine screens scored blank, and two
   "renders" were the NextZXOS welcome page, reached because the harness ran a
   separately downloaded patch `.bas` outside the game folder it belongs in, where
@@ -498,9 +498,12 @@ card is `roms/next/sd.img`, which knows nothing of new folders.
   Snapshots needed two hardware fixes: no divMMC automap, and no divMMC in the
   memory mux, while the Multiface is paged; and $EFF7 bit 3 acts only on a
   paging write.
-- [ ] **Funky Monkey Kid** (`.sna`) stops at BASIC report `0 OK, 30:1` and does
-  not answer a key. Not traced; no reference run yet.
-- [ ] **+3 CP/M disk images** (mystery-city-fortuneteller) are not driven.
+- [x] ~~**Funky Monkey Kid**~~ traced 2026-11-24, not an emulator fault. Its
+  first act is an esxDOS call (RST $08), and NextZXOS 2.10a loads every 48K
+  snapshot with NR$B8 = $00 (ROM 2 `NEXTREG $B8,$00` at $0A85, kept by the
+  Multiface restore), with or without the loader's Printer support option.
+- [x] ~~**+3 CP/M disk images**~~: mystery-city-fortuneteller's Next build is
+  its `.z5`, which the Browser's ZXZVM command runs; it answers a key.
 
 **Every Next game on the SD card is now accounted for**: every title directory
 holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
@@ -607,7 +610,7 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 | Change | Guest-visible | Status |
 |---|---|---|
 | NR$0A bit 5 (`sd_swap`) needs bit 2 set in the same write, in config mode (3.02.04, `6395c28`) | yes | **done**, `TestSpec_NR0A_SDSwapNeedsLockBit` |
-| Boot ROM shrinks to `$0000-$1FFF`; config memory shows through `$2000-$3FFF` (`zxnext.vhd` `cpu_a(15 downto 13)`) | yes | open, deliberately: `bootrom.bin` is 8192 bytes in 3.02.05, so adopting it replaces the working boot path, and whether 3.03.03 uses the same image is unknown |
+| Boot ROM shrinks to `$0000-$1FFF`; config memory shows through `$2000-$3FFF` (`zxnext.vhd` `cpu_a(15 downto 13)`) | yes | **done as an opt-in**, `ZX_GO_NEXT_CORE=3.02.05` with an installed `tbblue_loader_30205.rom`; `TestBootROMWindow`. Default unchanged |
 | NR$A0 bit 1 (Pi SPI slave enable) is now live, readable, and sticky across reset | yes, via NR$A0 | **done**, `TestNRA0Bit1SurvivesAResetAndTheRestDoesNot` |
 | Six-button Mega Drive pad also reports as three-button (`md6_joystick_connector_x2.vhd`) | yes | not modelled: no Mega Drive pad in zx_go |
 | `spi_master` refuses a new transaction while `rd` or `wr` is held (`spi_active`) | SD SPI only | **no change needed**: one transfer per port access, which is what `spi_active` enforces |
@@ -615,13 +618,15 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 | PS/2 hotkeys: expansion bus F11/F12 moved to F5/F6, F12 a second PS/2 reset | no, host keyboard | not applicable |
 | `t80n` CPU: debug variant is the production default (`g_option` `$FFF2`); `mcode` and `alu` identical | no | no behaviour change found |
 
-**Status 2026-11-24: blocked, not doable from public evidence.** Rechecked: `30205` is still the newest
-branch, so the 3.03 features have no VHDL to model from. The one 3.02.05 change left, the boot ROM, waits on a
-maintainer decision to retarget the boot path at 3.02.05; it is not a fault in the current model.
+**Status 2026-11-24.** The 3.02.05 boot ROM row is done as an opt-in: `ZX_GO_NEXT_CORE=3.02.05` loads a
+user-installed `tbblue_loader_30205.rom` (the 30205 branch's `bootrom.bin`) and narrows the boot ROM window to
+$0000-$1FFF (`TestBootROMWindow`, `TestBootCore`). It boots to the NextZXOS menu. It is not bundled, because its
+boot code source is not published beside it, and the default stays 3.02.03 until the retarget is decided. The
+3.03 features cannot be modelled: rechecked today, `30205` is still the newest branch and no 3.03 VHDL is public.
 
 Next steps, in order:
 
-1. The boot ROM row is the one left. Take it through the golden-suite method only once it is decided that the target is the 3.02.05 boot path.
+1. Decide whether 3.02.05 becomes the default boot path; the opt-in is in place.
 2. Watch the official repo for a 3.03 branch. Last checked 2026-11-24: `30205` is the newest branch.
 3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
    NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL

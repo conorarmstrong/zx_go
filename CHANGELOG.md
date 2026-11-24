@@ -24,6 +24,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   64 checkpoints of a busy Next hold 4.5 MB instead of 149 MB. The default ring
   is now 256 checkpoints, up from 16, and `tt-status` reports the memory held.
 
+- **Core 3.02.05 boot path, opt-in.** `ZX_GO_NEXT_CORE=3.02.05` loads that
+  core's boot loader, installed as `tbblue_loader_30205.rom`, with its boot ROM
+  window of $0000-$1FFF. The default stays 3.02.03.
+- **The Next screening also runs Z-machine stories** through the Browser's
+  ZXZVM command, and the typist for NextZXOS can type `$`, `=` and `%`.
+
 ### Fixed
 
 - **NextReg $1E/$1F read the copper's line counter, as on the FPGA.** They

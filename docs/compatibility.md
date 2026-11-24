@@ -318,13 +318,15 @@ through NEXLOAD (`TestNexloadSDGames`), NextBASIC through the Command Line
 `NEX_SD_SHARD` pointing them at the batch. Every screen was read by eye, and six
 pixel-count verdicts were corrected from the picture; the notes say which.
 
-**98 launch and render their own title or game screen.** One, Funky Monkey
+**99 launch and render their own title or game screen.** One, Funky Monkey
 Kid, loads from its snapshot and stops at a BASIC report; it is recorded as a
-known issue. Nine are untested: five are paid, one page has no files, and three
-ship nothing loadable here (POKEs only, an archive without its game, a +3 CP/M disk).
+known issue, traced to NextZXOS's snapshot loader rather than the emulator.
+Eight are untested: five are paid, one page has no files, and two ship nothing
+loadable here (POKEs only, an archive without its game).
 Titles without a `.nex` or `.bas` were screened by `TestOtherSDFormats`: tapes
 through `.tapein` and `LOAD ""`, snapshots through `SPECTRUM "file"`, and
-extensionless NEX or +3DOS BASIC files by their headers.
+extensionless NEX or +3DOS BASIC files by their headers, and Z-machine stories
+through the Browser's ZXZVM command.
 "Boots" here means what it means elsewhere in this document: the title's own
 code drew its screen, and no input was sent. Rows are by itch.io page name; a
 few (Blok Boy, Eternal Battle, Dougie Do, BasInvaders) also appear above under
@@ -373,7 +375,7 @@ their earlier screening.
 | flappynext | **Boots** | Screened 2026-11-24. NEXLOAD: `FlappyNext.nex` launch and render. |
 | foreign-cabinet | **Boots** | Screened 2026-11-24. NEXLOAD: `ForeignCabinet.nex` launch and render. |
 | fred-in-space | Untested | Paid (minimum price); not downloaded. |
-| funky-monkey-kid-game-watch | **Known issue** | Screened 2026-11-24. Snapshot: `SPECTRUM "fkmv103.sna"` ends on a red border, black screen and BASIC report `0 OK, 30:1`, and a keypress did nothing. Not traced, and no reference run yet, so whether the fault is ours is open. |
+| funky-monkey-kid-game-watch | **Known issue** | Screened 2026-11-24. Not an emulator fault, traced 2026-11-24. The game starts at $6000 and its first act is an esxDOS call, M_GETDATE (RST $08). NextZXOS 2.10a loads a 48K snapshot with every divMMC RST entry point off: ROM 2 runs `NEXTREG $B8,$00` at $0A85 and the Multiface restore keeps it, through `SPECTRUM` and through the Browser's snapshot loader alike, Printer support on or off. So RST $08 runs the 48K ROM's error restart and the game falls back to BASIC with `0 OK, 30:1`. The ReadMe's plain-Spectrum route needs esxDOS, which this card does not carry. |
 | galactus | **Boots** | Screened 2026-11-24. NextBASIC: `Galactus/galactus_play.bas` renders its title or game screen. |
 | gamebookreader-zxnext | **Boots** | Screened 2026-11-24. NextBASIC: its own menu ("Press 1 to start Gamebook Reader"), sparse enough that the pixel count called it blank. |
 | go-mummy | **Boots** | Screened 2026-11-24. NextBASIC: `gomummy.bas` renders its title or game screen. |
@@ -399,7 +401,7 @@ their earlier screening.
 | mercenarynext | **Boots** | Screened 2026-11-24. NEXLOAD: `mercenary.nex` launch and render. |
 | mimex | **Boots** | Screened 2026-11-24. NEXLOAD: `mimex-beta.nex` launch and render. |
 | mystery-city | **Boots** | Screened 2026-11-24. Tape: `mystery.tap` through `.tapein` and `LOAD ""` draws a text menu. Its words look misspelt (Portuguese with odd characters); not compared with a reference, so the rendering is unverified. |
-| mystery-city-fortuneteller | Untested | Screened 2026-11-24. The Spectrum build is a +3 CP/M `.dsk`; mounting a disk image is not a path the screening drives. |
+| mystery-city-fortuneteller | **Boots (responds)** | Screened 2026-11-24. The readme's Next route: the Browser's ZXZVM command loads `fortune.z5` ("Story loaded - press a key"), and after a key it shows its introduction and the Entrance Hall. The +3 CP/M `.dsk` is the build for a plain +3. |
 | nexions | **Boots** | Screened 2026-11-24. NextBASIC: `nexions.run/run.bas` renders its title or game screen. |
 | next-hexagon | **Boots** | Screened 2026-11-24. NEXLOAD: `nexthexagon.nex` launch and render. |
 | next-shift | **Boots** | Screened 2026-11-24. NextBASIC: `Next Shift.bas` renders its title or game screen. |
