@@ -161,7 +161,7 @@ UARTs and interrupts run through them too. All 12 SD `.nex` titles still launch
 and render. The interleaved burst path does not charge them: the bus is handed
 back between bytes there.
 
-### 2. [correctness] IM2: what is left after `dma_delay_i`
+### 2. [correctness] ~~IM2: what is left after `dma_delay_i`~~ — closed 2026-11-24
 
 **Re-checked against the code on 2026-11-16.** The CTC, the IM2 chain, the UART,
 the NMI arbiter and the DMA delay pin are wired and reachable, and the CTC and
@@ -220,12 +220,22 @@ instruction ends. At an instruction boundary the pin is therefore exactly
   nominal T-state), and `PollIntSources` moves into the next frame when a
   block runs past the frame end, raising that frame's interrupts at their own
   times; the loop does not raise them again.
-- **`o_reti_decode`** (`im2_control.vhd:233`): high for the single T-state
-  between the `ED` prefix and its second byte. The CPU still cannot give that
-  window. Nothing in the current chain needs it; it is the first thing to check
-  if arbitration comes out wrong.
-- **UART 1** has the Raspberry Pi behind it on boards that fit one. Nothing is
-  attached here, so its lines idle, as on a board without the Pi.
+- ~~**`o_reti_decode`**~~ Done 2026-11-24, and it was not inert. It is high
+  in `S_ED_T4` (`im2_control.vhd:233`), the state in which `o_reti_seen` is
+  computed, and it opens the IEO of a device still waiting in `S_REQ`
+  (`im2_device.vhd:142`). `IM2Driver.RETISeen` raised `reti_seen` without it,
+  so a lower-priority device in service stayed in service after its RETI
+  whenever a higher-priority one was pending, and with its dma-interrupt
+  enable on it held the DMA off until the other interrupt had been taken and
+  returned from. `TestIM2DriverRETIReachesPastAPendingHigherPriorityDevice`.
+  The rest of the decode window changes nothing an instruction boundary can
+  see: the CPU does not sample `/INT` inside the instruction and no other
+  transition reads IEI.
+- ~~**UART 1**~~ Checked 2026-11-24: nothing to do. With no Pi fitted,
+  `zxnext.vhd:2333-2334` hold its Rx high and its CTS_n low whatever NR$A0
+  says, and that is what the unrouted lines are. Its four IM2 request lines
+  and its joystick routing are wired and tested.
+
 **A known approximation, and the line not to cross.** The CTC and the UART are
 advanced from instruction boundaries, `T-states * 8 / SpeedMultiplier` clocks at
 a time. For the CTC that equals continuous ticking, because its channel FSM has

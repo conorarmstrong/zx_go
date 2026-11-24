@@ -8,6 +8,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A RETI now releases its interrupt when a higher-priority one is waiting.**
+  On the Next's IM2 daisy chain a device waiting to be acknowledged blocks the
+  devices below it, except while a RETI is being decoded. That exception was
+  missing, so a frame interrupt whose routine returned while a line interrupt
+  was pending stayed in service, and if it had its DMA interrupt enable on it
+  held the zxnDMA off until the line interrupt had been taken and returned
+  from.
+
 - **A zxnDMA block now costs the CPU its bus trip as well as its bytes.**
   START_DMA, WAITING_ACK and FINISH_DMA hold the CPU off the bus for a clock
   each, and a block parked by an interrupt pays the first two again when it

@@ -148,3 +148,44 @@ func TestIM2DriverLatchesOnTheRequestEdge(t *testing.T) {
 		t.Error("/INT not asserted after the source re-asserted with its enable set")
 	}
 }
+
+// The RETI that ends a lower-priority device's service routine has to reach it
+// past a higher-priority device that is still waiting to be acknowledged.
+// im2_device.vhd:136-146 makes a device in S_REQ block its IEO, except while
+// o_reti_decode is high: `o_ieo <= i_iei and i_reti_decode`. And
+// im2_control.vhd:233-234 raises o_reti_decode in S_ED_T4, the same state in
+// which o_reti_seen is computed (state_next = S_ED4D_T4), so on the clock the
+// device in service sees reti_seen it also sees IEI.
+//
+// Without that, a frame interrupt whose routine is interrupted, in effect, by a
+// line interrupt arriving while it runs with interrupts off stays in service
+// after its RETI, and with its dma-interrupt enable on it holds the DMA off
+// until the line interrupt has been taken and returned from.
+func TestIM2DriverRETIReachesPastAPendingHigherPriorityDevice(t *testing.T) {
+	d := NewIM2Driver()
+	d.SetMode(true)
+	d.SetEnabled(IM2SourceULA, true)
+	d.SetEnabled(IM2SourceLine, true)
+	d.SetDMAEnabled(IM2SourceULA, true)
+
+	d.Raise(IM2SourceULA)
+	if vec, ok := d.Acknowledge(); !ok || vec != byte(IM2SourceULA<<1) {
+		t.Fatalf("acknowledge = $%02X, %v; want the ULA's vector", vec, ok)
+	}
+	d.Lower(IM2SourceULA)
+	// The line interrupt arrives while the frame routine runs with interrupts
+	// off: it is pending, not acknowledged.
+	d.Raise(IM2SourceLine)
+	if !d.DMAInt() {
+		t.Fatal("the ULA in service with its dma enable on is not holding the DMA off")
+	}
+
+	d.RETISeen() // the frame routine returns
+	if d.DMAInt() {
+		t.Error("the ULA is still in service after its RETI: the pending line interrupt " +
+			"blocked the chain, but o_reti_decode opens it for the RETI")
+	}
+	if !d.INTAsserted() {
+		t.Error("the line interrupt is no longer pending after the ULA's RETI")
+	}
+}

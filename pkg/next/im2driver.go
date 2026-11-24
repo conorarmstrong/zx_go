@@ -130,8 +130,17 @@ func (d *IM2Driver) Acknowledge() (byte, bool) {
 
 // RETISeen is the end-of-interrupt: the peripheral in service releases its slot
 // and lets a lower-priority one through.
+//
+// o_reti_decode is raised with it. im2_control.vhd:233-234 drives
+// o_reti_decode in S_ED_T4 and o_reti_seen from state_next = S_ED4D_T4, which
+// is computed in that same state, so the clock that carries reti_seen also
+// carries reti_decode. That opens the IEO of every device still waiting in
+// S_REQ (im2_device.vhd:142), so the RETI reaches a lower-priority device in
+// service even while a higher-priority one is pending. Outside that clock the
+// signal changes nothing an instruction boundary can see: the CPU does not
+// sample /INT inside the RETI, and no other transition reads IEI.
 func (d *IM2Driver) RETISeen() {
-	d.tick(func(in *IM2Inputs) { in.RetiSeen = true })
+	d.tick(func(in *IM2Inputs) { in.RetiSeen, in.RetiDecode = true, true })
 	d.settle()
 	d.notify()
 }
