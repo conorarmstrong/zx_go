@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -202,4 +203,133 @@ func drawnInDisplayWindow(emu *emulator) (pixels, colours int) {
 		}
 	}
 	return w*h - best, len(hist)
+}
+
+// TestOtherSDFormats screens the titles in NEX_SD_GAMES_SUBDIR that ship
+// neither a .nex nor a .bas, through the NextZXOS Command Line as a user would
+// start them: a tape with `.tapein` then LOAD "", a snapshot (.snx, .sna,
+// .z80) with NextBASIC's SPECTRUM "file", and a NEX or +3DOS BASIC file
+// shipped without its extension with .nexload or LOAD. Report-only, like the BASIC screen;
+// skipped unless the subdirectory is given.
+func TestOtherSDFormats(t *testing.T) {
+	const sdRoot = "../../roms/next/sd"
+	sub := os.Getenv("NEX_SD_GAMES_SUBDIR")
+	if sub == "" {
+		t.Skip("NEX_SD_GAMES_SUBDIR not set")
+	}
+	gamesDir := filepath.Join(sdRoot, sub)
+	titles, err := os.ReadDir(gamesDir)
+	if err != nil {
+		t.Skipf("%s: %v", gamesDir, err)
+	}
+	for _, title := range titles {
+		if !title.IsDir() {
+			continue
+		}
+		var tap, snap, nex string
+		var basic []string
+		hasNative := false
+		_ = filepath.Walk(filepath.Join(gamesDir, title.Name()), func(p string, fi os.FileInfo, err error) error {
+			if err != nil || fi.IsDir() {
+				return nil
+			}
+			switch strings.ToLower(filepath.Ext(p)) {
+			case ".nex", ".bas":
+				hasNative = true
+			case ".tap":
+				if tap == "" {
+					tap = p
+				}
+			case ".snx", ".sna", ".z80":
+				if snap == "" {
+					snap = p
+				}
+			case "", ".00":
+				// Programs shipped without their extension: a NEX file
+				// keeps its "NextV" signature, a +3DOS file its header,
+				// whose byte 15 is 0 for a BASIC program.
+				head := make([]byte, 16)
+				if f, err := os.Open(p); err == nil {
+					n, _ := io.ReadFull(f, head)
+					head = head[:n]
+					_ = f.Close()
+				}
+				switch {
+				case bytes.HasPrefix(head, []byte("NextV")) && nex == "":
+					nex = p
+				case len(head) == 16 && bytes.HasPrefix(head, []byte("PLUS3DOS")) && head[15] == 0:
+					basic = append(basic, p)
+				}
+			}
+			return nil
+		})
+		// Of several BASIC programs, the one named after the title is the
+		// one to start; the rest are the parts it chains to.
+		bas := ""
+		squash := strings.NewReplacer(" ", "", "-", "", "_", "")
+		for _, b := range basic {
+			if bas == "" || strings.HasPrefix(squash.Replace(strings.ToLower(title.Name())), squash.Replace(strings.ToLower(filepath.Base(b)))) {
+				bas = b
+			}
+		}
+		if hasNative || (tap == "" && snap == "" && nex == "" && bas == "") {
+			continue
+		}
+		host, kind := nex, "nex"
+		switch {
+		case host != "":
+		case bas != "":
+			host, kind = bas, "basic"
+		case tap != "":
+			host, kind = tap, "tape"
+		default:
+			host, kind = snap, "snapshot"
+		}
+		rel, _ := filepath.Rel(sdRoot, filepath.Dir(host))
+		sdDir := "/" + filepath.ToSlash(rel)
+		file := strings.ToLower(filepath.Base(host))
+		name := title.Name()
+		t.Run(name, func(t *testing.T) {
+			emu := bootNextToMenu(t)
+			enter := func(frames int) {
+				nexPressCombo(emu, [][2]int{{6, 0x01}}, 4, 12)
+				nexRunFrames(emu, frames)
+			}
+			nexPressCombo(emu, [][2]int{{0, 0x01}, {4, 0x10}}, 4, 10) // DOWN -> Command Line
+			enter(80)
+			nexTypeLineBlind(emu, `.cd "`+strings.ToLower(sdDir)+`"`)
+			nexRunFrames(emu, 10)
+			enter(120)
+			switch kind {
+			case "nex":
+				nexTypeLineBlind(emu, `.nexload "`+file+`"`)
+			case "basic":
+				nexTypeLineBlind(emu, `load "`+file+`"`)
+			case "tape":
+				// .tapein mounts the tape; LOAD "t:" points LOAD at the tape
+				// device, as .tapein's own help says, and LOAD "" then
+				// loads from it.
+				nexTypeLineBlind(emu, `.tapein "`+file+`"`)
+				nexRunFrames(emu, 10)
+				enter(120)
+				nexTypeLineBlind(emu, `load "t:"`)
+				nexRunFrames(emu, 10)
+				enter(60)
+				nexTypeLineBlind(emu, `load ""`)
+			default:
+				nexTypeLineBlind(emu, `spectrum "`+file+`"`)
+			}
+			nexRunFrames(emu, 10)
+			enter(1500)
+			px, cols := drawnInDisplayWindow(emu)
+			if dir := os.Getenv("NEX_RENDER_OUT_DIR"); dir != "" {
+				_ = os.MkdirAll(dir, 0o755)
+				var buf bytes.Buffer
+				if writeScreenshotPNG(emu, &buf) == nil {
+					_ = os.WriteFile(filepath.Join(dir, "other-"+name+".png"), buf.Bytes(), 0o644)
+				}
+			}
+			t.Logf("OTHERVERDICT %-8s %-44s %s PC=%#04x pixels=%d colours=%d", kind, name, file, emu.cpu.PC, px, cols)
+		})
+	}
 }
