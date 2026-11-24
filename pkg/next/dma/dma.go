@@ -37,8 +37,8 @@
 // not. What runs in the shipped emulator: a block holds the bus for its bytes
 // and charges that to the CPU, burst mode gives the bus back only where the
 // FPGA does (WAITING_CYCLES, so only with a prescaler), and $83 abandons a
-// block where it stands. The per-block bus acquisition is derived but not
-// charged; see busAcquisitionCycles.
+// block where it stands. Each trip to the bus also costs START_DMA,
+// WAITING_ACK and FINISH_DMA; see busAcquisitionCycles.
 //
 // The dma_delay_i pin (SetBusDelay, BusRequested, the stalled state and its
 // capture) is driven by pkg/next.Ticker from the IM2 chain and the NMI
@@ -150,9 +150,10 @@ type DMA struct {
 	// as bit 5 (active-low: 1 = not at end, 0 = end-of-block reached).
 	endOfBlock bool
 
-	// lastDuration is the T-state cost of the most recent transfer, derived
-	// from the per-byte cycle cost (read + write cycle lengths, or the
-	// prescaler if larger). The emulator charges it to the CPU clock.
+	// lastDuration is the T-state cost of the most recent transfer's bytes,
+	// derived from the per-byte cycle cost (read + write cycle lengths, or the
+	// prescaler if larger). The CPU is charged that plus the bus trip's own
+	// clocks (busAcquisitionCycles).
 	lastDuration uint64
 
 	// Read-back: a WR6 "read mask follows" ($BB) selects which of the seven
@@ -302,21 +303,24 @@ const (
 // (dma.vhd:469-495, :260-265). The DMA owns the bus in all three, so the CPU
 // is stopped for them.
 //
-// It is derived, recorded, and NOT charged, and the reason is not the one first
-// written here. The original note said charging it broke TX-1696, which implied
-// the charge was at fault. Measurement says otherwise: perturbing the per-block
-// cost by every value from -5 to +10 T-states breaks that title at -4, -2, +3,
-// +4, +6, +8, +9 and +10, and leaves it working at -5, -3, -1, 0, +1, +2, +5
-// and +7. Seven of sixteen, scattered, with no monotonic relationship to how
-// much time is added. TX-1696 is balanced on a phase edge, and the fact that
-// zero happens to be one of the working phases is luck, not correctness.
+// The first two are paid each time a block goes to the bus (busAcquireCycles)
+// and the last once, when it finishes (busReleaseCycles). A block parked by
+// dma_delay_i leaves TRANSFERING_WRITE_4 straight for START_DMA
+// (dma.vhd:427-428), with no FINISH_DMA, and pays the first two again when it
+// resumes.
 //
-// So charging these three cycles is not wrong; it lands on one failing phase
-// among many. It stays deferred because doing it would knowingly regress a
-// working title while the underlying marginality is unexplained, and fixing
-// that marginality is the actual defect. See ROADMAP item 1.
-// TestBusAcquisitionIsDerivedButNotCharged pins the deferral.
-const busAcquisitionCycles = 3
+// The charge was deferred for a while on the grounds that it broke TX-1696.
+// The title was marginal for another reason: it polls the active video line
+// (NR$1E/$1F), which ran eight times too fast at 28 MHz until 61f329dfc. See
+// TestBusAcquisitionIsCharged and ROADMAP item 1.
+//
+// The interleaved burst path (Step) does not charge it: there the bus is
+// handed back between bytes and the trips overlap the CPU's own time.
+const (
+	busAcquireCycles     = 2 // START_DMA, WAITING_ACK
+	busReleaseCycles     = 1 // FINISH_DMA
+	busAcquisitionCycles = busAcquireCycles + busReleaseCycles
+)
 
 // resetCycleLen is the per-port cycle length both ports come up with and go
 // back to. The reset pin and the $C3 command both write "01" into the two
@@ -757,8 +761,7 @@ func (d *DMA) Trigger() {
 		fmt.Fprintf(os.Stderr, "DMA xfer A=%04X B=%04X len=%d aIO=%v bIO=%v mode=%d presc=%d\n",
 			d.curA, d.curB, moved, d.aIsIO, d.bIsIO, d.mode, d.prescaler)
 	}
-	// busAcquisitionCycles is deliberately absent from this sum; see
-	// TestBusAcquisitionIsDerivedButNotCharged for why.
+	// The bytes alone; runBlock adds the bus trip's own clocks to the charge.
 	d.lastDuration = uint64(moved) * d.perByteCycles()
 
 	// Burst mode with a fixed-time prescaler interleaves with the CPU: defer
@@ -802,6 +805,8 @@ func (d *DMA) runBlock() {
 	srcIsA := d.aToB // port A is the source when transferring A -> B
 	d.inTransfer = true
 	moved := 0 // bytes this call moves, which is what it holds the bus for
+	// START_DMA and WAITING_ACK, charged with the bytes when this trip ends.
+	held := uint64(busAcquireCycles)
 	for d.remaining > 0 {
 		b := d.portRead(srcIsA)
 		// The byte counter goes up in TRANSFERING_WRITE_1 (dma.vhd:361), the
@@ -833,7 +838,7 @@ func (d *DMA) runBlock() {
 		// bus. The hook lets it catch up to this byte and drive dma_delay_i,
 		// which TRANSFERING_WRITE_4 samples next.
 		if d.byteHook != nil && d.remaining > 0 {
-			d.byteHook(uint64(moved) * d.perByteCycles())
+			d.byteHook(held + uint64(moved)*d.perByteCycles())
 		}
 		if d.busDelay && d.remaining > 0 {
 			// TRANSFERING_WRITE_4 goes back to START_DMA rather than on to the
@@ -843,19 +848,20 @@ func (d *DMA) runBlock() {
 			// CPU off the bus, so they are charged now.
 			d.inTransfer = false
 			d.stalled = true
-			d.charge(moved)
+			d.charge(moved, held)
 			return
 		}
 	}
 	d.inTransfer = false
-	d.charge(moved)
+	d.charge(moved, held+busReleaseCycles)
 	d.finishBlock()
 }
 
-// charge bills the CPU clock for n bytes moved while holding the bus.
-func (d *DMA) charge(n int) {
+// charge bills the CPU clock for n bytes moved while holding the bus, plus the
+// extra clocks of the bus trip they were moved in.
+func (d *DMA) charge(n int, extra uint64) {
 	if d.cycleSink != nil && n > 0 {
-		d.cycleSink(uint64(n) * d.perByteCycles())
+		d.cycleSink(uint64(n)*d.perByteCycles() + extra)
 	}
 }
 
@@ -1037,11 +1043,9 @@ func (d *DMA) ByteCounter() uint16 { return d.counter }
 func (d *DMA) CurrentA() uint16    { return d.curA }
 func (d *DMA) CurrentB() uint16    { return d.curB }
 
-// Duration returns the T-state cost of the most recent transfer: the per-byte
-// cycle cost times the bytes moved. The emulator charges this to the CPU clock,
-// because that is the time the CPU spent frozen. It does NOT include the
-// per-block bus acquisition, which is derived but deliberately not charged; see
-// busAcquisitionCycles and TestBusAcquisitionIsDerivedButNotCharged.
+// Duration returns the T-state cost of the most recent transfer's bytes: the
+// per-byte cycle cost times the bytes moved. The CPU is charged this plus the
+// clocks of the bus trip itself; see busAcquisitionCycles.
 func (d *DMA) Duration() uint64 { return d.lastDuration }
 
 // Mode returns the transfer mode (continuous or burst) from the last WR4 write.

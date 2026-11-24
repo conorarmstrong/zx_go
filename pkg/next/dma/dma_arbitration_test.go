@@ -3,11 +3,9 @@ package dma
 import "testing"
 
 // A block holds the CPU off the bus for its bytes, at each port's programmed
-// cycle length, and the duration it reports and the amount it charges are the
-// same number. Three further states bracket the transfer loop with the DMA
-// still owning the bus -- START_DMA, WAITING_ACK and FINISH_DMA -- and their
-// three clocks are deliberately not in this figure; see
-// TestBusAcquisitionIsDerivedButNotCharged.
+// cycle length, plus the three clocks that bracket the transfer loop with the
+// DMA owning the bus: START_DMA, WAITING_ACK and FINISH_DMA
+// (busAcquisitionCycles). Duration reports the bytes alone.
 func TestABlockChargesTheCPUForItsBytes(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -28,10 +26,49 @@ func TestABlockChargesTheCPUForItsBytes(t *testing.T) {
 			if got := d.Duration(); got != c.want {
 				t.Errorf("Duration = %d, want %d", got, c.want)
 			}
-			if charged != c.want {
-				t.Errorf("charged = %d, want %d", charged, c.want)
+			if want := c.want + busAcquisitionCycles; charged != want {
+				t.Errorf("charged = %d, want %d: the bytes plus START_DMA, WAITING_ACK and FINISH_DMA", charged, want)
 			}
 		})
+	}
+}
+
+// A block parked by dma_delay_i pays for two trips to the bus. TRANSFERING_WRITE_4
+// goes straight back to START_DMA when the pin is high (dma.vhd:427-428), so
+// the first trip ends without a FINISH_DMA; dropping the pin goes round
+// START_DMA and WAITING_ACK again before the remaining bytes, and FINISH_DMA
+// closes the block (dma.vhd:267-305, :469-495). That is 2 + 2 + 1 clocks on top
+// of the bytes, against 3 for a block that is not parked.
+func TestAParkedBlockPaysForEachTripToTheBus(t *testing.T) {
+	mem := memMap{}
+	d := New(mem)
+	var charged uint64
+	d.SetCycleSink(func(n uint64) { charged += n })
+	moved := 0
+	d.SetIOBus(&hookBus{onWrite: func(uint16, byte) {
+		moved++
+		if moved == 3 {
+			d.SetBusDelay(true)
+		}
+	}})
+	feed(d, []byte{
+		0xC3,                         // RESET
+		0x7D, 0x00, 0x40, 0x08, 0x00, // WR0: A->B, port A = $4000, length 8
+		0x14,                     // WR1: port A memory, increment
+		wr2Byte(addrFixed, true), // WR2: port B IO, fixed
+		0x8D, 0xDF, 0x00,         // WR4: continuous, port B = IO $00DF
+		0xCF, 0x87, // LOAD, ENABLE
+	})
+	perByte := uint64(resetCycleLen + resetCycleLen)
+	if want := 3*perByte + busAcquireCycles; charged != want {
+		t.Errorf("parked after 3 bytes: charged = %d, want %d (the bytes and one acquisition, no FINISH_DMA)", charged, want)
+	}
+	d.SetBusDelay(false)
+	if moved != 8 {
+		t.Fatalf("moved %d bytes in all, want 8", moved)
+	}
+	if want := 8*perByte + 2*busAcquireCycles + busReleaseCycles; charged != want {
+		t.Errorf("after resuming: charged = %d, want %d (the bytes, two acquisitions, one FINISH_DMA)", charged, want)
 	}
 }
 
@@ -373,8 +410,9 @@ func TestStatusAtLeastOneIsSetInsideASynchronousBlock(t *testing.T) {
 }
 
 // The byte hook runs after every byte of a continuous block but the last, with
-// the bus time so far, and a delay it raises parks the block at that byte. The
-// parked part is charged when it parks; the rest when it finishes.
+// the bus time so far, START_DMA and WAITING_ACK included, and a delay it
+// raises parks the block at that byte. The parked part is charged when it
+// parks; the rest, with its own acquisition and FINISH_DMA, when it finishes.
 func TestByteHookCanParkAContinuousBlock(t *testing.T) {
 	mem := memMap{}
 	d := New(mem)
@@ -388,16 +426,16 @@ func TestByteHookCanParkAContinuousBlock(t *testing.T) {
 		}
 	})
 	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0)) // 4 bytes, 4 T-states each
-	if len(elapsed) != 2 || elapsed[0] != 4 || elapsed[1] != 8 {
-		t.Fatalf("hook saw %v, want [4 8]", elapsed)
+	if len(elapsed) != 2 || elapsed[0] != 2+4 || elapsed[1] != 2+8 {
+		t.Fatalf("hook saw %v, want [6 10]", elapsed)
 	}
-	if d.ByteCounter() != 2 || len(charged) != 1 || charged[0] != 8 {
-		t.Fatalf("parked with %d bytes, charges %v; want 2 bytes, [8]", d.ByteCounter(), charged)
+	if d.ByteCounter() != 2 || len(charged) != 1 || charged[0] != 2+8 {
+		t.Fatalf("parked with %d bytes, charges %v; want 2 bytes, [10]", d.ByteCounter(), charged)
 	}
 	d.SetByteHook(nil)
 	d.SetBusDelay(false)
-	if d.ByteCounter() != 4 || len(charged) != 2 || charged[1] != 8 {
-		t.Errorf("resumed to %d bytes, charges %v; want 4, [8 8]", d.ByteCounter(), charged)
+	if d.ByteCounter() != 4 || len(charged) != 2 || charged[1] != 2+8+1 {
+		t.Errorf("resumed to %d bytes, charges %v; want 4, [10 11]", d.ByteCounter(), charged)
 	}
 }
 

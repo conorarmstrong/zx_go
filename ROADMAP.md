@@ -131,36 +131,35 @@ package: see item 2.
 Ordered by what the reference-emulator goal above is worth, not by size. Items
 1 to 4 are correctness against the FPGA; 5 to 7 are product work; 8 is research.
 
-### 1. [correctness] TX-1696 is balanced on a timing edge
+### 1. [correctness] ~~TX-1696 is balanced on a timing edge~~ — explained and closed 2026-11-24
 
-**This item previously said the wrong thing, and the correction matters more
-than the original claim.** It said the DMA's bus-hold reaching the CPU as one
-jump of the T-state counter was a defect, because it leaves no interrupt sample
-point inside the stall. The first half is true and the conclusion did not
-follow: `zxnext.vhd:1827` forces `cpu_m1_n` inactive while the DMA holds the
-bus, so the real Z80 takes no M1 cycle inside a stall either, and `/INT` keeps
-pulsing where it cannot be sampled (`:1840`). One jump is the right shape. The
-interrupt really is lost, on hardware and here alike.
+**It was not the DMA.** TX-1696 polls the active video line, NR$1E/$1F, to wait
+for the raster. That counter was derived from CPU T-states, so at the Next's
+28 MHz it ran eight times too fast, and whether the title's wait caught its
+line came down to phase. Any change to a DMA block's cost moved the phase,
+which is why the August sweep failed at seven scattered values from -5 to +10.
+`61f329dfc` (v1.12.4) divided the counter by the speed multiplier, for an
+unrelated reason, and the marginality went with it.
 
-What is actually wrong is that TX-1696 flips on almost any perturbation.
-Charging or refunding a per-block cost across -5 to +10 T-states gives:
+The evidence, all against `TestNexloadSDGames/TX-1696` with a temporary knob
+adding a per-block delta to the DMA's CPU charge:
 
-| delta | -5 | -4 | -3 | -2 | -1 | 0 | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8 | +9 | +10 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| TX-1696 | ok | **fail** | ok | **fail** | ok | ok | ok | ok | **fail** | **fail** | ok | **fail** | ok | **fail** | **fail** | **fail** |
+| Build | Failing deltas in -5..+10 |
+|---|---|
+| `c0078c84d`, where the sweep was first taken | -4, -2, +3, +4, +6, +8, +9, +10 (the original table, reproduced exactly) |
+| Bisected: `9682141ba` | the same eight |
+| Bisected: `61f329dfc`, the counter fix | none |
+| Today's code | none, and +100000 passes too |
+| Today's code with only the fast counter put back | -3 and +1 fail again |
 
-Seven of sixteen fail, scattered, with no monotonic relationship to how much
-time is added. The title is knife-edge, and zero being a working phase is luck.
-
-Two things follow. `busAcquisitionCycles` was deferred on the stated grounds
-that charging it broke TX-1696, which implied the charge was at fault; it is
-not, it simply lands on one failing phase among many. And our green corpus run
-is not evidence that this title's timing is right.
-
-The work is to find why it is marginal at all. A title should not turn on one
-T-state per DMA block. Until that is understood, the three cycles stay
-uncharged, to avoid knowingly regressing a working title, and that deferral is
-now recorded as a deliberate hold rather than as a fix.
+**The three bus-acquisition cycles are now charged.** START_DMA and WAITING_ACK
+on each trip to the bus, FINISH_DMA when the block ends (`busAcquireCycles`,
+`busReleaseCycles`). A block parked by `dma_delay_i` pays the first two again
+when it resumes, because TRANSFERING_WRITE_4 goes straight back to START_DMA
+(`dma.vhd:427-428`). The byte hook's elapsed time includes them, so the CTC,
+UARTs and interrupts run through them too. All 12 SD `.nex` titles still launch
+and render. The interleaved burst path does not charge them: the bus is handed
+back between bytes there.
 
 ### 2. [correctness] IM2: what is left after `dma_delay_i`
 

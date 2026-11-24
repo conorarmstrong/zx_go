@@ -8,6 +8,14 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A zxnDMA block now costs the CPU its bus trip as well as its bytes.**
+  START_DMA, WAITING_ACK and FINISH_DMA hold the CPU off the bus for a clock
+  each, and a block parked by an interrupt pays the first two again when it
+  resumes. This was held back because charging it seemed to break TX-1696. It
+  did not: TX-1696 was sensitive to any timing change because it polls the
+  raster line, and that counter ran eight times too fast at 28 MHz until
+  v1.12.4. The title now passes across every per-block perturbation tried.
+
 - **A busy Copper list no longer costs several frames to draw.** Every Copper
   write re-drew the rest of its row and re-rendered Layer 2, the tilemap and
   the sprites to do it. A list writing a palette entry every two copper clocks

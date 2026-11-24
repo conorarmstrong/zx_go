@@ -76,15 +76,15 @@ func TestModeDecoded(t *testing.T) {
 	}
 }
 
-// In continuous mode the transfer duration is charged to the CPU clock via the
-// cycle sink; in burst mode it is not (the CPU keeps running).
+// In continuous mode the transfer duration, and the bus trip's own three
+// clocks, are charged to the CPU clock via the cycle sink.
 func TestCycleSinkContinuousCharges(t *testing.T) {
 	var charged uint64
 	d := New(memMap{})
 	d.SetCycleSink(func(n uint64) { charged += n })
 	feed(d, withTiming(0x4000, 0x6000, 8, 0x02, 0x02, 0)) // WR4 in withTiming = continuous
-	if charged != 8*(2+2) {
-		t.Errorf("continuous charged = %d, want %d", charged, 8*(2+2))
+	if want := uint64(8*(2+2)) + busAcquisitionCycles; charged != want {
+		t.Errorf("continuous charged = %d, want %d", charged, want)
 	}
 }
 
@@ -139,9 +139,9 @@ func TestBurstWithoutPrescalerChargesTheCPULikeContinuous(t *testing.T) {
 	if d.Duration() == 0 {
 		t.Fatal("the fixture computed no duration, so it moved nothing")
 	}
-	if charged != d.Duration() {
+	if want := d.Duration() + busAcquisitionCycles; charged != want {
 		t.Errorf("burst without a prescaler charged %d, want %d: the bus is held for the whole block",
-			charged, d.Duration())
+			charged, want)
 	}
 }
 
@@ -238,37 +238,33 @@ func TestResetPortTimingCommands(t *testing.T) {
 	}
 }
 
-// The per-block bus acquisition is derived from the FPGA but deliberately not
-// charged, and this pins that so the deferral cannot quietly become an
-// oversight. busAcquisitionCycles records what the hardware spends; Duration
-// deliberately leaves it out.
+// The per-block bus acquisition is derived from the FPGA and charged: START_DMA,
+// WAITING_ACK and FINISH_DMA are one clock each with the DMA owning the bus.
 //
-// The reason is not that the charge is wrong. An earlier note here said the
-// emulator's one-jump charge left no sample point inside the stall, and that
-// adding a cost to it was a phase lottery. The first half of that is true and
-// the second half misread it: zxnext.vhd:1827 forces cpu_m1_n inactive while
-// the DMA holds the bus, so the real Z80 takes no M1 cycle inside a stall
-// either, and one jump is the right shape for it.
-//
-// What the measurement actually shows is that TX-1696 is marginal. Perturbing
-// the per-block cost across -5..+10 T-states breaks it at -4, -2, +3, +4, +6,
-// +8, +9, +10 and leaves it working at -5, -3, -1, 0, +1, +2, +5, +7: seven of
-// sixteen, scattered, with no monotonic relationship to the amount added. Zero
-// is a working phase by luck. Charging three cycles lands on a failing one.
-//
-// So this stays deferred to avoid knowingly regressing a title while the
-// marginality is unexplained, and the marginality is the real defect. See
-// ROADMAP item 1.
-func TestBusAcquisitionIsDerivedButNotCharged(t *testing.T) {
-	if busAcquisitionCycles != 3 {
-		t.Errorf("busAcquisitionCycles = %d, want 3: START_DMA, WAITING_ACK and "+
-			"FINISH_DMA are one clock each (dma.vhd:267-305, :469-495)", busAcquisitionCycles)
+// It was deferred for a while because charging it broke TX-1696, and a sweep
+// of the per-block cost from -5 to +10 T-states broke that title at seven
+// scattered values. The cause was not the DMA. The title polls the active
+// video line (NR$1E/$1F), and that counter ran on CPU T-states, so at 28 MHz
+// it moved eight times too fast and the title's raster waits caught or missed
+// their line by phase. With the counter divided by the speed multiplier
+// (61f329dfc) the same sweep, and a +100000 T-state perturbation, all pass.
+// Reintroducing the fast counter brings scattered failures back. See ROADMAP
+// item 1.
+func TestBusAcquisitionIsCharged(t *testing.T) {
+	if busAcquisitionCycles != 3 || busAcquireCycles != 2 || busReleaseCycles != 1 {
+		t.Errorf("acquire %d + release %d = %d, want 2 + 1 = 3: START_DMA, WAITING_ACK and "+
+			"FINISH_DMA are one clock each (dma.vhd:267-305, :469-495)",
+			busAcquireCycles, busReleaseCycles, busAcquisitionCycles)
 	}
+	var charged uint64
 	d := New(memMap{})
+	d.SetCycleSink(func(n uint64) { charged += n })
 	feed(d, withTiming(0x4000, 0x6000, 4, 0x02, 0x02, 0))
 	if got, want := d.Duration(), uint64(4*(2+2)); got != want {
-		t.Errorf("Duration = %d, want %d: the acquisition must not be in the charge "+
-			"while a block is charged to the CPU as one lump", got, want)
+		t.Errorf("Duration = %d, want %d: it reports the bytes alone", got, want)
+	}
+	if want := uint64(4*(2+2)) + busAcquisitionCycles; charged != want {
+		t.Errorf("charged = %d, want %d", charged, want)
 	}
 }
 
