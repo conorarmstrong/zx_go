@@ -90,3 +90,24 @@ func TestBeamPositionAtTurboSpeed(t *testing.T) {
 		t.Errorf("mid line 5 at 28 MHz: got line=%d hpos=%d, want 5,10", line, hpos)
 	}
 }
+
+// VideoTStatesInFrame is the beam's position as video T-states since the frame
+// origin, wrapped at the frame: what BeamPosition and the Next's NR$1E/$1F are
+// computed from.
+func TestVideoTStatesInFrame(t *testing.T) {
+	var ts uint64
+	mem := &memory.Memory{}
+	mem.TStates = &ts
+	u := &ULA{mem: mem, frameStartTstate: 100}
+	ts = 100 + 1234
+	if got := u.VideoTStatesInFrame(); got != 1234 {
+		t.Errorf("VideoTStatesInFrame = %d, want 1234", got)
+	}
+	ts = 100 + uint64(TStatesPerLine*LinesPerFrame) + 7
+	if got := u.VideoTStatesInFrame(); got != 7 {
+		t.Errorf("VideoTStatesInFrame = %d, want 7: it wraps at the frame", got)
+	}
+	if got := (&ULA{}).VideoTStatesInFrame(); got != 0 {
+		t.Errorf("with no T-state source = %d, want 0", got)
+	}
+}

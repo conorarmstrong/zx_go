@@ -1289,12 +1289,11 @@ func (u *ULA) renderTimexHiRes() *image.RGBA {
 	return wide
 }
 
-// ActiveVideoLine returns the current raster line within the frame,
-// derived from the CPU's T-state position (T-states since frame start /
-// T-states-per-line). It is a 9-bit counter (0..511). The Spectrum Next
-// exposes this via NextReg $1E (MSB, bit 0) / $1F (LSB): NextZXOS dot
-// commands such as NextGuide DISABLE interrupts and poll it to sync to
-// the raster, so it MUST advance as the CPU runs or the wait hangs.
+// ActiveVideoLine returns the current raster line counted from the frame
+// origin (T-states since frame start / T-states-per-line), wrapped at the
+// frame. It is NOT what the Next's NR$1E/$1F read: those read the copper's
+// cvc, which counts from the first paper line; see next.ActiveVideoLine, which
+// is computed from VideoTStatesInFrame.
 func (u *ULA) ActiveVideoLine() int {
 	line, _ := u.BeamPosition()
 	return line
@@ -1309,8 +1308,19 @@ func (u *ULA) ActiveVideoLine() int {
 // the coarse scanline quantum. Returns (0,0) when no T-state source is
 // wired.
 func (u *ULA) BeamPosition() (line, hpos int) {
+	t := u.VideoTStatesInFrame()
+	lineLen := u.tStatesPerLine()
+	line = t / lineLen
+	hpos = (t % lineLen) / 4
+	return line, hpos
+}
+
+// VideoTStatesInFrame is the beam position as video T-states (the 3.5 MHz
+// clock the raster runs on, whatever the CPU speed) since the frame origin,
+// wrapped at the frame. 0 when no T-state source is wired.
+func (u *ULA) VideoTStatesInFrame() int {
 	if u.mem == nil || u.mem.TStates == nil {
-		return 0, 0
+		return 0
 	}
 	t := int(*u.mem.TStates - u.frameStartTstate)
 	if t < 0 {
@@ -1327,11 +1337,7 @@ func (u *ULA) BeamPosition() (line, hpos int) {
 	// flush: with audio disabled, or in a loop that does not render every
 	// frame, the offset grows without bound and the masked version became a
 	// free-running counter with no relation to the beam.
-	lineLen := u.tStatesPerLine()
-	t %= lineLen * u.linesPerFrame()
-	line = t / lineLen
-	hpos = (t % lineLen) / 4
-	return line, hpos
+	return t % (u.tStatesPerLine() * u.linesPerFrame())
 }
 
 // ReadPort handles CPU reads from ULA-controlled ports. The single

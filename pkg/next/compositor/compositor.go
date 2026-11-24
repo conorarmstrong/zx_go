@@ -110,6 +110,7 @@ type Compositor struct {
 	fallback       [4]byte // NR$4A fallback RGBA, shown when every layer is transparent
 	blendMode      byte    // NextReg 0x68 bits 6:5 — blend colour source
 	stencilMode    bool    // NextReg 0x68 bit 0 — ULA/tilemap stencil
+	ulaDisabled    bool    // NextReg 0x68 bit 7 — ULA output off: every ULA pixel transparent
 
 	// Pre-allocated per-scanline scratch buffers — hoisted out
 	// of ComposeScanline so 192 calls per frame don't churn the
@@ -209,6 +210,13 @@ func (c *Compositor) BlendMode() byte { return c.blendMode }
 // the tilemap are enabled, the two combine into a stencil (their colours
 // ANDed) rather than layering (zxnext.vhd:7125-7138).
 func (c *Compositor) SetStencilMode(on bool) { c.stencilMode = on }
+
+// SetULAEnabled follows NR$68 bit 7 (set means disabled). With the ULA
+// disabled the mixer treats every ULA pixel as transparent (zxnext.vhd:7103,
+// ula_transparent includes ula_en_2 = '0'), so the layers beneath it show.
+// The blend source keeps the ULA colour test alone, as ula_mix_transparent
+// does (:7100).
+func (c *Compositor) SetULAEnabled(on bool) { c.ulaDisabled = !on }
 
 // StencilMode reports the active NR$68 stencil selection.
 func (c *Compositor) StencilMode() bool { return c.stencilMode }
@@ -528,9 +536,15 @@ func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, s
 	// its colour's RGB332, the top 8 bits of the 9-bit palette entry it came
 	// from, equals NR$14 (zxnext.vhd:7100). The ULA arrives expanded from
 	// the palette, so each channel's top bits are the entry's bits.
-	ulaTransparentAt := func(off int) bool {
+	ulaMixTransparentAt := func(off int) bool {
 		v := ulaRGBA[off+0]>>5<<5 | ulaRGBA[off+1]>>5<<2 | ulaRGBA[off+2]>>6
 		return v == c.transparency
+	}
+	// ula_transparent (zxnext.vhd:7103) adds the ULA enable to the colour
+	// test; ula_mix_transparent (:7100), which the blend source reads, is the
+	// colour test alone.
+	ulaTransparentAt := func(off int) bool {
+		return c.ulaDisabled || ulaMixTransparentAt(off)
 	}
 	// paintBase lays the ULA down as the bottom layer, substituting the
 	// NR$4A fallback colour where the ULA pixel is transparent — so a
@@ -654,7 +668,9 @@ func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, s
 		// over this tilemap pixel. This used to be approximated as
 		// "on_top off and nibble 0", which hid every background tile
 		// that carried a palette offset.
-		if x < len(tilemapBelow) && tilemapBelow[x] != 0 {
+		// zxnext.vhd:7116 lets it through anyway where the ULA pixel is
+		// transparent.
+		if x < len(tilemapBelow) && tilemapBelow[x] != 0 && !ulaTransparentAt(off) {
 			return
 		}
 		r, g, b := tilemapPal.RGB(idx)
@@ -683,7 +699,7 @@ func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, s
 		// The ULA arrives already expanded to RGBA; palette.RGB replicates
 		// 3-bit 'abc' as 'abcabcab', so the top 3 bits are the original.
 		ulaChannels3 := func(off int) (byte, byte, byte) {
-			if ulaTransparentAt(off) {
+			if ulaMixTransparentAt(off) {
 				return 0, 0, 0
 			}
 			return ulaRGBA[off+0] >> 5, ulaRGBA[off+1] >> 5, ulaRGBA[off+2] >> 5

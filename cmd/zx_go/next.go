@@ -1377,8 +1377,14 @@ func wireNextSubsystems(e *emulator) error {
 	// counter derived from the CPU T-state position. NextZXOS dot
 	// commands (NextGuide) disable interrupts and poll it to wait for the
 	// raster; without a live value the wait loop hangs forever.
-	disp.SetOnRead(0x1F, func(*nextregs.Dispatcher) byte { return byte(u.ActiveVideoLine() & 0xFF) })
-	disp.SetOnRead(0x1E, func(*nextregs.Dispatcher) byte { return byte((u.ActiveVideoLine() >> 8) & 0x01) })
+	//
+	// The value is the copper's cvc, counted from the first paper line with
+	// NR$64 added, not a line count from the frame interrupt (zxnext.vhd:5982).
+	videoLine := func(d *nextregs.Dispatcher) int {
+		return next.ActiveVideoLine(u.VideoTStatesInFrame(), u.SixtyHz(), d.Raw(0x64))
+	}
+	disp.SetOnRead(0x1F, func(d *nextregs.Dispatcher) byte { return byte(videoLine(d) & 0xFF) })
+	disp.SetOnRead(0x1E, func(d *nextregs.Dispatcher) byte { return byte((videoLine(d) >> 8) & 0x01) })
 	// Tilemap pixel scroll (NR$2F:$30 = X 10-bit, NR$31 = Y 8-bit) per
 	// FPGA nr_30_tm_scrollx / nr_31_tm_scrolly.
 	disp.SetOnWrite(0x2F, func(d *nextregs.Dispatcher, val byte) {
@@ -1452,6 +1458,7 @@ func wireNextSubsystems(e *emulator) error {
 		d.Store(0x68, nr68ReadBack(val))
 		r := decodeNR68(val)
 		u.SetULAOutputDisabled(r.ulaDisabled)
+		comp.SetULAEnabled(!r.ulaDisabled)
 		comp.SetBlendMode(r.blendMode)
 		comp.SetStencilMode(r.stencilMode)
 		u.SetULAFineScrollX(r.ulaFineScrollX)
