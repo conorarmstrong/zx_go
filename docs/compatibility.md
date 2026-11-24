@@ -318,10 +318,13 @@ through NEXLOAD (`TestNexloadSDGames`), NextBASIC through the Command Line
 `NEX_SD_SHARD` pointing them at the batch. Every screen was read by eye, and six
 pixel-count verdicts were corrected from the picture; the notes say which.
 
-**80 launch and render their own title or game screen. Two, both builds of
-Celeste, crash after launch.** 26 are untested: five are paid, one page has no
-files, and 20 ship in formats the screening does not drive yet (Next tapes and
-tape-driven adventures, `.snx` snapshots, +3 or CP/M disks, other engines).
+**98 launch and render their own title or game screen.** One, Funky Monkey
+Kid, loads from its snapshot and stops at a BASIC report; it is recorded as a
+known issue. Nine are untested: five are paid, one page has no files, and three
+ship nothing loadable here (POKEs only, an archive without its game, a +3 CP/M disk).
+Titles without a `.nex` or `.bas` were screened by `TestOtherSDFormats`: tapes
+through `.tapein` and `LOAD ""`, snapshots through `SPECTRUM "file"`, and
+extensionless NEX or +3DOS BASIC files by their headers.
 "Boots" here means what it means elsewhere in this document: the title's own
 code drew its screen, and no input was sent. Rows are by itch.io page name; a
 few (Blok Boy, Eternal Battle, Dougie Do, BasInvaders) also appear above under
@@ -334,7 +337,7 @@ their earlier screening.
 | advanced-lawn-mower-simulator-next | **Boots** | Screened 2026-11-24. NextBASIC: `AdvancedLawnMower/ADVANCED.bas` renders its title or game screen. |
 | alien-annihilation | **Boots** | Screened 2026-11-24. NextBASIC: `playAAN.bas` renders its title or game screen. |
 | angry-bloaters | **Boots** | Screened 2026-11-24. NEXLOAD: `Bloaters.nex` launch and render. |
-| apolo11 | Untested | Screened 2026-11-24. Ships as .tap and +3 .dsk images; not a format the screening drives yet. |
+| apolo11 | **Boots** | Screened 2026-11-24. Tape: `.tapein "apolo11_128kb_en.tap"`, `LOAD "t:"`, `LOAD ""` draws its title screen. The +3 `.dsk` images were not driven. |
 | atic-atac-next | **Boots** | Screened 2026-11-24. NEXLOAD: `ATICATAC.NEX` launch and render. |
 | barclay | **Boots** | Screened 2026-11-24. NextBASIC: `The Tale Of Barclay/barclay.bas` renders its title or game screen. |
 | basinvaders | **Boots** | Screened 2026-11-24. NextBASIC: `BasInvaders R5/BasInvaders.bas` renders its title or game screen. |
@@ -349,14 +352,14 @@ their earlier screening.
 | brickz-invaderz | **Boots** | Screened 2026-11-24. NextBASIC: `Brickz_INVADERZ.bas` renders its title or game screen. |
 | brickz-variety | **Boots** | Screened 2026-11-24. NextBASIC: `Brickz_VARIETY.bas` renders its title or game screen. |
 | bungle | **Boots** | Screened 2026-11-24. NextBASIC: `Bungle/Bungle.bas` renders its title or game screen. |
-| celeste | **Known issue** | Screened 2026-11-24. Every build crashes after launching through NEXLOAD: within about 1400 frames the CPU is running through memory with interrupts off, RAM paged into slots 0 and 1 and SP at $0037, and the tilemap shows one repeating column across the whole frame. Not yet traced: the single-step driver ran 400 million instructions from the same launch without reaching the crash, so it may depend on the frame loop. |
-| celeste-old-site | **Known issue** | Screened 2026-11-24. Every build crashes after launching through NEXLOAD: within about 1400 frames the CPU is running through memory with interrupts off, RAM paged into slots 0 and 1 and SP at $0037, and the tilemap shows one repeating column across the whole frame. Not yet traced: the single-step driver ran 400 million instructions from the same launch without reaching the crash, so it may depend on the frame loop. |
+| celeste | **Boots** | Screened 2026-11-24. NEXLOAD: every build launches and renders its title screen. It used to crash after launch: NR$1E/$1F counted lines from the frame interrupt instead of from the first paper line, so a DMA it syncs to the raster ran 248 lines late. |
+| celeste-old-site | **Boots** | Screened 2026-11-24. NEXLOAD: every build launches and renders its title screen. It used to crash after launch: NR$1E/$1F counted lines from the frame interrupt instead of from the first paper line, so a DMA it syncs to the raster ran 248 lines late. |
 | chip-otto | **Boots** | Screened 2026-11-24. NEXLOAD: `CHIPOTTO.NEX` launch and render. |
-| codename-obscura | Untested | Screened 2026-11-24. A tape-driven adventure (.tap + .nxt data); not a format the screening drives yet. |
+| codename-obscura | **Boots** | Screened 2026-11-24. Tape: `obscura.tap` through `.tapein` and `LOAD ""` draws its title and waits for a key. |
 | cratercrawler | **Boots** | Screened 2026-11-24. NextBASIC: `ccrawler11_play.bas` renders its title or game screen. |
 | cuchalain-the-great | **Boots** | Screened 2026-11-24. NextBASIC: `TirNaGog_1.02/Cuchalain.bas` renders its title or game screen. |
 | dice8next | **Boots** | Screened 2026-11-24. NEXLOAD: `dice8next.nex` launch and render. |
-| dieragus | Untested | Screened 2026-11-24. A tape-driven adventure (.tap + .nxt data); not a format the screening drives yet. |
+| dieragus | **Boots** | Screened 2026-11-24. Tape: `die ragus.tap` through `.tapein` and `LOAD ""` draws its title and instructions. |
 | dougie-do | **Boots** | Screened 2026-11-24. NEXLOAD: `DougieDo.nex` launch and render. |
 | drug-dealers | **Boots** | Screened 2026-11-24. NEXLOAD: `drug_dealers.nex` launch and render. |
 | duckieduckduck | **Boots** | Screened 2026-11-24. NextBASIC: `Duckie Duck Duck/Duckie.bas` renders its title or game screen. |
@@ -366,37 +369,37 @@ their earlier screening.
 | escape-from-retro-island-zx-spectrum-next-game | **Boots** | Screened 2026-11-24. NextBASIC: `ISLAND.BAS` renders its title or game screen. |
 | eternal | **Boots** | Screened 2026-11-24. NEXLOAD: `EternalBattle 1.2/EternalBattle.nex` launch and render. |
 | fionas-flight | **Boots** | Screened 2026-11-24. NEXLOAD: `flight.nex` launch and render. |
-| flappybirdzxnext | Untested | Screened 2026-11-24. Ships as a .tap; not a format the screening drives yet. |
+| flappybirdzxnext | **Boots** | Screened 2026-11-24. Tape: `flappybird-zxnext.tap` through `.tapein` and `LOAD ""` runs its attract demo. |
 | flappynext | **Boots** | Screened 2026-11-24. NEXLOAD: `FlappyNext.nex` launch and render. |
 | foreign-cabinet | **Boots** | Screened 2026-11-24. NEXLOAD: `ForeignCabinet.nex` launch and render. |
 | fred-in-space | Untested | Paid (minimum price); not downloaded. |
-| funky-monkey-kid-game-watch | Untested | Screened 2026-11-24. Ships as a .sna; not a format the screening drives yet. |
+| funky-monkey-kid-game-watch | **Known issue** | Screened 2026-11-24. Snapshot: `SPECTRUM "fkmv103.sna"` ends on a red border, black screen and BASIC report `0 OK, 30:1`, and a keypress did nothing. Not traced, and no reference run yet, so whether the fault is ours is open. |
 | galactus | **Boots** | Screened 2026-11-24. NextBASIC: `Galactus/galactus_play.bas` renders its title or game screen. |
 | gamebookreader-zxnext | **Boots** | Screened 2026-11-24. NextBASIC: its own menu ("Press 1 to start Gamebook Reader"), sparse enough that the pixel count called it blank. |
 | go-mummy | **Boots** | Screened 2026-11-24. NextBASIC: `gomummy.bas` renders its title or game screen. |
-| golden-seas | Untested | Screened 2026-11-24. A tape-driven adventure (.tap + .nxt data); not a format the screening drives yet. |
+| golden-seas | **Boots** | Screened 2026-11-24. Tape: `golden seas.tap` through `.tapein` and `LOAD ""` draws its title and instructions. |
 | grelox-colony-7-zx-spectrum-next | **Boots** | Screened 2026-11-24. NextBASIC: `Grelox Colony 7/Grelox Colony 7.bas` renders its title or game screen. |
 | grelox-contagion | **Boots** | Screened 2026-11-24. NextBASIC: title screen, run from the game's own folder. The top-level "Easy Mode" .bas is a separate patch download meant to be copied into that folder; run where it lands its data paths do not exist and line 1's ON ERROR resets the machine. |
 | gridguard | **Boots** | Screened 2026-11-24. NEXLOAD: `gridguard.nex` launch and render. |
 | hamble | **Boots** | Screened 2026-11-24. NextBASIC: `Hambles House of Horror/Hamble.bas` renders its title or game screen. |
-| hi-color-hero | Untested | Screened 2026-11-24. Ships in an unrecognised container (.00 files); not a format the screening drives yet. |
+| hi-color-hero | **Boots** | Screened 2026-11-24. The Next build ships as an extensionless NEX file (`NextV1.1` header). Copied to `hicolorhero.nex`, NEXLOAD launches it and it draws its instructions screen. The TS2068/TC2048 builds are for other machines. |
 | inferno-dash | Untested | Paid (minimum price); not downloaded. |
 | infestation | **Boots** | Screened 2026-11-24. NextBASIC: title screen (the folder name holds parentheses, which the harness could not type until this run). |
 | invasion-of-the-cloud-people-the-next-storm | **Boots** | Screened 2026-11-24. NextBASIC: title screen, run from the game's own folder. The top-level demo .bas is a separate download meant to sit beside the game's data; run where it lands its LOAD fails and line 1's ON ERROR resets the machine. |
 | invasion-of-the-emerald-saucers | **Boots** | Screened 2026-11-24. NextBASIC: the game's starfield and ship, sparse enough that the pixel count called it blank. |
-| james-sinclair-and-the-temple-of-the-sun-god | Untested | Screened 2026-11-24. The RAR archives unpacked to no launchable program; not a format the screening drives yet. |
+| james-sinclair-and-the-temple-of-the-sun-god | Untested | Screened 2026-11-24. The RAR archives unpacked to one extensionless +3DOS BASIC file, `Cars`, which loads and draws nothing; no launcher for the game itself was found. |
 | jet-set-willy-net | Untested | No downloadable files on its page. |
-| jetpacrx | Untested | Screened 2026-11-24. Ships as POKEs for another release; not a format the screening drives yet. |
+| jetpacrx | Untested | Screened 2026-11-24. Ships only POKEs for another release; nothing to load. |
 | king-of-anglers | **Boots** | Screened 2026-11-24. NextBASIC: `King of Anglers/King of Anglers.bas` renders its title or game screen. |
-| kings-ransom | Untested | Screened 2026-11-24. A tape-driven adventure (.nxt data, .zxs); not a format the screening drives yet. |
+| kings-ransom | **Boots** | Screened 2026-11-24. Tape: `kings ransom.tap` through `.tapein` and `LOAD ""` draws its introduction and waits for a key. |
 | knights-and-chalices | **Boots** | Screened 2026-11-24. NextBASIC: `kac.bas` renders its title or game screen. |
 | lone-lunner | Untested | Paid (minimum price); not downloaded. |
 | lumberer | **Boots** | Screened 2026-11-24. NextBASIC: `lumberer.bas` renders its title or game screen. |
 | marbles2 | **Boots** | Screened 2026-11-24. NextBASIC: `marbles.bas` renders its title or game screen. |
 | mercenarynext | **Boots** | Screened 2026-11-24. NEXLOAD: `mercenary.nex` launch and render. |
 | mimex | **Boots** | Screened 2026-11-24. NEXLOAD: `mimex-beta.nex` launch and render. |
-| mystery-city | Untested | Screened 2026-11-24. A CP/M-hosted adventure (.com + data); not a format the screening drives yet. |
-| mystery-city-fortuneteller | Untested | Screened 2026-11-24. Ships as +3/CP/M .dsk and other platforms' images; not a format the screening drives yet. |
+| mystery-city | **Boots** | Screened 2026-11-24. Tape: `mystery.tap` through `.tapein` and `LOAD ""` draws a text menu. Its words look misspelt (Portuguese with odd characters); not compared with a reference, so the rendering is unverified. |
+| mystery-city-fortuneteller | Untested | Screened 2026-11-24. The Spectrum build is a +3 CP/M `.dsk`; mounting a disk image is not a path the screening drives. |
 | nexions | **Boots** | Screened 2026-11-24. NextBASIC: `nexions.run/run.bas` renders its title or game screen. |
 | next-hexagon | **Boots** | Screened 2026-11-24. NEXLOAD: `nexthexagon.nex` launch and render. |
 | next-shift | **Boots** | Screened 2026-11-24. NextBASIC: `Next Shift.bas` renders its title or game screen. |
@@ -405,36 +408,36 @@ their earlier screening.
 | nextjumble | **Boots** | Screened 2026-11-24. NextBASIC: `Next Jumble 001/Next Jumble 001.bas` renders its title or game screen. |
 | nextoid | **Boots** | Screened 2026-11-24. NEXLOAD: `nextoid.nex` launch and render. |
 | nextpoint | Untested | Paid (minimum price); not downloaded. |
-| nexttanks | Untested | Screened 2026-11-24. Ships as a .snx Next snapshot; not a format the screening drives yet. |
+| nexttanks | **Boots** | Screened 2026-11-24. Snapshot: `SPECTRUM "__nexttanks.snx"` draws its title screen. Needed two fixes: no divMMC automap while the Multiface is paged, and $EFF7 bit 3 acting only on a paging write. |
 | operation-jeff | **Boots** | Screened 2026-11-24. NEXLOAD: `OperationJeff.nex` launch and render. |
 | orb-run | **Boots** | Screened 2026-11-24. NextBASIC: `orb/orb.bas` renders its title or game screen. |
-| outerintruders | Untested | Screened 2026-11-24. Ships as a .snx Next snapshot; not a format the screening drives yet. |
+| outerintruders | **Boots** | Screened 2026-11-24. Snapshot: `SPECTRUM "outerintruders.snx"` draws its title screen, after the same two fixes as nexttanks. |
 | piggy-in-the-woods | **Boots** | Screened 2026-11-24. NextBASIC: `piggy.bas` renders its title or game screen. |
 | pitman | **Boots** | Screened 2026-11-24. NEXLOAD: `pitman.nex` launch and render. |
 | ranble | **Boots** | Screened 2026-11-24. NextBASIC: `RANBLE/RANBLE_GAME.bas` renders its title or game screen. |
 | reflectron-zx-spectrum-next | **Boots** | Screened 2026-11-24. NextBASIC: `Reflectron by Sunteam/Reflectron.bas` renders its title or game screen. |
 | retro-virus-zx-spectrum-next | **Boots** | Screened 2026-11-24. NextBASIC: `Retro-Virus-Game-Emulator.bas` renders its title or game screen. |
 | return-to-long-shadows-for-zx-spectrum-next | **Boots** | Screened 2026-11-24. NextBASIC: its "PLEASE PRESS SPACE" prompt, sparse enough that the pixel count called it blank. |
-| rite-of-the-druid-zx-spectrum-next | Untested | Screened 2026-11-24. A tape-driven adventure (.tap + .nxt + .vga data); not a format the screening drives yet. |
+| rite-of-the-druid-zx-spectrum-next | **Boots** | Screened 2026-11-24. Tape: `rite of the druid.tap` through `.tapein` and `LOAD ""` draws its title picture and introduction. |
 | roadkill | **Boots** | Screened 2026-11-24. NextBASIC: `ROADKILL_2022a.bas` renders its title or game screen. |
 | space-splat | **Boots** | Screened 2026-11-24. NextBASIC: `spacesplat-game.bas` renders its title or game screen. |
 | specbong | **Boots** | Screened 2026-11-24. NEXLOAD: `SpecBong.nex` launch and render. |
 | specnext-invaders | **Boots** | Screened 2026-11-24. NEXLOAD: `invaders.nex` launch and render. |
-| spice-invaderz | Untested | Screened 2026-11-24. Ships as a .snx Next snapshot; not a format the screening drives yet. |
+| spice-invaderz | **Boots** | Screened 2026-11-24. Snapshot: `SPECTRUM "spiceinv.snx"` draws its title and score table, after the same two fixes as nexttanks. |
 | spooky-tales-by-candlelight-zx-spectrum-next | **Boots** | Screened 2026-11-24. NextBASIC: `Spookytales/SpookyTales.bas` renders its title or game screen. |
 | starblaster | **Boots** | Screened 2026-11-24. NextBASIC: `Starblaster_game/play_starblaster.bas` renders its title or game screen. |
 | the-city-of-gloomburgh | **Boots** | Screened 2026-11-24. NextBASIC: its name-entry prompt, sparse enough that the pixel count called it blank. |
-| the-farmer | Untested | Screened 2026-11-24. Ships as a .tap; not a format the screening drives yet. |
+| the-farmer | **Boots** | Screened 2026-11-24. Tape: `the_farmer_eng_final.tap` through `.tapein` and `LOAD ""` draws its menu. |
 | the-junk-pile | **Boots** | Screened 2026-11-24. NextBASIC: `frogb11.bas` renders its title or game screen. |
-| the-quest-for-the-staff-of-the-first-moon | Untested | Screened 2026-11-24. Ships as .tap/.tzx/.z80; not a format the screening drives yet. |
+| the-quest-for-the-staff-of-the-first-moon | **Boots** | Screened 2026-11-24. Tape: `tqftsotfm.tap` through `.tapein` and `LOAD ""` draws its opening text and waits for a key. |
 | the-scholar | **Boots** | Screened 2026-11-24. NEXLOAD: `TheScholar.nex` launch and render. |
-| the-secret-of-barron-wood | Untested | Screened 2026-11-24. A data-driven adventure for another engine (.msd/.ly2); not a format the screening drives yet. |
+| the-secret-of-barron-wood | **Boots** | Screened 2026-11-24. Tape: `barron.tap` through `.tapein` and `LOAD ""` draws its title picture; the lower half was still a solid colour at the end of the window. |
 | the-tale-of-rabbits | Untested | Paid (minimum price); not downloaded. |
 | timmdi | **Boots** | Screened 2026-11-24. NextBASIC: `timmdi-game-fin11.bas` renders its title or game screen. |
 | tinypeter | **Boots** | Screened 2026-11-24. NextBASIC: `Tiny Peter/Tiny Peter.bas` renders its title or game screen. |
 | torvin-foundation | **Boots** | Screened 2026-11-24. NEXLOAD: `TorvinFoundation/TEMPLATES/MODULES_TEMPLATE/GAME/main.nex`, `TorvinFoundation/TEMPLATES/STANDARD_TEMPLATE/GAME/main.nex`, `TorvinFoundation/EXAMPLES/EXAMPLE - Sprite 001/GAME/main.nex` and more launch and render. A NextBASIC development framework rather than a game; the program picked was a library include. Its example .nex programs render. |
 | trainyard-express | **Boots** | Screened 2026-11-24. NEXLOAD: `trainyard-express.nex`, `trainyard-express-ES.nex` and the copies in the package's bundled-emulator folder all launch and render. |
-| vicecityblues-spectrum-next | Untested | Screened 2026-11-24. Launched from its own folder layout (.czx data, no .nex or .bas at the top level); not a format the screening drives yet. |
+| vicecityblues-spectrum-next | **Boots** | Screened 2026-11-24. The start program is a +3DOS BASIC file without an extension: `LOAD "vicecityblues"` from the distro folder draws its title picture and starts its text. |
 | webster | **Boots** | Screened 2026-11-24. NEXLOAD: `Webster.nex` launch and render. |
 | zcadia | **Boots** | Screened 2026-11-24. NEXLOAD: `zcadia.nex` launch and render. |
 

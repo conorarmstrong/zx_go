@@ -9,9 +9,9 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **108 more Next titles in the compatibility manifest.** The itch.io catalogue
-  of native Next games was screened through NextZXOS itself: 80 launch and
-  render, both builds of Celeste crash after launch (recorded as a known issue),
-  and 26 are untested (paid, no files, or a format not yet driven). The 27
+  of native Next games was screened through NextZXOS itself, including the
+  titles that ship as tapes, snapshots or extensionless files. The counts are
+  in `docs/compatibility.md`. The 27
   snapshot-loaded 128K titles were also compared against a reference emulator
   through the same keypresses.
 - **Step back into a machine that has been running.** `replay-back` used to
@@ -39,6 +39,22 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Every memory read costs a wait state at 28 MHz, not only opcode
   fetches.** The Next's SRAM waits on each read cycle at 28 MHz, operand and
   data reads included, so the CPU ran slightly fast at that speed.
+- **The zxnDMA pays the same wait on a 2-cycle memory read at 28 MHz.** A
+  source read with the 2-cycle timing ran a cycle short at 28 MHz. The 3- and
+  4-cycle timings already cover the wait and are unchanged.
+- **NextZXOS loads `.snx` and `.sna` snapshots.** Two faults stopped
+  `SPECTRUM "file"`. First, while the Multiface memory is paged in the divMMC
+  can neither automap nor show through, but ours did both: the loader runs from
+  the Multiface ROM with interrupts on, and the esxDOS interrupt handler ran in
+  place of its own. Second, $EFF7 bit 3 replaced the ROM with RAM bank 0 for
+  good, where the hardware only loads MMU0/1 with RAM bank 0 on a paging write;
+  a later NR$50 write of $FF must bring the ROM back. Nexttanks, Outer Intruders
+  and Spice Invaderz now start.
+- **The Next's Multiface runs the FPGA's state machine.** It used to page in
+  when its NMI fired and out on RETN, and nothing else. It now pages in on the
+  $0066 fetch, answers its enable and disable ports (`$3F`/`$BF`, or as NR$0A
+  selects) including going invisible, returns the full set of paging registers
+  on an enable-port read, and is cleared by a reset.
 
 - **File > Open on the Next can type `_`, `+`, `(` and `)`.** The macro that
   drives NextZXOS's `.nexload` skipped them, so a game whose folder or file name

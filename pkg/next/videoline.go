@@ -13,7 +13,11 @@ package next
 // raster) is timing itself against that origin.
 //
 // The constants are the 128K timing the Next runs in, as WireLineInterrupt
-// uses (zxula_timing.vhd:172-233); hc counts two per T-state.
+// uses (zxula_timing.vhd:172-233); hc counts two per T-state. NR$03 machine
+// timing is not consulted, as for the frame and the Copper: 48K (448 hc, 312
+// lines, c_int_h 116), +3 (c_int_h 126) and Pentagon timing are not modelled.
+// NR$64 is read live; the hardware latches it at the reload point, so a
+// mid-frame write shows here a frame early.
 func ActiveVideoLine(t int, sixtyHz bool, offset byte) int {
 	const (
 		hcPerLine = 456 // c_max_hc + 1

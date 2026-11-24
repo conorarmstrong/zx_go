@@ -17,10 +17,10 @@ compatibility is still the honest weak point, and the Windows ARM64 GUI has neve
 | | Value | Kind |
 |---|---|---|
 | **Machines that boot and are interactive** | **all 9 listed** | measured |
-| **Compatibility rows** (`docs/compatibility.md`) | **266**: 11 Works, 20 Works (caveat), 58 Boots (responds), 131 Boots, 1 Parses cleanly, 13 Known issue, 32 Untested | measured |
-| **Known issue rows with a third-emulator reference** | **11 of 13** (8 settled as bad dumps; the two Celeste rows are new and not yet traced) | measured |
+| **Compatibility rows** (`docs/compatibility.md`) | **266**: 11 Works, 20 Works (caveat), 58 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 15 Untested | measured |
+| **Known issue rows with a third-emulator reference** | **11 of 12** (8 settled as bad dumps; Funky Monkey Kid is new and not yet traced) | measured |
 | **Next games on the SD card** | **12 `.nex` launch and render**, 5 NextBASIC programs and NEXTipede also run | measured |
-| **itch.io catalogue of Next titles** | **108**: 80 launch and render, 2 crash (Celeste), 26 untested (5 paid, 1 without files, 20 in formats not yet driven) | measured, screens read by eye |
+| **itch.io catalogue of Next titles** | **108**: 98 launch and render, 1 known issue (Funky Monkey Kid), 9 untested (5 paid, 1 without files, 3 with nothing loadable) | measured, screens read by eye |
 | **Z80N opcode vectors captured from the FPGA HDL** | **8567, all green** | measured |
 | **Open work items** | **4** (1 correctness note, 2 product, 1 research), plus item 2 kept as a closed record | counted from this page |
 | **Time and effort estimates** | none kept | not estimated |
@@ -59,7 +59,7 @@ hardware changes are modelled; see item 8.
 |---|---|---|
 | Next hardware blocks vs the FPGA VHDL | golden suites for the CPU, sprites, paging, DMA and others | `VHDL_CONFORMANCE.md` |
 | Reachability (modelled and wired) | enforced by `pkg/next/reachability_test.go`; declared-unwired list is empty | item 2 |
-| Next game compatibility | weak point, narrowing; 12 of 12 SD `.nex` launch, 80 of the 82 screenable catalogue titles render, Celeste crashes | item 5 |
+| Next game compatibility | weak point, narrowing; 12 of 12 SD `.nex` launch, 98 of the 99 screenable catalogue titles render | item 5 |
 | Timing fidelity | no known knife-edge title; TX-1696's was the raster counter, fixed in v1.12.4 | Do not re-derive |
 | Performance | a saturated Copper list costs 6.1 ms a frame, 30% of a 50 Hz budget (was 108 ms) | `BenchmarkSaturatedCopperFrame` |
 | Time travel and debugging | reverse debugging, snapshot rewind and `replay-back` on every machine, into frames the loop ran; 256-checkpoint ring with shared memory | `DEBUGGER.md` |
@@ -70,11 +70,10 @@ hardware changes are modelled; see item 8.
 
 Ranked; detail in the open-work items below.
 
-1. **Next game compatibility** (item 5): the catalogue titles that did not launch or render, read screen by screen
-   and against a reference where one will run them; then the formats the screening does not drive yet (Next tapes,
-   `.snx`, +3-mode disks).
+1. **Next game compatibility** (item 5): Funky Monkey Kid's snapshot stops at a BASIC report; trace it and run it
+   on a reference. +3 CP/M disk images are still not driven by the screening.
 2. **Then:** a physical Windows-on-ARM launch (item 6).
-3. **Research:** the 3.02.05 diff is done (item 8); the open part is the new boot ROM. 3.03 VHDL is not public.
+3. **Research (blocked):** the 3.02.05 diff is done (item 8). The boot ROM waits on a retarget decision; 3.03 VHDL is not public.
 
 ## What this is
 
@@ -248,7 +247,7 @@ arbiter; see item 2.
 ### 5. [product] Next game compatibility
 
 `docs/compatibility.md` now holds **266 title rows: 11 Works, 20 Works
-(caveat), 58 Boots (responds), 131 Boots, 1 Parses cleanly, 13 Known issue, 32
+(caveat), 58 Boots (responds), 149 Boots, 1 Parses cleanly, 12 Known issue, 15
 Untested.** It was 36 rows with 13 Untested before automated screening, and 158
 before the itch.io catalogue was screened on 2026-11-24.
 
@@ -479,7 +478,7 @@ NextBASIC through the Command Line, sharded six ways (`NEX_SD_GAMES_SUBDIR`,
 for this (`ZX_GO_NEXT_SD_IMG` pointed at a missing file), because the default
 card is `roms/next/sd.img`, which knows nothing of new folders.
 
-- **80 launch and render.** Every screen was read by eye. That corrected six
+- **98 launch and render** after the fixes below. Every screen was read by eye. That corrected six
   pixel-count verdicts: four sparse but genuine screens scored blank, and two
   "renders" were the NextZXOS welcome page, reached because the harness ran a
   separately downloaded patch `.bas` outside the game folder it belongs in, where
@@ -489,14 +488,19 @@ card is `roms/next/sd.img`, which knows nothing of new folders.
   `(` or `)`, and a deep path in one `.cd` overran the two rows of the command
   line the OS's copy can be confirmed against, so it now changes directory one
   component at a time. The `_` gap also reached the GUI's File > Open macro.
-- [ ] **Celeste crashes, both builds.** Within about 1400 frames of launching
-  through NEXLOAD the CPU is running through memory with interrupts off, RAM in
-  slots 0 and 1 and SP at $0037. The single-step driver ran 400 million
-  instructions from the same launch without reaching it, so the frame loop is
-  the first suspect. Needs a reference trace; the title ships bundled with a
-  reference emulator it runs on.
-- [ ] **Formats the screening does not drive yet:** Next tapes and tape-driven
-  adventures, `.snx` snapshots, +3 and CP/M disks. 20 titles.
+- [x] ~~**Celeste crashes, both builds.**~~ Fixed 2026-11-24. NR$1E/$1F counted
+  lines from the frame interrupt; the FPGA counts from the first paper line plus
+  NR$64, so they read 248 at the interrupt. Celeste syncs a DMA to the raster
+  with them and ran it 248 lines late. Every build now renders.
+- [x] ~~**Formats the screening does not drive yet.**~~ `TestOtherSDFormats` now
+  drives tapes (`.tapein`, `LOAD "t:"`, `LOAD ""`), snapshots (`SPECTRUM
+  "file"`) and extensionless NEX or +3DOS BASIC files. 16 of the 20 render.
+  Snapshots needed two hardware fixes: no divMMC automap, and no divMMC in the
+  memory mux, while the Multiface is paged; and $EFF7 bit 3 acts only on a
+  paging write.
+- [ ] **Funky Monkey Kid** (`.sna`) stops at BASIC report `0 OK, 30:1` and does
+  not answer a key. Not traced; no reference run yet.
+- [ ] **+3 CP/M disk images** (mystery-city-fortuneteller) are not driven.
 
 **Every Next game on the SD card is now accounted for**: every title directory
 holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
@@ -611,10 +615,14 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 | PS/2 hotkeys: expansion bus F11/F12 moved to F5/F6, F12 a second PS/2 reset | no, host keyboard | not applicable |
 | `t80n` CPU: debug variant is the production default (`g_option` `$FFF2`); `mcode` and `alu` identical | no | no behaviour change found |
 
+**Status 2026-11-24: blocked, not doable from public evidence.** Rechecked: `30205` is still the newest
+branch, so the 3.03 features have no VHDL to model from. The one 3.02.05 change left, the boot ROM, waits on a
+maintainer decision to retarget the boot path at 3.02.05; it is not a fault in the current model.
+
 Next steps, in order:
 
 1. The boot ROM row is the one left. Take it through the golden-suite method only once it is decided that the target is the 3.02.05 boot path.
-2. Watch the official repo for a 3.03 branch. Last checked 2026-11-14: `30205` is the newest branch.
+2. Watch the official repo for a 3.03 branch. Last checked 2026-11-24: `30205` is the newest branch.
 3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
    NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL
    must be labelled as not VHDL-derived.
