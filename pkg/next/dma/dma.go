@@ -1033,10 +1033,21 @@ func (d *DMA) perByteCycles() uint64 {
 // while the period is still running).
 func (d *DMA) byteCycles() uint64 {
 	srcCyc, dstCyc := d.aCycleLen, d.bCycleLen
+	srcIO := d.aIsIO
 	if !d.aToB { // B is the source
 		srcCyc, dstCyc = d.bCycleLen, d.aCycleLen
+		srcIO = d.bIsIO
 	}
-	return uint64(srcCyc) + uint64(dstCyc)
+	n := uint64(srcCyc) + uint64(dstCyc)
+	// At 28 MHz the SRAM holds the bus wait low for one clock at the start of
+	// every memory read (zxnext.vhd:3169-3181). The DMA samples it in
+	// TRANSFERING_READ_4 (dma.vhd:409-410), which a 2-cycle read reaches while
+	// it is still low; a 3 or 4-cycle read reaches it after. Measured on the
+	// real dma.vhd in GHDL; see TestA28MHzTwoCycleMemoryReadPaysTheWaitState.
+	if srcCyc == 2 && !srcIO && d.speedMul != nil && d.speedMul() == 8 {
+		n++
+	}
+	return n
 }
 
 func stepAddr(a uint16, mode byte) uint16 {

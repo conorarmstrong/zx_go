@@ -383,3 +383,36 @@ func TestAnInterleavedBurstChargesTheCPUForEachByte(t *testing.T) {
 			charged, want, 4*prescalerPeriod(10))
 	}
 }
+
+// At 28 MHz the Next's SRAM pulls the bus wait low for one clock at the start
+// of every memory read (zxnext.vhd:3169-3181), and the DMA samples it in
+// TRANSFERING_READ_4 (dma.vhd:409-410). A GHDL run of the real dma.vhd with
+// that wait generator (_tools/dma-vhdl-test/tb_wait.vhd) moves 16 bytes
+// memory -> IO in 131 / 99 / 67 clocks without it and 131 / 99 / 83 with it,
+// for 4, 3 and 2-cycle reads: only a 2-cycle read reaches READ_4 while the
+// wait is low, and pays one clock a byte.
+func TestA28MHzTwoCycleMemoryReadPaysTheWaitState(t *testing.T) {
+	cost := func(speed int, code byte) uint64 {
+		var charged uint64
+		d := New(memMap{})
+		d.SetSpeedMultiplier(func() int { return speed })
+		d.SetCycleSink(func(n uint64) { charged += n })
+		feed(d, withTiming(0x4000, 0x6000, 16, code, code, 0))
+		return charged
+	}
+	for _, c := range []struct {
+		code      byte
+		base, w28 uint64
+	}{
+		{0x00, 16*8 + 3, 16*8 + 3}, // 4-cycle read: the wait is over before READ_4
+		{0x01, 16*6 + 3, 16*6 + 3}, // 3-cycle read: the same
+		{0x02, 16*4 + 3, 16*5 + 3}, // 2-cycle read: one clock a byte
+	} {
+		if got := cost(1, c.code); got != c.base {
+			t.Errorf("code %d at 3.5 MHz charged %d, want %d", c.code, got, c.base)
+		}
+		if got := cost(8, c.code); got != c.w28 {
+			t.Errorf("code %d at 28 MHz charged %d, want %d", c.code, got, c.w28)
+		}
+	}
+}
