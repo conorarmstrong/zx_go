@@ -103,7 +103,7 @@ func TestNexloadSDGames(t *testing.T) {
 				t.Fatalf("%s: driving the NextZXOS command line: %v", name, err)
 			}
 
-			img := emu.renderFrame()
+			img := emu.lastFrame() // nexRunFrames rendered it; rendering again would run the frame's Copper twice
 			nonBlank := !uniformImage(img)
 			// Sample the PC that goes with THIS verdict before nexAtOSKeyWait
 			// runs the guest on: it advances 20 frames, so reporting

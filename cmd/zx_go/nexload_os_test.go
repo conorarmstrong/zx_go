@@ -18,13 +18,21 @@ import (
 // a real Spectrum Next loads these games. The OS CDs into the game's folder
 // and provides the environment, so the game's runtime file opens succeed.
 
-// nexRunFrames runs the machine GUI-style for n frames.
+// nexRunFrames runs the machine GUI-style for n frames: each frame is executed
+// and then rendered, as the GUI loop does.
+//
+// The render is not optional. On the Next it is where the Copper runs and the
+// raster journal is replayed and drained, so a loop that never rendered ran
+// no Copper at all, and judging a title by one render after hundreds of
+// unrendered frames judged a picture the GUI never shows: TX-1696 passed that
+// way while the GUI showed a black screen.
 func nexRunFrames(emu *emulator, n int) {
 	for i := 0; i < n; i++ {
 		emu.cpu.ExecuteFrame(frameTStatesForModel(roms.ModelNext))
 		if emu.peripherals != nil {
 			emu.peripherals.Frame()
 		}
+		emu.renderFrame()
 	}
 }
 
@@ -388,7 +396,7 @@ func TestNexloadOSGamesIfPresent(t *testing.T) {
 				t.Fatalf("%s: driving the NextZXOS command line: %v", c.name, err)
 			}
 
-			img := emu.renderFrame()
+			img := emu.lastFrame() // nexRunFrames rendered it; rendering again would run the frame's Copper twice
 			nonBlank := !uniformImage(img)
 			verdictPC := emu.cpu.PC
 			// launched only says the CPU was busy for a while, which

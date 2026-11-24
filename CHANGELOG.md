@@ -26,6 +26,20 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **NextReg $1E/$1F read the copper's line counter, as on the FPGA.** They
+  counted lines from the frame interrupt; the hardware counts from the first
+  paper line (plus NR$64), so at the interrupt they read 248, not 0. A game
+  that waits for a line and then starts a DMA did its work 248 lines late.
+  Celeste, both builds, crashed for exactly this reason and now runs.
+- **A disabled ULA is transparent.** With NR$68 bit 7 set the ULA layer was
+  painted in the fallback colour, opaque, so in a layer order with the ULA
+  above the sprites it hid them. TX-1696's title screen was black in the GUI
+  for this reason. A tilemap pixel flagged to sit below the ULA now also shows
+  where the ULA pixel is transparent.
+- **Every memory read costs a wait state at 28 MHz, not only opcode
+  fetches.** The Next's SRAM waits on each read cycle at 28 MHz, operand and
+  data reads included, so the CPU ran slightly fast at that speed.
+
 - **File > Open on the Next can type `_`, `+`, `(` and `)`.** The macro that
   drives NextZXOS's `.nexload` skipped them, so a game whose folder or file name
   held one (`drug_dealers.nex`) could not be opened.

@@ -186,7 +186,7 @@ func mainPrograms(root string, files []string) []string {
 // single flashing cursor block is "not uniform" and passes it, which reported
 // NextBASIC Invaders as rendering when it had not run at all.
 func drawnInDisplayWindow(emu *emulator) (pixels, colours int) {
-	img := emu.renderFrame()
+	img := emu.lastFrame() // nexRunFrames rendered it
 	const bl, bt, w, h = 32, 24, 256, 192
 	hist := map[uint32]int{}
 	for y := bt; y < bt+h; y++ {
