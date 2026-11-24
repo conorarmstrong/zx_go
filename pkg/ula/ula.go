@@ -120,6 +120,8 @@ type ULA struct {
 
 	// nextULAPlus handles ports $BF3B / $FF3B. nil off the Next.
 	nextULAPlus NextULAPlus
+	// nextMF is the Next Multiface's port decode (see SetNextMultiface).
+	nextMF NextMultiface
 
 	// nextLoRes replaces the ULA bitmap when the Next's LoRes/Radastan mode is
 	// on. nil off the Next. loresRow is its per-row scratch, hoisted so 192
@@ -1186,6 +1188,16 @@ func (u *ULA) borderRGBA(c byte) color.RGBA {
 // SetNextULAPlus attaches the ULA+ port handler. nil unhooks.
 func (u *ULA) SetNextULAPlus(p NextULAPlus) { u.nextULAPlus = p }
 
+// NextMultiface is the Next Multiface's I/O side: Port applies an IN (write
+// false) or OUT and reports whether the Multiface answers the IN with a
+// paging register (mf_port_en_o). pkg/next.Multiface satisfies it.
+type NextMultiface interface {
+	Port(addr uint16, write bool) bool
+}
+
+// SetNextMultiface attaches the Multiface's port decode. nil unhooks.
+func (u *ULA) SetNextMultiface(m NextMultiface) { u.nextMF = m }
+
 // NextLoRes is the contract for the Spectrum Next's LoRes / Radastan layer.
 // pkg/next/compositor.LoRes satisfies it; the interface lives here so this
 // package does not import that one.
@@ -1422,29 +1434,29 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 		}
 	}
 
-	// Multiface 3 paging-register readback. Per the FPGA source
-	// (zxnext.vhd:2612-2616 port_mf_enable decode + the mf_port_dat mux,
-	// and multiface.vhd:43-44): while the Multiface is active (paged in /
-	// "invisible off") in MF+3 mode, an IN whose LOW byte is $3F returns a
-	// paging register selected by A15:12 —
-	//   $7F3F -> port $7FFD (full byte)   (mf_port_dat: A15:12 = 0111)
-	//   $1F3F -> port $1FFD (low nibble)  (mf_port_dat: A15:12 = 0001 =
-	//            "0000" & !motor & 1ffd_reg(2:0))
-	// NextZXOS's 128K-BASIC launch fires the MF NMI; its handler reads
-	// $7F3F/$1F3F to snapshot the live paging into MF RAM ($3FCC/$3FFF),
-	// then a routine ($15F9) tests those bytes against the expected paging
-	// state (MF ROM $01F6 `cp $04; jr nz`) to decide whether to continue to
-	// the Sinclair 128 menu or abort — so this read must return the real
-	// paging register, not open bus. The $Dxxx/$Exxx (dffd/eff7) and border
-	// high-nibble cases aren't modelled — ours doesn't track those
-	// registers and the launch doesn't read them.
-	if u.mem != nil && u.mem.MultifaceActive() && addr&0x00FF == 0x003F {
+	// Multiface port read. Every IN reaches the Multiface, whose enable and
+	// disable ports page it in and out (multiface.vhd:171-184). An enable
+	// read it answers (mf_port_en_o) returns mf_port_dat (zxnext.vhd:4309-
+	// 4320): in MF +3 mode a paging register chosen by A15:12, else 7FFD bit 3
+	// over ones. NextZXOS's 128K-BASIC launch reads $7F3F/$1F3F this way to
+	// snapshot the paging into MF RAM.
+	if u.nextMF != nil && u.mem != nil && u.nextMF.Port(addr, false) {
 		p7ffd, p1ffd, _ := u.mem.GetPortState()
+		if u.nextRegs != nil && u.nextRegs.ReadReg(0x0A)>>6 != 0 {
+			return (p7ffd&0x08)<<4 | 0x7F, true // port_7ffd_reg(3) & "1111111"
+		}
 		switch addr >> 12 {
-		case 0x7:
-			return p7ffd, true
 		case 0x1:
 			return p1ffd & 0x0F, true
+		case 0x7:
+			return p7ffd, true
+		case 0xD:
+			dffd := u.mem.DFFDValue()
+			return dffd&0x40 | dffd&0x1F, true
+		case 0xE:
+			return u.mem.EFF7Value(), true
+		default:
+			return u.BorderColour & 0x07, true
 		}
 	}
 
@@ -1744,6 +1756,15 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 			u.nextRegs.WriteData(val)
 			return
 		}
+	}
+
+	// The Multiface's enable and disable ports (multiface.vhd:137-163). Its
+	// strobes are decoded independently of every other device
+	// (zxnext.vhd:2730-2733), and $3F and $1F are also DAC ports, so it sees
+	// the OUT before the dispatch below, which stops at the first claimant.
+	// An OUT carries no data into the Multiface, so nothing is consumed.
+	if u.nextMF != nil {
+		u.nextMF.Port(addr, true)
 	}
 
 	// Beta Disk / TR-DOS registers, while the TR-DOS ROM is paged in (see the

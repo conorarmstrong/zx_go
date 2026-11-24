@@ -156,10 +156,10 @@ type Pager struct {
 	// paged in. See SetFramesBumper.
 	framesBump func()
 
-	// mfActiveFn, if non-nil, reports whether the Next Multiface overlay is
-	// the active NMI master. When it returns true the divMMC suppresses its
-	// $0066 NMI-vector automap so the MF handler keeps the vector (the two
-	// coexist — divMMC still automaps for esxDOS RST-$08). See SetMultifaceActiveFn.
+	// mfActiveFn, if non-nil, reports whether the Next Multiface memory is
+	// paged in. While it is, zxnext.vhd:3030-3036 drives sram_pre_override
+	// to "000", so no entry point automaps and the $1FF8-$1FFF off area
+	// does not unmap (device/divmmc.vhd:129-131). See SetMultifaceActiveFn.
 	mfActiveFn func() bool
 
 	// stubProtected, if true, write-protects divMMC-RAM-bank-1
@@ -465,7 +465,7 @@ func (p *Pager) Step(pc uint16) {
 			p.pendingRom3 = rom3
 		}
 	}
-	if !p.pagedIn && !p.pendingPageIn {
+	if !p.pagedIn && !p.pendingPageIn && !p.multifacePaged() {
 		switch {
 		case pc == 0x0000 && rstGate&0x01 != 0:
 			armRST0(0x01)
@@ -476,15 +476,13 @@ func (p *Pager) Step(pc uint16) {
 		case pc == 0x0038 && rstGate&0x80 != 0:
 			armRST0(0x80)
 			return
-		case pc == 0x0066 && p.entryPoints1&0x03 != 0 && p.nmiButton && (p.mfActiveFn == nil || !p.mfActiveFn()):
+		case pc == 0x0066 && p.entryPoints1&0x03 != 0 && p.nmiButton:
 			// $0066 NMI-vector trap. Per divmmc.vhd:120-121 the NMI automap
 			// entry points are ANDed with button_nmi, so this fires ONLY while
 			// a divMMC NMI is actually asserted (p.nmiButton) — never on a plain
 			// fetch of $0066 by a program running its own code there (e.g. a
-			// .nex game whose ISR spans $0066). Also NOT when the Multiface is
-			// the active NMI master: the MF NMI (NR$02 bit 3) vectors to $0066
-			// in the MF ROM and owns the vector; the divMMC still automaps for
-			// the handler's esxDOS RST-$08 calls ($0008 etc.).
+			// .nex game whose ISR spans $0066). Never while the Multiface
+			// memory is paged: that gate covers every entry point (above).
 			p.pagedIn = true
 			p.nmiButton = false // button_nmi clears once the automap engages (vhd:112)
 			if p.pageLogger != nil {
@@ -590,7 +588,7 @@ func (p *Pager) PostStep(pc uint16) {
 	// CONMEM-held page-out: the esxDOS IM1 handler's JP C,$1FFC page-out
 	// runs with CONMEM set, then a later trampoline clears CONMEM and the
 	// RET would fall into divMMC RAM.)
-	if p.pagedIn && pc >= 0x1FF8 && pc <= 0x1FFF && p.entryPoints1&0x40 != 0 {
+	if p.pagedIn && pc >= 0x1FF8 && pc <= 0x1FFF && p.entryPoints1&0x40 != 0 && !p.multifacePaged() {
 		p.pageOut()
 		if p.pageLogger != nil {
 			p.pageLogger("out(offarea)", pc)
@@ -614,9 +612,13 @@ func (p *Pager) SetPageLogger(fn func(event string, pc uint16)) { p.pageLogger =
 func (p *Pager) SetFramesBumper(fn func()) { p.framesBump = fn }
 
 // SetMultifaceActiveFn wires a predicate reporting whether the Next Multiface
-// overlay is the active NMI master. While it returns true the divMMC skips its
-// $0066 NMI-vector automap (the MF owns that vector). See Step.
+// memory is paged in. While it returns true no entry point automaps and the
+// off area does not unmap. See Step and PostStep.
 func (p *Pager) SetMultifaceActiveFn(fn func() bool) { p.mfActiveFn = fn }
+
+// multifacePaged reports whether the Multiface memory is paged in, which
+// takes the divMMC automap's address decode away (see mfActiveFn).
+func (p *Pager) multifacePaged() bool { return p.mfActiveFn != nil && p.mfActiveFn() }
 
 // SetStubProtected toggles write-shadow protection on bank 1
 // offset $0009. When true, any guest write to that byte is silently

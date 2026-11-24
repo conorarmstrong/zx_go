@@ -1341,6 +1341,7 @@ func (m *Memory) Reset() error {
 	m.portEFF7Reg3 = false
 	m.specialPaging = false
 	m.PagingFrozen = false
+	m.mfActive = false // multiface.vhd:175
 	for i := range m.slotBank {
 		m.slotBank[i] = 0
 		m.mmuOverride[i] = false
@@ -1452,28 +1453,23 @@ func (m *Memory) readValue(addr uint16) byte {
 		// esxDOS ROM at $0046+, NOP-slid through its own body, and the
 		// menu-item launch derailed (#255). bootrom (read mask) is still
 		// higher priority — it returns above.
-		if addr < 0x4000 && m.PeripheralRead != nil {
-			if val, ok := m.PeripheralRead(addr); ok {
-				return val
-			}
-		}
 		// Next Multiface overlay. When the MF NMI has paged it in (NR$02=$08),
 		// $0000-$1FFF reads enNextMF.rom and $2000-$3FFF the MF RAM, so the
-		// $0066 handler runs (NextZXOS's 128K-BASIC editor-snapshot loader).
-		// BELOW the divMMC overlay above: the MF handler's esxDOS RST-$08 calls
-		// automap the divMMC over $0000-$1FFF and those must win while paged in
-		// (FPGA: MF + divMMC coexist, changelog 3.01.07). The divMMC's own
-		// $0066 NMI-vector automap is SUPPRESSED while the MF is master (see
-		// divmmc.go), so at $0066 the divMMC is absent and the MF ROM is read
-		// here. Above Alt-ROM / config / normal ROM. Without the MF overlay
-		// $0066 read the normal-ROM stub F5F1ED45 → $FF00 NOP-slide hang →
-		// black (the development log; the reference's $0066 = JP $006D real handler). Paged out
-		// on RETN (changelog 3.01.09).
+		// $0066 handler runs. ABOVE the divMMC overlay: with the MF paged in,
+		// sram_pre_override is "000" (zxnext.vhd:3030-3036) and the divMMC ROM
+		// and RAM arms of the SRAM mux need override bit 2 (:3084, :3092), so
+		// a divMMC held or forced by CONMEM does not show through, and no
+		// entry point automaps (see divmmc.go). Paged out on RETN and reset.
 		if m.mfActive && addr < 0x4000 && len(m.mfROM) > 0 {
 			if addr < 0x2000 {
 				return m.mfROM[int(addr)&0x1FFF]
 			}
 			return m.mfRAM[addr&0x1FFF]
+		}
+		if addr < 0x4000 && m.PeripheralRead != nil {
+			if val, ok := m.PeripheralRead(addr); ok {
+				return val
+			}
 		}
 		// Alt-ROM read redirect (NextReg $8C bit 7 set, bit 6 clear):
 		// $0000-$3FFF reads come from the alt-rom 16K bank instead of the
@@ -1647,6 +1643,15 @@ func (m *Memory) Write(addr uint16, val byte) {
 	if m.opus != nil && addr < 0x4000 && m.opus.Write(addr, val) {
 		return
 	}
+	// Next Multiface overlay WRITE (mirrors the read path, above the divMMC
+	// for the same reason): while the MF is paged in, $2000-$3FFF writes land
+	// in the 8 KB MF RAM; $0000-$1FFF is read-only MF ROM.
+	if m.currentModel == roms.ModelNext && m.mfActive && addr < 0x4000 {
+		if addr >= 0x2000 {
+			m.mfRAM[addr&0x1FFF] = val
+		}
+		return
+	}
 	// divMMC overlay WRITE priority. Per zxnext.vhd's final memory mux
 	// (3084-3130) the divMMC override is tested FIRST — the
 	// `divmmc_ram_en` branch (writeable, modulo divmmc_rdonly) selects
@@ -1671,17 +1676,6 @@ func (m *Memory) Write(addr uint16, val byte) {
 		if m.PeripheralWrite(addr, val) {
 			return
 		}
-	}
-	// Next Multiface overlay WRITE (mirrors the read path, below the divMMC
-	// overlay above so the handler's esxDOS calls win while the divMMC is
-	// paged): while the MF is paged in, $2000-$3FFF writes land in the 8 KB MF
-	// RAM (the $0066 handler's SP-save / scratch); $0000-$1FFF is read-only MF
-	// ROM. Above Alt-ROM / config / normal ROM.
-	if m.currentModel == roms.ModelNext && m.mfActive && addr < 0x4000 {
-		if addr >= 0x2000 {
-			m.mfRAM[addr&0x1FFF] = val
-		}
-		return
 	}
 	// Alt-ROM write redirect (NextReg $8C bit 7 set, bit 6 also
 	// set): writes to $0000-$3FFF land in the alt-rom 16K bank

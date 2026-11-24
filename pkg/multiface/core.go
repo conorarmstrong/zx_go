@@ -184,3 +184,15 @@ func (c *Core) MFPortEn() bool { return c.outMFPortEn }
 func (c *Core) NMIActive() bool     { return c.nmiActive }
 func (c *Core) Invisible() bool     { return c.invisible }
 func (c *Core) MFEnableLatch() bool { return c.mfEnable }
+
+// Bits returns the registered state, for state capture.
+func (c *Core) Bits() (portIODly, nmiActive, invisible, mfEnable bool) {
+	return c.portIODly, c.nmiActive, c.invisible, c.mfEnable
+}
+
+// SetBits restores state captured by Bits and recomputes the outputs for an
+// idle bus.
+func (c *Core) SetBits(portIODly, nmiActive, invisible, mfEnable bool) {
+	c.portIODly, c.nmiActive, c.invisible, c.mfEnable = portIODly, nmiActive, invisible, mfEnable
+	c.recomputeOutputs(Inputs{M1n: true, MReqn: true})
+}

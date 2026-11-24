@@ -25,10 +25,14 @@ func TestNR02NMINeedsTheNR06EnableButStillLatchesTheSourceBit(t *testing.T) {
 func TestNR02MultifaceNMIHoldsUntilTheMultifacePagesOut(t *testing.T) {
 	d, cpu, mem, rc := nmiRig(t)
 	d.WriteReg(0x02, 0x08)
-	if !mem.MultifaceActive() || !rc.NMIActivated() {
-		t.Fatal("MF NMI did not page the Multiface in")
+	if !rc.mf.Hold() || !rc.NMIActivated() {
+		t.Fatal("MF NMI did not raise the Multiface's NMI hold")
 	}
-	rc.nmi.Fetch(0x0066, rc.nmiInputs()) // the vector fetch
+	rc.mf.Fetch(0x0066) // the vector fetch pages it in (multiface.vhd:169-186)
+	if !mem.MultifaceActive() {
+		t.Fatal("the $0066 fetch did not page the Multiface in")
+	}
+	rc.nmi.Fetch(0x0066, rc.nmiInputs())
 	cpu.PendingNMI.Store(false)
 	d.WriteReg(0x02, 0x00)
 	d.WriteReg(0x02, 0x04) // divMMC request while the MF holds
@@ -38,7 +42,7 @@ func TestNR02MultifaceNMIHoldsUntilTheMultifacePagesOut(t *testing.T) {
 	if d.ReadReg(0x02)&0x04 != 0 {
 		t.Error("source bit latched in HOLD")
 	}
-	mem.SetMultifaceActive(false) // RETN
+	rc.mf.SetMultifaceActive(false) // RETN
 	rc.nmi.Fetch(0x8000, rc.nmiInputs())
 	if rc.NMIActivated() {
 		t.Fatal("NMI still active after the Multiface paged out")

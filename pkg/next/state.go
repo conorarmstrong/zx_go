@@ -104,6 +104,9 @@ type resetState struct {
 	NMIMF     bool
 	NMIDivMMC bool
 	NMIState  byte
+	// The Multiface registers (multiface.vhd); mf_enabled_o itself is the
+	// memory's overlay flag and is captured there.
+	MFPortIODly, MFNMIActive, MFInvisible, MFEnable bool
 }
 
 // StateID identifies the NR$02 reset control in a captured machine state.
@@ -116,12 +119,17 @@ func (r *ResetControl) StateID() string { return "next.reset" }
 // would restore a machine that answers the next NR$02 read differently.
 func (r *ResetControl) SaveState() []byte {
 	var buf bytes.Buffer
+	var pio, na, inv, en bool
+	if r.mf != nil {
+		pio, na, inv, en = r.mf.core.Bits()
+	}
 	if err := gob.NewEncoder(&buf).Encode(resetState{
-		ResetType: r.resetType,
-		NMISource: r.nmiSource,
-		NMIMF:     r.nmi.mf,
-		NMIDivMMC: r.nmi.divmmc,
-		NMIState:  byte(r.nmi.state),
+		ResetType:   r.resetType,
+		NMISource:   r.nmiSource,
+		NMIMF:       r.nmi.mf,
+		NMIDivMMC:   r.nmi.divmmc,
+		NMIState:    byte(r.nmi.state),
+		MFPortIODly: pio, MFNMIActive: na, MFInvisible: inv, MFEnable: en,
 	}); err != nil {
 		return nil
 	}
@@ -143,5 +151,8 @@ func (r *ResetControl) LoadState(b []byte) error {
 	r.resetType = s.ResetType
 	r.nmiSource = s.NMISource
 	r.nmi = NMIController{mf: s.NMIMF, divmmc: s.NMIDivMMC, state: nmiState(s.NMIState)}
+	if r.mf != nil {
+		r.mf.core.SetBits(s.MFPortIODly, s.MFNMIActive, s.MFInvisible, s.MFEnable)
+	}
 	return nil
 }

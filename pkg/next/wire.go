@@ -1667,7 +1667,13 @@ type ResetControl struct {
 	// hotkeys holds button presses from the UI goroutine until the emulation
 	// goroutine applies them at its next opcode fetch: bit 0 M1, bit 1 DRIVE.
 	hotkeys atomic.Uint32
+	// mf is the Multiface state machine the arbiter's MF NMI drives.
+	mf *Multiface
 }
+
+// Multiface returns the Next's Multiface, for the RETN hook and the ULA's
+// port decode.
+func (r *ResetControl) Multiface() *Multiface { return r.mf }
 
 // requestNMI asserts a source at the arbiter and fires it if it latches.
 func (r *ResetControl) requestNMI(src NMISource) {
@@ -1790,12 +1796,13 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	if mem.FPGABootROMActive() {
 		rc.resetType = 0b100
 	}
+	rc.mf = NewMultiface(mem, func() byte { return d.Raw(0x0A) >> 6 })
 	rc.nmiInputs = func() NMIInputs {
 		in := NMIInputs{
 			MFEnable:   d.Raw(0x06)&0x08 != 0,
 			DivEnable:  d.Raw(0x06)&0x10 != 0,
-			MFActive:   mem.MultifaceActive(),
-			MFHold:     mem.MultifaceActive(),
+			MFActive:   rc.mf.MultifaceActive(),
+			MFHold:     rc.mf.Hold(),
 			ConfigMode: mem.ConfigModeActive(),
 		}
 		if q, ok := divmmcSPI.(interface{ LastE3() byte }); ok {
@@ -1807,13 +1814,13 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 		return in
 	}
 	// A source that latches drops /NMI (zxnext.vhd:2168) and pulses its
-	// owner's button (:2169-2170): the Multiface pages in so the NMI vectors
-	// into its ROM, and the divMMC latches button_nmi so its $0066 automap
-	// engages (divmmc.vhd:110-120).
+	// owner's button (:2169-2170): the Multiface raises nmi_active and pages
+	// in on the $0066 fetch, so the NMI vectors into its ROM, and the divMMC
+	// latches button_nmi so its $0066 automap engages (divmmc.vhd:110-120).
 	rc.hotkeyDriveEn = func() bool { return d.Raw(0x83)&0x01 != 0 }
 	rc.fireNMI = func(src NMISource) {
 		if src == NMISourceMF {
-			mem.SetMultifaceActive(true)
+			rc.mf.Button()
 		} else if q, ok := divmmcSPI.(interface{ AssertNMIButton() }); ok {
 			q.AssertNMIButton()
 		}
@@ -1823,6 +1830,7 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	// fetch, HOLD -> idle once the owner drops its hold (RETN pages the
 	// Multiface and the divMMC out).
 	cpu.AddPreFetchHook("next-nmi", func(pc uint16) {
+		rc.mf.Fetch(pc)
 		if rc.nmi.Busy() {
 			rc.nmi.Fetch(pc, rc.nmiInputs())
 		}
@@ -1832,6 +1840,7 @@ func WireReset(d *nextregs.Dispatcher, mem *memory.Memory, cpu *z80.CPU, divmmcS
 	// the reset belongs to the machine that went away.
 	d.SetOnReset(func() {
 		rc.nmi.Reset()
+		rc.mf.Reset()
 		rc.hotkeys.Store(0)
 	})
 	// rc.nmiSource latches the NMI-source read-back bits (bit 4 = i/o

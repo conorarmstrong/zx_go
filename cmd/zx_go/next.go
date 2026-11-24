@@ -1566,7 +1566,8 @@ func wireNextSubsystems(e *emulator) error {
 	// Multiface was not active (see next.RETNHook). The MF $0066 handler ends
 	// with a RETN to return to the interrupted program; that same RETN pages
 	// the MF out.
-	cpu.SetRETNHook(next.RETNHook(mem, pager))
+	cpu.SetRETNHook(next.RETNHook(resetControl.Multiface(), pager))
+	e.ula.SetNextMultiface(resetControl.Multiface())
 	// PostStep applies the $1FF8-$1FFF page-out AFTER the M1 fetch
 	// completes — matching FPGA timing where automap_held updates on
 	// the rising edge of MREQ at end-of-M1. The $1FFC opcode must

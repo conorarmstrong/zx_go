@@ -5,6 +5,8 @@ import (
 
 	"github.com/conorarmstrong/zx_go/pkg/keyboard"
 	"github.com/conorarmstrong/zx_go/pkg/memory"
+	nextdac "github.com/conorarmstrong/zx_go/pkg/next/dac"
+	"github.com/conorarmstrong/zx_go/pkg/next/nextregs"
 	"github.com/conorarmstrong/zx_go/pkg/roms"
 )
 
@@ -36,14 +38,14 @@ func TestMultifacePagingReadback(t *testing.T) {
 		t.Fatalf("setup: $7FFD = %#x, want $14", got7)
 	}
 
-	// MF INACTIVE: $7F3F must NOT return the paging reg (open-bus float).
-	mem.SetMultifaceActive(false)
+	// No Multiface attached, or one that does not answer: open bus.
 	if v, handled := u.ReadPort(0x7F3F); handled && v == 0x14 {
-		t.Fatalf("MF inactive: $7F3F returned paging reg %#x (want open bus, unhandled)", v)
+		t.Fatalf("no Multiface: $7F3F returned paging reg %#x (want open bus, unhandled)", v)
 	}
+	u.SetNextMultiface(fakeMFPorts{})
 
-	// MF ACTIVE: $7F3F -> $7FFD full byte; $1F3F -> $1FFD low nibble.
-	mem.SetMultifaceActive(true)
+	// An answering Multiface: $7F3F -> $7FFD full byte; $1F3F -> $1FFD
+	// low nibble.
 	if v, handled := u.ReadPort(0x7F3F); !handled || v != 0x14 {
 		t.Fatalf("MF active: $7F3F = %#x handled=%v, want $14", v, handled)
 	}
@@ -75,5 +77,62 @@ func TestLayer2PortReadback(t *testing.T) {
 	u.WritePort(0x123B, 0x42)
 	if v, handled := u.ReadPort(0x123B); !handled || v != 0x42 {
 		t.Fatalf("$123B read after write $42 = %#x handled=%v, want $42", v, handled)
+	}
+}
+
+// fakeMFPorts answers every $3F read, as a visible MF +3 does.
+type fakeMFPorts struct{}
+
+func (fakeMFPorts) Port(addr uint16, write bool) bool { return !write && addr&0xFF == 0x3F }
+
+// recordMF records the port accesses the ULA hands the Multiface.
+type recordMF struct{ writes []uint16 }
+
+func (r *recordMF) Port(addr uint16, write bool) bool {
+	if write {
+		r.writes = append(r.writes, addr)
+	}
+	return !write
+}
+
+// The Multiface sees every OUT, including $3F and $1F, which the Next's DACs
+// also decode: zxnext.vhd:2730-2733 strobes the Multiface independently of
+// the DAC decode.
+func TestEveryOUTReachesTheMultiface(t *testing.T) {
+	mem, err := memory.New("", roms.ModelNext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := New(mem, keyboard.New())
+	u.SetNextDAC(nextdac.New())
+	r := &recordMF{}
+	u.SetNextMultiface(r)
+	for _, p := range []uint16{0x003F, 0x001F, 0x00BF} {
+		u.WritePort(p, 0)
+	}
+	if len(r.writes) != 3 {
+		t.Errorf("the Multiface saw OUTs %#04x, want $3F, $1F and $BF", r.writes)
+	}
+}
+
+// Outside MF +3 mode an answered enable read returns port_7ffd_reg(3) &
+// "1111111" (zxnext.vhd:4318-4319): 7FFD bit 3 in bit 7, ones below.
+func TestMultifaceNonPlus3ReadbackCarries7FFDBit3InBit7(t *testing.T) {
+	mem, err := memory.New("", roms.ModelNext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := New(mem, keyboard.New())
+	d := nextregs.New()
+	d.Store(0x0A, 0x40) // mf_type 01, MF 128
+	u.SetNextRegs(d)
+	u.SetNextMultiface(fakeMFPorts{})
+	mem.PageMemory(0x08)
+	if v, ok := u.ReadPort(0x7F3F); !ok || v != 0xFF {
+		t.Errorf("7FFD bit 3 set: read %#02x ok=%v, want $FF", v, ok)
+	}
+	mem.PageMemory(0x00)
+	if v, ok := u.ReadPort(0x7F3F); !ok || v != 0x7F {
+		t.Errorf("7FFD bit 3 clear: read %#02x ok=%v, want $7F", v, ok)
 	}
 }
