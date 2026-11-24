@@ -312,7 +312,7 @@ const (
 // The charge was deferred for a while on the grounds that it broke TX-1696.
 // The title was marginal for another reason: it polls the active video line
 // (NR$1E/$1F), which ran eight times too fast at 28 MHz until 61f329dfc. See
-// TestBusAcquisitionIsCharged and ROADMAP item 1.
+// TestBusAcquisitionIsCharged and the ROADMAP's "Do not re-derive" list.
 //
 // With a prescaler that outlasts a byte, a continuous block also passes
 // WAITING_ACK between bytes with the bus held, one clock each. The interleaved

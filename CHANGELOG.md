@@ -8,6 +8,12 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **108 more Next titles in the compatibility manifest.** The itch.io catalogue
+  of native Next games was screened through NextZXOS itself: 80 launch and
+  render, both builds of Celeste crash after launch (recorded as a known issue),
+  and 26 are untested (paid, no files, or a format not yet driven). The 27
+  snapshot-loaded 128K titles were also compared against a reference emulator
+  through the same keypresses.
 - **Step back into a machine that has been running.** `replay-back` used to
   refuse any span the frame loop had run, so it only worked after
   single-stepping. The time-travel ring now records each frame the loop runs
@@ -20,10 +26,9 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **File > Open on the Next can now type an underscore.** The macro that drives
-  NextZXOS's `.nexload` skipped `_`, so a game whose folder or file name held
-  one (`drug_dealers.nex`) could not be opened.
-
+- **File > Open on the Next can type `_`, `+`, `(` and `)`.** The macro that
+  drives NextZXOS's `.nexload` skipped them, so a game whose folder or file name
+  held one (`drug_dealers.nex`) could not be opened.
 - **A RETI now releases its interrupt when a higher-priority one is waiting.**
   On the Next's IM2 daisy chain a device waiting to be acknowledged blocks the
   devices below it, except while a RETI is being decoded. That exception was
@@ -31,17 +36,16 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was pending stayed in service, and if it had its DMA interrupt enable on it
   held the zxnDMA off until the line interrupt had been taken and returned
   from.
-
 - **A zxnDMA block now costs the CPU its bus trip as well as its bytes.**
   START_DMA, WAITING_ACK and FINISH_DMA hold the CPU off the bus for a clock
   each, and a block parked by an interrupt pays the first two again when it
   resumes. With a prescaler, each byte also pays the WAITING_ACK that precedes
   it, in burst mode as in continuous, and a block cut short by a `$83` written
-  through its own port now pays for the bytes it did move. This was held back because charging it seemed to break TX-1696. It
-  did not: TX-1696 was sensitive to any timing change because it polls the
-  raster line, and that counter ran eight times too fast at 28 MHz until
-  v1.12.4. The title now passes across every per-block perturbation tried.
-
+  through its own port now pays for the bytes it did move. This was held back
+  because charging it seemed to break TX-1696. It did not: TX-1696 was
+  sensitive to any timing change because it polls the raster line, and that
+  counter ran eight times too fast at 28 MHz until v1.12.4. The title now passes
+  across every per-block perturbation tried.
 - **A busy Copper list no longer costs several frames to draw.** Every Copper
   write re-drew the rest of its row and re-rendered Layer 2, the tilemap and
   the sprites to do it. A list writing a palette entry every two copper clocks

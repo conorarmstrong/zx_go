@@ -199,9 +199,9 @@ backend**, so state set on either appears (and acts) on the other:
   snapshot-now, tap-a-row-to-rewind, clear) drive the same buffer.
   Read [Going backwards](#going-backwards) before relying on it: a
   rewind restores every device the machine carries — the sound chip,
-  the disk controller and the tape position included — but a +D or
-  Opus Discovery interface has no capture, and a rewind lands on a
-  checkpoint rather than on an instruction.
+  the disk controller, the +D and Opus Discovery interfaces and the
+  tape position included — and a rewind lands on a checkpoint rather
+  than on an instruction; `replay-back` reaches the instruction.
 - **Reverse** — one shared cursor into the M1 ring. The tab's
   Enter reverse / Step back / Step forward / Run back to… controls
   are the GUI face of `step-back` / `step-forward` / `run-back` /
@@ -672,7 +672,7 @@ Typical workflow on the menu-RETURN freeze:
 nc localhost 10000
 > pause                                # at the freeze
 > tt-status
-OK time-travel on every=50000 keep=16 entries=12
+OK time-travel on every=50000 keep=256 entries=12 held=3172KB
   insn=50000   PC=$0038
   insn=100000  PC=$11A0
   ...

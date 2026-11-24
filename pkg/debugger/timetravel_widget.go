@@ -142,7 +142,7 @@ func (w *TimeTravelWidget) onToggleEnable() {
 	if w.ctl.Enabled() {
 		w.ctl.Disable()
 	} else {
-		// Sensible defaults mirroring tt-on: every 50k insns, keep 16.
+		// Sensible defaults mirroring tt-on: every 50k insns, keep 256.
 		w.ctl.Enable(50000, 256) // the telnet tt-on defaults
 	}
 	w.Refresh()

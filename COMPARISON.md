@@ -276,13 +276,15 @@ eight-word stack window. It is driven from the telnet server (`step-back`,
 debugger's **Reverse** tab, over one shared cursor. **Snapshot rewind**
 resumes from a checkpoint and restores every device the machine carries — the
 CPU, the whole RAM pool, the ULA's frame phase, the AY's generators, the FDC,
-the tape position and the Next's blocks — but a +D or Opus Discovery interface
-has no capture yet, and it lands on a checkpoint rather than an instruction.
+the tape position, the +D and Opus Discovery interfaces and the Next's blocks —
+and it lands on a checkpoint rather than an instruction.
 **Replay step-back** (`replay-back`) closes that last gap by restoring the
 nearest checkpoint and re-executing forward to the exact instruction, so the
 instant it hands back has memory and every device in it; it refuses rather than
-guesses when the window cannot be reproduced. What still bounds all three is
-depth: the checkpoint ring holds 16 captures by default.
+guesses when the window cannot be reproduced. It works on a machine that has
+simply been running, not only after single-stepping, because the frames the
+loop ran are replayed with the same code, and the checkpoint ring holds 256
+captures by default, consecutive captures sharing the memory neither changed.
 
 ZEsarUX remains ahead overall here, and the shape of the gap is worth stating
 precisely rather than as a score. Its time machine is mature and its reverse

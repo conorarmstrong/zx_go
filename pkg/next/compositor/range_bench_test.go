@@ -20,7 +20,7 @@ import (
 //	         8     8_527        1.64          8.2
 //	       256   228_573       43.90        219.5
 //
-// That was how pkg/ula drew a Copper row until ROADMAP item 3. It now paints
+// That was how pkg/ula drew a Copper row until 2026-11-24. It now paints
 // each segment of the row once, through ComposeFrameRowTail, and renders the
 // layers again only after a write in LayerRenderReads; see
 // BenchmarkSaturatedCopperFrame in cmd/zx_go for the whole-frame figure.

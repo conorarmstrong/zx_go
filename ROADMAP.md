@@ -2,7 +2,7 @@
 
 **Stage: released (v1.13.3)** · next: a reference emulator for the Next, where "the games run" becomes "arbitrary `.NEX` titles run" and no claim outruns what is wired
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (item 2: frame INT past the frame end done) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
+> **Last reviewed:** 2026-11-24 · **Last updated:** 2026-11-24 · **Change:** major (items 1, 3 and 7 done and removed, item 2 closed, item 5 widened) · **Target:** real Sinclair hardware, and the Spectrum Next FPGA core (System/Next 26.11a, core 3.03.03), as defined by `zxnext.vhd`
 
 zx_go is a hardware-faithful emulator for the Sinclair 8-bit line, written in Go. This page is the summary; the
 detail is in the open-work items below, in [`docs/compatibility.md`](docs/compatibility.md) and in
@@ -10,19 +10,19 @@ detail is in the open-work items below, in [`docs/compatibility.md`](docs/compat
 
 **Why this stage:** every machine boots and is interactive, the classic line is mature, and the Next cold-boots
 NextZXOS through the real FPGA chain to an interactive desktop. What is missing is confidence, not boot: Next game
-compatibility is still the honest weak point, one Next-wired title (TX-1696) is balanced on a timing edge, and the
-Windows ARM64 GUI has never produced a window.
+compatibility is still the honest weak point, and the Windows ARM64 GUI has never produced a window.
 
 ## Headline numbers
 
 | | Value | Kind |
 |---|---|---|
 | **Machines that boot and are interactive** | **all 9 listed** | measured |
-| **Compatibility rows** (`docs/compatibility.md`) | **158**: 11 Works, 20 Works (caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6 Untested | measured |
-| **Known issue rows with a third-emulator reference** | **11 of 11** (8 settled as bad dumps) | measured |
+| **Compatibility rows** (`docs/compatibility.md`) | **266**: 11 Works, 20 Works (caveat), 58 Boots (responds), 131 Boots, 1 Parses cleanly, 13 Known issue, 32 Untested | measured |
+| **Known issue rows with a third-emulator reference** | **11 of 13** (8 settled as bad dumps; the two Celeste rows are new and not yet traced) | measured |
 | **Next games on the SD card** | **12 `.nex` launch and render**, 5 NextBASIC programs and NEXTipede also run | measured |
+| **itch.io catalogue of Next titles** | **108**: 80 launch and render, 2 crash (Celeste), 26 untested (5 paid, 1 without files, 20 in formats not yet driven) | measured, screens read by eye |
 | **Z80N opcode vectors captured from the FPGA HDL** | **8567, all green** | measured |
-| **Open work items** | **8** (4 correctness, 1 efficiency, 2 product, 1 research) | counted from this page |
+| **Open work items** | **4** (1 correctness note, 2 product, 1 research), plus item 2 kept as a closed record | counted from this page |
 | **Time and effort estimates** | none kept | not estimated |
 
 Nothing on this page is a percentage, because no weighted parity measure exists for this project. Counts above are
@@ -51,7 +51,7 @@ hardware changes are modelled; see item 8.
 | 48K, 128K, +2, +2A, +3 | mature; +3 disk FDC proven on 6 reference-compared titles | item 5 (breadth) |
 | Pentagon 128 | boots | none listed |
 | SAM Coupé | boots to BASIC ([sam-coupe.md](docs/sam-coupe.md)) | stereo audio, GUI disk load, symbol keys |
-| Spectrum Next | cold-boots NextZXOS to the desktop ([spectrum-next.md](docs/spectrum-next.md)) | items 1, 2, 3, 5 |
+| Spectrum Next | cold-boots NextZXOS to the desktop ([spectrum-next.md](docs/spectrum-next.md)) | item 5 |
 
 ## By dimension
 
@@ -59,10 +59,10 @@ hardware changes are modelled; see item 8.
 |---|---|---|
 | Next hardware blocks vs the FPGA VHDL | golden suites for the CPU, sprites, paging, DMA and others | `VHDL_CONFORMANCE.md` |
 | Reachability (modelled and wired) | enforced by `pkg/next/reachability_test.go`; declared-unwired list is empty | item 2 |
-| Next game compatibility | weak point; 12 of 12 SD `.nex` launch, about 100 catalogued titles unscreened | item 5 |
-| Timing fidelity | one knife-edge title (TX-1696) | item 1 |
-| Performance | Copper-saturated rows cost 219.5% of a 50 Hz budget | item 3 |
-| Time travel and debugging | reverse debugging and snapshot rewind done on every machine | item 7 |
+| Next game compatibility | weak point, narrowing; 12 of 12 SD `.nex` launch, 80 of the 82 screenable catalogue titles render, Celeste crashes | item 5 |
+| Timing fidelity | no known knife-edge title; TX-1696's was the raster counter, fixed in v1.12.4 | Do not re-derive |
+| Performance | a saturated Copper list costs 6.1 ms a frame, 30% of a 50 Hz budget (was 108 ms) | `BenchmarkSaturatedCopperFrame` |
+| Time travel and debugging | reverse debugging, snapshot rewind and `replay-back` on every machine, into frames the loop ran; 256-checkpoint ring with shared memory | `DEBUGGER.md` |
 | Platforms | Windows ARM64 core proven, GUI blocked upstream | item 6 |
 | Out of scope | Wi-Fi, IF1 RS-232, NR$0B GPIO, SAM MIDI/IDE, Beta density bit | Catalogued below |
 
@@ -70,12 +70,11 @@ hardware changes are modelled; see item 8.
 
 Ranked; detail in the open-work items below.
 
-1. **TX-1696 timing** (item 1): find why one T-state per DMA block flips it.
-2. **IM2 leftovers** (item 2): `o_reti_decode`, and anything on UART 1.
-3. **Row composition cost** (item 3): enumerate each layer's NextReg reads, then cache.
-4. **Next game compatibility** (item 5): the roughly 100 unscreened catalogue titles, and the 128K class for keypress verification.
-5. **Then:** a physical Windows-on-ARM launch (item 6), and the time-travel window (item 7).
-6. **Research:** the 3.02.05 diff is done (item 8); the open part is the new boot ROM. 3.03 VHDL is not public.
+1. **Next game compatibility** (item 5): the catalogue titles that did not launch or render, read screen by screen
+   and against a reference where one will run them; then the formats the screening does not drive yet (Next tapes,
+   `.snx`, +3-mode disks).
+2. **Then:** a physical Windows-on-ARM launch (item 6).
+3. **Research:** the 3.02.05 diff is done (item 8); the open part is the new boot ROM. 3.03 VHDL is not public.
 
 ## What this is
 
@@ -99,7 +98,7 @@ behaviour). If you change one, re-check the citation.
 
 ---
 
-## CURRENT STATE (2026-11-18, v1.13.3)
+## CURRENT STATE (2026-11-24, after v1.13.3)
 
 Every machine listed above boots and is interactive. The classic line is
 mature. The Next cold-boots NextZXOS through the real FPGA chain to an
@@ -128,46 +127,19 @@ package: see item 2.
 
 ## Open work (ordered)
 
-Ordered by what the reference-emulator goal above is worth, not by size. Items
-1 to 4 are correctness against the FPGA; 5 to 7 are product work; 8 is research.
+Ordered by what the reference-emulator goal above is worth, not by size.
+Items 1 (TX-1696's timing edge), 3 (row composition cost) and 7 (time travel)
+were finished on 2026-11-24 and removed, as finished items are here; their
+numbers are not reused, so references elsewhere stay valid. What they found that
+would be expensive to find again is under "Do not re-derive". Item 2 is kept as
+a closed record. Item 4 is a correctness note, 5 and 6 are product work, and 8
+is research.
 
-### 1. [correctness] ~~TX-1696 is balanced on a timing edge~~ — explained and closed 2026-11-24
+### 2. [record] IM2 chain, `dma_delay_i`, CTC, UART and NMI arbiter — closed 2026-11-24
 
-**It was not the DMA.** TX-1696 polls the active video line, NR$1E/$1F, to wait
-for the raster. That counter was derived from CPU T-states, so at the Next's
-28 MHz it ran eight times too fast, and whether the title's wait caught its
-line came down to phase. Any change to a DMA block's cost moved the phase,
-which is why the August sweep failed at seven scattered values from -5 to +10.
-`61f329dfc` (v1.12.4) divided the counter by the speed multiplier, for an
-unrelated reason, and the marginality went with it.
-
-The evidence, all against `TestNexloadSDGames/TX-1696` with a temporary knob
-adding a per-block delta to the DMA's CPU charge:
-
-| Build | Failing deltas in -5..+10 |
-|---|---|
-| `c0078c84d`, where the sweep was first taken | -4, -2, +3, +4, +6, +8, +9, +10 (the original table, reproduced exactly) |
-| Bisected: `9682141ba` | the same eight |
-| Bisected: `61f329dfc`, the counter fix | none |
-| Today's code | none, and +100000 passes too |
-| Today's code with only the fast counter put back | -3 and +1 fail again |
-
-**The three bus-acquisition cycles are now charged.** START_DMA and WAITING_ACK
-on each trip to the bus, FINISH_DMA when the block ends (`busAcquireCycles`,
-`busReleaseCycles`). A block parked by `dma_delay_i` pays the first two again
-when it resumes, because TRANSFERING_WRITE_4 goes straight back to START_DMA
-(`dma.vhd:427-428`). The byte hook's elapsed time includes them, so the CTC,
-UARTs and interrupts run through them too. All 12 SD `.nex` titles still launch
-and render.
-
-A review of that change found three more bus clocks the model left out, now
-charged: a continuous block whose prescaler outlasts a byte passes WAITING_ACK
-between bytes with the bus held (`dma.vhd:451-458`); an interleaved burst takes
-the bus back through WAITING_ACK before every byte (`:441-461`); and a block a
-re-entrant `$83` abandons was charged nothing, though the byte hook had already
-run the CTC and UARTs through its bytes.
-
-### 2. [correctness] ~~IM2: what is left after `dma_delay_i`~~ — closed 2026-11-24
+Nothing here is open. The section stays because `COMPARISON.md`,
+`VHDL_CONFORMANCE.md`, `docs/spectrum-next.md` and code comments cite it as the
+record of how the interrupt and bus-arbitration wiring was checked.
 
 **Re-checked against the code on 2026-11-16.** The CTC, the IM2 chain, the UART,
 the NMI arbiter and the DMA delay pin are wired and reachable, and the CTC and
@@ -255,41 +227,6 @@ unfaithful interrupt source is worse than none, because a developer would trust 
 
 ---
 
-### 3. [efficiency] ~~Row composition is O(row x writes)~~ — done 2026-11-24
-
-**Was:** every Copper write re-composed the rest of its row and re-rendered the
-whole Layer 2, tilemap and sprite scanline to do it. A saturated list, a MOVE
-every two copper clocks, cost **108 ms a frame**, more than five times the 20 ms
-budget (`BenchmarkSaturatedCopperFrame`, cmd/zx_go, on an M-series laptop).
-
-**Now 6.1 ms**, from three changes:
-
-- **Each pixel is painted once.** Before stepping a column the ULA asks the
-  Copper whether that Step will write (`Copper.WouldWrite`, a side-effect-free
-  mirror of Step's clock loop, checked against Step on 200 random programs that
-  include self-modifying mode writes and VBL restarts). If it will, the pixels
-  before that column are painted while the old state is still in place. A row
-  costs its width plus a little per write.
-- **The layer renders are cached per row.** `ComposeFrameRowTail` reuses the
-  row's Layer 2, tilemap and sprite renders until a write names a register in
-  `compositor.LayerRenderReads`. The enumeration, per layer, is in that
-  function's comment: 27 registers. Which layers are enabled is part of the
-  cache key, so NR$69 is not in the set: its only render bit is the Layer 2
-  enable.
-- **The raster journal no longer builds closures for writes it will drop.**
-  The palette and Layer 2 scroll observers and the journalled-register wrappers
-  return early while the log is replaying. Before this, half the remaining time
-  went on allocating closures for the Copper's own palette writes.
-
-**The guard.** `TestLayerCacheMatchesUncachedForEveryCopperRegister` renders a
-frame with all three layers drawing, for every register the Copper can name
-($01-$7F), once through the cached segment path and once through the old
-uncached one, and fails on any pixel difference. The scene writes each register
-with enable bits kept on, with mixed values, after a reconfiguration that makes
-NR$6C, NR$71 and NR$19 count, and on a row that starts with the register clear.
-`TestLayerCacheGuardCatchesEachRegisterLeftOut` is its mutation check: dropping
-any one of the 25 non-precautionary registers from the set changes the frame.
-
 ### 4. [correctness] zxnDMA: nothing outstanding except the interrupt logic
 
 Not implementable, and not to be re-attempted: **the Z80 DMA's interrupt and
@@ -310,9 +247,10 @@ arbiter; see item 2.
 
 ### 5. [product] Next game compatibility
 
-`docs/compatibility.md` now holds **158 title rows: 11 Works, 20 Works
-(caveat), 58 Boots (responds), 51 Boots, 1 Parses cleanly, 11 Known issue, 6
-Untested.** It was 36 rows with 13 Untested before automated screening.
+`docs/compatibility.md` now holds **266 title rows: 11 Works, 20 Works
+(caveat), 58 Boots (responds), 131 Boots, 1 Parses cleanly, 13 Known issue, 32
+Untested.** It was 36 rows with 13 Untested before automated screening, and 158
+before the itch.io catalogue was screened on 2026-11-24.
 
 **Eight of the eleven Known issue rows are settled as bad dumps, on a third
 emulator's evidence.** MAME's `specpls3`, driven from our own vendored ROMs
@@ -500,7 +438,14 @@ remaining gap.
   matching screens said nothing about input. Both menus take number keys. The
   rows now say screen-verified rather than input-verified.
 
-  Remaining work is breadth: the 128K class beyond the tape rows.
+  **The 128K snapshot class is done, 2026-11-24.** `refdiff` now loads `.z80`
+  and `.sna` on both sides, the reference held in cpu-step mode so the snapshot
+  starts both machines at the same instant. Of the 27 rows, 11 are
+  byte-identical with both screens still, two are the same attract sequence at
+  different phases, 11 void as still animating, one is inert and one blank on
+  both. The one difference, Saboteur II at 7.6%, is a 48K snapshot run on the
+  128K: the reference runs it on a 48K ROM, and the panel it draws is read from
+  ROM, where the 128K's ROM 1 differs. On the 48K both are byte-identical.
 - [x] ~~A +3 disk loader for the harness~~ — `Harness.InsertPlus3Disk` plus
   `.dsk`/`.edsk` screening (v1.8.4). Screening the disk class immediately
   surfaced three real loader bugs, all fixed; see the CHANGELOG.
@@ -525,17 +470,33 @@ easy to confuse. Four of its titles are already installed on the SD card and
 already counted in the figures above, so finding them there is not evidence of
 unscreened work.
 
-Its URL catalogue is not that. It lists **108 Next titles**, of which only a
-handful are on the card, so **roughly 100 titles are undownloaded and
-unscreened**. That is the largest single block of open compatibility work in
-this document. Fetching them is a bulk pull from a
-third-party site and needs the maintainer's say-so, which is why it is recorded
-here rather than started.
+**The itch.io catalogue is screened, 2026-11-24.** Its 108 Next titles were
+fetched through itch.io's normal free-download flow, paid titles left alone,
+unpacked into a `Catalogue` folder of the SD tree (gitignored) and run through
+the genuine paths on a card built from that tree: `.nex` through NEXLOAD,
+NextBASIC through the Command Line, sharded six ways (`NEX_SD_GAMES_SUBDIR`,
+`NEX_SD_REPORT_ONLY`, `NEX_SD_SHARD`). The card has to be built from the tree
+for this (`ZX_GO_NEXT_SD_IMG` pointed at a missing file), because the default
+card is `roms/next/sd.img`, which knows nothing of new folders.
 
-An earlier revision of this paragraph said everything in the directory was
-already installed and told the reader not to look further. That was wrong, and
-wrong in the expensive direction: it suppressed those ~100 titles behind a
-claim that sounded like a resolution.
+- **80 launch and render.** Every screen was read by eye. That corrected six
+  pixel-count verdicts: four sparse but genuine screens scored blank, and two
+  "renders" were the NextZXOS welcome page, reached because the harness ran a
+  separately downloaded patch `.bas` outside the game folder it belongs in, where
+  its loads fail and its `ON ERROR` resets the machine. Run from their folders
+  both titles render.
+- **The screening harness had four gaps, all fixed:** the typist had no `_`, `+`,
+  `(` or `)`, and a deep path in one `.cd` overran the two rows of the command
+  line the OS's copy can be confirmed against, so it now changes directory one
+  component at a time. The `_` gap also reached the GUI's File > Open macro.
+- [ ] **Celeste crashes, both builds.** Within about 1400 frames of launching
+  through NEXLOAD the CPU is running through memory with interrupts off, RAM in
+  slots 0 and 1 and SP at $0037. The single-step driver ran 400 million
+  instructions from the same launch without reaching it, so the frame loop is
+  the first suspect. Needs a reference trace; ZEsarUX runs it (the title ships
+  bundled with it).
+- [ ] **Formats the screening does not drive yet:** Next tapes and tape-driven
+  adventures, `.snx` snapshots, +3 and CP/M disks. 20 titles.
 
 **Every Next game on the SD card is now accounted for**: every title directory
 holding a launchable program runs — 12 `.nex` through NEXLOAD, 5 NextBASIC
@@ -614,112 +575,6 @@ to leave it stalled, not to work around it here.
   accepting ANSI as well as being a terminal, and falls back to plain text
   (`pkg/zxlog/color.go`). Not ARM-specific: it affected every legacy Windows
   console on any architecture.
-
-### 7. [product] Time travel
-
-Three mechanisms, deliberately separate.
-
-**Reverse debugging is done and wired to both surfaces**
-(`pkg/debugger/reverse.go`, `pkg/debugger/reverse_ui.go`,
-`cmd/zx_go/reverse_cmd.go`). A cursor walks the M1 ring backwards one
-instruction at a time, and every view reads the instant under it. Registers,
-flags and the branch that led to each instruction always; on a wide ring the
-pair registers, the shadow registers and an eight-word stack window too, as far
-back as the ring holds. Conditions evaluate against a recorded instant through
-the same interface the live machine uses, so `run-back "a == 0"` works. The
-telnet commands are `step-back`, `step-forward`, `run-back`, `to-present` and
-`reverse-status`; the GUI's **Reverse** tab drives the same cursor, and the
-visual debugger opens a wide ring by default so its panels have the shadow set
-and the stack window to show.
-
-The invariant to keep: **anything the recording cannot answer is refused, not
-guessed.** Memory is not recorded per instruction, so a memory condition has
-no value to test going backwards, and a narrow ring never recorded BC. Both
-return an error. Do not "improve" this into evaluating against zero: a
-breakpoint that silently stops being the one the user wrote sends people
-hunting bugs that are not there. Note the reason answerability is re-checked at
-every step of a backwards search is NOT short-circuit evaluation — `binOp.eval`
-computes both operands eagerly — it is that the check costs nothing.
-
-**Snapshot rewind now restores the machine, and the device set is complete.**
-The time-travel ring captures through the registry, so a rewind returns every
-registered device rather than the CPU and the visible 64 K. Every disk
-interface the emulator offers is now captured, the +D and the Opus Discovery
-included. `replay-back` is what reaches an exact instruction inside it.
-
-**The window is open, 2026-11-24.** Two limits kept it short, and both are gone.
-
-- **A machine that had been running could not be stepped back into.** Replay
-  re-ran every span with the single-step driver, and the frame loop's
-  `ExecuteFrame` rebases the T-state counter at each frame end, raises the frame
-  interrupt on its own schedule, and is followed by the GUI loop's render, which
-  moves the ULA's and the Next's own state. The ring now records each frame-loop
-  turn (`timeTravelBuffer.runFrame`, from both the GUI and headless loops) and
-  replays it with the same code, the debugger's breakpoints swapped out and the
-  audio held back from the host. Every instruction boundary inside a frame is an
-  instant replay can land on, leaving the machine as a breakpoint there would;
-  checkpoints are taken at frame starts. A landing that cuts a frame rewrites
-  the ring's history to match. `TestReplayStepBackReachesIntoFramesTheLoopRan`
-  lands on a frame end the live run passed through, byte for byte, on the 48K,
-  128K, +3 and Next, through both loops.
-- **Sixteen checkpoints, each a whole machine.** Consecutive checkpoints now
-  share every 4 KB piece of state neither changed (`machinestate.ShareWith`):
-  64 checkpoints of a Next running a busy guest hold 4.5 MB against 149 MB
-  unshared. The default ring is 256.
-
-Still refused, by the proof pass: a tape turbo burst (several frames per tick),
-RZX, the SAM Coupe and ZX80/ZX81 frame drivers, and any input from outside the
-machine inside the window.
-
-`pkg/machinestate` is the registry the complete capture is built on: named
-devices, a device-set check in both directions before anything is applied, and
-canonical ordering so two captures of an unchanged machine compare equal.
-
-- [x] ~~Registry~~ — done, with the refusal semantics tested.
-- [x] ~~AY~~ — full generator state, mutation-verified. The test replays audio
-  from a capture rather than comparing fields, because a field-by-field test
-  only checks the fields someone remembered to add. Worth knowing: the LFSR
-  mutation initially passed, because the fixture wrote `0x38` to the mixer and
-  those bits are active low, so it had disabled noise on every channel.
-- [x] ~~The remaining devices~~ — **every machine the emulator builds is now
-  captured.** The CPU, ULA, memory, `plus3fdc`, `betadisk`, `disciple` (the +D),
-  `opus`, keyboard, `if1`, `multiface`, the DAC, the tape player
-  (`pkg/ula/tapestate.go` — position, not the tape image), the whole Next set
-  including LoRes and ULA+, and the SAM Coupé's own memory, keyboard, SAA1099
-  and both WD1772s. `(*emulator).stateRegistry` is the list, and it registers
-  each device exactly when the machine really carries it.
-
-  The SAM was the last hole and it was a total one: the registry returned an
-  EMPTY registry for it, so rewind and time travel silently did nothing there.
-  The field-coverage guard written alongside the capture found a real bug on its
-  first run — the SAM's DC blocker had no output clamp, so an isolated beeper
-  toggle overshot to twice the speaker's drive level.
-
-  The +D and the Opus were the last two, and the audit that verified them found
-  a real controller bug rather than a capture gap: the +D's format flag was
-  sticky across commands, so a Write Track abandoned by a Force Interrupt left
-  the next Write Sector to be committed as a format. The tell was a mutation
-  surviving because nothing in the fixture could move the flag, and the reason
-  nothing could move it was the bug.
-- [x] ~~The replay-equivalence oracle~~ — `cmd/zx_go/replay_oracle_test.go`.
-  Fingerprints outputs and memory in bulk rather than device state, so it
-  cannot pass by comparing the capture with itself, and a companion test
-  leaves one device un-rewound to prove the oracle still bites.
-- [x] ~~Replay-based step-back~~ — `replay-back [N]` (`cmd/zx_go/replayback.go`).
-  Restores the newest checkpoint at or before the target and re-executes to it,
-  landing by step count from the checkpoint rather than by instruction counter:
-  the counter tallies M1 fetches, so a prefixed instruction moves it by more
-  than one and a halted CPU not at all. Before handing an instant back it
-  re-runs the window to the present and compares the whole machine, so a window
-  it cannot reproduce is refused rather than answered.
-- [x] ~~A determinism audit~~ — the step path is deterministic; replay of a
-  step-driven span reproduces the machine byte for byte on 48K, 128K, +2, +2A,
-  +3 and the Next. Two things are NOT reproducible and are refused rather than
-  guessed at: a span the frame loop ran through `ExecuteFrame` (it rebases the
-  T-state counter every frame and schedules the frame INT differently from the
-  single-step path), and any change made from outside the CPU during the window
-  (`write-memory`, a key press, a disk arriving). The first is now replayed as
-  recorded turns; see "The window is open" above.
 
 ### 8. [research] Core 3.03 hardware behaviour is not modelled
 
@@ -803,6 +658,33 @@ Kept so they are not re-proposed.
 
 Solved problems whose answers were expensive to find.
 
+- **TX-1696 was never knife-edge on the DMA.** It polls NR$1E/$1F for the
+  raster, and that counter ran on CPU T-states, eight times too fast at 28 MHz,
+  until `61f329dfc` (v1.12.4) divided it by the speed multiplier. Any change to
+  a DMA block's cost moved the phase of its raster waits, which is why an
+  August sweep of the per-block cost from -5 to +10 T-states failed at seven
+  scattered values. Bisected on 2026-11-24 with a temporary charge knob: the
+  sweep reproduces exactly at `c0078c84d` and `9682141ba`, every delta passes
+  from `61f329dfc` on (and +100000 passes today), and putting the fast counter
+  back on today's code brings failures back. The bus-trip clocks it held back
+  are now charged (`busAcquireCycles`, `busReleaseCycles`, `pkg/next/dma`).
+- **The Copper row cache is guarded by a differential test, not by the
+  enumeration.** `compositor.LayerRenderReads` lists the registers a layer's
+  scanline render reads, per layer, and `TestLayerCacheMatchesUncached*`
+  (cmd/zx_go) renders every Copper-reachable register through the cached and
+  uncached paths and compares pixels; its mutation twin drops each register in
+  turn. Change the layers and the test tells you what to add. Which layers are
+  enabled is part of the cache key, so an enable bit alone (NR$69) needs no
+  entry.
+- **Replay re-runs frame-loop turns, it does not step them.** `ExecuteFrame`
+  rebases the T-state counter per frame and the GUI loop renders after each
+  frame, so a span the frame loop ran can only be replayed by calling the same
+  turn (`timeTravelBuffer.runFrame`). A landing inside a GUI frame is the
+  machine as a breakpoint there leaves it, render included; inside a headless
+  frame it is the live machine exactly. Order instants by instruction count,
+  not T-states: the T-state counter rewinds every frame and `clockBase` is not
+  in saved state.
+
 - **Opus Discovery ROM paging** is an **M1 address trap delayed one
   fetch**: in at `$0008`, `$0048`, `$1708`; out at `$1748`. The tell is
   placeholder bytes in the Opus ROM copying the Spectrum's at those
@@ -860,6 +742,14 @@ Solved problems whose answers were expensive to find.
 
 ## Key invariants (do not regress)
 
+- **A debugger view of the past that the recording cannot answer is refused,
+  not guessed.** Reverse debugging over the M1 ring refuses memory conditions
+  and registers a narrow ring never recorded; `replay-back` re-runs the window
+  to the present and refuses if the machine it produces differs, byte for byte.
+  A breakpoint that silently stops being the one the user wrote, or a machine at
+  the right instruction with one byte from another history, is the failure
+  these exist to prevent.
+
 - **No hacks.** `zxnext.vhd` + the t80n VHDL are the oracle for every Next
   hardware question. Where behaviour is ambiguous, the VHDL wins over
   folklore and over other emulators.
@@ -899,6 +789,9 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-24 | Debugger: `replay-back` steps back into frames the loop ran, GUI and headless, render included; consecutive checkpoints share unchanged memory (64 Next checkpoints 4.5 MB, was 149 MB) and the default ring is 256. |
+| 2026-11-24 | Next: a busy Copper list costs 6.1 ms a frame, was 108 ms (each pixel painted once, layer renders cached per row, guarded by a per-register differential test); the zxnDMA charges each bus trip (START_DMA, WAITING_ACK, FINISH_DMA, and WAITING_ACK per byte after a prescaler wait); RETI raises `reti_decode` on the IM2 chain (GHDL scenario s7); TX-1696's marginality traced to the pre-v1.12.4 raster counter. |
+| 2026-11-24 | Compatibility: the 27 snapshot-loaded 128K titles compared against a reference through the same keys; the itch.io catalogue of 108 Next titles fetched (102 free, 5 paid and skipped, 1 with no files) and screened. |
 | 2026-11-16 | Debugger: NextReg names and decoded fields everywhere; `im2`, `nmi-state`, `dma`, `uart`, `ctc`, `nr-list`; port masks and read watches; GUI tools split into CPU and Next groups with Interrupts, DMA, UART/CTC, Copper and NextRegs tabs; debugger reads no longer reach the trace hooks. |
 | 2026-11-16 | Next: the NMI arbiter (NR$06 enables, first-come latch, `$0066` hold) drives NR$02, the F12/F8 keys and the NMI term of `dma_delay_i`; the CTC, UARTs and ULA interrupts run during a continuous DMA block and can park it mid-block; joystick buttons B and C drive a routed UART; NR$0B resets to `$01`. |
 | 2026-11-15 | Next: the CTC and IM2 chain are in save states; NR$CC/CD/CE hold the zxnDMA off the bus through `dma_delay_i` (tested from a Z80 guest); NR$C0 bits 2:1 report the IM mode; a UART can be routed to the joystick port; NR$A0 follows 3.02.05. |
@@ -915,6 +808,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-24 | major | Items 1, 3 and 7 done and removed, findings moved to "Do not re-derive" and "Key invariants"; item 2 closed and kept as a record; item 5 updated with the 128K snapshot class and the catalogue screening. Summary tables and Upcoming rewritten. |
 | 2026-11-16 | minor | Item 2: NMI term and in-block arbitration done; divMMC RETN rule done; left are a frame INT past the frame end inside a block, `o_reti_decode` and UART 1. NR$0B catalogue entry narrowed to the GPIO modes. |
 | 2026-11-15 | minor | Item 2 narrowed to the NMI term and in-block arbitration; item 8 rows for NR$A0 and `spi_active` closed. |
 | 2026-11-15 | minor | Item 2 rewritten: the UART is wired, `dma_delay_i` and save-state capture of the CTC and chain remain. Catalogued Wi-Fi entry corrected again. |

@@ -250,8 +250,8 @@ func TestResetPortTimingCommands(t *testing.T) {
 // it moved eight times too fast and the title's raster waits caught or missed
 // their line by phase. With the counter divided by the speed multiplier
 // (61f329dfc) the same sweep, and a +100000 T-state perturbation, all pass.
-// Reintroducing the fast counter brings scattered failures back. See ROADMAP
-// item 1.
+// Reintroducing the fast counter brings scattered failures back. See the
+// ROADMAP's "Do not re-derive" list.
 func TestBusAcquisitionIsCharged(t *testing.T) {
 	if busAcquisitionCycles != 3 || busAcquireCycles != 2 || busReleaseCycles != 1 {
 		t.Errorf("acquire %d + release %d = %d, want 2 + 1 = 3: START_DMA, WAITING_ACK and "+

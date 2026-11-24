@@ -330,9 +330,18 @@ func nexloadFromMenu(emu *emulator, sdPath string, loadFrames int) (launched boo
 
 	dir, file := path.Split(sdPath)
 	dir = strings.TrimSuffix(dir, "/")
-	if dir != "" {
-		// Quoted because .cd splits its argument on spaces.
-		if err := nexTypeLine(emu, `.cd "`+strings.ToLower(dir)+`"`); err != nil {
+	// One component at a time, the first from the root. Quoted because .cd
+	// splits its argument on spaces. A whole deep path in one .cd runs past
+	// the two rows of the command line the OS's copy can be read back from,
+	// and then no character can be confirmed.
+	for i, part := range strings.Split(strings.TrimPrefix(dir, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		if i == 0 {
+			part = "/" + part
+		}
+		if err := nexTypeLine(emu, `.cd "`+strings.ToLower(part)+`"`); err != nil {
 			return false, err
 		}
 		if err := nexSubmitLine(emu); err != nil {
