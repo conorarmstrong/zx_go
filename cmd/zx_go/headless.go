@@ -161,15 +161,9 @@ func runHeadless(f *cliFlags) {
 			slog.Info("time-travel enabled",
 				"every", f.timeTravel, "keep", f.timeTravelKeep)
 			// Every entry is a complete machine state, which is what lets
-			// replay-back re-execute from one. On the Next that is the
-			// whole ~2 MB pool plus divMMC RAM and the NextRegs, so the
-			// ring costs far more there than on classic models. Surface
-			// it so a long --time-travel-keep doesn't surprise.
-			if model == roms.ModelNext {
-				slog.Info("time-travel: each entry is the whole machine",
-					"approx_ring_mb", (f.timeTravelKeep*2200)/1024,
-					"hint", "lower --time-travel-keep if memory is tight")
-			}
+			// replay-back re-execute from one. Consecutive entries share the
+			// memory neither changed, so the ring's cost is what the guest
+			// writes between them; `tt-status` reports it as held=.
 		}
 	}
 
@@ -1042,7 +1036,13 @@ func runOneFrameHeadless(emu *emulator, model roms.SpectrumModel) {
 		return
 	}
 	if os.Getenv("ZX_GO_STEP_FRAME") == "" {
-		emu.cpu.ExecuteFrame(frameTStatesForModel(model, emu.video60Hz))
+		budget := frameTStatesForModel(model, emu.video60Hz)
+		if emu.timeTravel != nil {
+			// Recorded, so replay-back can re-run it as it ran.
+			emu.timeTravel.runFrame(func() { emu.cpu.ExecuteFrame(budget) })
+			return
+		}
+		emu.cpu.ExecuteFrame(budget)
 		return
 	}
 	budget := uint64(frameTStatesForModel(model, emu.video60Hz)) * uint64(emu.cpu.SpeedMultiplier())

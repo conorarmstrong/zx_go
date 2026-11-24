@@ -38,14 +38,15 @@ import (
 //     any instant on the way to it, so the step back is refused and the present
 //     is put back.
 //
-// The forward driver is StepInstructionWithIRQ, which is what the debugger's
-// own `step` uses. Execution driven by ExecuteFrame — the frame loop's bulk
-// path — is NOT reproduced by it: ExecuteFrame rebases the T-state counter at
-// each frame end and asserts the frame interrupt on its own schedule, so a span
-// run that way replays as a different machine. In practice that shows up first
-// as every checkpoint sitting AHEAD of the present on the clock, which is
-// reported as itself; anything subtler is caught by the proof pass. Either way
-// it is a refusal rather than a wrong answer.
+// The forward path drives the machine the way it was driven. Spans the
+// debugger single-stepped are stepped with StepInstructionWithIRQ, which is
+// what `step` uses. Spans the frame loop ran are re-run turn by turn with the
+// turns the ring recorded (timeTravelBuffer.runFrame): ExecuteFrame rebases the
+// T-state counter at each frame end and raises the frame interrupt on its own
+// schedule, and the GUI loop renders after each frame, so stepping such a span
+// would replay a different machine. Anything the ring did not record, a frame
+// run outside the loop or a machine with its own frame driver, is caught by the
+// proof pass and refused rather than answered wrongly.
 
 // replayPoint is one instruction boundary passed during a replay walk. Both
 // counters are kept because both are asserted at the landing: the T-state
@@ -96,7 +97,9 @@ func (t *timeTravelBuffer) replayBack(n int) (uint64, error) {
 	ahead := 0
 	for i := len(entries) - 1; i >= 0; i-- {
 		cp := entries[i]
-		if cp.insn > now.insn || cp.tstates > now.tstates {
+		// The frame loop rewinds the T-state counter at every frame end, so
+		// T-states order two instants only on the same instruction count.
+		if cp.insn > now.insn || (cp.insn == now.insn && cp.tstates > now.tstates) {
 			ahead++
 			continue
 		}
@@ -111,25 +114,21 @@ func (t *timeTravelBuffer) replayBack(n int) (uint64, error) {
 			continue // this checkpoint is too recent; try the one before it
 		}
 		target := points[len(points)-1-n]
-		if err := t.landOn(reg, &cp, len(points)-1-n, target); err != nil {
+		if err := t.landOn(&cp, now, len(points)-1-n, target); err != nil {
 			return t.refuse(reg, present, err)
 		}
 		return target.insn, nil
 	}
 
 	// Every checkpoint being ahead of the present is a different situation from
-	// the ring being too short, and it has a different cause: the machine was
-	// advanced by the frame loop's bulk driver, which rebases the T-state
-	// counter at every frame end, so what the ring holds is not a past this
-	// present has.
+	// the ring being too short: the machine has been stepped back past all of
+	// them, or reset, so what the ring holds is not a past this present has.
 	if ahead == len(entries) && ahead > 0 {
 		newest := entries[len(entries)-1]
 		return t.refuse(reg, present, fmt.Errorf(
 			"replay-back: every checkpoint is ahead of the present — the newest is at "+
 				"instruction %d, T-state %d, against the present's instruction %d, T-state %d. "+
-				"The machine was last advanced by the frame loop's bulk driver, whose timeline "+
-				"replay does not reproduce; pause and `step` to put it back on the single-step "+
-				"path, or take a fresh `tt-snap` and run forward from there",
+				"Take a fresh `tt-snap` and run forward from there",
 			newest.insn, newest.tstates, now.insn, now.tstates))
 	}
 
@@ -144,80 +143,221 @@ func (t *timeTravelBuffer) replayBack(n int) (uint64, error) {
 }
 
 // walkToPresent restores the checkpoint, re-executes forward to the present,
-// and returns the instruction boundaries it passed through — the first being
-// the checkpoint itself.
+// and returns the instants it passed through — the first being the checkpoint
+// itself.
 //
 // Reaching the present is not enough: the machine it produces has to BE the
 // present. The comparison is against the capture taken before the walk started,
 // over every registered device, so a forward path that diverged anywhere in the
 // window is caught here rather than handed back as a step-back result.
 func (t *timeTravelBuffer) walkToPresent(reg *machinestate.Registry, cp *ttEntry, now replayPoint, present machinestate.State) ([]replayPoint, error) {
+	points, _, err := t.walk(cp, now, -1)
+	if err != nil {
+		return nil, err
+	}
+	if got := reg.Capture(); !bytes.Equal(got.Bytes(), present.Bytes()) {
+		return nil, fmt.Errorf("replay-back: re-executing from the checkpoint at instruction %d "+
+			"reached the present instruction but produced a DIFFERENT machine, so no instant on "+
+			"the way there can be trusted either. Either the window was advanced by something "+
+			"the ring does not record (a frame run outside the frame loop, a tape turbo burst, "+
+			"a machine with its own frame driver), or something outside the CPU changed the "+
+			"machine inside it (a write-memory, a key press, a disk arriving) and does not "+
+			"happen again on the way back", cp.insn)
+	}
+	return points, nil
+}
+
+// landOn re-runs the checkpoint forward to the instant at index idx of the walk
+// and requires the machine to be at want.
+//
+// The assertion is the point. Stopping when the instruction counter first
+// reaches a value would land on the first boundary carrying it, which for a
+// halted CPU or a repeated counter value is a different instant with the same
+// number on it.
+func (t *timeTravelBuffer) landOn(cp *ttEntry, now replayPoint, idx int, want replayPoint) error {
+	points, ran, err := t.walk(cp, now, idx)
+	if err != nil {
+		return err
+	}
+	if got := t.here(); len(points) != idx+1 || got != want {
+		return fmt.Errorf("replay-back: walking %d instants from the checkpoint at instruction %d "+
+			"landed on instruction %d (T-state %d), not the instruction %d (T-state %d) the same "+
+			"walk reached a moment ago — execution is not reproducible from this checkpoint",
+			idx, cp.insn, got.insn, got.tstates, want.insn, want.tstates)
+	}
+	t.rewriteHistory(cp, ran, want)
+	return nil
+}
+
+// rewriteHistory makes the ring describe the past of the machine it has just
+// landed on rather than of the present it left.
+//
+// The turns after the landing are a future this machine no longer has, and a
+// turn the landing stopped part way is now a turn that stopped there, as one a
+// breakpoint stops; checkpoints after the landing are dropped for the same
+// reason, because resuming a cut frame need not retrace the frame that ran
+// whole. Without it the next step back would replay the abandoned future and
+// arrive somewhere other than the present. A landing that cuts nothing leaves
+// the ring as it was: the future after it is still the one recorded.
+func (t *timeTravelBuffer) rewriteHistory(cp *ttEntry, ran []ttFrame, at replayPoint) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	keep := cp.frame - t.framesBase
+	if keep < 0 {
+		keep = 0
+	}
+	if keep > len(t.frames) {
+		keep = len(t.frames)
+	}
+	old := t.frames[keep:]
+	changed := len(ran) != len(old)
+	if !changed && len(ran) > 0 {
+		last := len(ran) - 1
+		changed = ran[last].stopped != old[last].stopped || ran[last].end != old[last].end
+	}
+	if !changed {
+		// The landing is on the recorded history, between turns or on a
+		// turn's end, and the future after it is still the one it had.
+		return
+	}
+	t.frames = append(t.frames[:keep], ran...)
+	kept := t.entries[:0]
+	for _, e := range t.entries {
+		ahead := e.insn > at.insn || (e.insn == at.insn && e.tstates > at.tstates)
+		if !ahead && e.frame <= t.framesBase+len(t.frames) {
+			kept = append(kept, e)
+		}
+	}
+	t.entries = kept
+}
+
+// walk restores the checkpoint and re-executes forward, one instant at a time,
+// until it reaches now or, when stop is not negative, the instant at index stop
+// (index 0 is the checkpoint). It returns the instants passed.
+//
+// The machine is driven the way it was driven the first time. The frame-loop
+// turns the ring recorded after the checkpoint are re-run as turns, and the
+// spans between them, which nothing recorded, are stepped as the debugger
+// steps. Within a turn, every instruction boundary the frame passes is an
+// instant, the boundary a breakpoint could have stopped it at; stopping the
+// walk at one stops that frame there, as a breakpoint would, and lets the turn
+// finish its per-frame work. The end of a turn is an instant too.
+//
+// It also returns the turns it ran, the last of them cut short where the walk
+// stopped inside it, which is the history of the machine it leaves.
+func (t *timeTravelBuffer) walk(cp *ttEntry, now replayPoint, stop int) ([]replayPoint, []ttFrame, error) {
 	if err := t.restoreLocked(cp); err != nil {
-		return nil, fmt.Errorf("replay-back: restoring the checkpoint at instruction %d: %w", cp.insn, err)
+		return nil, nil, fmt.Errorf("replay-back: restoring the checkpoint at instruction %d: %w", cp.insn, err)
 	}
 	start := t.here()
 	if start != (replayPoint{tstates: cp.tstates, insn: cp.insn}) {
 		// The ring's idea of where this checkpoint sits decided it was usable.
 		// If restoring it lands somewhere else, the two disagree and every
 		// judgement built on the ring's copy is unsound.
-		return nil, fmt.Errorf("replay-back: the checkpoint recorded as instruction %d, T-state %d "+
+		return nil, nil, fmt.Errorf("replay-back: the checkpoint recorded as instruction %d, T-state %d "+
 			"restores as instruction %d, T-state %d", cp.insn, cp.tstates, start.insn, start.tstates)
 	}
-
-	// Every step advances the T-state counter by at least the four a halted M1
-	// cycle costs, so this bounds the walk without assuming anything about what
-	// the guest does inside it. A checkpoint taken at the present walks zero
-	// steps rather than one: stepping "to where we already are" would overshoot
-	// and be reported as a divergence.
-	budget := (now.tstates-start.tstates)/4 + 2
 	points := []replayPoint{start}
-	for points[len(points)-1].tstates < now.tstates {
-		if uint64(len(points)) > budget {
-			return nil, fmt.Errorf("replay-back: the walk from instruction %d ran past %d steps "+
-				"without reaching the present at T-state %d", cp.insn, budget, now.tstates)
-		}
-		t.replayStep()
-		points = append(points, t.here())
+	if stop == 0 {
+		return points, nil, nil
 	}
-
-	landed := points[len(points)-1]
-	if landed != now {
-		return nil, fmt.Errorf("replay-back: replaying from instruction %d arrived at instruction %d "+
+	var ran []ttFrame
+	done := false
+	for _, f := range t.framesFrom(cp.frame) {
+		if points, done = t.stepTo(points, f.start, stop); done {
+			return points, ran, nil
+		}
+		if t.here() != f.start {
+			return nil, nil, fmt.Errorf("replay-back: stepping from the checkpoint at instruction %d "+
+				"did not arrive at the frame recorded at instruction %d (T-state %d); it is at "+
+				"instruction %d (T-state %d)", cp.insn, f.start.insn, f.start.tstates, t.here().insn, t.here().tstates)
+		}
+		var cut bool
+		if points, cut, done = t.replayFrame(points, f, stop); done {
+			if cut {
+				f.stopped, f.end = true, t.here()
+			}
+			return points, append(ran, f), nil
+		}
+		if t.here() != f.end {
+			return nil, nil, fmt.Errorf("replay-back: re-running the frame recorded at instruction %d "+
+				"ended at instruction %d (T-state %d), not where it ended the first time, "+
+				"instruction %d (T-state %d)", f.start.insn, t.here().insn, t.here().tstates, f.end.insn, f.end.tstates)
+		}
+		ran = append(ran, f)
+	}
+	if points, done = t.stepTo(points, now, stop); done {
+		return points, ran, nil
+	}
+	if landed := t.here(); landed != now {
+		return nil, nil, fmt.Errorf("replay-back: replaying from instruction %d arrived at instruction %d "+
 			"(T-state %d) instead of the present's instruction %d (T-state %d)",
 			cp.insn, landed.insn, landed.tstates, now.insn, now.tstates)
 	}
-	if got := reg.Capture(); !bytes.Equal(got.Bytes(), present.Bytes()) {
-		return nil, fmt.Errorf("replay-back: re-executing from the checkpoint at instruction %d "+
-			"reached the present instruction but produced a DIFFERENT machine, so no instant on "+
-			"the way there can be trusted either. Either the window was advanced by the frame "+
-			"loop's bulk driver, which replay does not reproduce, or something outside the CPU "+
-			"changed the machine inside it (a write-memory, a key press, a disk arriving) and "+
-			"does not happen again on the way back", cp.insn)
-	}
-	return points, nil
+	return points, ran, nil
 }
 
-// landOn re-runs the checkpoint forward by exactly steps instruction
-// boundaries and requires the machine to be at want.
+// stepTo single-steps until the machine is at to, recording each instant, and
+// reports whether it reached the instant at index stop on the way.
 //
-// The assertion is the point. Stopping when the instruction counter first
-// reaches a value would land on the first boundary carrying it, which for a
-// halted CPU or a repeated counter value is a different instant with the same
-// number on it.
-func (t *timeTravelBuffer) landOn(reg *machinestate.Registry, cp *ttEntry, steps int, want replayPoint) error {
-	if err := t.restoreLocked(cp); err != nil {
-		return fmt.Errorf("replay-back: restoring the checkpoint at instruction %d: %w", cp.insn, err)
-	}
-	for i := 0; i < steps; i++ {
+// Every step advances the T-state counter by at least the four a halted M1
+// cycle costs, and nothing in a stepped span rewinds it, so this stops as soon
+// as the counter reaches to's. A walk that is already there takes no step:
+// stepping "to where we already are" would overshoot and be reported as a
+// divergence.
+func (t *timeTravelBuffer) stepTo(points []replayPoint, to replayPoint, stop int) ([]replayPoint, bool) {
+	for t.here() != to && t.here().tstates < to.tstates {
 		t.replayStep()
+		points = append(points, t.here())
+		if stop == len(points)-1 {
+			return points, true
+		}
 	}
-	if got := t.here(); got != want {
-		return fmt.Errorf("replay-back: %d steps from the checkpoint at instruction %d landed on "+
-			"instruction %d (T-state %d), not the instruction %d (T-state %d) the same walk "+
-			"reached a moment ago — execution is not reproducible from this checkpoint",
-			steps, cp.insn, got.insn, got.tstates, want.insn, want.tstates)
+	return points, false
+}
+
+// replayFrame re-runs one recorded turn, recording an instant at every
+// instruction boundary its frame passes and one at its end, and stops the frame
+// at the instant at index stop if that falls inside it.
+//
+// The frame is run with the ring's own BreakpointCheck in place of the
+// debugger's, which must neither stop the replay where the user set a
+// breakpoint nor log tracepoints a second time, and with the ULA holding its
+// audio back from the host, which has already played this frame.
+//
+// It reports whether the walk stopped the frame part way (cut) and whether it
+// reached the instant at index stop (done).
+func (t *timeTravelBuffer) replayFrame(points []replayPoint, f ttFrame, stop int) (out []replayPoint, cut, done bool) {
+	cpu := t.emu.cpu
+	saved := cpu.BreakpointCheck
+	reached := false
+	cpu.BreakpointCheck = func(uint16) bool {
+		at := t.here()
+		if f.stopped && at == f.end {
+			return true // where the breakpoint stopped it the first time
+		}
+		points = append(points, at)
+		if stop == len(points)-1 {
+			reached = true
+			return true
+		}
+		return false
 	}
-	return nil
+	if t.emu.ula != nil {
+		t.emu.ula.HoldAudio(true)
+	}
+	t.replaying = true
+	f.run()
+	t.replaying = false
+	if t.emu.ula != nil {
+		t.emu.ula.HoldAudio(false)
+	}
+	cpu.BreakpointCheck = saved
+	if reached {
+		return points, true, true
+	}
+	points = append(points, t.here())
+	return points, false, stop == len(points)-1
 }
 
 // replayStep advances one instruction boundary, with checkpoint capture

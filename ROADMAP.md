@@ -645,8 +645,31 @@ computes both operands eagerly — it is that the check costs nothing.
 The time-travel ring captures through the registry, so a rewind returns every
 registered device rather than the CPU and the visible 64 K. Every disk
 interface the emulator offers is now captured, the +D and the Opus Discovery
-included. The ring still holds 16 captures by default, so the reachable window
-is short; `replay-back` is what reaches an exact instruction inside it.
+included. `replay-back` is what reaches an exact instruction inside it.
+
+**The window is open, 2026-11-24.** Two limits kept it short, and both are gone.
+
+- **A machine that had been running could not be stepped back into.** Replay
+  re-ran every span with the single-step driver, and the frame loop's
+  `ExecuteFrame` rebases the T-state counter at each frame end, raises the frame
+  interrupt on its own schedule, and is followed by the GUI loop's render, which
+  moves the ULA's and the Next's own state. The ring now records each frame-loop
+  turn (`timeTravelBuffer.runFrame`, from both the GUI and headless loops) and
+  replays it with the same code, the debugger's breakpoints swapped out and the
+  audio held back from the host. Every instruction boundary inside a frame is an
+  instant replay can land on, leaving the machine as a breakpoint there would;
+  checkpoints are taken at frame starts. A landing that cuts a frame rewrites
+  the ring's history to match. `TestReplayStepBackReachesIntoFramesTheLoopRan`
+  lands on a frame end the live run passed through, byte for byte, on the 48K,
+  128K, +3 and Next, through both loops.
+- **Sixteen checkpoints, each a whole machine.** Consecutive checkpoints now
+  share every 4 KB piece of state neither changed (`machinestate.ShareWith`):
+  64 checkpoints of a Next running a busy guest hold 4.5 MB against 149 MB
+  unshared. The default ring is 256.
+
+Still refused, by the proof pass: a tape turbo burst (several frames per tick),
+RZX, the SAM Coupe and ZX80/ZX81 frame drivers, and any input from outside the
+machine inside the window.
 
 `pkg/machinestate` is the registry the complete capture is built on: named
 devices, a device-set check in both directions before anything is applied, and
@@ -695,7 +718,8 @@ canonical ordering so two captures of an unchanged machine compare equal.
   guessed at: a span the frame loop ran through `ExecuteFrame` (it rebases the
   T-state counter every frame and schedules the frame INT differently from the
   single-step path), and any change made from outside the CPU during the window
-  (`write-memory`, a key press, a disk arriving).
+  (`write-memory`, a key press, a disk arriving). The first is now replayed as
+  recorded turns; see "The window is open" above.
 
 ### 8. [research] Core 3.03 hardware behaviour is not modelled
 

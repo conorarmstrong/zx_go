@@ -1183,6 +1183,11 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 // a LoadState, which ClockGeneration reports.
 func (c *CPU) Clock() uint64 { return c.clockBase + c.tstates }
 
+// FrameEpoch counts completed frames and other clock discontinuities: it
+// moves when ExecuteFrame finishes a frame (not when a breakpoint stops it part
+// way) and on every Reset and LoadState.
+func (c *CPU) FrameEpoch() uint64 { return c.frameEpoch }
+
 // ClockGeneration changes on every Reset and LoadState, the points where
 // Clock jumps arbitrarily.
 func (c *CPU) ClockGeneration() uint64 { return c.clockGen }

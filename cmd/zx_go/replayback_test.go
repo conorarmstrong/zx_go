@@ -229,33 +229,36 @@ func TestReplayStepBackRefusesANonPositiveDistance(t *testing.T) {
 	}
 }
 
-// Replay follows the debugger's single-step driver. The frame loop's bulk
-// driver is a different timeline — it rebases the T-state counter at every
-// frame end and asserts the frame interrupt on its own schedule — so a span the
-// machine ran in bulk does not come back the same way.
-//
-// The requirement is not that replay handle it. It is that replay NOTICE, and
-// say so, instead of handing back a machine that never existed. The proof pass
-// is what notices: it re-runs the window to the present and compares.
-func TestReplayStepBackRefusesASpanTheFrameLoopRanInBulk(t *testing.T) {
+// A window the debugger stepped and the frame loop then ran is replayed the
+// way it was driven: the steps stepped, the frames re-run as recorded turns.
+// Stepping back to the instant between the two must return the machine the
+// live run passed through there.
+func TestReplayStepBackCrossesFromFramesIntoSteps(t *testing.T) {
 	emu, tt := armReplayFixture(t, roms.Model128K, 200, 8)
 	for i := 0; i < 600; i++ {
 		emu.cpu.StepInstructionWithIRQ()
 	}
+	reg := emu.stateRegistry()
+	passed := reg.Capture()
+	passedAt := emu.cpu.InstructionCount()
+
+	calls := 0
+	emu.cpu.BreakpointCheck = func(uint16) bool { calls++; return false }
 	for i := 0; i < 3; i++ {
 		runOneFrameHeadless(emu, roms.Model128K)
 	}
+	emu.cpu.BreakpointCheck = nil
 
-	reg := emu.stateRegistry()
-	present := reg.Capture()
-
-	landed, err := tt.replayBack(1)
-	if err == nil {
-		t.Fatalf("a bulk-driven span replayed as if it were reproducible, landing at %d", landed)
+	// Each frame's boundaries are instants, and so is each frame's end.
+	landed, err := tt.replayBack(calls + 3)
+	if err != nil {
+		t.Fatalf("replay-back across three recorded frames: %v", err)
 	}
-	t.Logf("refused, as it must be: %v", err)
-	if got := reg.Capture(); !bytes.Equal(got.Bytes(), present.Bytes()) {
-		t.Error("a refused step back left the machine somewhere other than the present")
+	if landed != passedAt {
+		t.Errorf("landed on instruction %d, want %d", landed, passedAt)
+	}
+	if got := reg.Capture(); !bytes.Equal(got.Bytes(), passed.Bytes()) {
+		t.Error("replay landed on the instruction but not on the machine the live run passed through")
 	}
 }
 
@@ -332,8 +335,8 @@ func TestReplayLandingSomewhereElseIsAnError(t *testing.T) {
 		t.Fatal("no checkpoint to replay from")
 	}
 
-	reg := emu.stateRegistry()
-	err := tt.landOn(reg, cp, 5, replayPoint{tstates: 1, insn: 1})
+	now := replayPoint{tstates: emu.cpu.Tstates(), insn: emu.cpu.InstructionCount()}
+	err := tt.landOn(cp, now, 5, replayPoint{tstates: 1, insn: 1})
 	if err == nil {
 		t.Fatal("landing five steps from the checkpoint was accepted as arriving at " +
 			"instruction 1, T-state 1")

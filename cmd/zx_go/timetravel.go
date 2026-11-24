@@ -40,6 +40,32 @@ type ttEntry struct {
 	// $10FB/$14AB-style address can't be mis-attributed to the wrong
 	// ROM. Empty on machines whose state is unavailable.
 	bankCtx string
+	// frame is the index (in timeTravelBuffer.frames numbering) of the first
+	// frame-loop turn recorded after this checkpoint. A replay from here
+	// re-runs the turns from that index on.
+	frame int
+}
+
+// ttFrame is one turn of the frame loop as the ring recorded it.
+//
+// A turn is the frame and whatever per-frame work the loop does to the machine
+// after it: the GUI loop renders, which moves the ULA's per-frame state and, on
+// the Next, steps the Copper and replays the raster journal. None of that is
+// reproduced by stepping instructions, so a span the frame loop ran is replayed
+// by calling the same turn again.
+type ttFrame struct {
+	start replayPoint
+	// run is the turn itself. It must touch only the machine, so that calling
+	// it again from the same machine state does the same thing; work driven
+	// from outside the machine stays out of it, or is skipped while the ring
+	// is replaying (see emulator.frameTail).
+	run func()
+	// stopped records that a breakpoint ended the frame part way, as the
+	// debugger stops one. The loop's per-frame work still ran after it.
+	stopped bool
+	// end is where the CPU stood after the turn: the frame's end, or the
+	// instruction boundary the breakpoint stopped it at.
+	end replayPoint
 }
 
 // captureBankContext builds the compact paging-context string stored
@@ -187,7 +213,27 @@ type timeTravelBuffer struct {
 	// under coreMu — the walk holds it for its whole length, and the
 	// hook only ever runs from inside a frame, which also holds it.
 	replaying bool
+
+	// frames are the frame-loop turns recorded since the oldest checkpoint;
+	// framesBase is the index of frames[0], so a checkpoint's frame index
+	// survives the eviction of older turns.
+	frames     []ttFrame
+	framesBase int
+	// inFrame is set while a recorded turn runs. A checkpoint taken part way
+	// through a frame could not start a replay of the rest of it, so the
+	// pre-fetch hook only marks one due (captureDue) and runFrame takes it at
+	// the start of the next turn.
+	inFrame    bool
+	captureDue bool
 }
+
+// The ring's defaults for `tt-on` with no arguments and for --time-travel-keep.
+// Consecutive checkpoints share the memory neither changed, so 256 of them on a
+// Next running a busy guest hold a few megabytes rather than 256 whole machines.
+const (
+	defaultTimeTravelEvery = 50000
+	defaultTimeTravelKeep  = 256
+)
 
 // newTimeTravelBuffer constructs the ring. Returns nil if
 // everyInsns/maxEntries are not sensible.
@@ -223,8 +269,50 @@ func (t *timeTravelBuffer) Step(_ uint16) {
 	if insns < t.nextCapture {
 		return
 	}
+	if t.inFrame {
+		t.captureDue = true
+		return
+	}
 	t.capture("", insns)
 	t.nextCapture = insns + uint64(t.everyInsns)
+}
+
+// runFrame runs one turn of the frame loop and records it, taking a checkpoint
+// first if one is due. run must be the whole turn as it reaches the machine:
+// see ttFrame.
+func (t *timeTravelBuffer) runFrame(run func()) {
+	if t.replaying {
+		run()
+		return
+	}
+	cpu := t.emu.cpu
+	if insns := cpu.InstructionCount(); t.captureDue || insns >= t.nextCapture {
+		t.capture("", insns)
+		t.captureDue = false
+		t.nextCapture = insns + uint64(t.everyInsns)
+	}
+	start := t.here()
+	epoch := cpu.FrameEpoch()
+	t.inFrame = true
+	run()
+	t.inFrame = false
+	f := ttFrame{start: start, run: run, stopped: cpu.FrameEpoch() == epoch, end: t.here()}
+	t.mu.Lock()
+	t.frames = append(t.frames, f)
+	t.mu.Unlock()
+}
+
+// framesFrom returns the recorded turns from index i on.
+func (t *timeTravelBuffer) framesFrom(i int) []ttFrame {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if i < t.framesBase {
+		i = t.framesBase
+	}
+	if i-t.framesBase >= len(t.frames) {
+		return nil
+	}
+	return append([]ttFrame(nil), t.frames[i-t.framesBase:]...)
 }
 
 // capture takes a complete machine state and pushes it into the ring.
@@ -241,16 +329,24 @@ func (t *timeTravelBuffer) capture(label string, insn uint64) {
 	if reg.Len() == 0 {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Consecutive captures share every 4 KB piece neither changed, so the
+	// ring costs the memory the machine wrote between captures, not a whole
+	// machine per entry.
+	var prev machinestate.State
+	if n := len(t.entries); n > 0 {
+		prev = t.entries[n-1].state
+	}
 	e := ttEntry{
 		insn:    insn,
 		tstates: t.emu.cpu.Tstates(),
 		pc:      t.emu.cpu.PC,
 		label:   label,
-		state:   reg.Capture(),
+		state:   reg.Capture().ShareWith(prev),
 		bankCtx: captureBankContext(t.emu),
+		frame:   t.framesBase + len(t.frames),
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	if len(t.entries) >= t.maxEntries {
 		// Drop the oldest. copy is fine for the modest ring sizes
 		// we expect (≤64 typical); the snapshots themselves are
@@ -258,6 +354,11 @@ func (t *timeTravelBuffer) capture(label string, insn uint64) {
 		t.entries = append(t.entries[:0], t.entries[1:]...)
 	}
 	t.entries = append(t.entries, e)
+	// Turns recorded before the oldest checkpoint can never be replayed.
+	if drop := t.entries[0].frame - t.framesBase; drop > 0 {
+		t.frames = append(t.frames[:0], t.frames[drop:]...)
+		t.framesBase += drop
+	}
 }
 
 // Snapshots returns a copy of the current ring (oldest first) so
@@ -333,6 +434,20 @@ func (t *timeTravelBuffer) Clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.entries = nil
+	t.framesBase += len(t.frames)
+	t.frames = nil
+}
+
+// HeldBytes is the memory the ring's checkpoints hold, a piece shared between
+// consecutive checkpoints counted once.
+func (t *timeTravelBuffer) HeldBytes() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	states := make([]machinestate.State, len(t.entries))
+	for i, e := range t.entries {
+		states[i] = e.state
+	}
+	return machinestate.HeldBytes(states...)
 }
 
 // Len reports the current ring depth. Race-tolerant — value may

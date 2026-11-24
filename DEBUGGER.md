@@ -320,11 +320,14 @@ That completeness is what makes the checkpoints replayable, which is
 what `replay-back` below is built on.
 
 **Granularity** is the checkpoint interval, not the instruction: you
-land on the nearest capture at or before your target. **Depth** is the
-ring size, 16 captures by default, so the reachable window is well under
-a second of Z80 time at the low end of the suggested interval. Each
-entry holds the machine's whole RAM pool, so a deep ring on a Next costs
-`KEEP × ~2 MB`.
+land on the nearest capture at or before your target, and `replay-back`
+reaches any instruction in between. **Depth** is the ring size, 256
+captures by default, about 12.8 million instructions at the default
+interval. Each entry is the whole machine, but consecutive entries share
+every 4 KB piece of state neither changed, so the ring costs what the
+guest writes between captures: 64 captures of a Next running a busy
+guest hold about 4.5 MB, against 149 MB unshared. `tt-status` reports
+the figure as `held=`.
 
 ### Replay step-back (`replay-back`)
 
@@ -339,22 +342,32 @@ oldest checkpoint. The cost per step back is one walk of the checkpoint
 interval, so a smaller `EVERY` makes it quicker and a larger one makes
 the ring reach further.
 
-**What it refuses, and why it has to.** Replay drives the CPU with the
-same single-step path the debugger's own `step` uses. Before handing
-back an instant, it re-runs the window all the way to the present and
-compares the machine it produced against the machine that was there,
-device by device. If they differ, the step back is refused and the
-present is put back, because a window replay cannot reproduce contains
-no instant replay can be trusted to produce. Two things cause that:
+**It replays the machine the way it was driven.** Spans you stepped are
+re-stepped with the path the debugger's own `step` uses. Spans the frame
+loop ran with `continue` are re-run frame by frame with the same code the
+loop ran, including the per-frame work after each frame (the render, and
+on the Next the Copper and the raster journal), so a machine that has
+simply been running can be stepped back into. Inside a frame, every
+instruction boundary is an instant you can land on, and landing there
+leaves the machine as a breakpoint at that instruction would have; the
+end of each frame is an instant too. Checkpoints are taken at frame
+starts while the frame loop runs. Audio is not replayed to the speaker.
 
-> **The frame loop's bulk driver.** `continue` runs whole frames through
-> `ExecuteFrame`, which rebases the T-state counter at every frame end
-> and asserts the frame interrupt on its own schedule. A span run that
-> way is a different timeline, and replay says so instead of guessing.
+**What it refuses, and why it has to.** Before handing back an instant,
+replay re-runs the window all the way to the present and compares the
+machine it produced against the machine that was there, device by
+device. If they differ, the step back is refused and the present is put
+back, because a window replay cannot reproduce contains no instant
+replay can be trusted to produce. Two things cause that:
+
+> **A driver the ring did not record.** A tape turbo burst (several
+> frames per tick while fast loading), RZX playback or recording, and
+> the SAM Coupe and ZX80/ZX81, which run their own frame drivers.
 >
 > **Anything that changed the machine from outside the CPU** during the
-> window — a `write-memory`, a key press, a disk arriving. It did not
-> come from the checkpoint and does not happen again on the way back.
+> window — a `write-memory`, a key press, a disk arriving, the NEXLOAD
+> macro typing, a CPU speed override. It did not come from the
+> checkpoint and does not happen again on the way back.
 
 Both are honest limits of "re-execute and see", not defects to work
 around: the alternative is a machine at the right instruction with one
@@ -630,13 +643,15 @@ A capture is refused on restore if the machine's device set has changed
 since (a disk mounted, a Multiface attached): rewinding everything
 except the new controller would leave it mid-command.
 
-Cost: an entry holds the whole pool, so the ring is roughly
-`KEEP × 128 KB` on classic models and `KEEP × 2 MB` on the Next (logged
-at startup); lower `--time-travel-keep` if memory is tight.
+Cost: an entry is the whole machine, but consecutive entries share the
+memory neither changed, so the ring costs roughly what the guest writes
+between captures. `tt-status` reports it as `held=`; lower
+`--time-travel-keep` if a guest that rewrites most of its memory makes
+it large.
 
 | Command | Aliases | Purpose |
 | --- | --- | --- |
-| `tt-on [EVERY [KEEP]]` | — | Install the buffer. `EVERY` is the instruction interval between auto-captures (default 50000); `KEEP` is the ring depth (default 16). Memory budget ≈ `KEEP × 128 KB` on classic models, ≈ `KEEP × 2 MB` on the Next. `EVERY` is also the distance `replay-back` may have to re-execute per step, so lower it if you intend to step backwards a lot. The pre-fetch hook fires inline with the CPU; cost per fetch is one uint64 compare. |
+| `tt-on [EVERY [KEEP]]` | — | Install the buffer. `EVERY` is the instruction interval between auto-captures (default 50000); `KEEP` is the ring depth (default 256). Consecutive checkpoints share unchanged memory, so the ring costs what the guest writes between captures; `tt-status` reports it as `held=`. `EVERY` is also the distance `replay-back` may have to re-execute per step, so lower it if you intend to step backwards a lot. The pre-fetch hook fires inline with the CPU; cost per fetch is one uint64 compare. |
 | `tt-off` | — | Remove the hook and drop the ring. |
 | `tt-status` | `tt` | List ring contents: insn count + PC + optional label + **bank/paging context** per entry (`rom=N slots=… dmmc:paged/automap/mapram`). The bank context is captured per entry so a trace can't mis-attribute a PC to the wrong ROM/bank. It is informational — what a rewind applies is the machine state itself. |
 | `tt-snap [LABEL]` | — | Force an immediate manual capture, optionally tagged. |

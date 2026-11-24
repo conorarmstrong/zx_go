@@ -287,6 +287,10 @@ type ULA struct {
 	// rather than in renderNext: a MOVE begun on the frame's last
 	// clock is paid for out of the next frame's first column.
 	copperDebt int
+	// audioHeld keeps a frame's samples from the host while the frame is
+	// still synthesised, so every generator advances as it would. Replay
+	// re-runs frames the user has already heard.
+	audioHeld bool
 	// nextLayerCacheOff makes every Copper write re-render the row's layers,
 	// as before the cache existed. Tests compare the two paths with it.
 	nextLayerCacheOff bool
@@ -638,6 +642,11 @@ func (u *ULA) SetNextI2C(b NextI2C) { u.nextI2C = b }
 // affecting palette / Layer 2 state are visible to that row's
 // composition. Passing nil unhooks.
 func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
+
+// HoldAudio keeps rendered frames' audio from the host (on) or sends it (off,
+// the default). The frame's audio is synthesised either way, so the machine
+// advances identically; only the push to the audio device is skipped.
+func (u *ULA) HoldAudio(on bool) { u.audioHeld = on }
 
 // SetNextLayerCache turns the compositor's per-row layer cache on (the
 // default) or off. Off, every Copper write re-renders the row's layers.
@@ -2494,13 +2503,18 @@ func (u *ULA) flushAudioFrame() {
 		u.frameStartTapeState = false
 		u.frameStartSpeakerState = u.Speaker
 		u.dc.Reset()
-		u.audio.PushBeeperSamples(make([]int16, audio.SamplesPerFrame))
+		if !u.audioHeld {
+			u.audio.PushBeeperSamples(make([]int16, audio.SamplesPerFrame))
+		}
 		if u.mem.TStates != nil {
 			u.frameStartTstate = *u.mem.TStates
 		}
 		return
 	}
-	u.audio.PushStereoSamples(u.mixAudioFrame())
+	samples := u.mixAudioFrame()
+	if !u.audioHeld {
+		u.audio.PushStereoSamples(samples)
+	}
 	if u.mem.TStates != nil {
 		u.frameStartTstate = *u.mem.TStates
 	}

@@ -6,6 +6,18 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Step back into a machine that has been running.** `replay-back` used to
+  refuse any span the frame loop had run, so it only worked after
+  single-stepping. The time-travel ring now records each frame the loop runs
+  and replays it with the same code, render included, so you can run a game,
+  stop it and step back instruction by instruction, memory and all.
+- **A much deeper time-travel ring for the same memory.** Consecutive
+  checkpoints share every piece of state that did not change between them, so
+  64 checkpoints of a busy Next hold 4.5 MB instead of 149 MB. The default ring
+  is now 256 checkpoints, up from 16, and `tt-status` reports the memory held.
+
 ### Fixed
 
 - **A RETI now releases its interrupt when a higher-priority one is waiting.**

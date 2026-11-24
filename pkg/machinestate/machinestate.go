@@ -64,6 +64,7 @@
 package machinestate
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"sort"
@@ -92,6 +93,96 @@ type State struct {
 type entry struct {
 	id   string
 	blob []byte
+	// chunks, when set, holds the blob instead, in shareChunk pieces that may
+	// be shared with an earlier capture (see ShareWith). blob is then nil.
+	chunks [][]byte
+}
+
+// shareChunk is the piece size ShareWith compares and shares.
+const shareChunk = 4096
+
+// data returns the device's state bytes.
+func (e entry) data() []byte {
+	if e.chunks == nil {
+		return e.blob
+	}
+	out := make([]byte, 0, e.size())
+	for _, c := range e.chunks {
+		out = append(out, c...)
+	}
+	return out
+}
+
+// size is len(data()) without assembling it.
+func (e entry) size() int {
+	if e.chunks == nil {
+		return len(e.blob)
+	}
+	n := 0
+	for _, c := range e.chunks {
+		n += len(c)
+	}
+	return n
+}
+
+// HeldBytes reports the memory the states hold between them, counting a piece
+// shared by several of them once.
+func HeldBytes(states ...State) int {
+	seen := make(map[*byte]bool)
+	n := 0
+	for _, s := range states {
+		for _, e := range s.entries {
+			if e.chunks == nil {
+				n += len(e.blob)
+				continue
+			}
+			for _, c := range e.chunks {
+				if len(c) == 0 || seen[&c[0]] {
+					continue
+				}
+				seen[&c[0]] = true
+				n += len(c)
+			}
+		}
+	}
+	return n
+}
+
+// ShareWith returns s with every shareChunk piece of a device's state that is
+// identical to the same piece of the same device in prev held as prev's copy,
+// and every other piece in its own allocation. A ring of consecutive captures
+// built this way costs the memory that changed between them, not the machine
+// per capture. The bytes, the size and what a restore applies are unchanged.
+// prev may be the zero State.
+func (s State) ShareWith(prev State) State {
+	byID := make(map[string]entry, len(prev.entries))
+	for _, e := range prev.entries {
+		byID[e.id] = e
+	}
+	out := State{entries: make([]entry, len(s.entries))}
+	for i, e := range s.entries {
+		src := e.data()
+		p := byID[e.id]
+		var old [][]byte
+		if p.chunks != nil && p.size() == len(src) {
+			old = p.chunks
+		}
+		n := (len(src) + shareChunk - 1) / shareChunk
+		chunks := make([][]byte, n)
+		for k := 0; k < n; k++ {
+			lo, hi := k*shareChunk, min((k+1)*shareChunk, len(src))
+			if k < len(old) && bytes.Equal(old[k], src[lo:hi]) {
+				chunks[k] = old[k]
+				continue
+			}
+			chunks[k] = append([]byte(nil), src[lo:hi]...)
+		}
+		if n == 0 {
+			chunks = [][]byte{}
+		}
+		out.entries[i] = entry{id: e.id, chunks: chunks}
+	}
+	return out
 }
 
 // Bytes is the canonical encoding, and two states compare equal exactly when
@@ -102,7 +193,7 @@ type entry struct {
 func (s State) Bytes() []byte {
 	n := 0
 	for _, e := range s.entries {
-		n += 8 + len(e.id) + len(e.blob)
+		n += 8 + len(e.id) + e.size()
 	}
 	out := make([]byte, 0, n)
 	var hdr [4]byte
@@ -110,9 +201,15 @@ func (s State) Bytes() []byte {
 		binary.BigEndian.PutUint32(hdr[:], uint32(len(e.id)))
 		out = append(out, hdr[:]...)
 		out = append(out, e.id...)
-		binary.BigEndian.PutUint32(hdr[:], uint32(len(e.blob)))
+		binary.BigEndian.PutUint32(hdr[:], uint32(e.size()))
 		out = append(out, hdr[:]...)
-		out = append(out, e.blob...)
+		if e.chunks == nil {
+			out = append(out, e.blob...)
+		} else {
+			for _, c := range e.chunks {
+				out = append(out, c...)
+			}
+		}
 	}
 	return out
 }
@@ -126,7 +223,7 @@ func (s State) Bytes() []byte {
 func (s State) Size() int {
 	n := 0
 	for _, e := range s.entries {
-		n += 8 + len(e.id) + len(e.blob)
+		n += 8 + len(e.id) + e.size()
 	}
 	return n
 }
@@ -211,7 +308,7 @@ func (r *Registry) Restore(s State) error {
 
 	rollback := r.Capture()
 	for i, e := range s.entries {
-		if err := r.devices[e.id].LoadState(e.blob); err != nil {
+		if err := r.devices[e.id].LoadState(e.data()); err != nil {
 			// i+1, not i: the device that FAILED is unwound too. A device is
 			// entitled to mutate itself before discovering the state is bad,
 			// and one that does would otherwise keep its half-applied bytes
@@ -234,7 +331,7 @@ func (r *Registry) Restore(s State) error {
 func (r *Registry) rollback(prev State, n int) error {
 	for i := 0; i < n && i < len(prev.entries); i++ {
 		e := prev.entries[i]
-		if err := r.devices[e.id].LoadState(e.blob); err != nil {
+		if err := r.devices[e.id].LoadState(e.data()); err != nil {
 			return fmt.Errorf("device %q: %w", e.id, err)
 		}
 	}

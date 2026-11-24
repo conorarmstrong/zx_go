@@ -42,8 +42,8 @@ func (d *remoteDebugger) ttStatus() string {
 	tt := d.emu.timeTravel
 	entries := tt.Snapshots()
 	var b strings.Builder
-	fmt.Fprintf(&b, "OK time-travel on every=%d keep=%d entries=%d",
-		tt.everyInsns, tt.maxEntries, len(entries))
+	fmt.Fprintf(&b, "OK time-travel on every=%d keep=%d entries=%d held=%dKB",
+		tt.everyInsns, tt.maxEntries, len(entries), tt.HeldBytes()/1024)
 	for _, e := range entries {
 		fmt.Fprintf(&b, "\r\n  insn=%d  PC=$%04X", e.insn, e.pc)
 		if e.label != "" {
@@ -57,9 +57,8 @@ func (d *remoteDebugger) ttStatus() string {
 }
 
 func (d *remoteDebugger) ttOn(args []string) string {
-	// Defaults: every 50,000 insns, keep 16 snapshots.
-	everyInsns := 50000
-	keep := 16
+	everyInsns := defaultTimeTravelEvery
+	keep := defaultTimeTravelKeep
 	if len(args) >= 1 {
 		var v int
 		if _, err := fmt.Sscanf(args[0], "%d", &v); err == nil && v > 0 {

@@ -1389,6 +1389,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					}
 					// Execution paths: ZX80/ZX81 (CPU-generated video),
 					// RZX playback, RZX recording, or normal frame.
+					var newImage *image.RGBA
 					switch {
 					case e.zx8x != nil:
 						e.zx8x.RunFrame()
@@ -1477,7 +1478,13 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 							if e.ula != nil {
 								before = e.ula.FEReadCount()
 							}
-							e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
+							if n == 1 {
+								// One frame and its per-frame work, as one turn
+								// the time-travel ring can record and replay.
+								newImage = e.runGUIFrame()
+							} else {
+								e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
+							}
 							if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
 								heavyReads = true
 							}
@@ -1516,32 +1523,14 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 
 					frameCount++
 					atomic.AddInt32(&e.frameCounter, 1)
-					// Advance the typed-character symbol pulse (no-op when idle).
-					if e.kbd != nil {
-						e.kbd.Tick()
-					}
-					if e.peripherals != nil {
-						e.peripherals.Frame()
-					}
-
-					// Advance the NextZXOS .nexload driver (File -> Open),
-					// one step per executed frame; keys it presses are seen
-					// by the next frame's keyboard scan.
-					if e.nexloadMacro != nil {
-						if e.nexloadMacro.tick(e) {
-							e.nexloadMacro = nil
-						}
-					}
-
-					// Enforce the user's CPU-speed override (no-op when Auto or
-					// still loading) — see applyForcedCPUSpeed.
-					e.applyForcedCPUSpeed()
-
 					// Render every frame the pacer runs. Each render also
 					// pushes the frame's audio, so a wall-clock gate here
 					// dropped about a third of the audio frames to timer
-					// jitter (issue #12).
-					newImage := e.renderFrame()
+					// jitter (issue #12). A single-frame turn of the normal
+					// path has done this already, inside runGUIFrame.
+					if newImage == nil {
+						newImage = e.frameTail()
+					}
 
 					// In plain mode, screen.Image already points at the
 					// ULA's frame buffer (set at startup) and Render
@@ -1586,6 +1575,55 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 			}
 		}
 	}()
+}
+
+// frameTail is the GUI loop's per-frame work after a frame, the part of it
+// that reaches the machine, and returns the rendered picture.
+//
+// While the time-travel ring replays a recorded turn, the work driven from
+// outside the machine is skipped: the NEXLOAD macro's keystrokes and the user's
+// CPU-speed override are inputs, not consequences of the machine's state, and
+// doing them again would change what is being replayed. If they changed the
+// machine the first time, replay's proof pass sees the difference and refuses.
+func (e *emulator) frameTail() *image.RGBA {
+	// Advance the typed-character symbol pulse (no-op when idle).
+	if e.kbd != nil {
+		e.kbd.Tick()
+	}
+	if e.peripherals != nil {
+		e.peripherals.Frame()
+	}
+	if e.timeTravel == nil || !e.timeTravel.replaying {
+		// Advance the NextZXOS .nexload driver (File -> Open), one step per
+		// executed frame; keys it presses are seen by the next frame's
+		// keyboard scan.
+		if e.nexloadMacro != nil {
+			if e.nexloadMacro.tick(e) {
+				e.nexloadMacro = nil
+			}
+		}
+		// Enforce the user's CPU-speed override (no-op when Auto or still
+		// loading) — see applyForcedCPUSpeed.
+		e.applyForcedCPUSpeed()
+	}
+	return e.renderFrame()
+}
+
+// runGUIFrame is one turn of the GUI frame loop: a frame and frameTail. With
+// the time-travel ring armed it is recorded, so replay-back can re-run it.
+func (e *emulator) runGUIFrame() *image.RGBA {
+	budget := frameTStatesForModel(e.model, e.video60Hz)
+	var img *image.RGBA
+	turn := func() {
+		e.cpu.ExecuteFrame(budget)
+		img = e.frameTail()
+	}
+	if e.timeTravel != nil {
+		e.timeTravel.runFrame(turn)
+	} else {
+		turn()
+	}
+	return img
 }
 
 // reboot resets the machine. It takes coreMu, so it must not be called from
