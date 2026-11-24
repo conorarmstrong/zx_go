@@ -208,8 +208,9 @@ func drawnInDisplayWindow(emu *emulator) (pixels, colours int) {
 // TestOtherSDFormats screens the titles in NEX_SD_GAMES_SUBDIR that ship
 // neither a .nex nor a .bas, through the NextZXOS Command Line as a user would
 // start them: a tape with `.tapein` then LOAD "", a snapshot (.snx, .sna,
-// .z80) with NextBASIC's SPECTRUM "file", and a NEX or +3DOS BASIC file
-// shipped without its extension with .nexload or LOAD. Report-only, like the BASIC screen;
+// .z80) with NextBASIC's SPECTRUM "file", a NEX or +3DOS BASIC file
+// shipped without its extension with .nexload or LOAD, and a Z-machine story
+// through the Browser's ZXZVM command. Report-only, like the BASIC screen;
 // skipped unless the subdirectory is given.
 func TestOtherSDFormats(t *testing.T) {
 	const sdRoot = "../../roms/next/sd"
@@ -226,7 +227,7 @@ func TestOtherSDFormats(t *testing.T) {
 		if !title.IsDir() {
 			continue
 		}
-		var tap, snap, nex string
+		var tap, snap, nex, story string
 		var basic []string
 		hasNative := false
 		_ = filepath.Walk(filepath.Join(gamesDir, title.Name()), func(p string, fi os.FileInfo, err error) error {
@@ -243,6 +244,10 @@ func TestOtherSDFormats(t *testing.T) {
 			case ".snx", ".sna", ".z80":
 				if snap == "" {
 					snap = p
+				}
+			case ".z3", ".z5", ".z8":
+				if story == "" {
+					story = p
 				}
 			case "", ".00":
 				// Programs shipped without their extension: a NEX file
@@ -272,7 +277,7 @@ func TestOtherSDFormats(t *testing.T) {
 				bas = b
 			}
 		}
-		if hasNative || (tap == "" && snap == "" && nex == "" && bas == "") {
+		if hasNative || (tap == "" && snap == "" && nex == "" && bas == "" && story == "") {
 			continue
 		}
 		host, kind := nex, "nex"
@@ -282,6 +287,8 @@ func TestOtherSDFormats(t *testing.T) {
 			host, kind = bas, "basic"
 		case tap != "":
 			host, kind = tap, "tape"
+		case snap == "":
+			host, kind = story, "zmachine"
 		default:
 			host, kind = snap, "snapshot"
 		}
@@ -305,6 +312,10 @@ func TestOtherSDFormats(t *testing.T) {
 				nexTypeLineBlind(emu, `.nexload "`+file+`"`)
 			case "basic":
 				nexTypeLineBlind(emu, `load "`+file+`"`)
+			case "zmachine":
+				// The Browser's own command for a Z-machine story
+				// (nextzxos/browser.cfg), with the story file named.
+				nexTypeLineBlind(emu, `run at 3:clear %$67ff:erase 1,9999:merge "c:/games/z-machine/zxzvm/nxzxzvm.bas":proc story("`+file+`","c:/games/z-machine/zxzvm/")`)
 			case "tape":
 				// .tapein mounts the tape; LOAD "t:" points LOAD at the tape
 				// device, as .tapein's own help says, and LOAD "" then
