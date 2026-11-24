@@ -1321,6 +1321,12 @@ func wireNextSubsystems(e *emulator) error {
 	// still latch once per frame.
 	rlog := rasterlog.NewWithFrame(u.DisplayRow, u.FrameID)
 	pal.SetWriteObserver(func(w palette.PaletteWrite) {
+		// A replay or a Copper write is dropped by Record; return before
+		// building the closures, which a saturated Copper list would
+		// otherwise allocate on every write.
+		if rlog.Replaying() {
+			return
+		}
 		p := pal.Palette(int(w.Slot))
 		if p == nil {
 			return
@@ -1332,6 +1338,9 @@ func wireNextSubsystems(e *emulator) error {
 		)
 	})
 	l2.SetScrollObserver(func(w layer2.ScrollWrite) {
+		if rlog.Replaying() {
+			return
+		}
 		rlog.Record(
 			func() { l2.SetScrollX(w.OldX); l2.SetScrollY(w.OldY) },
 			func() { l2.SetScrollX(w.NewX); l2.SetScrollY(w.NewY) },

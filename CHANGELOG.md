@@ -6,6 +6,16 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A busy Copper list no longer costs several frames to draw.** Every Copper
+  write re-drew the rest of its row and re-rendered Layer 2, the tilemap and
+  the sprites to do it. A list writing a palette entry every two copper clocks
+  took 108 ms a frame, more than five times the 50 Hz budget. Each pixel is now
+  drawn once, the layers are rendered once per row unless a write changes what
+  they draw, and the raster journal stops allocating for writes it discards.
+  The same frame now takes 6.1 ms, and renders identically.
+
 ## [v1.13.3]
 
 **NR$7F keeps its value across resets.**

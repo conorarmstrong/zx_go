@@ -287,6 +287,9 @@ type ULA struct {
 	// rather than in renderNext: a MOVE begun on the frame's last
 	// clock is paid for out of the next frame's first column.
 	copperDebt int
+	// nextLayerCacheOff makes every Copper write re-render the row's layers,
+	// as before the cache existed. Tests compare the two paths with it.
+	nextLayerCacheOff bool
 
 	// nextDAC receives the four DAC channel port writes. Decoded
 	// on low byte only — channels A/B/C/D map to several alias
@@ -428,6 +431,24 @@ type NextCopper interface {
 	// no program enables the Copper, and stepping it anyway costs a couple of
 	// percent of the frame budget in call overhead alone.
 	Idle() bool
+}
+
+// nextCopperRegs is the optional part of NextCopper that names the registers
+// the last Step wrote and predicts whether the next Step will write.
+// pkg/next/copper.Copper satisfies it.
+type nextCopperRegs interface {
+	WroteRegs() []byte
+	WouldWrite(scanline uint16, hcount uint16, maxClocks int) bool
+}
+
+// nextLayerCache is the optional part of NextCompositor that re-composes a
+// row's tail without rendering its layers again, for Copper writes that
+// cannot change a layer's render. pkg/next/compositor.Compositor satisfies
+// it; see compositor.LayerRenderReads for the register set.
+type nextLayerCache interface {
+	ComposeFrameRowTail(fy int, ula, dst []byte, scale, x0, x1 int)
+	InvalidateLayerRenders()
+	LayerRenderReads(reg byte) bool
 }
 
 // NextRasterLog is the contract for replaying mid-frame CPU writes to the
@@ -584,6 +605,9 @@ func (u *ULA) displayStartTState() int {
 // Passing nil restores the plain-ULA render.
 func (u *ULA) SetNextCompositor(c NextCompositor) { u.nextCompositor = c }
 
+// NextCompositor returns the compositor SetNextCompositor installed.
+func (u *ULA) NextCompositor() NextCompositor { return u.nextCompositor }
+
 // Palette returns the ULA's 16-colour palette. The Next compositor uses it
 // to resolve the ULA transparency colour: the classic ULA renders via this
 // palette, so the global transparency NR$14 (when < 16) corresponds to
@@ -614,6 +638,10 @@ func (u *ULA) SetNextI2C(b NextI2C) { u.nextI2C = b }
 // affecting palette / Layer 2 state are visible to that row's
 // composition. Passing nil unhooks.
 func (u *ULA) SetNextCopper(c NextCopper) { u.nextCopper = c }
+
+// SetNextLayerCache turns the compositor's per-row layer cache on (the
+// default) or off. Off, every Copper write re-renders the row's layers.
+func (u *ULA) SetNextLayerCache(on bool) { u.nextLayerCacheOff = !on }
 
 // SetNextRasterLog installs the mid-frame raster journal. Passing nil (the
 // default, and every classic model) leaves the compositor pass exactly as it
@@ -2069,6 +2097,13 @@ func (u *ULA) renderNext() *image.RGBA {
 		journal.ApplyThrough(-1)
 	}
 	paperTop := nextFrameRowBias + BorderTop // frame row of paper row 0
+	// The layer cache needs both halves: a compositor that can reuse a row's
+	// renders and a Copper that names the registers it wrote.
+	cache, _ := u.nextCompositor.(nextLayerCache)
+	regs, _ := u.nextCopper.(nextCopperRegs)
+	if u.nextLayerCacheOff {
+		cache = nil
+	}
 	for fy := 0; fy < paperTop; fy++ {
 		composeRow(fy)
 	}
@@ -2079,14 +2114,58 @@ func (u *ULA) renderNext() *image.RGBA {
 		fy := paperTop + y
 		loadULA(fy)
 		dst := frame.Pix[fy*frame.Stride : fy*frame.Stride+outW*4]
+		copperOn := u.nextCopper != nil && !u.nextCopper.Idle()
+		if copperOn && cache != nil && regs != nil {
+			// Paint the row in segments, each in the state it was drawn in.
+			// Before each column the Copper is asked whether it is about to
+			// write; if so, the pixels before the column it writes in are
+			// painted first, while the state the write changes is still in
+			// place. Each pixel is painted once, so a row costs its width plus
+			// a little per write, not its width per write. The layers are
+			// rendered once per row and again only after a write that names a
+			// register a render reads. hcount is hc_ula, whose zero point is
+			// twelve columns before displayed paper pixel 0. A write past the
+			// right border stands for the next row but shows on none of this
+			// one.
+			cache.InvalidateLayerRenders()
+			painted := 0
+			paintTo := func(x int) {
+				if x > outW {
+					x = outW
+				}
+				if x > painted {
+					cache.ComposeFrameRowTail(fy, ulaRow, dst, scale, painted, x)
+					painted = x
+				}
+			}
+			for hc := 0; hc < columnsPerLine; hc++ {
+				if regs.WouldWrite(uint16(y), uint16(hc), copperClocksPerHCount-u.copperDebt) {
+					fx := BorderLeft + hc - copperHCountOrigin
+					if fx < 0 {
+						fx = 0
+					}
+					paintTo(fx * scale)
+				}
+				u.copperDebt = u.stepCopperColumn(y, hc, u.copperDebt)
+				if !u.nextCopper.Wrote() {
+					continue
+				}
+				for _, r := range regs.WroteRegs() {
+					if cache.LayerRenderReads(r) {
+						cache.InvalidateLayerRenders()
+						break
+					}
+				}
+			}
+			paintTo(outW)
+			continue
+		}
 		u.nextCompositor.ComposeFrameRowRange(fy, ulaRow, dst, scale, 0, outW)
-		// Walk the line column by column, stepping the Copper at each hcount.
-		// hcount is hc_ula, whose zero point is twelve columns before
-		// displayed paper pixel 0. A write re-composes the row from the pixel
-		// it lands in to the end of the row; the pixels before it keep the
-		// state they were generated under. A write past the right border
-		// stands for the next row but shows on none of this one.
-		if u.nextCopper != nil && !u.nextCopper.Idle() {
+		// Without the layer cache: walk the line column by column, stepping
+		// the Copper at each hcount, and re-compose the row from the pixel a
+		// write lands in to the end of the row; the pixels before it keep the
+		// state they were generated under.
+		if copperOn {
 			for hc := 0; hc < columnsPerLine; hc++ {
 				u.copperDebt = u.stepCopperColumn(y, hc, u.copperDebt)
 				if !u.nextCopper.Wrote() {

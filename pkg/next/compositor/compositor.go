@@ -123,6 +123,21 @@ type Compositor struct {
 	tilemapScratch [2 * FullWidth]byte
 	tilemapEn      [2 * FullWidth]byte // per-pixel pixel_en_s plane for the same row
 	tilemapBelow   [2 * FullWidth]byte // per-pixel pixel_below_o plane for the same row
+
+	// cache records what the scratch buffers above hold, so a Copper write
+	// that cannot change any layer's render re-composes the row without
+	// rendering the layers again. See ComposeFrameRowTail.
+	cache layerCache
+	// renders counts layer renders, for tests that check the cache is used.
+	renders int
+}
+
+// layerCache names the frame row whose layer renders the scratch buffers hold
+// and which layers were rendered into them.
+type layerCache struct {
+	valid           bool
+	fy              int
+	l2, tm, sprites bool
 }
 
 // SetTilemap attaches the tilemap layer (Layer 3). nil unhooks.
@@ -263,7 +278,7 @@ func (c *Compositor) ComposeScanlineRange(y int, ulaRGBA []byte, dst []byte, x0,
 	if len(dst) < Width*4 {
 		return
 	}
-	c.composeFrame(y+SpriteFrameYTop, ulaRGBA, dst, BorderOffsetX, x0+BorderOffsetX, x1+BorderOffsetX, 1, nil)
+	c.composeFrame(y+SpriteFrameYTop, ulaRGBA, dst, BorderOffsetX, x0+BorderOffsetX, x1+BorderOffsetX, 1, false, nil)
 }
 
 // ComposeFrameRowRange composes output pixels [x0, x1) of frame row fy (0..255
@@ -281,7 +296,75 @@ func (c *Compositor) ComposeFrameRowRange(fy int, ula, dst []byte, scale, x0, x1
 	if len(ula) < n*4 || len(dst) < n*4 || x0 < 0 || x1 > n || x0 >= x1 {
 		return
 	}
-	c.composeFrame(fy, ula, dst, 0, x0, x1, scale, nil)
+	c.composeFrame(fy, ula, dst, 0, x0, x1, scale, false, nil)
+}
+
+// ComposeFrameRowTail is ComposeFrameRowRange for a row already composed once:
+// it reuses the Layer 2, tilemap and sprite renders made for frame row fy by
+// the last compose, unless InvalidateLayerRenders was called since. The paint
+// stage always runs on live state, so palette entries, NR$14, NR$15's order,
+// NR$4A, NR$4B, NR$4C and NR$68 take effect from x0 without a render.
+//
+// The caller re-composes a row's tail after each Copper write and must call
+// InvalidateLayerRenders first when the write named a register for which
+// LayerRenderReads is true.
+func (c *Compositor) ComposeFrameRowTail(fy int, ula, dst []byte, scale, x0, x1 int) {
+	if scale != 2 {
+		scale = 1
+	}
+	n := FullWidth * scale
+	if len(ula) < n*4 || len(dst) < n*4 || x0 < 0 || x1 > n || x0 >= x1 {
+		return
+	}
+	c.composeFrame(fy, ula, dst, 0, x0, x1, scale, true, nil)
+}
+
+// LayerRenderReads is the package function of the same name, as a method so
+// the ULA can reach it through an interface.
+func (c *Compositor) LayerRenderReads(reg byte) bool { return LayerRenderReads(reg) }
+
+// InvalidateLayerRenders drops the layer renders ComposeFrameRowTail would
+// otherwise reuse.
+func (c *Compositor) InvalidateLayerRenders() { c.cache.valid = false }
+
+// LayerRenderReads reports whether a write to NextReg reg can change what a
+// layer's scanline render produces, as opposed to how the paint stage colours
+// and orders it. These are the registers that drop ComposeFrameRowTail's
+// cache. Per layer:
+//
+//   - Layer 2 (layer2.RenderScanlineEnabled): NR$12 the active bank, NR$16 and
+//     NR$71 bit 0 the X scroll, NR$17 the Y scroll, NR$18 the clip window,
+//     NR$70 the resolution and palette offset.
+//   - The tilemap (tilemap.RenderScanlineFlags): NR$1B the clip window, NR$2F,
+//     NR$30 and NR$31 the scroll, NR$6B the enable and control bits, NR$6C the
+//     default attribute, NR$6E and NR$6F the map and definition bases.
+//   - Sprites (sprite.Engine.RenderScanline): NR$15 bits 0, 1, 5 and 6 (enable,
+//     over border, border clip, zero on top), NR$19 the clip window, NR$35 to
+//     NR$39 and NR$75 to NR$79 the attribute bytes.
+//   - NR$02 and NR$03, which can reset or reconfigure every layer at once.
+//
+// Not in the set, and why: NR$69's only bit a render reads is bit 7, the
+// Layer 2 enable, and which layers are enabled is part of the cache key, so
+// turning a layer on or off re-renders without the register being listed (the
+// same holds for the enable bits of NR$15 and NR$6B); NR$1C only resets the
+// clip write indices; NR$34
+// selects the sprite later attribute writes go to without changing any
+// sprite; NR$14, NR$40 to NR$44, NR$4A, NR$4B, NR$4C and NR$68 are read by the
+// paint stage, which always runs live. Pattern RAM and the layers' memory are
+// not reachable from the Copper.
+//
+// TestLayerCacheMatchesUncachedForEveryCopperRegister (cmd/zx_go) renders a
+// frame with and without the cache for every register the Copper can name and
+// fails on any difference, so a register missing here is caught there.
+func LayerRenderReads(reg byte) bool {
+	switch reg {
+	case 0x02, 0x03,
+		0x12, 0x16, 0x17, 0x18, 0x70, 0x71,
+		0x1B, 0x2F, 0x30, 0x31, 0x6B, 0x6C, 0x6E, 0x6F,
+		0x15, 0x19, 0x35, 0x36, 0x37, 0x38, 0x39, 0x75, 0x76, 0x77, 0x78, 0x79:
+		return true
+	}
+	return false
 }
 
 // WideScale is 2 when a layer needs a 640-pixel row, the 80-column tilemap or
@@ -304,13 +387,18 @@ func (c *Compositor) WideScale() int {
 // paper pass hands 256-pixel rows that start at frame column 32). Each layer
 // is fetched once as a frame row in its native width and sampled at
 // ox * width / (FullWidth*scale).
-func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, scale int, skip func(int) bool) {
+//
+// reuse asks for the layer renders already in the scratch buffers to be used
+// when they were made for this row and the same set of layers; otherwise every
+// active layer is rendered afresh.
+func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, scale int, reuse bool, skip func(int) bool) {
 	outW := FullWidth * scale
 	base := origin * scale
 	doL2 := c.l2 != nil && c.l2.Enabled() && c.pal != nil
 	doSprites := c.sprites != nil && c.sprites.Enabled() && c.pal != nil
 	doTilemap := c.tilemap != nil && c.tilemap.Enabled() && c.pal != nil
 	if !doL2 && !doSprites && !doTilemap {
+		c.cache.valid = false
 		// Bounded like the paint loop below: this is still a range compose, and
 		// the caller re-composes only the tail after a Copper write. Copying the
 		// whole row here would erase the head, which was composed under the
@@ -327,35 +415,60 @@ func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, s
 		return
 	}
 
-	// Pre-fetch active layers' scanlines + their palettes.
+	// The active layers' palettes. PaletteForLayer reads the per-layer
+	// "first/second" selection (NextReg 0x43 bits 4-7) independently of the
+	// write-target bits. Sprint 6's mistake was reading Selected() (the write
+	// target) and assuming it meant the active palette.
+	//
+	// Per FPGA zxnext.vhd:6981 the tilemap pixel address has bit 9 = 1, bit 8
+	// = nr_6b bit 4 (tm_palette_select), bits 7:0 = tile pixel. The FPGA
+	// palette SRAM is 4 logical banks of 256 entries: address "00" = ULA
+	// First, "01" = ULA Second, "10" = Tilemap First, "11" = Tilemap Second.
+	// Our Zeus-aligned 8-palette enum keeps the same physical SRAM banks at
+	// indices 0,1 (ULA) and 6,7 (Tilemap), so the natural mapping is
+	// palettes[6 + activeTilemap].
+	var l2Pal, tilemapPal, spritePal *palette.Palette
+	if doL2 {
+		l2Pal = c.pal.PaletteForLayer(palette.LayerLayer2)
+		doL2 = l2Pal != nil
+	}
+	if doTilemap {
+		tilemapPal = c.pal.PaletteForLayer(palette.LayerTilemap)
+		doTilemap = tilemapPal != nil
+	}
+	if doSprites {
+		spritePal = c.pal.PaletteForLayer(palette.LayerSprites)
+		doSprites = spritePal != nil
+	}
+	want := layerCache{valid: true, fy: fy, l2: doL2, tm: doTilemap, sprites: doSprites}
+	render := !reuse || c.cache != want
+	if render {
+		c.renders++
+	}
+	c.cache = want
+
+	// The active layers' scanlines, rendered unless the scratch buffers
+	// already hold this row's.
 	var l2Scanline []byte
 	var l2Enabled []byte
-	var l2Pal *palette.Palette
 	l2W := FullWidth
 	if doL2 {
-		// PaletteForLayer reads the per-layer "first/second"
-		// selection (NextReg 0x43 bits 4-7) independently of the
-		// write-target bits. Sprint 6's mistake was reading
-		// Selected() (the write target) and assuming it meant
-		// the active palette.
-		l2Pal = c.pal.PaletteForLayer(palette.LayerLayer2)
-		if l2Pal == nil {
-			doL2 = false
-		} else {
-			l2Scanline = c.l2Scratch[:]
-			l2Enabled = c.l2Enabled[:]
-			for i := range l2Enabled {
-				l2Enabled[i] = 0
-			}
-			if c.l2.Resolution() == 0 {
-				// 256x192: the paper only, addressed by paper row.
-				l2W = FullWidth
+		l2Scanline = c.l2Scratch[:]
+		l2Enabled = c.l2Enabled[:]
+		if c.l2.Resolution() == 0 {
+			// 256x192: the paper only, addressed by paper row.
+			l2W = FullWidth
+			if render {
+				clear(l2Enabled)
 				if py := fy - SpriteFrameYTop; py >= 0 && py < 192 {
 					c.l2.RenderScanlineEnabled(py, l2Scanline[BorderOffsetX:BorderOffsetX+Width], l2Enabled[BorderOffsetX:BorderOffsetX+Width])
 				}
-			} else {
-				// 320x256 / 640x256: the frame row (wide counters).
-				l2W = c.l2.LineWidth()
+			}
+		} else {
+			// 320x256 / 640x256: the frame row (wide counters).
+			l2W = c.l2.LineWidth()
+			if render {
+				clear(l2Enabled)
 				c.l2.RenderScanlineEnabled(fy, l2Scanline[:l2W], l2Enabled[:l2W])
 			}
 		}
@@ -363,48 +476,29 @@ func (c *Compositor) composeFrame(fy int, ulaRGBA, dst []byte, origin, x0, x1, s
 	var tilemapScan []byte
 	var tilemapEn []byte
 	var tilemapBelow []byte
-	var tilemapPal *palette.Palette
 	tmW := FullWidth
 	if doTilemap {
-		// Per FPGA zxnext.vhd:6981 the tilemap pixel address has
-		// bit 9 = 1, bit 8 = nr_6b bit 4 (tm_palette_select), bits
-		// 7:0 = tile pixel. The FPGA palette SRAM is 4 logical
-		// banks of 256 entries: address "00" = ULA First, "01" =
-		// ULA Second, "10" = Tilemap First, "11" = Tilemap Second.
-		// Our Zeus-aligned 8-palette enum keeps the same physical
-		// SRAM banks at indices 0,1 (ULA) and 6,7 (Tilemap), so
-		// the natural mapping is palettes[6 + activeTilemap].
-		tilemapPal = c.pal.PaletteForLayer(palette.LayerTilemap)
-		if tilemapPal == nil {
-			doTilemap = false
-		} else {
-			// The tilemap is a frame-row layer, 320 pixels wide or 640 in
-			// 80-column mode, addressed vertically by the wide counter wvc,
-			// 0 thirty-two lines above the paper (zxnext.vhd:4390,
-			// zxula_timing.vhd:477-499).
-			tmW = FullWidth
-			if c.tilemap.Is80Col() {
-				tmW = 2 * FullWidth
-			}
-			c.tilemap.RenderScanlineFlags(fy, c.tilemapScratch[:tmW], c.tilemapEn[:tmW], c.tilemapBelow[:tmW])
-			tilemapScan = c.tilemapScratch[:tmW]
-			tilemapEn = c.tilemapEn[:tmW]
-			tilemapBelow = c.tilemapBelow[:tmW]
+		// The tilemap is a frame-row layer, 320 pixels wide or 640 in
+		// 80-column mode, addressed vertically by the wide counter wvc,
+		// 0 thirty-two lines above the paper (zxnext.vhd:4390,
+		// zxula_timing.vhd:477-499).
+		if c.tilemap.Is80Col() {
+			tmW = 2 * FullWidth
 		}
+		if render {
+			c.tilemap.RenderScanlineFlags(fy, c.tilemapScratch[:tmW], c.tilemapEn[:tmW], c.tilemapBelow[:tmW])
+		}
+		tilemapScan = c.tilemapScratch[:tmW]
+		tilemapEn = c.tilemapEn[:tmW]
+		tilemapBelow = c.tilemapBelow[:tmW]
 	}
 	var spriteScan []byte
-	var spritePal *palette.Palette
 	if doSprites {
-		spritePal = c.pal.PaletteForLayer(palette.LayerSprites)
-		if spritePal == nil {
-			doSprites = false
-		} else {
-			spriteScan = c.spriteScratch[:]
+		spriteScan = c.spriteScratch[:]
+		if render {
 			// Zero the buffer; the sprite engine only OVERWRITES
 			// pixels it covers, leaving previous content otherwise.
-			for i := range spriteScan {
-				spriteScan[i] = 0
-			}
+			clear(spriteScan)
 			// Sprites live in frame coordinates (320x256, paper at 32,32).
 			c.sprites.RenderScanline(fy, spriteScan, FullWidth)
 		}

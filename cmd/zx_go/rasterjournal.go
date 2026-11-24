@@ -57,8 +57,11 @@ func journalVisualRegs(disp *nextregs.Dispatcher, rlog *rasterlog.Log) {
 		disp.SetOnWrite(reg, func(d *nextregs.Dispatcher, val byte) {
 			old := d.Raw(reg)
 			inner(d, val)
-			if old == val {
-				return // nothing moved; nothing to replay
+			if old == val || rlog.Replaying() {
+				// Nothing moved, or the write is the machine's own (a replay
+				// or the Copper), which Record would drop: don't build the
+				// closures for it.
+				return
 			}
 			rlog.Record(
 				func() { inner(d, old) },

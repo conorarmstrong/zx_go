@@ -238,36 +238,40 @@ unfaithful interrupt source is worse than none, because a developer would trust 
 
 ---
 
-### 3. [efficiency] Row composition is O(row x writes)
+### 3. [efficiency] ~~Row composition is O(row x writes)~~ — done 2026-11-24
 
-**Measured.** `ComposeScanlineRange` re-renders the whole Layer 2, tilemap and
-sprite scanline before it consults `x0`/`x1`, so only the paint loop is bounded,
-and `pkg/ula` calls it once per Copper write. `pkg/next/compositor/range_bench_test.go`
-holds the benchmark; at 192 displayed rows against a 20 ms frame budget:
+**Was:** every Copper write re-composed the rest of its row and re-rendered the
+whole Layer 2, tilemap and sprite scanline to do it. A saturated list, a MOVE
+every two copper clocks, cost **108 ms a frame**, more than five times the 20 ms
+budget (`BenchmarkSaturatedCopperFrame`, cmd/zx_go, on an M-series laptop).
 
-| Copper writes per row | ns per row | ms per frame | % of a 50 Hz budget |
-|---|---|---|---|
-| 0 | 1,639 | 0.31 | 1.6 |
-| 8 | 8,527 | 1.64 | 8.2 |
-| 256 | 228,573 | 43.90 | **219.5** |
+**Now 6.1 ms**, from three changes:
 
-An ordinary list is affordable. A saturated one is not: at one MOVE per column
-the compositor alone wants more than twice the frame budget, and since a MOVE
-costs two of a column's four copper clocks, twice that density is reachable. So
-this is a real cliff rather than a theoretical one, and it sits exactly where
-the intended audience works.
+- **Each pixel is painted once.** Before stepping a column the ULA asks the
+  Copper whether that Step will write (`Copper.WouldWrite`, a side-effect-free
+  mirror of Step's clock loop, checked against Step on 200 random programs that
+  include self-modifying mode writes and VBL restarts). If it will, the pixels
+  before that column are painted while the old state is still in place. A row
+  costs its width plus a little per write.
+- **The layer renders are cached per row.** `ComposeFrameRowTail` reuses the
+  row's Layer 2, tilemap and sprite renders until a write names a register in
+  `compositor.LayerRenderReads`. The enumeration, per layer, is in that
+  function's comment: 27 registers. Which layers are enabled is part of the
+  cache key, so NR$69 is not in the set: its only render bit is the Layer 2
+  enable.
+- **The raster journal no longer builds closures for writes it will drop.**
+  The palette and Layer 2 scroll observers and the journalled-register wrappers
+  return early while the log is replaying. Before this, half the remaining time
+  went on allocating closures for the Copper's own palette writes.
 
-**Not yet fixed, deliberately.** The fix is to hoist the layer renders above the
-range check and cache them per row, and the hard part is invalidation: the cache
-has to be dropped when a Copper MOVE touches a register that changes what a
-layer's scanline render produces, and kept when it touches one that only affects
-the paint loop, such as a palette entry or a priority mode. Getting that mapping
-wrong produces visual corruption that no current test would catch, because no
-title on the SD card exercises the Copper at all.
-
-So the work is: enumerate, per layer, which NextRegs its scanline render reads;
-turn that into an invalidation set; then cache. That enumeration is the
-deliverable, not the caching.
+**The guard.** `TestLayerCacheMatchesUncachedForEveryCopperRegister` renders a
+frame with all three layers drawing, for every register the Copper can name
+($01-$7F), once through the cached segment path and once through the old
+uncached one, and fails on any pixel difference. The scene writes each register
+with enable bits kept on, with mixed values, after a reconfiguration that makes
+NR$6C, NR$71 and NR$19 count, and on a row that starts with the register clear.
+`TestLayerCacheGuardCatchesEachRegisterLeftOut` is its mutation check: dropping
+any one of the 25 non-precautionary registers from the set changes the frame.
 
 ### 4. [correctness] zxnDMA: nothing outstanding except the interrupt logic
 

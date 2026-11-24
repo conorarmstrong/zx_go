@@ -158,6 +158,8 @@ type Copper struct {
 	// row's composition at the pixel a MOVE actually wrote in, rather than
 	// assuming the write landed at a segment boundary.
 	wrote bool
+	// wroteRegs lists the registers the LAST Step's MOVEs wrote, in order.
+	wroteRegs []byte
 }
 
 // New returns an empty copper.
@@ -259,6 +261,54 @@ func (c *Copper) Executing() bool { return c.executing }
 // suppresses the pulse on that field alone (device/copper.vhd:104), which
 // Decode already reports as OpNOOP.
 func (c *Copper) Wrote() bool { return c.wrote }
+
+// WroteRegs returns the registers the last Step's MOVEs wrote, in order. Like
+// Wrote it describes that one call; the slice is reused by the next Step.
+func (c *Copper) WroteRegs() []byte { return c.wroteRegs }
+
+// WouldWrite reports whether Step(scanline, hcount, maxClocks) would raise the
+// MOVE write pulse, without changing anything. It follows Step's clock loop on
+// copies of the program counter and the pending restart, and stops at the
+// first MOVE: a MOVE is the only thing that can change the Copper's mode
+// inside a Step, so nothing before it depends on registers.
+//
+// A render loop asks before stepping a column so it can paint the pixels the
+// old state still owns before the write lands.
+func (c *Copper) WouldWrite(scanline uint16, hcount uint16, maxClocks int) bool {
+	pc := c.pc
+	restart := c.restartPending
+	if c.mode == StartOnVBL && scanline < c.lastScanline {
+		pc = 0
+	}
+	spent := 0
+	for spent < maxClocks && pc < MaxInstructions {
+		if restart {
+			restart = false
+			pc = 0
+			spent++
+			continue
+		}
+		if c.stopped {
+			return false
+		}
+		inst := Decode(c.program[pc])
+		switch inst.Op {
+		case OpMOVE:
+			return true
+		case OpWAIT:
+			if scanline == inst.Y && hcount >= WaitHThreshold(inst.X) {
+				pc++
+				spent++
+				continue
+			}
+			return false
+		case OpNOOP:
+			pc++
+			spent++
+		}
+	}
+	return false
+}
 
 // Instruction returns the decoded instruction at index i. Indexes
 // past MaxInstructions return a NOOP.
@@ -375,6 +425,7 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 	// Wrote describes this call and no other, so clear it before anything can
 	// return early.
 	c.wrote = false
+	c.wroteRegs = c.wroteRegs[:0]
 	// VBL auto-restart: in StartOnVBL the program counter resets to 0 at
 	// the start of each frame, i.e. when the raster wraps back to the top.
 	if c.mode == StartOnVBL && scanline < c.lastScanline {
@@ -406,6 +457,7 @@ func (c *Copper) Step(scanline uint16, hcount uint16, maxClocks int) int {
 			// (device/copper.vhd:104), whether or not anything is wired to
 			// receive it, so this does not depend on regs.
 			c.wrote = true
+			c.wroteRegs = append(c.wroteRegs, inst.Reg)
 			if c.regs != nil {
 				// Raised across the write only, and cleared before the pc
 				// moves on, so a trace callback reads the MOVE's own index.
