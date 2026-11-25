@@ -40,7 +40,8 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   length, frame interrupt, contention pattern, Copper, line interrupt, NR$1E/$1F
   and the floating bus now all follow the timing in force, which changes at the
   next frame sync as on the FPGA: raw (0,0), inside the frame, after which
-  that frame runs on to the new timing's interrupt. On 48K and 128K timing port $FF now reads the
+  that frame runs on to the new timing's interrupt. NR$05's 50/60 Hz switch
+  now waits for the same sync; it applied at once. On 48K and 128K timing port $FF now reads the
   floating bus, and on +3 timing so does $0FFD while paging is unlocked.
 - **NextReg $08 bit 6 switches contention off at the hardware's moment, ports
   included.** It took effect at once and left I/O contention on; the FPGA
