@@ -1010,7 +1010,13 @@ func (d *Debugger) buildControls() fyne.CanvasObject {
 		if d.onPause != nil {
 			d.onPause()
 		}
-		d.cpu.ExecuteFrame(69888)
+		// The machine's own frame where the emulator has set it (the Next,
+		// whose frame follows its NR$03 machine timing; the SAM).
+		frame := 69888
+		if d.cpu.FrameTStates > 0 {
+			frame = int(d.cpu.FrameTStates)
+		}
+		d.cpu.ExecuteFrame(frame)
 		d.Refresh()
 	})
 	pcBtn := widget.NewButton("Go to PC", func() {

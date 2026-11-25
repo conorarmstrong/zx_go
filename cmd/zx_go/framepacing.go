@@ -24,12 +24,16 @@ func (e *emulator) currentModel() roms.SpectrumModel {
 	return e.model
 }
 
-// currentTimingModel is the model whose frame timing is in force: the Next's
-// follows its NR$03 machine timing (memory.TimingModel).
+// currentTimingModel is the model whose frame timing the next frame runs
+// with: the Next's follows its NR$03 machine timing, including a write the
+// frame's own sync is about to latch (memory.TimingModelAfterSync).
 func (e *emulator) currentTimingModel() roms.SpectrumModel {
 	e.coreMu.Lock()
 	defer e.coreMu.Unlock()
-	return e.timingModel(e.model)
+	if e.mem != nil && e.mem.GetCurrentModel() == e.model {
+		return e.mem.TimingModelAfterSync()
+	}
+	return e.model
 }
 
 // timingModel maps model to the timing in force, which differs from it only
