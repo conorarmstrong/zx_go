@@ -60,7 +60,18 @@ type cpuState struct {
 	FrameIntFired        bool
 	FrameIntDeasserted   bool
 	NextFrameBoundary    uint64
-	IM2Vector            byte
+	// The frame-sync bookkeeping (see CPU.FrameSyncAt): a frame whose end the
+	// sync moved, and the step driver's frame start, sync flag and grid.
+	// FrameSyncFn is wiring, set by the machine.
+	SyncFrameStart, SyncFrameEnd uint64
+	StepFrameStart               uint64
+	StepSyncFired                bool
+	StepGridAnchor               uint64
+	StepSyncAt, NominalBudget    uint64
+	// FrameSyncAt follows the machine's timing, which the memory device
+	// restores without re-running its observers, so it is captured here.
+	FrameSyncAt uint64
+	IM2Vector   byte
 
 	// Speed selection is guest-visible state on the Next (NextReg $07).
 	SpeedSelect byte
@@ -105,6 +116,14 @@ func (c *CPU) snapshot() cpuState {
 		FrameIntFired:        c.frameIntFired,
 		FrameIntDeasserted:   c.frameIntDeasct,
 		NextFrameBoundary:    c.nextFrameBoundary,
+		SyncFrameStart:       c.syncFrameStart,
+		SyncFrameEnd:         c.syncFrameEnd,
+		StepFrameStart:       c.stepFrameStart,
+		StepSyncFired:        c.stepSyncFired,
+		StepGridAnchor:       c.stepGridAnchor,
+		StepSyncAt:           c.stepSyncAt,
+		NominalBudget:        c.nominalBudget,
+		FrameSyncAt:          c.FrameSyncAt,
 		IM2Vector:            c.IM2Vector,
 
 		SpeedSelect: c.speedSelect,
@@ -178,6 +197,9 @@ func (c *CPU) LoadState(b []byte) error {
 	c.IntPulseTstates = s.IntPulseTstates
 	c.frameIntFired = s.FrameIntFired
 	c.frameIntDeasct = s.FrameIntDeasserted
+	c.syncFrameStart, c.syncFrameEnd = s.SyncFrameStart, s.SyncFrameEnd
+	c.stepFrameStart, c.stepSyncFired, c.stepGridAnchor = s.StepFrameStart, s.StepSyncFired, s.StepGridAnchor
+	c.stepSyncAt, c.nominalBudget, c.FrameSyncAt = s.StepSyncAt, s.NominalBudget, s.FrameSyncAt
 	c.nextFrameBoundary = s.NextFrameBoundary
 	c.IM2Vector = s.IM2Vector
 

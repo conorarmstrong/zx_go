@@ -367,6 +367,29 @@ type CPU struct {
 	// they are wired to the dispatcher in pkg/next. Matches a faithful
 	// Z80N core (the NMI path writes $C2/$C3; RETN reads them back).
 	NMIStackless bool
+	// FrameSyncAt and FrameSyncFn model a frame-sync point inside the frame,
+	// where a machine whose video timing can change applies the change (the
+	// Next's eff_nr_03_machine_timing, zxnext.vhd:6694-6703). FrameSyncFn runs
+	// once a frame, when the frame reaches FrameSyncAt T-states (at the base
+	// clock), and returns the frame's new length in base T-states, or 0 to
+	// keep it. Both execution drivers honour it, and a moved end survives a
+	// frame stopped part way. FrameSyncAt 0 or a nil FrameSyncFn disables it.
+	FrameSyncAt uint64
+	FrameSyncFn func() uint64
+	// syncFrameStart/End hold a frame whose end the sync moved, until it
+	// completes; stepFrameStart and stepSyncFired are the step driver's view
+	// of the current frame; stepGridAnchor realigns its frame grid after a
+	// frame of another length.
+	syncFrameStart, syncFrameEnd uint64
+	stepFrameStart               uint64
+	stepSyncFired                bool
+	stepGridAnchor               uint64
+	// stepSyncAt is the step driver's sync point for the current frame,
+	// fixed at the frame start as ExecuteFrame fixes its own; nominalBudget
+	// is the length frames after a moved one run (PollIntSources).
+	stepSyncAt    uint64
+	nominalBudget uint64
+
 	// CPUAccessHook, if set, sees every memory read and write the CPU makes,
 	// after the access, with its data. DMA and debugger accesses do not pass
 	// through it. The Next's +3 floating bus uses it.
@@ -624,6 +647,8 @@ func (c *CPU) popC() uint16 {
 // Reset resets the CPU to its initial state.
 func (c *CPU) Reset() {
 	c.frameOriginValid = false
+	c.syncFrameStart, c.syncFrameEnd, c.stepGridAnchor = 0, 0, 0
+	c.stepFrameStart, c.stepSyncFired, c.stepSyncAt, c.nominalBudget = 0, false, 0, 0
 	c.frameEpoch++
 	c.clockGen++
 	c.polledValid = false
@@ -852,6 +877,11 @@ func (c *CPU) PollIntSources(now uint64) {
 		}
 		c.pollLineInt(end - 1)
 		c.frameOrigin = end
+		// A frame whose end a sync moved is followed by frames of the
+		// timing then in force.
+		if c.nominalBudget > 0 {
+			c.frameBudget = c.nominalBudget
+		}
 		c.frameIntFired, c.frameIntDeasct, c.lineIntFired = false, false, false
 		c.polledOrigin, c.polledValid = end, true
 	}
@@ -1041,17 +1071,35 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	// 2 / 4 / 8 times more T-states per ULA frame than at the
 	// 3.5 MHz reference. SpeedMultiplier returns 1 on every other
 	// model so this is a no-op there.
-	budget := uint64(tstatesPerFrame) * uint64(c.SpeedMultiplier())
+	mult := uint64(c.SpeedMultiplier())
+	budget := uint64(tstatesPerFrame) * mult
 	// Frames sit on a fixed grid. An instruction that ran past the last
 	// frame's end has already spent part of this one, so the frame starts at
 	// its nominal T-state, not where that instruction ended: its interrupt
-	// then asserts inside the straddling instruction, as on hardware.
+	// then asserts inside the straddling instruction, as on hardware. After a
+	// frame of another length that the step driver ran (a frame sync's), the
+	// grid is anchored at its end.
+	anchor := c.stepGridAnchor
+	if anchor > c.tstates {
+		anchor = 0
+	}
 	frameStart := c.tstates
 	if budget > 0 {
-		frameStart -= c.tstates % budget
+		frameStart = anchor + (c.tstates-anchor)/budget*budget
 	}
 	tstatesEnd := frameStart + budget
-	c.frameBudget = budget
+	syncDone := false
+	if c.syncFrameEnd > 0 && c.tstates < c.syncFrameEnd {
+		// Resuming a frame stopped part way after its sync moved its end.
+		frameStart, tstatesEnd, syncDone = c.syncFrameStart, c.syncFrameEnd, true
+	}
+	c.syncFrameEnd = 0
+	syncAt := frameStart + c.FrameSyncAt*mult
+	if c.FrameSyncFn == nil || c.FrameSyncAt == 0 {
+		syncDone = true
+	}
+	c.frameBudget = tstatesEnd - frameStart
+	c.nominalBudget = budget
 
 	// ULA INT line: asserted at the start of every ULA frame and
 	// held until the CPU acknowledges or the next frame begins.
@@ -1102,6 +1150,22 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 	}
 
 	for c.tstates < tstatesEnd {
+		if !syncDone && c.tstates >= syncAt {
+			syncDone = true
+			if nb := c.FrameSyncFn(); nb > 0 {
+				tstatesEnd = frameStart + nb*mult
+				c.frameBudget = tstatesEnd - frameStart
+				c.nominalBudget = c.frameBudgetTstates() * mult
+			}
+			if tstatesEnd != frameStart+budget {
+				c.syncFrameStart, c.syncFrameEnd = frameStart, tstatesEnd
+			}
+			// The sync can move the line interrupt (a new timing's offset):
+			// the rest of this frame compares against the new one.
+			if lineIntAt = 0; c.LineIntOffsetTstates > 0 {
+				lineIntAt = frameStart + c.LineIntOffsetTstates
+			}
+		}
 		// Narrow-pulse frame INT: raise at the pulse start, withdraw once
 		// at the pulse end if un-accepted. Runs BEFORE the line-INT block
 		// so a later line INT still re-raises the shared latch.
@@ -1206,13 +1270,19 @@ func (c *CPU) ExecuteFrame(tstatesPerFrame int) {
 		}
 	}
 
+	c.syncFrameEnd = 0
 	c.tstates -= tstatesEnd
 	c.clockBase += tstatesEnd
 	if c.polledValid {
 		c.polledOrigin -= tstatesEnd
 	}
+	c.stepGridAnchor = 0
 	c.frameEpoch++
 }
+
+// InMovedFrame reports whether the CPU is inside a frame whose end a frame
+// sync moved, stopped part way.
+func (c *CPU) InMovedFrame() bool { return c.syncFrameEnd > 0 && c.tstates < c.syncFrameEnd }
 
 // Clock is the machine's running T-state count: Tstates plus everything the
 // frame rewinds have taken off it. It never goes back except across a Reset or
@@ -1494,7 +1564,16 @@ func (c *CPU) StepInstructionWithIRQ() {
 		if !c.FrameIntDisabled && !narrowPulse && !c.IRQExternal {
 			c.IRQPending.Store(true)
 		}
-		c.nextFrameBoundary = ((c.tstates / frameBudget) + 1) * frameBudget
+		// Frames sit on a grid of whole frames, anchored where the last frame
+		// of another length (a frame sync's) ended.
+		anchor := c.stepGridAnchor
+		if anchor > c.tstates {
+			anchor = 0
+		}
+		c.nextFrameBoundary = anchor + ((c.tstates-anchor)/frameBudget+1)*frameBudget
+		c.stepFrameStart = c.nextFrameBoundary - frameBudget
+		c.stepSyncFired = false
+		c.stepSyncAt = c.stepFrameStart + c.FrameSyncAt*uint64(c.SpeedMultiplier())
 		if c.polledValid && c.polledOrigin == c.nextFrameBoundary-frameBudget {
 			c.polledValid = false // reached already by PollIntSources
 		} else {
@@ -1504,15 +1583,41 @@ func (c *CPU) StepInstructionWithIRQ() {
 			c.frameIntDeasct = false
 		}
 	}
-	c.frameBudget = frameBudget
-	c.frameOrigin, c.frameOriginValid = c.nextFrameBoundary-frameBudget, true
+	if c.syncFrameEnd > 0 && c.tstates < c.syncFrameEnd {
+		// Inside a frame ExecuteFrame stopped part way after its sync moved
+		// the end: keep that frame.
+		c.stepFrameStart, c.nextFrameBoundary = c.syncFrameStart, c.syncFrameEnd
+		c.stepSyncFired, c.stepGridAnchor = true, c.syncFrameEnd
+	} else if c.stepFrameStart > c.nextFrameBoundary || c.nextFrameBoundary-c.stepFrameStart > 2*frameBudget {
+		c.stepFrameStart = c.nextFrameBoundary - frameBudget // first call, or after a rebase
+		c.stepSyncAt = c.stepFrameStart + c.FrameSyncAt*uint64(c.SpeedMultiplier())
+	}
+	if !c.stepSyncFired && c.FrameSyncFn != nil && c.FrameSyncAt > 0 && c.tstates >= c.stepSyncAt {
+		c.stepSyncFired = true
+		mult := uint64(c.SpeedMultiplier())
+		if nb := c.FrameSyncFn(); nb > 0 {
+			c.nextFrameBoundary = c.stepFrameStart + nb*mult
+			c.stepGridAnchor = c.nextFrameBoundary
+			// ExecuteFrame, resuming in this frame, keeps the moved end.
+			c.syncFrameStart, c.syncFrameEnd = c.stepFrameStart, c.nextFrameBoundary
+			c.nominalBudget = c.frameBudgetTstates() * mult
+		}
+	}
+	if c.syncFrameEnd > 0 && c.tstates >= c.syncFrameEnd {
+		c.syncFrameEnd = 0 // the moved frame is over; the anchor keeps the grid
+	}
+	c.frameBudget = c.nextFrameBoundary - c.stepFrameStart
+	if c.syncFrameEnd == 0 {
+		c.nominalBudget = c.frameBudget
+	}
+	c.frameOrigin, c.frameOriginValid = c.stepFrameStart, true
 	if narrowPulse {
-		c.frameIntPulse(c.nextFrameBoundary - frameBudget)
+		c.frameIntPulse(c.stepFrameStart)
 	}
 
 	// Line interrupt (NR$22/$23 scheduled second INT)
 	if c.LineIntOffsetTstates > 0 && !c.lineIntFired {
-		frameStart := c.nextFrameBoundary - frameBudget
+		frameStart := c.stepFrameStart
 		if c.tstates >= frameStart+c.LineIntOffsetTstates {
 			if !c.IRQExternal {
 				c.IRQPending.Store(true)
