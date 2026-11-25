@@ -73,7 +73,7 @@ Ranked; detail in the open-work items below.
 1. **Next game compatibility** (item 5): the catalogue is screened end to end; the open part is playing titles,
    not just booting them.
 2. **Then:** a physical Windows-on-ARM launch (item 6).
-3. **Research:** the 3.02.05 diff is done, the boot ROM as an opt-in (item 8). 3.03 VHDL is not public.
+3. **Research:** the 3.02.05 diff is done, boot ROM included (item 8). 3.03 VHDL is not public.
 
 ## What this is
 
@@ -610,7 +610,7 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 | Change | Guest-visible | Status |
 |---|---|---|
 | NR$0A bit 5 (`sd_swap`) needs bit 2 set in the same write, in config mode (3.02.04, `6395c28`) | yes | **done**, `TestSpec_NR0A_SDSwapNeedsLockBit` |
-| Boot ROM shrinks to `$0000-$1FFF`; config memory shows through `$2000-$3FFF` (`zxnext.vhd` `cpu_a(15 downto 13)`) | yes | **done as an opt-in**, `ZX_GO_NEXT_CORE=3.02.05` with an installed `tbblue_loader_30205.rom`; `TestBootROMWindow`. Default unchanged |
+| Boot ROM shrinks to `$0000-$1FFF`; config memory shows through `$2000-$3FFF` (`zxnext.vhd` `cpu_a(15 downto 13)`) | yes | **done**: the default whenever `tbblue_loader_30205.rom` is installed; `TestBootROMWindow`, `TestBootCore` |
 | NR$A0 bit 1 (Pi SPI slave enable) is now live, readable, and sticky across reset | yes, via NR$A0 | **done**, `TestNRA0Bit1SurvivesAResetAndTheRestDoesNot` |
 | Six-button Mega Drive pad also reports as three-button (`md6_joystick_connector_x2.vhd`) | yes | not modelled: no Mega Drive pad in zx_go |
 | `spi_master` refuses a new transaction while `rd` or `wr` is held (`spi_active`) | SD SPI only | **no change needed**: one transfer per port access, which is what `spi_active` enforces |
@@ -618,15 +618,16 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 | PS/2 hotkeys: expansion bus F11/F12 moved to F5/F6, F12 a second PS/2 reset | no, host keyboard | not applicable |
 | `t80n` CPU: debug variant is the production default (`g_option` `$FFF2`); `mcode` and `alu` identical | no | no behaviour change found |
 
-**Status 2026-11-24.** The 3.02.05 boot ROM row is done as an opt-in: `ZX_GO_NEXT_CORE=3.02.05` loads a
-user-installed `tbblue_loader_30205.rom` (the 30205 branch's `bootrom.bin`) and narrows the boot ROM window to
-$0000-$1FFF (`TestBootROMWindow`, `TestBootCore`). It boots to the NextZXOS menu. It is not bundled, because its
-boot code source is not published beside it, and the default stays 3.02.03 until the retarget is decided. The
-3.03 features cannot be modelled: rechecked today, `30205` is still the newest branch and no 3.03 VHDL is public.
+**Status 2026-11-25: done as far as public evidence reaches.** The boot path defaults to core 3.02.05 whenever
+its loader, `tbblue_loader_30205.rom` (the 30205 branch's `bootrom.bin`), is installed, with that core's boot ROM
+window of $0000-$1FFF (`TestBootROMWindow`, `TestBootCore`); it boots to the NextZXOS menu. The loader is not
+bundled, because its boot code source is not published beside it, so without it the bundled 3.02.03 loader runs.
+`ZX_GO_NEXT_CORE` forces either. The 3.03 features cannot be modelled: rechecked 2026-11-24, `30205` is still the
+newest branch and no 3.03 VHDL is public.
 
 Next steps, in order:
 
-1. Decide whether 3.02.05 becomes the default boot path; the opt-in is in place.
+1. Nothing left on 3.02.05 short of its loader source being published, which would let it be bundled.
 2. Watch the official repo for a 3.03 branch. Last checked 2026-11-24: `30205` is the newest branch.
 3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
    NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL
@@ -802,7 +803,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
-| 2026-11-25 | Next: NR$03 machine timing (48K, 128K, +3, Pentagon) drives the frame, interrupt, contention, floating bus, Copper, line interrupt and NR$1E/$1F, latched at the frame sync; power-on is +3. The Multiface runs the FPGA state machine and hides the divMMC; snapshots load; Funky Monkey Kid traced to NextZXOS's snapshot loader; the fortuneteller runs on the Z-machine; 3.02.05 boot path as an opt-in. |
+| 2026-11-25 | Next: NR$03 machine timing (48K, 128K, +3, Pentagon) drives the frame, interrupt, contention, floating bus, Copper, line interrupt and NR$1E/$1F, latched at the frame sync; power-on is +3. The Multiface runs the FPGA state machine and hides the divMMC; snapshots load; Funky Monkey Kid traced to NextZXOS's snapshot loader; the fortuneteller runs on the Z-machine; 3.02.05 boot path is the default when its loader is installed; NR$08 bit 6 latches at hc(8) and gates port contention; $7FFD and the ULA+ ports contend; NR$69/22/C4 reach the Timex register. |
 | 2026-11-24 | Debugger: `replay-back` steps back into frames the loop ran, GUI and headless, render included; consecutive checkpoints share unchanged memory (64 Next checkpoints 4.5 MB, was 149 MB) and the default ring is 256. |
 | 2026-11-24 | Next: a busy Copper list costs 6.1 ms a frame, was 108 ms (each pixel painted once, layer renders cached per row, guarded by a per-register differential test); the zxnDMA charges each bus trip (START_DMA, WAITING_ACK, FINISH_DMA, and WAITING_ACK per byte after a prescaler wait); RETI raises `reti_decode` on the IM2 chain (GHDL scenario s7); TX-1696's marginality traced to the pre-v1.12.4 raster counter. |
 | 2026-11-24 | Compatibility: the 27 snapshot-loaded 128K titles compared against a reference through the same keys; the itch.io catalogue of 108 Next titles fetched (102 free, 5 paid and skipped, 1 with no files) and screened. |

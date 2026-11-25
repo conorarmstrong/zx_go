@@ -24,9 +24,10 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   64 checkpoints of a busy Next hold 4.5 MB instead of 149 MB. The default ring
   is now 256 checkpoints, up from 16, and `tt-status` reports the memory held.
 
-- **Core 3.02.05 boot path, opt-in.** `ZX_GO_NEXT_CORE=3.02.05` loads that
-  core's boot loader, installed as `tbblue_loader_30205.rom`, with its boot ROM
-  window of $0000-$1FFF. The default stays 3.02.03.
+- **Core 3.02.05 boot path.** With `tbblue_loader_30205.rom` installed (the
+  30205 branch's `bootrom.bin`, not bundled) the Next boots through it, with
+  that core's boot ROM window of $0000-$1FFF; without it the bundled 3.02.03
+  loader runs as before. `ZX_GO_NEXT_CORE=3.02.03` or `3.02.05` forces one.
 - **The Next screening also runs Z-machine stories** through the Browser's
   ZXZVM command, and the typist for NextZXOS can type `$`, `=` and `%`.
 
@@ -40,6 +41,15 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the floating bus now all follow the timing in force, which changes at the
   next frame sync as on the FPGA. On 48K and 128K timing port $FF now reads the
   floating bus, and on +3 timing so does $0FFD while paging is unlocked.
+- **NextReg $08 bit 6 switches contention off at the hardware's moment, ports
+  included.** It took effect at once and left I/O contention on; the FPGA
+  latches it at the next column with hc(8) set and gates port contention too.
+- **The Next contends $7FFD, $BF3B and $FF3B like ULA ports**, as its
+  `port_contend` does, $7FFD on 128K timing.
+- **NR$69, NR$22 and NR$C4 write the Timex register**, so a port $FF read-back
+  (NR$08 bit 2) and the Timex screen mode see them, as on the FPGA.
+- **The debugger's Step Frame runs the machine's own frame** on the Next, and
+  frame pacing follows a timing change from the frame it takes effect in.
 - **The classic Pentagon's ULA line is 224 T-states.** It was 228, against the
   Pentagon's own 71680-T-state frame of 320 lines.
 
