@@ -36,6 +36,17 @@ func (e *emulator) currentTimingModel() roms.SpectrumModel {
 	return e.model
 }
 
+// currentSixtyHz is the 50/60 Hz selection the next frame runs with,
+// including an NR$05 write its sync is about to latch.
+func (e *emulator) currentSixtyHz() bool {
+	e.coreMu.Lock()
+	defer e.coreMu.Unlock()
+	if e.mem != nil && e.mem.GetCurrentModel() == roms.ModelNext && e.model == roms.ModelNext {
+		return e.mem.SixtyHzAfterSync()
+	}
+	return e.video60Hz
+}
+
 // timingModel maps model to the timing in force, which differs from it only
 // on the Next. The caller holds coreMu or runs on the emulation goroutine.
 func (e *emulator) timingModel(model roms.SpectrumModel) roms.SpectrumModel {

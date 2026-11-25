@@ -73,6 +73,7 @@ type ulaState struct {
 	AudioEvents            []stateAudioEvent
 	FrameStartTstate       uint64
 	SyncAt, SyncLen        int // a frame-sync transition (SetFrameSyncTransition)
+	SixtyHz                bool
 
 	KempstonEnabled bool
 	KempstonState   byte
@@ -148,6 +149,7 @@ func (u *ULA) SaveState() []byte {
 		FrameStartTstate:       u.frameStartTstate,
 		SyncAt:                 u.syncAt,
 		SyncLen:                u.syncLen,
+		SixtyHz:                u.sixtyHz,
 
 		KempstonEnabled: u.KempstonEnabled,
 		KempstonState:   u.KempstonState,
@@ -212,6 +214,7 @@ func (u *ULA) LoadState(b []byte) error {
 	u.audioEvents = loadAudioEvents(s.AudioEvents)
 	u.frameStartTstate = s.FrameStartTstate
 	u.syncAt, u.syncLen = s.SyncAt, s.SyncLen
+	u.sixtyHz = s.SixtyHz
 
 	u.KempstonEnabled = s.KempstonEnabled
 	u.KempstonState = s.KempstonState

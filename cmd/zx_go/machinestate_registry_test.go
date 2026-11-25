@@ -69,11 +69,11 @@ func TestStateRegistryDeviceSetPerModel(t *testing.T) {
 		// register file in the present.
 		//
 		// 48K: no AY fitted, no disk controller.
-		{roms.Model48K, []string{"audiodac", "cpu", "keyboard", "memory", "ula"}},
+		{roms.Model48K, []string{"audiodac", "cpu", "emu.video", "keyboard", "memory", "ula"}},
 		// 128K: the AY-3-8912 arrives, still no FDC.
-		{roms.Model128K, []string{"audiodac", "ay", "cpu", "keyboard", "memory", "ula"}},
+		{roms.Model128K, []string{"audiodac", "ay", "cpu", "emu.video", "keyboard", "memory", "ula"}},
 		// +3: AY plus the uPD765 floppy controller.
-		{roms.ModelPlus3, []string{"audiodac", "ay", "cpu", "keyboard", "memory", "plus3fdc", "ula"}},
+		{roms.ModelPlus3, []string{"audiodac", "ay", "cpu", "emu.video", "keyboard", "memory", "plus3fdc", "ula"}},
 	} {
 		t.Run(roms.GetModelName(tc.model), func(t *testing.T) {
 			emu := quietEmulator(t, tc.model)
@@ -94,7 +94,7 @@ func TestStateRegistryDeviceSetNext(t *testing.T) {
 	}
 	emu := quietEmulator(t, roms.ModelNext)
 	want := []string{
-		"ay.turbosound", "cpu", "keyboard", "memory",
+		"ay.turbosound", "cpu", "emu.video", "keyboard", "memory",
 		"next.clipwindows", "next.copper", "next.ctc", "next.dac", "next.divmmc", "next.dma",
 		"next.im2", "next.layer2", "next.lores", "next.nextregs", "next.palette", "next.reset",
 		"next.sprite", "next.tilemap", "next.uartsys", "next.ulaplus",

@@ -71,7 +71,10 @@ type cpuState struct {
 	// FrameSyncAt follows the machine's timing, which the memory device
 	// restores without re-running its observers, so it is captured here.
 	FrameSyncAt uint64
-	IM2Vector   byte
+	// FrameTStates is the step driver's frame length, which follows the
+	// machine's timing and 50/60 Hz selection the same way.
+	FrameTStates uint64
+	IM2Vector    byte
 
 	// Speed selection is guest-visible state on the Next (NextReg $07).
 	SpeedSelect byte
@@ -124,6 +127,7 @@ func (c *CPU) snapshot() cpuState {
 		StepSyncAt:           c.stepSyncAt,
 		NominalBudget:        c.nominalBudget,
 		FrameSyncAt:          c.FrameSyncAt,
+		FrameTStates:         c.FrameTStates,
 		IM2Vector:            c.IM2Vector,
 
 		SpeedSelect: c.speedSelect,
@@ -200,6 +204,9 @@ func (c *CPU) LoadState(b []byte) error {
 	c.syncFrameStart, c.syncFrameEnd = s.SyncFrameStart, s.SyncFrameEnd
 	c.stepFrameStart, c.stepSyncFired, c.stepGridAnchor = s.StepFrameStart, s.StepSyncFired, s.StepGridAnchor
 	c.stepSyncAt, c.nominalBudget, c.FrameSyncAt = s.StepSyncAt, s.NominalBudget, s.FrameSyncAt
+	if s.FrameTStates != 0 { // a capture from before the field keeps the machine's
+		c.FrameTStates = s.FrameTStates
+	}
 	c.nextFrameBoundary = s.NextFrameBoundary
 	c.IM2Vector = s.IM2Vector
 

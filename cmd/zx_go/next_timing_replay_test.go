@@ -77,3 +77,51 @@ func TestReplayAcrossAMachineTimingChange(t *testing.T) {
 		t.Error("replay across the timing change landed on a different machine")
 	}
 }
+
+// The same across a 50/60 Hz switch: NR$05 bit 2 latches at the frame sync
+// inside a frame the loop ran, and stepping back across it lands on the
+// machine the live run passed through, the effective 50/60 Hz included.
+func TestReplayAcrossAFiftySixtyChange(t *testing.T) {
+	if _, err := newEmulator(roms.ModelNext); err != nil {
+		t.Skipf("Next core unavailable: %v", err)
+	}
+	emu, tt := armReplayFixture(t, roms.ModelNext, 20000, 16)
+	for i := 0; i < 3; i++ {
+		runOneFrameHeadless(emu, roms.ModelNext)
+	}
+	// The guest makes the change: DI; NEXTREG $05,$04 (60 Hz); JR $.
+	emu.mem.SetMMU(4, 0x20)
+	for i, b := range []byte{0xF3, 0xED, 0x91, 0x05, 0x04, 0x18, 0xFE} {
+		emu.mem.Write(0x8000+uint16(i), b)
+	}
+	emu.cpu.PC = 0x8000
+	reg := emu.stateRegistry()
+	passed := reg.Capture()
+	passedAt := emu.cpu.InstructionCount()
+
+	n := newInstantCounter(emu)
+	emu.cpu.BreakpointCheck = n.check(0)
+	runOneFrameHeadless(emu, roms.ModelNext) // runs the NEXTREG; its sync latches 60 Hz
+	n.frameEnd()
+	if !emu.video60Hz {
+		t.Fatal("60 Hz did not latch")
+	}
+	const stopAfter = 300
+	emu.cpu.BreakpointCheck = n.check(stopAfter)
+	runOneFrameHeadless(emu, roms.ModelNext)
+	emu.cpu.BreakpointCheck = nil
+
+	landed, err := tt.replayBack(n.instants)
+	if err != nil {
+		t.Fatalf("replay-back %d: %v", n.instants, err)
+	}
+	if landed != passedAt {
+		t.Errorf("landed on instruction %d, want %d", landed, passedAt)
+	}
+	if emu.video60Hz || emu.ula.SixtyHz() || emu.mem.SixtyHz() {
+		t.Error("the replay landed at 50 Hz's instant still running 60 Hz")
+	}
+	if !bytes.Equal(reg.Capture().Bytes(), passed.Bytes()) {
+		t.Error("replay across the 50/60 Hz change landed on a different machine")
+	}
+}

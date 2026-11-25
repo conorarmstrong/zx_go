@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/conorarmstrong/zx_go/pkg/machinestate"
@@ -49,6 +50,7 @@ func (e *emulator) stateRegistry() *machinestate.Registry {
 	// is stranger than restoring nothing. e.ula is nil on the ZX80/ZX81, which
 	// generate video from the CPU.
 	registerDevices(r, e.cpu, e.mem, e.kbd, e.ula, e.speccyDAC)
+	registerDevices(r, videoModeDevice{e})
 
 	// AY. On the Next the TurboSound engine is the device: it owns all three
 	// generators plus the $FFFD chip selection and the NextReg $06 reset, and
@@ -113,4 +115,25 @@ func registerDevices(r *machinestate.Registry, ds ...machinestate.Device) {
 		}
 		r.Register(d)
 	}
+}
+
+// videoModeDevice captures the emulator's own 50/60 Hz flag, which the frame
+// loops size their frames from. The ULA and memory capture their copies.
+type videoModeDevice struct{ e *emulator }
+
+func (d videoModeDevice) StateID() string { return "emu.video" }
+
+func (d videoModeDevice) SaveState() []byte {
+	if d.e.video60Hz {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+func (d videoModeDevice) LoadState(b []byte) error {
+	if len(b) != 1 {
+		return fmt.Errorf("emu.video: %d bytes, want 1", len(b))
+	}
+	d.e.video60Hz = b[0] == 1
+	return nil
 }

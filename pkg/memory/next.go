@@ -778,3 +778,23 @@ func (m *Memory) TakePending60Hz() (on, changed bool) {
 	m.sixtyHzHas = false
 	return m.sixtyHzPending, m.sixtyHzPending != m.sixtyHz
 }
+
+// FiftyHzForced reports that the timing in force is the Pentagon's, which
+// zxnext.vhd:5835-5836 holds at 50 Hz whatever NR$05 says.
+func (m *Memory) FiftyHzForced() bool { return m.TimingModel() == roms.ModelPentagon }
+
+// ClearPending60Hz drops a pending 50/60 Hz write: the machine has left the
+// Next whose register it belonged to.
+func (m *Memory) ClearPending60Hz() { m.sixtyHzHas = false }
+
+// SixtyHzAfterSync is the 50/60 Hz selection the next frame sync will put in
+// force, for the frame pacer, which arms a frame's timer before its sync.
+func (m *Memory) SixtyHzAfterSync() bool {
+	if m.sixtyHzHas && m.timingModelFor(m.nextTimingPending) != roms.ModelPentagon {
+		return m.sixtyHzPending
+	}
+	if m.timingModelFor(m.nextTimingPending) == roms.ModelPentagon {
+		return false
+	}
+	return m.sixtyHz
+}

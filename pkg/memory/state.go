@@ -113,6 +113,7 @@ type memState struct {
 	CDAt                          uint64
 	NR03Type, NR03Lock, NR03Top   byte
 	SixtyHzPending, SixtyHzHas    bool
+	SixtyHz                       bool // the effective 50/60 Hz selection
 
 	MFActive bool
 	MFRAM    []byte
@@ -172,6 +173,7 @@ func (m *Memory) SaveState() []byte {
 		NR03Top:               m.nr03Top,
 		SixtyHzPending:        m.sixtyHzPending,
 		SixtyHzHas:            m.sixtyHzHas,
+		SixtyHz:               m.sixtyHz,
 		ConfigModeActive:      m.configModeActive,
 		ConfigModeRAMPage:     m.configModeRAMPage,
 		MFActive:              m.mfActive,
@@ -272,6 +274,7 @@ func (m *Memory) LoadState(b []byte) error {
 	m.cdPending, m.cdHas, m.cdAt = s.CDPending, s.CDHas, s.CDAt
 	m.nr03Type, m.nr03Lock, m.nr03Top = s.NR03Type, s.NR03Lock, s.NR03Top
 	m.sixtyHzPending, m.sixtyHzHas = s.SixtyHzPending, s.SixtyHzHas
+	m.sixtyHz = s.SixtyHz
 	if m.nr03Type == 0 { // a capture from before these fields
 		m.nr03Type, m.nr03Top = 0x03, 1
 	}

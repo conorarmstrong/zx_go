@@ -1443,6 +1443,7 @@ func (m *Memory) SwitchModel(model roms.SpectrumModel) error {
 
 	m.currentModel = model
 	m.nextTiming, m.nextTimingPending = 0x03, 0x03 // power-on "011" (zxnext.vhd:1099)
+	m.sixtyHzHas = false
 	if err := m.setupModel(model); err != nil {
 		return err
 	}

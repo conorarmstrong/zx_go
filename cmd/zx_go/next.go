@@ -1208,6 +1208,10 @@ func wireNextSubsystems(e *emulator) error {
 		at := cpu.FrameSyncAt
 		on, changed60 := mem.TakePending60Hz()
 		latched := mem.LatchVideoTiming()
+		// Pentagon timing holds 50 Hz (zxnext.vhd:5835-5836).
+		if mem.FiftyHzForced() {
+			on, changed60 = false, e.video60Hz
+		}
 		if changed60 {
 			apply60Hz(on)
 		}
@@ -2036,6 +2040,11 @@ func unwireNextSubsystems(e *emulator) {
 	mem.ClearVideoTimingObservers() // they hold the Next's dispatcher and CPU wiring
 	cpu.FrameTStates = 0
 	cpu.FrameSyncAt, cpu.FrameSyncFn = 0, nil
+	// NR$05's 50/60 Hz belongs to the Next: no other machine here has it.
+	e.video60Hz = false
+	u.Set60Hz(false)
+	mem.Set60Hz(false)
+	mem.ClearPending60Hz()
 	cpu.RemovePreFetchHook("divmmc")
 	cpu.RemovePreFetchHook("esxdos")
 

@@ -1354,7 +1354,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		// (no accumulated drift) and drops missed frames instead of running
 		// them back-to-back — see framepacing.go.
 		pacer := newFramePacer(time.Now())
-		timer := time.NewTimer(frameDurationForModel(e.currentTimingModel(), e.video60Hz))
+		timer := time.NewTimer(frameDurationForModel(e.currentTimingModel(), e.currentSixtyHz()))
 		defer timer.Stop()
 
 		frameCount := 0
@@ -1362,7 +1362,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		for {
 			select {
 			case <-timer.C:
-				period := frameDurationForModel(e.currentTimingModel(), e.video60Hz)
+				period := frameDurationForModel(e.currentTimingModel(), e.currentSixtyHz())
 				timer.Reset(pacer.next(time.Now(), period))
 				if !e.paused.Load() {
 					// Honour the remote debugger's pause state.
