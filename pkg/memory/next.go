@@ -763,3 +763,18 @@ func (m *Memory) NR03Fields() (machineType, userDTLock, top byte) {
 func (m *Memory) SetNR03Fields(machineType, userDTLock, top byte) {
 	m.nr03Type, m.nr03Lock, m.nr03Top = machineType, userDTLock, top
 }
+
+// SetPending60Hz records an NR$05 bit 2 write. Like the machine timing it
+// takes effect at the frame sync (eff_nr_05_5060, zxnext.vhd:6699-6700); the
+// machine collects it there with TakePending60Hz.
+func (m *Memory) SetPending60Hz(on bool) { m.sixtyHzPending, m.sixtyHzHas = on, true }
+
+// TakePending60Hz returns a pending 50/60 Hz selection that differs from the
+// one in force, and clears it.
+func (m *Memory) TakePending60Hz() (on, changed bool) {
+	if !m.sixtyHzHas {
+		return false, false
+	}
+	m.sixtyHzHas = false
+	return m.sixtyHzPending, m.sixtyHzPending != m.sixtyHz
+}

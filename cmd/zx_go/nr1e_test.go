@@ -99,3 +99,38 @@ func TestNR03MachineTimingTakesEffectAtTheFrameSync(t *testing.T) {
 		t.Errorf("ULA frame %d, want 69888", got)
 	}
 }
+
+// NR$05 bit 2 (50/60 Hz) is latched at the same frame sync as NR$03's timing
+// (eff_nr_05_5060, zxnext.vhd:6699-6700): the frame that contains the sync
+// runs the 50 Hz figures to raw (0,1) and the 60 Hz ones from there to the
+// interrupt, and the next frame is a 60 Hz one.
+func TestNR05FiftySixtyTakesEffectAtTheFrameSync(t *testing.T) {
+	emu, err := newEmulator(roms.ModelNext)
+	if err != nil || emu.nextRegs == nil {
+		t.Skipf("Next core unavailable: %v", err)
+	}
+	d := emu.nextRegs
+	d.WriteReg(0x07, 0x00)
+	runOneFrameHeadless(emu, roms.ModelNext)
+	frameEnd := func() uint64 { return emu.cpu.Clock() - emu.cpu.Tstates() }
+
+	d.WriteReg(0x05, d.ReadReg(0x05)|0x04)
+	if emu.video60Hz || emu.ula.SixtyHz() {
+		t.Fatal("60 Hz took effect before the frame sync")
+	}
+	before := frameEnd()
+	runOneFrameHeadless(emu, roms.ModelNext)
+	if !emu.video60Hz || !emu.ula.SixtyHz() || !emu.mem.SixtyHz() {
+		t.Fatal("the frame sync did not apply 60 Hz")
+	}
+	// +3 at 50 Hz from its interrupt (vc 1, hc 126) to (0,1), then +3 at
+	// 60 Hz from (0,1) to its interrupt (vc 0, hc 126).
+	if got, want := frameEnd()-before, uint64((311*456-(456+126)+126)/2); got != want {
+		t.Errorf("the frame with the sync ran %d T, want %d", got, want)
+	}
+	before = frameEnd()
+	runOneFrameHeadless(emu, roms.ModelNext)
+	if got := frameEnd() - before; got != 60192 {
+		t.Errorf("the next frame ran %d T, want 60192 (60 Hz)", got)
+	}
+}

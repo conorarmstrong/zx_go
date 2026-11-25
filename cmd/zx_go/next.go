@@ -1148,18 +1148,9 @@ func wireNextSubsystems(e *emulator) error {
 		DivMMCPager: pager,
 		IM2:         im2,
 		Video60Hz:   func() bool { return e.video60Hz },
-		SetVideo60Hz: func(on bool) {
-			e.video60Hz = on
-			u.Set60Hz(on)
-			mem.Set60Hz(on)
-			configureIntTiming(cpu, mem.NextMachineTiming(), on)
-			cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), on))
-			cpu.FrameSyncAt = uint64(next.VideoTimingFor(mem.NextMachineTiming(), on).TFromInt(0, 1))
-			// The line-interrupt scheduler pre-computes a frame-relative
-			// offset from the raster line count; re-run its NR$22 handler
-			// so a mid-run 50/60 Hz switch takes effect.
-			refreshLineInt()
-		},
+		// NR$05 bit 2 waits for the frame sync, as eff_nr_05_5060 does
+		// (zxnext.vhd:6699-6700); FrameSyncFn applies it.
+		SetVideo60Hz: func(on bool) { mem.SetPending60Hz(on) },
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
@@ -1196,15 +1187,31 @@ func wireNextSubsystems(e *emulator) error {
 	})
 	// At the sync a pending timing takes over: the counters run on from (0,0)
 	// under the new figures, so this frame ends at the new timing's interrupt.
-	// Known approximations, each confined to the one frame of a personality
-	// switch: the Pentagon's odd c_int_h leaves the length half a T-state
-	// short; NR$05's 50/60 Hz still applies at once (the FPGA latches it at
-	// this sync too); and the frame renders with the new timing throughout.
+	// NR$05's 50/60 Hz latches at the same sync. Two limits, each confined to
+	// the one frame of a switch: the Pentagon's odd c_int_h makes that frame
+	// an odd number of 7 MHz columns, and the emulator counts whole T-states,
+	// so it is half a T-state short; and the frame is drawn with the new
+	// timing throughout.
 	cpu.FrameSyncAt = syncPoint()
+	apply60Hz := func(on bool) {
+		e.video60Hz = on
+		u.Set60Hz(on)
+		mem.Set60Hz(on)
+		configureIntTiming(cpu, mem.NextMachineTiming(), on)
+		cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), on))
+		cpu.FrameSyncAt = syncPoint()
+		// The line interrupt's offset is pre-computed from the line count.
+		refreshLineInt()
+	}
 	cpu.FrameSyncFn = func() uint64 {
 		old := next.VideoTimingFor(mem.NextMachineTiming(), e.video60Hz)
 		at := cpu.FrameSyncAt
-		if !mem.LatchVideoTiming() {
+		on, changed60 := mem.TakePending60Hz()
+		latched := mem.LatchVideoTiming()
+		if changed60 {
+			apply60Hz(on)
+		}
+		if !latched && !changed60 {
 			return 0
 		}
 		nv := next.VideoTimingFor(mem.NextMachineTiming(), e.video60Hz)

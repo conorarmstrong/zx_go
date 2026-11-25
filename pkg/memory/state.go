@@ -112,6 +112,7 @@ type memState struct {
 	CDPending, CDHas              bool
 	CDAt                          uint64
 	NR03Type, NR03Lock, NR03Top   byte
+	SixtyHzPending, SixtyHzHas    bool
 
 	MFActive bool
 	MFRAM    []byte
@@ -169,6 +170,8 @@ func (m *Memory) SaveState() []byte {
 		NR03Type:              m.nr03Type,
 		NR03Lock:              m.nr03Lock,
 		NR03Top:               m.nr03Top,
+		SixtyHzPending:        m.sixtyHzPending,
+		SixtyHzHas:            m.sixtyHzHas,
 		ConfigModeActive:      m.configModeActive,
 		ConfigModeRAMPage:     m.configModeRAMPage,
 		MFActive:              m.mfActive,
@@ -268,6 +271,7 @@ func (m *Memory) LoadState(b []byte) error {
 	m.p3FloatByte = s.P3FloatByte
 	m.cdPending, m.cdHas, m.cdAt = s.CDPending, s.CDHas, s.CDAt
 	m.nr03Type, m.nr03Lock, m.nr03Top = s.NR03Type, s.NR03Lock, s.NR03Top
+	m.sixtyHzPending, m.sixtyHzHas = s.SixtyHzPending, s.SixtyHzHas
 	if m.nr03Type == 0 { // a capture from before these fields
 		m.nr03Type, m.nr03Top = 0x03, 1
 	}

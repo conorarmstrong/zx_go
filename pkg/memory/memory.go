@@ -218,6 +218,9 @@ type Memory struct {
 	// nr03Type, nr03Lock and nr03Top are NR$03's machine type, user
 	// display-timing lock and bit 7 (see NR03Fields).
 	nr03Type, nr03Lock, nr03Top byte
+	// sixtyHzPending holds an NR$05 50/60 Hz write until the frame sync
+	// (eff_nr_05_5060); sixtyHzHas marks it. See SetPending60Hz.
+	sixtyHzPending, sixtyHzHas bool
 
 	// Spectrum Next config-mode RAM-page mapping at $0000-$3FFF.
 	//
