@@ -502,6 +502,8 @@ card is `roms/next/sd.img`, which knows nothing of new folders.
   first act is an esxDOS call (RST $08), and NextZXOS 2.10a loads every 48K
   snapshot with NR$B8 = $00 (ROM 2 `NEXTREG $B8,$00` at $0A85, kept by the
   Multiface restore), with or without the loader's Printer support option.
+  Accepted as final 2026-11-25: a faithful emulator reproduces it, so it stays
+  recorded as a known issue with that evidence.
 - [x] ~~**+3 CP/M disk images**~~: mystery-city-fortuneteller's Next build is
   its `.z5`, which the Browser's ZXZVM command runs; it answers a key.
 
