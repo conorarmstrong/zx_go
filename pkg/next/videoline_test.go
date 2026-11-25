@@ -30,7 +30,7 @@ func TestActiveVideoLineIsCVC(t *testing.T) {
 		{"60 Hz at the interrupt", 0, true, 0, 224}, // vc 0: (0 - 40) mod 264
 		{"60 Hz at the reload", 9118, true, 0, 0},   // vc 40, hc 124
 	} {
-		if got := ActiveVideoLine(c.t, c.sixty, c.offset); got != c.want {
+		if got := VideoTimingFor(0x02, c.sixty).ActiveVideoLine(c.t, c.offset); got != c.want {
 			t.Errorf("%s: ActiveVideoLine(%d, %v, %d) = %d, want %d", c.name, c.t, c.sixty, c.offset, got, c.want)
 		}
 	}

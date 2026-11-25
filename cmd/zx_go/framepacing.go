@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/conorarmstrong/zx_go/pkg/roms"
+	"github.com/conorarmstrong/zx_go/pkg/ula"
 )
 
 // CPU clock rates in Hz. The 48K and the Pentagon run at 3.5 MHz; the 128K
@@ -21,6 +22,47 @@ func (e *emulator) currentModel() roms.SpectrumModel {
 	e.coreMu.Lock()
 	defer e.coreMu.Unlock()
 	return e.model
+}
+
+// currentTimingModel is the model whose frame timing is in force: the Next's
+// follows its NR$03 machine timing (memory.TimingModel).
+func (e *emulator) currentTimingModel() roms.SpectrumModel {
+	e.coreMu.Lock()
+	defer e.coreMu.Unlock()
+	return e.timingModel(e.model)
+}
+
+// timingModel maps model to the timing in force, which differs from it only
+// on the Next. The caller holds coreMu or runs on the emulation goroutine.
+func (e *emulator) timingModel(model roms.SpectrumModel) roms.SpectrumModel {
+	if e.mem != nil && e.mem.GetCurrentModel() == model {
+		return e.mem.TimingModel()
+	}
+	return model
+}
+
+// frameBudget is the frame sync: a pending NR$03 machine timing takes effect
+// (zxnext.vhd:6694-6703), and the frame's length in T-states follows the
+// timing then in force. Every frame loop sizes its frame through here.
+//
+// The sprite engine's per-line budget follows the line length too. It is set
+// here every frame rather than on a change, so a frame replayed from a
+// checkpoint finds it as the live run did.
+func (e *emulator) frameBudget(model roms.SpectrumModel) int {
+	budget := frameTStatesForModel(e.timingModel(model), e.video60Hz)
+	if e.mem != nil && e.mem.GetCurrentModel() == model {
+		e.mem.LatchVideoTiming()
+		budget = frameTStatesForModel(e.timingModel(model), e.video60Hz)
+		if model == roms.ModelNext {
+			if e.nextSprites != nil {
+				e.nextSprites.SetLineClockBudget(ula.TStatesPerLineFor(e.mem.TimingModel()) * 8)
+			}
+			// The single-step driver (debugger, replay) finds the frame
+			// boundary where ExecuteFrame does.
+			e.cpu.FrameTStates = uint64(budget)
+		}
+	}
+	return budget
 }
 
 // cpuHzForModel returns the model's CPU clock.

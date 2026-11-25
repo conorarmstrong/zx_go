@@ -101,7 +101,7 @@ func (p *nextDebugProvider) HardwareView(view string) []string {
 			return nil
 		}
 		text := formatCopperDisasm(c.Instruction, c.Cursor(), c.Mode(), copper.MaxInstructions,
-			ula.LinesPerFrameFor(e.mem.GetCurrentModel()))
+			ula.LinesPerFrameFor(e.mem.TimingModel()))
 		return strings.Split(strings.TrimRight(text, "\r\n"), "\r\n")
 	}
 	return nil

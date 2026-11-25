@@ -222,6 +222,7 @@ func (h *Harness) Reboot() {
 // asynchronous BASIC operations to complete.
 func (h *Harness) RunFrames(n int) {
 	for i := 0; i < n; i++ {
+		h.mem.LatchVideoTiming() // the frame sync (see Memory.LatchVideoTiming)
 		h.cpu.ExecuteFrame(TstatesPerFrame)
 		// One frame of guest time, whatever speed the CPU is running at.
 		// Scaling by SpeedMultiplier counted CPU cycles EXECUTED, not time

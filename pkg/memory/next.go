@@ -614,3 +614,82 @@ func (m *Memory) configModePageBacking(p byte) []byte {
 	}
 	return nil
 }
+
+// SetNextMachineTiming records an NR$03 machine-timing write (bits 6:4 as
+// the core stores them: 001 48K, 010 128K, 011 +3, 100 Pentagon). It takes
+// effect at the next frame sync, as eff_nr_03_machine_timing does
+// (zxnext.vhd:6694-6703); see LatchVideoTiming.
+func (m *Memory) SetNextMachineTiming(t byte) { m.nextTimingPending = t & 0x07 }
+
+// NextMachineTiming is the effective NR$03 machine timing.
+func (m *Memory) NextMachineTiming() byte { return m.nextTiming }
+
+// NextMachineTimingWritten is the NR$03 machine timing as last written, which
+// NR$03 reads back (nr_03_machine_timing, zxnext.vhd:5894) even before the
+// frame sync makes it effective.
+func (m *Memory) NextMachineTimingWritten() byte { return m.nextTimingPending }
+
+// LatchVideoTiming is the frame sync: a pending NR$03 machine timing becomes
+// effective. It reports whether the timing changed, after running the
+// observers registered with OnVideoTimingChange.
+func (m *Memory) LatchVideoTiming() bool {
+	if m.nextTimingPending == m.nextTiming {
+		return false
+	}
+	m.nextTiming = m.nextTimingPending
+	m.applyTimingCaches()
+	for _, fn := range m.timingObservers {
+		fn()
+	}
+	return true
+}
+
+// OnVideoTimingChange registers fn to run when LatchVideoTiming changes the
+// Next's machine timing.
+func (m *Memory) OnVideoTimingChange(fn func()) { m.timingObservers = append(m.timingObservers, fn) }
+
+// ClearVideoTimingObservers drops every observer, for the machine leaving the
+// Next: they reach into the Next's own wiring.
+func (m *Memory) ClearVideoTimingObservers() { m.timingObservers = nil }
+
+// TimingModel is the classic machine whose video and contention timing is in
+// force: the model itself, except on the Next, where NR$03's machine timing
+// picks it (zxnext.vhd:5758-5778: bit 2 Pentagon, "10" 128K, "11" +3, else
+// 48K). pkg/roms holds each one's figures, derived from zxula_timing.vhd.
+func (m *Memory) TimingModel() roms.SpectrumModel {
+	if m.currentModel != roms.ModelNext {
+		return m.currentModel
+	}
+	switch t := m.nextTiming; {
+	case t&0x04 != 0:
+		return roms.ModelPentagon
+	case t&0x03 == 0x02:
+		return roms.Model128K
+	case t&0x03 == 0x03:
+		return roms.ModelPlus3
+	default:
+		return roms.Model48K
+	}
+}
+
+// applyTimingCaches re-derives the contention shape from the timing in force.
+// isContendedBank runs on every memory access, so it reads these caches
+// rather than the model.
+func (m *Memory) applyTimingCaches() {
+	tm := m.TimingModel()
+	m.contendTiming = contentionTimingFor(tm)
+	m.contendTPerLine = uint64(roms.TStatesPerLine(tm))
+	m.contendStart = uint64(roms.FirstContendedTStateFor(tm, m.sixtyHz))
+}
+
+// NoteCPUAccess records a CPU memory read or write (z80.CPU.CPUAccessHook).
+// The last one to contended memory is the +3 floating bus between ULA
+// fetches (p3_floating_bus_dat, zxnext.vhd:4496-4507).
+func (m *Memory) NoteCPUAccess(addr uint16, val byte) {
+	if m.isContendedBank(addr) {
+		m.p3FloatByte = val
+	}
+}
+
+// P3FloatingBus is the last CPU access to contended memory, $FF at power-on.
+func (m *Memory) P3FloatingBus() byte { return m.p3FloatByte }

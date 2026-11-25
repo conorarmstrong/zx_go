@@ -75,5 +75,5 @@ func (d *remoteDebugger) cmdCopperDisasm() string {
 	}
 	c := d.emu.nextCopper
 	return formatCopperDisasm(c.Instruction, c.Cursor(), c.Mode(), copper.MaxInstructions,
-		ula.LinesPerFrameFor(d.emu.mem.GetCurrentModel()))
+		ula.LinesPerFrameFor(d.emu.mem.TimingModel()))
 }

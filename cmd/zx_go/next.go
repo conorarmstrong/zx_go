@@ -833,7 +833,7 @@ func wireNextSubsystems(e *emulator) error {
 	// The engine's per-scanline time budget follows the machine's line
 	// length: two 7 MHz columns per T-state, four 28 MHz master clocks per
 	// column (sprites.vhd's state machine runs on clock_master_i).
-	sprites.SetLineClockBudget(ula.TStatesPerLineFor(roms.ModelNext) * 8)
+	sprites.SetLineClockBudget(ula.TStatesPerLineFor(mem.TimingModel()) * 8)
 	cop := copper.New()
 	cop.SetRegWriter(disp)
 	rtcEngine := rtcpkg.New()
@@ -1149,9 +1149,8 @@ func wireNextSubsystems(e *emulator) error {
 			e.video60Hz = on
 			u.Set60Hz(on)
 			mem.Set60Hz(on)
-			if nr03, ok := next.MachineTimingFor(roms.ModelNext); ok {
-				configureIntTiming(cpu, nr03, on)
-			}
+			configureIntTiming(cpu, mem.NextMachineTiming(), on)
+			cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), on))
 			// The line-interrupt scheduler pre-computes a frame-relative
 			// offset from the raster line count; re-run its NR$22 handler
 			// so a mid-run 50/60 Hz switch takes effect.
@@ -1160,6 +1159,17 @@ func wireNextSubsystems(e *emulator) error {
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	// A change of NR$03 machine timing, latched at the frame sync, moves the
+	// frame INT's pulse width (zxnext.vhd:2014-2033) and the line interrupt's
+	// offset from the frame interrupt. The sprite line budget is set by
+	// frameBudget each frame.
+	mem.OnVideoTimingChange(func() {
+		configureIntTiming(cpu, mem.NextMachineTiming(), e.video60Hz)
+		disp.WriteReg(0x22, disp.ReadReg(0x22))
+	})
+	// The +3 floating bus keeps the CPU's last access to contended memory.
+	cpu.CPUAccessHook = mem.NoteCPUAccess
+	cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), e.video60Hz))
 	u.SetNextCTC(ctcBank)
 	ctcClock := next.NewCTCClock(ctcBank, im2)
 	// The UART register block (ports $133B..$163B) and the ESP behind UART 0.
@@ -1384,7 +1394,7 @@ func wireNextSubsystems(e *emulator) error {
 	// The value is the copper's cvc, counted from the first paper line with
 	// NR$64 added, not a line count from the frame interrupt (zxnext.vhd:5982).
 	videoLine := func(d *nextregs.Dispatcher) int {
-		return next.ActiveVideoLine(u.VideoTStatesInFrame(), u.SixtyHz(), d.Raw(0x64))
+		return next.VideoTimingFor(mem.NextMachineTiming(), u.SixtyHz()).ActiveVideoLine(u.VideoTStatesInFrame(), d.Raw(0x64))
 	}
 	disp.SetOnRead(0x1F, func(d *nextregs.Dispatcher) byte { return byte(videoLine(d) & 0xFF) })
 	disp.SetOnRead(0x1E, func(d *nextregs.Dispatcher) byte { return byte((videoLine(d) >> 8) & 0x01) })
@@ -1970,6 +1980,9 @@ func unwireNextSubsystems(e *emulator) {
 
 	cpu.Variant = z80.VariantZ80
 	cpu.NextRegs = nil
+	cpu.CPUAccessHook = nil
+	mem.ClearVideoTimingObservers() // they hold the Next's dispatcher and CPU wiring
+	cpu.FrameTStates = 0
 	cpu.RemovePreFetchHook("divmmc")
 	cpu.RemovePreFetchHook("esxdos")
 

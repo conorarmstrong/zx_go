@@ -70,7 +70,7 @@ func TestDisplayStartTState(t *testing.T) {
 		{ModelPlus2, 14362},
 		{ModelPlus2A, 14363},
 		{ModelPlus3, 14363},
-		{ModelNext, 14362},
+		{ModelNext, 14363}, // power-on NR$03 machine timing "011", +3 (zxnext.vhd:1099)
 		{ModelPentagon, 17982},
 	} {
 		if got := DisplayStartTState(tc.model); got != tc.want {
@@ -161,7 +161,7 @@ func Test60HzGeometry(t *testing.T) {
 		{ModelPlus2, 264, 60192, 9118, 9117},
 		{ModelPlus2A, 264, 60192, 9119, 9118},
 		{ModelPlus3, 264, 60192, 9119, 9118},
-		{ModelNext, 264, 60192, 9118, 9117},
+		{ModelNext, 264, 60192, 9119, 9118}, // +3 timing at power-on
 	} {
 		if got := LinesPerFrameFor(tc.model, true); got != tc.lines {
 			t.Errorf("LinesPerFrameFor(%s,60) = %d, want %d", GetModelName(tc.model), got, tc.lines)

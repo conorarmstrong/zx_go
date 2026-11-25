@@ -74,9 +74,9 @@ func DisplayStartTStateFor(model SpectrumModel, sixtyHz bool) int {
 		switch model {
 		case Model48K:
 			return 8960
-		case ModelPlus2A, ModelPlus3:
+		case ModelPlus2A, ModelPlus3, ModelNext:
 			return 9119
-		case Model128K, ModelPlus2, ModelNext:
+		case Model128K, ModelPlus2:
 			return 9118
 		}
 		// Pentagon has no 60 Hz timing in zxula_timing.vhd.
@@ -84,13 +84,15 @@ func DisplayStartTStateFor(model SpectrumModel, sixtyHz bool) int {
 	switch model {
 	case Model48K:
 		return 14336
-	case ModelPlus2A, ModelPlus3:
+	case ModelPlus2A, ModelPlus3, ModelNext:
+		// The Next powers on in +3 timing (NR$03 machine timing "011",
+		// zxnext.vhd:1099) and NextZXOS keeps it; a running Next follows
+		// its NR$03 instead (memory.TimingModel).
 		return 14363
 	case ModelPentagon:
 		return 17982
 	default:
-		// 128K, +2, and the Next (which boots in 128K timing on the
-		// path TX-1696 and the raster-wait loops use).
+		// 128K and +2.
 		return 14362
 	}
 }

@@ -573,7 +573,7 @@ func (u *ULA) FrameTStates() int {
 	if u.mem == nil {
 		return 69888
 	}
-	return roms.FrameTStatesFor(u.mem.GetCurrentModel(), u.sixtyHz)
+	return roms.FrameTStatesFor(u.mem.TimingModel(), u.sixtyHz)
 }
 
 // tStatesPerLine is the live scanline length. The zero-value ULA used by
@@ -582,7 +582,7 @@ func (u *ULA) tStatesPerLine() int {
 	if u.mem == nil || !u.modelSet {
 		return TStatesPerLine
 	}
-	return TStatesPerLineFor(u.mem.GetCurrentModel())
+	return TStatesPerLineFor(u.mem.TimingModel())
 }
 
 // linesPerFrame is the live scanline count for the current model and mode.
@@ -590,7 +590,7 @@ func (u *ULA) linesPerFrame() int {
 	if u.mem == nil || !u.modelSet {
 		return LinesPerFrame
 	}
-	return roms.LinesPerFrameFor(u.mem.GetCurrentModel(), u.sixtyHz)
+	return roms.LinesPerFrameFor(u.mem.TimingModel(), u.sixtyHz)
 }
 
 // displayStartTState is the live frame-relative T-state of the first paper
@@ -599,7 +599,7 @@ func (u *ULA) displayStartTState() int {
 	if u.mem == nil || !u.modelSet {
 		return roms.DisplayStartTState(roms.Model128K)
 	}
-	return roms.DisplayStartTStateFor(u.mem.GetCurrentModel(), u.sixtyHz)
+	return roms.DisplayStartTStateFor(u.mem.TimingModel(), u.sixtyHz)
 }
 
 // SetNextCompositor installs the Spectrum Next render stack's
@@ -848,7 +848,7 @@ func (u *ULA) videoTStates(t int) int {
 // sload. The Pentagon reloads it on every pixel (zxula.vhd:443-447), so there
 // the unit is one T-state, 2 pixels.
 func (u *ULA) paintBorder(changes []borderChange, colour byte) {
-	model := u.mem.GetCurrentModel()
+	model := u.mem.TimingModel()
 	line := u.tStatesPerLine()
 	step := 4
 	if model == roms.ModelPentagon {
@@ -1561,6 +1561,11 @@ func (u *ULA) readPortInternal(addr uint16) (byte, bool) {
 	// The +2A/+3 memory controller disables this behaviour;
 	// ModelNext also returns 0xFF for compatibility with most
 	// post-Sinclair software that's clean about port use.
+	if u.mem != nil && u.mem.GetCurrentModel() == roms.ModelNext {
+		if v, ok := u.nextFloatingBus(addr); ok {
+			return v, true
+		}
+	}
 	return u.floatingBusByte(), false
 }
 
@@ -1579,6 +1584,54 @@ func (u *ULA) floatingBusByte() byte {
 	if model == roms.ModelPlus2A || model == roms.ModelPlus3 || model == roms.ModelNext {
 		return 0xFF
 	}
+	return u.ulaFloatingBus()
+}
+
+// nextFloatingBus answers the Next's two floating-bus ports, which follow its
+// NR$03 machine timing. Port $FF reads the Timex register when NR$08 bit 2 is
+// set, else the ULA's floating bus on 48K and 128K timing and $FF on the
+// others (zxnext.vhd:2813, :4513). On +3 timing, A15:12 = 0 with A1:0 = 01
+// is the +3 floating bus, $FF once paging is locked (:2578, :2589, :4517).
+// Both sit after every other port handler, so a port another device answers
+// keeps its answer.
+func (u *ULA) nextFloatingBus(addr uint16) (byte, bool) {
+	tm := u.mem.TimingModel()
+	switch {
+	case addr&0xFF == 0xFF:
+		if u.nextRegs != nil && u.nextRegs.ReadReg(0x08)&0x04 != 0 {
+			return u.timexVideoMode, true
+		}
+		if tm == roms.Model48K || tm == roms.Model128K {
+			return u.ulaFloatingBus(), true
+		}
+		return 0xFF, true
+	case addr&0xF003 == 0x0001 && tm == roms.ModelPlus3: // port_fd is A1:0 = 01 (zxnext.vhd:2578)
+		if !u.mem.PagingEnabled {
+			return 0xFF, true
+		}
+		// While fetching, the fetched byte with bit 0 forced on +3 timing;
+		// otherwise the last CPU access to contended memory (zxula.vhd:573).
+		if v, ok := u.ulaFetch(); ok {
+			return v | 0x01, true
+		}
+		return u.mem.P3FloatingBus(), true
+	}
+	return 0, false
+}
+
+// ulaFloatingBus is the byte the ULA is fetching at this moment, from the
+// timing in force, or $FF between fetches.
+func (u *ULA) ulaFloatingBus() byte {
+	v, _ := u.ulaFetch()
+	return v
+}
+
+// ulaFetch is the byte the ULA is fetching at this moment, with true, or
+// $FF and false between fetches.
+func (u *ULA) ulaFetch() (byte, bool) {
+	if u.mem == nil || u.mem.TStates == nil {
+		return 0xFF, false
+	}
 
 	// Compute T-state offset within the current frame.
 	tstates := int(*u.mem.TStates - u.frameStartTstate)
@@ -1594,12 +1647,12 @@ func (u *ULA) floatingBusByte() byte {
 	// construction.
 	displayStart := u.displayStartTState()
 	if tstates < displayStart {
-		return 0xFF
+		return 0xFF, false
 	}
 
 	line := (tstates - displayStart) / tPerLine
 	if line >= 192 { // bottom border
-		return 0xFF
+		return 0xFF, false
 	}
 
 	// T-states into this display line, measured from its first paper fetch.
@@ -1609,7 +1662,7 @@ func (u *ULA) floatingBusByte() byte {
 	// border and retrace, which return no screen data.
 	const horizontalScreen = 128
 	if tInDisplay >= horizontalScreen {
-		return 0xFF
+		return 0xFF, false
 	}
 	// 8 T-states per 16-pixel column pair. Within those 8 T-states
 	// the ULA's fetch pattern is:
@@ -1631,20 +1684,20 @@ func (u *ULA) floatingBusByte() byte {
 	}
 	page := u.mem.GetPage(screenBank)
 	if page == nil {
-		return 0xFF
+		return 0xFF, false
 	}
 
 	switch tInDisplay % 8 {
 	case 2:
-		return page[screenAddrForRowCol(line, column)]
+		return page[screenAddrForRowCol(line, column)], true
 	case 3:
-		return page[0x1800+(line/8)*32+column]
+		return page[0x1800+(line/8)*32+column], true
 	case 4:
-		return page[screenAddrForRowCol(line, column+1)]
+		return page[screenAddrForRowCol(line, column+1)], true
 	case 5:
-		return page[0x1800+(line/8)*32+column+1]
+		return page[0x1800+(line/8)*32+column+1], true
 	}
-	return 0xFF
+	return 0xFF, false
 }
 
 // screenAddrForRowCol returns the offset within a 16K screen RAM
@@ -1923,7 +1976,7 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 			// Record the border change with the raster T-state of the write,
 			// for Render to paint from its beam position.
 			at := u.rasterTState()
-			scanline := at / TStatesPerLineFor(u.mem.GetCurrentModel())
+			scanline := at / u.tStatesPerLine()
 			u.borderChanges = append(u.borderChanges, borderChange{tstate: at, colour: newBorder})
 			u.BorderColour = newBorder
 			if u.borderTracer != nil {
@@ -2119,10 +2172,8 @@ func (u *ULA) renderNext() *image.RGBA {
 	// It is paid per column in copper clocks, where a MOVE costs two and
 	// everything else one. columnsPerLine is the hcount column count, two
 	// per T-state (video/zxula_timing.vhd:160,196).
-	//
-	// LIMITATION: this reads the classic machine model from memory, not the
-	// Next's NR$03 machine timing (zxnext.vhd:5124).
-	columnsPerLine := TStatesPerLineFor(u.mem.GetCurrentModel()) * 2
+	// On the Next the line follows NR$03's machine timing.
+	columnsPerLine := u.tStatesPerLine() * 2
 
 	journal := u.nextRasterLog
 	if journal != nil {

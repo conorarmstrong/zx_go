@@ -201,6 +201,16 @@ type Memory struct {
 	// SetFPGABootROMLowOnly.
 	fpgaBootROMLowOnly bool
 
+	// nextTiming is the Next's effective NR$03 machine timing
+	// (eff_nr_03_machine_timing) and nextTimingPending the written value
+	// waiting for the frame sync (zxnext.vhd:6694-6703); see
+	// SetNextMachineTiming. timingObservers run when a latch changes it.
+	nextTiming, nextTimingPending byte
+	timingObservers               []func()
+	// p3FloatByte is the last CPU access to contended memory; see
+	// NoteCPUAccess.
+	p3FloatByte byte
+
 	// Spectrum Next config-mode RAM-page mapping at $0000-$3FFF.
 	//
 	// On ModelNext, the machine boots in "configuration mode"
@@ -758,11 +768,9 @@ func contentionTimingFor(model roms.SpectrumModel) contentionTiming {
 		return timing128
 	case roms.ModelPlus2A, roms.ModelPlus3:
 		return timingP3
-	case roms.ModelNext:
-		// The Next boots in 128K timing; its selectable personality is not
-		// yet routed down to the contention model.
-		return timing128
 	}
+	// The Next never reaches here: TimingModel maps it to the classic model
+	// its NR$03 machine timing selects. The Pentagon has no contention.
 	return timingNone
 }
 
@@ -951,8 +959,9 @@ func (m *Memory) portContends() bool {
 	if !m.ContentionEnabled || m.TStates == nil {
 		return false
 	}
-	// +2A/+3 have no ULA port contention
-	return m.currentModel != roms.ModelPlus3 && m.currentModel != roms.ModelPlus2A
+	// +2A/+3 timing has no ULA port contention
+	tm := m.TimingModel()
+	return tm != roms.ModelPlus3 && tm != roms.ModelPlus2A
 }
 
 // New creates a new Memory instance for a given machine model.
@@ -960,6 +969,10 @@ func New(romPath string, model roms.SpectrumModel) (*Memory, error) {
 	m := &Memory{
 		romManager:   roms.NewROMManager(romPath),
 		currentModel: model,
+		// Power-on NR$03 machine timing "011", +3 (zxnext.vhd:1099).
+		nextTiming:        0x03,
+		nextTimingPending: 0x03,
+		p3FloatByte:       0xFF,
 	}
 
 	// Initialize RAM pages. Classic models allocate banks 0..7
@@ -1038,9 +1051,7 @@ func (m *Memory) setupModel(model roms.SpectrumModel) error {
 
 	// Cache the contention shape: isContendedBank runs on EVERY memory access,
 	// so it must not re-derive these from the model each time.
-	m.contendTiming = contentionTimingFor(model)
-	m.contendTPerLine = uint64(roms.TStatesPerLine(model))
-	m.contendStart = uint64(roms.FirstContendedTStateFor(model, m.sixtyHz))
+	m.applyTimingCaches()
 
 	var err error
 	switch model {
@@ -1320,7 +1331,7 @@ func (m *Memory) GetCurrentModel() roms.SpectrumModel {
 // of the first contended T-state moves. Safe to call while running.
 func (m *Memory) Set60Hz(on bool) {
 	m.sixtyHz = on
-	m.contendStart = uint64(roms.FirstContendedTStateFor(m.currentModel, on))
+	m.contendStart = uint64(roms.FirstContendedTStateFor(m.TimingModel(), on))
 }
 
 // SixtyHz reports the current video-timing selection.
@@ -1402,6 +1413,7 @@ func (m *Memory) SwitchModel(model roms.SpectrumModel) error {
 	}
 
 	m.currentModel = model
+	m.nextTiming, m.nextTimingPending = 0x03, 0x03 // power-on "011" (zxnext.vhd:1099)
 	if err := m.setupModel(model); err != nil {
 		return err
 	}

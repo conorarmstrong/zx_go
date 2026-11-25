@@ -1354,7 +1354,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		// (no accumulated drift) and drops missed frames instead of running
 		// them back-to-back — see framepacing.go.
 		pacer := newFramePacer(time.Now())
-		timer := time.NewTimer(frameDurationForModel(e.currentModel(), e.video60Hz))
+		timer := time.NewTimer(frameDurationForModel(e.currentTimingModel(), e.video60Hz))
 		defer timer.Stop()
 
 		frameCount := 0
@@ -1362,7 +1362,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 		for {
 			select {
 			case <-timer.C:
-				period := frameDurationForModel(e.currentModel(), e.video60Hz)
+				period := frameDurationForModel(e.currentTimingModel(), e.video60Hz)
 				timer.Reset(pacer.next(time.Now(), period))
 				if !e.paused.Load() {
 					// Honour the remote debugger's pause state.
@@ -1430,7 +1430,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 					case e.rzxRecord.Load() != nil:
 						recorder := e.rzxRecord.Load()
 						before := e.cpu.InstructionCount()
-						e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
+						e.cpu.ExecuteFrame(e.frameBudget(e.model))
 						delta := e.cpu.InstructionCount() - before
 						if delta > 0xFFFF {
 							slog.Warn("RZX record: frame instruction count exceeded 0xFFFF, clamping", "count", delta)
@@ -1508,7 +1508,7 @@ func (e *emulator) run(a fyne.App, screen *canvas.Image) {
 								if e.ula != nil {
 									before = e.ula.FEReadCount()
 								}
-								e.cpu.ExecuteFrame(frameTStatesForModel(e.model, e.video60Hz))
+								e.cpu.ExecuteFrame(e.frameBudget(e.model))
 								if e.ula != nil && e.ula.FEReadCount()-before > tapeLoadReadThreshold {
 									heavyReads = true
 								}
@@ -1617,10 +1617,11 @@ func (e *emulator) frameTail() *image.RGBA {
 // loop's own bookkeeping, run live only and never replayed), then frameTail.
 // With the time-travel ring armed it is recorded, so replay-back can re-run it.
 func (e *emulator) runGUIFrame(between func()) *image.RGBA {
-	budget := frameTStatesForModel(e.model, e.video60Hz)
 	var img *image.RGBA
 	turn := func() {
-		e.cpu.ExecuteFrame(budget)
+		// The frame sync happens inside the recorded turn, so a replay
+		// latches a timing change exactly where the live run did.
+		e.cpu.ExecuteFrame(e.frameBudget(e.model))
 		if tt := e.timeTravel; between != nil && (tt == nil || !tt.replaying) {
 			between()
 		}

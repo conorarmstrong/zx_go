@@ -96,7 +96,7 @@ func TestLineInterruptAt60Hz(t *testing.T) {
 	cpu := z80.New(minimalMem{}, minimalULA{})
 	disp := nextregs.New()
 	WireCPUSpeed(disp, cpu)
-	WireLineInterrupt(disp, cpu, func() bool { return true })
+	WireLineInterrupt(disp, cpu, func() VideoTiming { return VideoTimingFor(0x02, true) })
 
 	for _, tc := range []struct {
 		target   byte

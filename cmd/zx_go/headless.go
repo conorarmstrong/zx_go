@@ -1046,16 +1046,16 @@ func runOneFrameHeadless(emu *emulator, model roms.SpectrumModel) {
 		return
 	}
 	if os.Getenv("ZX_GO_STEP_FRAME") == "" {
-		budget := frameTStatesForModel(model, emu.video60Hz)
 		if tt := emu.timeTravel; tt != nil {
-			// Recorded, so replay-back can re-run it as it ran.
-			tt.runFrame(func() { emu.cpu.ExecuteFrame(budget) })
+			// Recorded, so replay-back can re-run it as it ran, frame sync
+			// included.
+			tt.runFrame(func() { emu.cpu.ExecuteFrame(emu.frameBudget(model)) })
 			return
 		}
-		emu.cpu.ExecuteFrame(budget)
+		emu.cpu.ExecuteFrame(emu.frameBudget(model))
 		return
 	}
-	budget := uint64(frameTStatesForModel(model, emu.video60Hz)) * uint64(emu.cpu.SpeedMultiplier())
+	budget := uint64(emu.frameBudget(model)) * uint64(emu.cpu.SpeedMultiplier())
 	target := emu.cpu.Tstates() + budget
 	for emu.cpu.Tstates() < target {
 		emu.cpu.StepInstructionWithIRQ()

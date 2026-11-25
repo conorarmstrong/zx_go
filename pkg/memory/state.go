@@ -104,6 +104,12 @@ type memState struct {
 	ConfigModeActive  bool
 	ConfigModeRAMPage byte
 
+	// NR$03 machine timing, effective and written-but-unlatched. Zero never
+	// occurs in a capture (a write of 000 stores 001), so it marks a capture
+	// from before these fields, restored as the power-on "011".
+	NextTiming, NextTimingPending byte
+	P3FloatByte                   byte
+
 	MFActive bool
 	MFRAM    []byte
 
@@ -151,6 +157,9 @@ func (m *Memory) SaveState() []byte {
 		AltROM0:               m.altROM0[:],
 		AltROM1:               m.altROM1[:],
 		FPGABootROMActive:     m.fpgaBootROMActive,
+		NextTiming:            m.nextTiming,
+		NextTimingPending:     m.nextTimingPending,
+		P3FloatByte:           m.p3FloatByte,
 		ConfigModeActive:      m.configModeActive,
 		ConfigModeRAMPage:     m.configModeRAMPage,
 		MFActive:              m.mfActive,
@@ -246,6 +255,11 @@ func (m *Memory) LoadState(b []byte) error {
 	m.mmuOverride = s.MMUOverride
 	m.altROMReg = s.AltROMReg
 	m.fpgaBootROMActive = s.FPGABootROMActive
+	m.nextTiming, m.nextTimingPending = s.NextTiming, s.NextTimingPending
+	m.p3FloatByte = s.P3FloatByte
+	if m.nextTiming == 0 {
+		m.nextTiming, m.nextTimingPending = 0x03, 0x03
+	}
 	m.configModeActive = s.ConfigModeActive
 	m.configModeRAMPage = s.ConfigModeRAMPage
 	m.mfActive = s.MFActive
@@ -259,5 +273,10 @@ func (m *Memory) LoadState(b []byte) error {
 	m.betaEnabled = s.BetaEnabled
 	m.betaActive = s.BetaActive
 	m.RAMContentionDisabled = s.RAMContentionDisabled
+	// The contention caches are derived from the timing, so re-derive them.
+	// The observers are not run: what they derive is captured by the devices
+	// that hold it (the CPU's INT and line-interrupt fields), and those may be
+	// restored before or after this device.
+	m.applyTimingCaches()
 	return nil
 }

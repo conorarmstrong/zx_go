@@ -78,7 +78,7 @@ func newNext() (*Harness, error) {
 	// The engine's per-scanline time budget follows the machine's line
 	// length: two 7 MHz columns per T-state, four 28 MHz master clocks per
 	// column (sprites.vhd's state machine runs on clock_master_i).
-	sprites.SetLineClockBudget(ula.TStatesPerLineFor(roms.ModelNext) * 8)
+	sprites.SetLineClockBudget(ula.TStatesPerLineFor(mem.TimingModel()) * 8)
 	cop := copper.New()
 	cop.SetRegWriter(disp)
 	rtcEngine := rtcpkg.New()
@@ -102,16 +102,24 @@ func newNext() (*Harness, error) {
 		SetVideo60Hz: func(on bool) {
 			u.Set60Hz(on)
 			mem.Set60Hz(on)
-			if nr03, ok := next.MachineTimingFor(roms.ModelNext); ok {
-				assert, pulse := next.FrameIntTiming(nr03, on)
-				cpu.IntAssertTstate = uint64(assert)
-				cpu.IntPulseTstates = uint64(pulse)
-			}
+			assert, pulse := next.FrameIntTiming(mem.NextMachineTiming(), on)
+			cpu.IntAssertTstate = uint64(assert)
+			cpu.IntPulseTstates = uint64(pulse)
 			disp.WriteReg(0x22, disp.ReadReg(0x22))
 		},
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	// As the GUI wiring does: a latched change of NR$03 machine timing moves
+	// the INT pulse width, the sprite line budget and the line interrupt.
+	mem.OnVideoTimingChange(func() {
+		assert, pulse := next.FrameIntTiming(mem.NextMachineTiming(), u.SixtyHz())
+		cpu.IntAssertTstate = uint64(assert)
+		cpu.IntPulseTstates = uint64(pulse)
+		sprites.SetLineClockBudget(ula.TStatesPerLineFor(mem.TimingModel()) * 8)
+		disp.WriteReg(0x22, disp.ReadReg(0x22))
+	})
+	cpu.CPUAccessHook = mem.NoteCPUAccess // the +3 floating bus
 	u.SetNextCTC(ctcBank)
 	ctcClock := next.NewCTCClock(ctcBank, im2)
 	// The UART register block (ports $133B..$163B) and the ESP behind UART 0.

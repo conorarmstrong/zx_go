@@ -468,16 +468,17 @@ func WireMachineType(d *nextregs.Dispatcher, mem *memory.Memory) {
 	//   nr_03_machine_type   = "011" (= $03)
 	//   nr_03_config_mode    = '1'   (initial = config mode on)
 	//   nr_03_user_dt_lock   = '0'
+	// The machine-timing field lives in memory (SetNextMachineTiming), the
+	// one copy the video, contention and state capture read.
 	var (
-		machineType   byte = 0x03
-		machineTiming byte = 0x03
-		userDTLock    byte
-		topBit        byte = 1 // mirrors nr_palette_sub_idx; default 1
+		machineType byte = 0x03
+		userDTLock  byte
+		topBit      byte = 1 // mirrors nr_palette_sub_idx; default 1
 	)
 	// Reconstruct the byte the way zxnext.vhd:5894 does.
 	read := func() byte {
 		return (topBit&1)<<7 |
-			(machineTiming&0x07)<<4 |
+			(mem.NextMachineTimingWritten()&0x07)<<4 |
 			(userDTLock&1)<<3 |
 			(machineType & 0x07)
 	}
@@ -491,12 +492,14 @@ func WireMachineType(d *nextregs.Dispatcher, mem *memory.Memory) {
 			// pass through (with "others" → 011 default).
 			switch t {
 			case 0, 1:
-				machineTiming = 1
+				t = 1
 			case 2, 3, 4:
-				machineTiming = t
 			default:
-				machineTiming = 3
+				t = 3
 			}
+			// Video and contention timing follow it from the next frame
+			// sync (eff_nr_03_machine_timing, zxnext.vhd:6694-6703).
+			mem.SetNextMachineTiming(t)
 		}
 		// user_dt_lock XOR-toggles on every write whose bit 3 = 1.
 		userDTLock ^= (val >> 3) & 1
@@ -943,7 +946,13 @@ func Wire(opts WireOpts) (*ClipWindows, *ResetControl) {
 		opts.IM2.SetNMIActivated(resetControl.NMIActivated)
 	}
 	WireCPUSpeed(opts.Dispatcher, opts.CPU)
-	WireLineInterrupt(opts.Dispatcher, opts.CPU, opts.Video60Hz)
+	WireLineInterrupt(opts.Dispatcher, opts.CPU, func() VideoTiming {
+		nr03 := byte(0x03)
+		if opts.Memory != nil {
+			nr03 = opts.Memory.NextMachineTiming()
+		}
+		return VideoTimingFor(nr03, opts.Video60Hz != nil && opts.Video60Hz())
+	})
 	WireContentionDisable(opts.Dispatcher, opts.Memory)
 	WirePeripheral2(opts.Dispatcher, opts.AYEngine, opts.DivMMCPager, opts.Memory)
 	WirePeripheral1(opts.Dispatcher, opts.DivMMCPager, opts.Memory)
@@ -1485,11 +1494,6 @@ func WireCPUSpeed(d *nextregs.Dispatcher, cpu *z80.CPU) {
 	})
 }
 
-// linesPerFrame is the scanline count of the 50 Hz frame the line-interrupt
-// target is measured against, matching c_max_vc+1 in zxula_timing.vhd and
-// ula.LinesPerFrame.
-const linesPerFrame = 311
-
 // WireLineInterrupt installs NR$22 / NR$23 OnWrite handlers so the
 // guest can program a per-frame "line interrupt" — a second INT
 // pulse asserted when the ULA scan-line counter hits the target line.
@@ -1505,12 +1509,18 @@ const linesPerFrame = 311
 //
 // NR$23 = bits 7..0 of target scan-line (LSB).
 //
-// 228 T-states per scan line at the 3.5 MHz reference; we scale by
-// the CPU's SpeedMultiplier so the offset stays correct under turbo
-// modes (NR$07 = 14 / 28 MHz). Must be called after WireCPUSpeed
-// (so OnWriteFn(0x07) is non-nil and we can chain onto it).
-func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, sixtyHz ...func() bool) {
-	const tstatesPerScanLine = 228
+// The offset comes from timing, the machine timing in force (128K at 50 Hz
+// when none is given), at the 3.5 MHz reference; it is scaled by the CPU's
+// SpeedMultiplier so it stays correct under turbo modes (NR$07 = 14 / 28
+// MHz). Must be called after WireCPUSpeed (so OnWriteFn(0x07) is non-nil
+// and we can chain onto it).
+func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, timing ...func() VideoTiming) {
+	vt := func() VideoTiming {
+		if len(timing) > 0 && timing[0] != nil {
+			return timing[0]()
+		}
+		return VideoTimingFor(0x02, false)
+	}
 	recompute := func() {
 		nr22 := d.Raw(0x22)
 		nr23 := d.Raw(0x23)
@@ -1525,29 +1535,12 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, sixtyHz ...func() b
 			return
 		}
 		target := uint64(nr23) | (uint64(nr22&0x01) << 8)
-		// The target counts from the top of the paper. zxula_timing.vhd
-		// reloads cvc on the first paper line (vc = c_min_vactive, at
-		// ula_max_hc) and lets it run through every line of the frame:
-		//
-		//	if i_int_line = 0 then int_line_num <= c_max_vc;
-		//	else                   int_line_num <= unsigned(i_int_line) - 1;
-		//	...
-		//	if (i_inten_line = '1') and (hc_ula = 255) and (cvc = int_line_num)
-		//
-		// So target N fires on paper row N-1 (mod the frame), at hc_ula 255.
-		// The CPU counts from the frame interrupt, at vc = c_int_v, hc =
-		// c_int_h. For 128K timing hc_ula 255 is hc 380 and c_int_h is 128,
-		// 126 T-states. Wrapping mod the frame keeps every target reachable;
-		// adding the paper offset without the wrap once asked for line 373 of
-		// 311 and hung Eternal Battle.
-		lines, minVactive, intV := uint64(linesPerFrame), uint64(64), uint64(1)
-		if len(sixtyHz) > 0 && sixtyHz[0] != nil && sixtyHz[0]() {
-			lines, minVactive, intV = 264, 40, 0
-		}
-		const hcULA255FromInt = 126         // (380 - 128) / 2
-		row := (target + lines - 1) % lines // cvc = int_line_num
-		line := (minVactive + row + lines - intV) % lines
-		cpu.LineIntOffsetTstates = (line*tstatesPerScanLine + hcULA255FromInt) * uint64(cpu.SpeedMultiplier())
+		// zxula_timing.vhd compares cvc, NR$64 included, with target-1 at
+		// hc_ula 255 (see LineIntOffset); the CPU counts from the frame
+		// interrupt. Wrapping mod the frame
+		// keeps every target reachable; adding the paper offset without the
+		// wrap once asked for line 373 of 311 and hung Eternal Battle.
+		cpu.LineIntOffsetTstates = uint64(vt().LineIntOffset(int(target), d.Raw(0x64))) * uint64(cpu.SpeedMultiplier())
 	}
 	d.SetOnWrite(0x22, func(disp *nextregs.Dispatcher, v byte) {
 		// Per zxnext.vhd:5905 the NR$22 read shape is
@@ -1570,6 +1563,16 @@ func WireLineInterrupt(d *nextregs.Dispatcher, cpu *z80.CPU, sixtyHz ...func() b
 			recompute()
 		})
 	}
+	// NR$64 offsets cvc, which the line interrupt compares against.
+	prev64 := d.OnWriteFn(0x64)
+	d.SetOnWrite(0x64, func(disp *nextregs.Dispatcher, v byte) {
+		if prev64 != nil {
+			prev64(disp, v)
+		} else {
+			disp.Store(0x64, v)
+		}
+		recompute()
+	})
 }
 
 // WireMMU installs OnWrite / OnRead handlers on the NextReg dispatcher
