@@ -49,17 +49,14 @@ const LinesPerFrame = 311
 // caught by TestCopperConstantsMatchTheDevice rather than by the compiler.
 const copperHCountOrigin = 12
 
-// TStatesPerLineFor returns the documented T-states-per-scanline for a machine
-// model: 224 for the 48K (312 lines * 224 = 69888 T-states/frame), 228 for the
-// 128K family and +2/+2A/+3 (311 lines * 228 = 70908). The Spectrum Next boots
-// in 128K/+3 timing. Matches video/zxula_timing.vhd c_max_hc: 48K=447 (448
-// columns → 224 T) and 128K=455 (456 columns → 228 T), and Sean Young's /
-// Chris Smith's classic timing references.
+// TStatesPerLineFor returns the T-states per scanline for a machine model:
+// 224 for the 48K (312 lines * 224 = 69888 T-states/frame) and the Pentagon
+// (320 * 224 = 71680), 228 for the 128K family and +2/+2A/+3 (311 * 228 =
+// 70908). It is roms.TStatesPerLine, from video/zxula_timing.vhd c_max_hc
+// (447, 448 columns, for the 48K and Pentagon; 455 for the 128K family). The
+// Pentagon used to get 228 here, against its own 71680-T-state frame.
 func TStatesPerLineFor(model roms.SpectrumModel) int {
-	if model == roms.Model48K {
-		return 224
-	}
-	return 228
+	return roms.TStatesPerLine(model)
 }
 
 // LinesPerFrameFor returns the scanline count of one frame for a machine
