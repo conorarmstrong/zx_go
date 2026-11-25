@@ -624,13 +624,13 @@ against `30205` (VHDL only, ignoring Vivado netlists) gives:
 its loader, `tbblue_loader_30205.rom` (the 30205 branch's `bootrom.bin`), is installed, with that core's boot ROM
 window of $0000-$1FFF (`TestBootROMWindow`, `TestBootCore`); it boots to the NextZXOS menu. The loader is not
 bundled, because its boot code source is not published beside it, so without it the bundled 3.02.03 loader runs.
-`ZX_GO_NEXT_CORE` forces either. The 3.03 features cannot be modelled: rechecked 2026-11-24, `30205` is still the
+`ZX_GO_NEXT_CORE` forces either. The 3.03 features cannot be modelled: rechecked 2026-11-25, `30205` is still the
 newest branch and no 3.03 VHDL is public.
 
 Next steps, in order:
 
 1. Nothing left on 3.02.05 short of its loader source being published, which would let it be bundled.
-2. Watch the official repo for a 3.03 branch. Last checked 2026-11-24: `30205` is the newest branch.
+2. Watch the official repo for a 3.03 branch. Last checked 2026-11-25: `30205` (3.02.05, 2026-09-25) is the newest branch and `master` is still 3.02.03; no tags.
 3. For the 3.03 features, the only evidence today is the register map and behaviour of the shipped
    NextZXOS 2.10a and the Next manual. Do not invent hardware from that. Anything modelled without VHDL
    must be labelled as not VHDL-derived.
