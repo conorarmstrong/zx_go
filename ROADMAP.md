@@ -802,6 +802,7 @@ Newest first. Earlier history is in `CHANGELOG.md` and git.
 
 | Date | What landed |
 |---|---|
+| 2026-11-25 | Next: NR$03 machine timing (48K, 128K, +3, Pentagon) drives the frame, interrupt, contention, floating bus, Copper, line interrupt and NR$1E/$1F, latched at the frame sync; power-on is +3. The Multiface runs the FPGA state machine and hides the divMMC; snapshots load; Funky Monkey Kid traced to NextZXOS's snapshot loader; the fortuneteller runs on the Z-machine; 3.02.05 boot path as an opt-in. |
 | 2026-11-24 | Debugger: `replay-back` steps back into frames the loop ran, GUI and headless, render included; consecutive checkpoints share unchanged memory (64 Next checkpoints 4.5 MB, was 149 MB) and the default ring is 256. |
 | 2026-11-24 | Next: a busy Copper list costs 6.1 ms a frame, was 108 ms (each pixel painted once, layer renders cached per row, guarded by a per-register differential test); the zxnDMA charges each bus trip (START_DMA, WAITING_ACK, FINISH_DMA, and WAITING_ACK per byte after a prescaler wait); RETI raises `reti_decode` on the IM2 chain (GHDL scenario s7); TX-1696's marginality traced to the pre-v1.12.4 raster counter. |
 | 2026-11-24 | Compatibility: the 27 snapshot-loaded 128K titles compared against a reference through the same keys; the itch.io catalogue of 108 Next titles fetched (102 free, 5 paid and skipped, 1 with no files) and screened. |

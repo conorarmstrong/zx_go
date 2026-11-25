@@ -32,6 +32,17 @@ project targets [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Next follows NR$03's machine timing.** It ran everything with 128K
+  timing. The FPGA runs the standard personality with +3 timing and a 48K
+  snapshot with 48K timing (224 T-state lines, 312 of them, the interrupt at a
+  different point in the line), and offers 128K and Pentagon too. The frame
+  length, frame interrupt, contention pattern, Copper, line interrupt, NR$1E/$1F
+  and the floating bus now all follow the timing in force, which changes at the
+  next frame sync as on the FPGA. On 48K and 128K timing port $FF now reads the
+  floating bus, and on +3 timing so does $0FFD while paging is unlocked.
+- **The classic Pentagon's ULA line is 224 T-states.** It was 228, against the
+  Pentagon's own 71680-T-state frame of 320 lines.
+
 - **NextReg $1E/$1F read the copper's line counter, as on the FPGA.** They
   counted lines from the frame interrupt; the hardware counts from the first
   paper line (plus NR$64), so at the interrupt they read 248, not 0. A game
