@@ -119,6 +119,9 @@ type ULA struct {
 	nextULAPlus NextULAPlus
 	// nextMF is the Next Multiface's port decode (see SetNextMultiface).
 	nextMF NextMultiface
+	// in123BWrite marks port $123B's own update of NR$69, which is not an
+	// NR$69 write for port_ff_reg (see NextRegWritten).
+	in123BWrite bool
 
 	// nextLoRes replaces the ULA bitmap when the Next's LoRes/Radastan mode is
 	// on. nil off the Next. loresRow is its per-row scratch, hoisted so 192
@@ -1195,6 +1198,33 @@ type NextMultiface interface {
 // SetNextMultiface attaches the Multiface's port decode. nil unhooks.
 func (u *ULA) SetNextMultiface(m NextMultiface) { u.nextMF = m }
 
+// NextRegWritten applies the NextReg writes that also land in port_ff_reg,
+// the Timex register (zxnext.vhd:3611-3621): NR$69 bits 5:0 into bits 5:0,
+// NR$22 bit 2 into bit 6, and NR$C4 bit 0, inverted, into bit 6. Port $123B's
+// own update of NR$69 is not an NR$69 write on the FPGA and does not call this.
+func (u *ULA) NextRegWritten(reg, val byte) {
+	if u.in123BWrite {
+		return
+	}
+	ff := u.timexVideoMode
+	switch reg {
+	case 0x69:
+		ff = ff&0xC0 | val&0x3F
+	case 0x22:
+		ff = ff&^0x40 | (val&0x04)<<4
+	case 0xC4:
+		ff = ff&^0x40 | (^val&0x01)<<6
+	default:
+		return
+	}
+	if ff != u.timexVideoMode {
+		u.timexVideoMode = ff
+		if u.timexModeObserver != nil {
+			u.timexModeObserver(ff)
+		}
+	}
+}
+
 // NextLoRes is the contract for the Spectrum Next's LoRes / Radastan layer.
 // pkg/next/compositor.LoRes satisfies it; the interface lives here so this
 // package does not import that one.
@@ -1927,7 +1957,9 @@ func (u *ULA) writePortInternal(addr uint16, val byte) {
 		} else {
 			nr69 &^= 0x40
 		}
+		u.in123BWrite = true
 		u.nextRegs.WriteReg(0x69, nr69)
+		u.in123BWrite = false
 		return
 	}
 

@@ -86,6 +86,9 @@ func newNext() (*Harness, error) {
 	dacBank := dac.New()
 	im2 := next.NewIM2Driver()
 	ctcBank := ctc.NewBank()
+	// refreshLineInt re-derives the line interrupt's offset without an NR$22
+	// write, which would also reach port_ff_reg; set once Wire has run.
+	refreshLineInt := func() {}
 	_, resetControl := next.Wire(next.WireOpts{
 		Dispatcher: disp,
 		Memory:     mem,
@@ -105,11 +108,26 @@ func newNext() (*Harness, error) {
 			assert, pulse := next.FrameIntTiming(mem.NextMachineTiming(), on)
 			cpu.IntAssertTstate = uint64(assert)
 			cpu.IntPulseTstates = uint64(pulse)
-			disp.WriteReg(0x22, disp.ReadReg(0x22))
+			refreshLineInt()
 		},
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	if h := disp.OnWriteFn(0x22); h != nil {
+		refreshLineInt = func() { h(disp, disp.Raw(0x22)) }
+	}
+	// NR$69, NR$22 and NR$C4 also write port_ff_reg (zxnext.vhd:3611-3621).
+	for _, reg := range []byte{0x69, 0x22, 0xC4} {
+		reg, prev := reg, disp.OnWriteFn(reg)
+		disp.SetOnWrite(reg, func(dd *nextregs.Dispatcher, v byte) {
+			if prev != nil {
+				prev(dd, v)
+			} else {
+				dd.Store(reg, v)
+			}
+			u.NextRegWritten(reg, v)
+		})
+	}
 	// As the GUI wiring does: a latched change of NR$03 machine timing moves
 	// the INT pulse width, the sprite line budget and the line interrupt.
 	mem.OnVideoTimingChange(func() {
@@ -117,7 +135,7 @@ func newNext() (*Harness, error) {
 		cpu.IntAssertTstate = uint64(assert)
 		cpu.IntPulseTstates = uint64(pulse)
 		sprites.SetLineClockBudget(ula.TStatesPerLineFor(mem.TimingModel()) * 8)
-		disp.WriteReg(0x22, disp.ReadReg(0x22))
+		refreshLineInt()
 	})
 	cpu.CPUAccessHook = mem.NoteCPUAccess // the +3 floating bus
 	u.SetNextCTC(ctcBank)

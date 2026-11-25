@@ -633,6 +633,12 @@ func (m *Memory) NextMachineTimingWritten() byte { return m.nextTimingPending }
 // effective. It reports whether the timing changed, after running the
 // observers registered with OnVideoTimingChange.
 func (m *Memory) LatchVideoTiming() bool {
+	// A pending NR$08 bit 6 write is due within its line, so by the frame
+	// sync it has taken effect; settling it here keeps it clear of the
+	// frame's T-state rebase.
+	if m.cdHas {
+		m.RAMContentionDisabled, m.cdHas = m.cdPending, false
+	}
 	if m.nextTimingPending == m.nextTiming {
 		return false
 	}
@@ -656,11 +662,20 @@ func (m *Memory) ClearVideoTimingObservers() { m.timingObservers = nil }
 // force: the model itself, except on the Next, where NR$03's machine timing
 // picks it (zxnext.vhd:5758-5778: bit 2 Pentagon, "10" 128K, "11" +3, else
 // 48K). pkg/roms holds each one's figures, derived from zxula_timing.vhd.
-func (m *Memory) TimingModel() roms.SpectrumModel {
+func (m *Memory) TimingModel() roms.SpectrumModel { return m.timingModelFor(m.nextTiming) }
+
+// TimingModelAfterSync is the timing model the next frame sync will put in
+// force: TimingModel with any pending NR$03 machine timing applied. The
+// frame pacer arms a frame's timer before the frame latches, so it uses this.
+func (m *Memory) TimingModelAfterSync() roms.SpectrumModel {
+	return m.timingModelFor(m.nextTimingPending)
+}
+
+func (m *Memory) timingModelFor(t byte) roms.SpectrumModel {
 	if m.currentModel != roms.ModelNext {
 		return m.currentModel
 	}
-	switch t := m.nextTiming; {
+	switch {
 	case t&0x04 != 0:
 		return roms.ModelPentagon
 	case t&0x03 == 0x02:
@@ -693,3 +708,58 @@ func (m *Memory) NoteCPUAccess(addr uint16, val byte) {
 
 // P3FloatingBus is the last CPU access to contended memory, $FF at power-on.
 func (m *Memory) P3FloatingBus() byte { return m.p3FloatByte }
+
+// SetRAMContentionDisable applies an NR$08 bit 6 write. The core latches it
+// into eff_nr_08_contention_disable at the next 7 MHz column with hc(8) set
+// (zxnext.vhd:5822-5824), so within the line: immediately when hc is already
+// 256 or more, else when it gets there.
+func (m *Memory) SetRAMContentionDisable(on bool) {
+	if m.TStates == nil || m.currentModel != roms.ModelNext {
+		m.RAMContentionDisabled, m.cdHas = on, false
+		return
+	}
+	mult := uint64(1)
+	if m.SpeedMultiplier != nil {
+		if v := m.SpeedMultiplier(); v > 0 {
+			mult = uint64(v)
+		}
+	}
+	hcLine, intH := 456, 128
+	switch m.TimingModel() {
+	case roms.Model48K:
+		hcLine, intH = 448, 116
+	case roms.ModelPlus3:
+		intH = 126
+	case roms.ModelPentagon:
+		hcLine, intH = 448, 439
+	}
+	hc := (intH + 2*int(*m.TStates/mult)) % hcLine
+	wait := 0
+	if hc < 256 {
+		wait = (256 - hc + 1) / 2
+	}
+	m.cdPending, m.cdHas = on, true
+	m.cdAt = *m.TStates + uint64(wait)*mult
+	m.contentionDisabledNow()
+}
+
+// contentionDisabledNow settles a pending NR$08 bit 6 write whose moment has
+// come and reports the effective disable.
+func (m *Memory) contentionDisabledNow() bool {
+	if m.cdHas && m.TStates != nil && *m.TStates >= m.cdAt {
+		m.RAMContentionDisabled, m.cdHas = m.cdPending, false
+	}
+	return m.RAMContentionDisabled
+}
+
+// NR03Fields returns NR$03's machine type, user display-timing lock and bit 7,
+// held here so a state capture keeps the register whole (the machine timing
+// is SetNextMachineTiming's).
+func (m *Memory) NR03Fields() (machineType, userDTLock, top byte) {
+	return m.nr03Type, m.nr03Lock, m.nr03Top
+}
+
+// SetNR03Fields stores the fields NR03Fields returns.
+func (m *Memory) SetNR03Fields(machineType, userDTLock, top byte) {
+	m.nr03Type, m.nr03Lock, m.nr03Top = machineType, userDTLock, top
+}

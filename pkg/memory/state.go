@@ -109,6 +109,9 @@ type memState struct {
 	// from before these fields, restored as the power-on "011".
 	NextTiming, NextTimingPending byte
 	P3FloatByte                   byte
+	CDPending, CDHas              bool
+	CDAt                          uint64
+	NR03Type, NR03Lock, NR03Top   byte
 
 	MFActive bool
 	MFRAM    []byte
@@ -160,6 +163,12 @@ func (m *Memory) SaveState() []byte {
 		NextTiming:            m.nextTiming,
 		NextTimingPending:     m.nextTimingPending,
 		P3FloatByte:           m.p3FloatByte,
+		CDPending:             m.cdPending,
+		CDHas:                 m.cdHas,
+		CDAt:                  m.cdAt,
+		NR03Type:              m.nr03Type,
+		NR03Lock:              m.nr03Lock,
+		NR03Top:               m.nr03Top,
 		ConfigModeActive:      m.configModeActive,
 		ConfigModeRAMPage:     m.configModeRAMPage,
 		MFActive:              m.mfActive,
@@ -257,6 +266,11 @@ func (m *Memory) LoadState(b []byte) error {
 	m.fpgaBootROMActive = s.FPGABootROMActive
 	m.nextTiming, m.nextTimingPending = s.NextTiming, s.NextTimingPending
 	m.p3FloatByte = s.P3FloatByte
+	m.cdPending, m.cdHas, m.cdAt = s.CDPending, s.CDHas, s.CDAt
+	m.nr03Type, m.nr03Lock, m.nr03Top = s.NR03Type, s.NR03Lock, s.NR03Top
+	if m.nr03Type == 0 { // a capture from before these fields
+		m.nr03Type, m.nr03Top = 0x03, 1
+	}
 	if m.nextTiming == 0 {
 		m.nextTiming, m.nextTimingPending = 0x03, 0x03
 	}

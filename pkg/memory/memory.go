@@ -210,6 +210,14 @@ type Memory struct {
 	// p3FloatByte is the last CPU access to contended memory; see
 	// NoteCPUAccess.
 	p3FloatByte byte
+	// cdPending is an NR$08 bit 6 write waiting for hc(8) (see
+	// SetRAMContentionDisable); cdHas marks it, cdAt is the T-state it
+	// takes effect at.
+	cdPending, cdHas bool
+	cdAt             uint64
+	// nr03Type, nr03Lock and nr03Top are NR$03's machine type, user
+	// display-timing lock and bit 7 (see NR03Fields).
+	nr03Type, nr03Lock, nr03Top byte
 
 	// Spectrum Next config-mode RAM-page mapping at $0000-$3FFF.
 	//
@@ -882,7 +890,7 @@ func (m *Memory) contentionDelay() uint64 {
 
 // ContendMemory adds contention delay if the address is in contended memory.
 func (m *Memory) ContendMemory(addr uint16) {
-	if !m.ContentionEnabled || m.TStates == nil || m.RAMContentionDisabled {
+	if !m.ContentionEnabled || m.TStates == nil || m.contentionDisabledNow() {
 		return
 	}
 	if m.isContendedBank(addr) {
@@ -921,7 +929,7 @@ func (m *Memory) ContendPortLate(addr uint16) {
 	if !m.portContends() {
 		return
 	}
-	isULAPort := (addr & 0x01) == 0
+	isULAPort := (addr&0x01) == 0 || m.nextPortContend(addr)
 	if isULAPort {
 		*m.TStates += m.contentionDelay()
 		return
@@ -941,6 +949,21 @@ func (m *Memory) ContendPortLate(addr uint16) {
 	*m.TStates -= 2
 }
 
+// nextPortContend reports the odd ports the Next's port_contend adds to the
+// even ULA ports (zxnext.vhd:4496): $7FFD while it is active, which on a
+// timing that contends ports at all means 128K timing (port_7ffd_active,
+// :2593-2594: A15 = 0, A1:0 = 01, not $1FFD, :2598-2599), and the ULA+
+// ports $BF3B and $FF3B (:2685-2686).
+func (m *Memory) nextPortContend(addr uint16) bool {
+	if m.currentModel != roms.ModelNext {
+		return false
+	}
+	if addr == 0xBF3B || addr == 0xFF3B {
+		return true
+	}
+	return m.TimingModel() == roms.Model128K && addr&0x8003 == 0x0001 && addr&0xF003 != 0x1001
+}
+
 // ContendPort adds the whole I/O cycle's contention delay in one call, for a
 // caller that does not need the access placed inside the cycle. It is the
 // early and late halves with the cycle's first T between them.
@@ -956,7 +979,8 @@ func (m *Memory) ContendPort(addr uint16) {
 
 // portContends reports whether this machine contends I/O at all right now.
 func (m *Memory) portContends() bool {
-	if !m.ContentionEnabled || m.TStates == nil {
+	// NR$08 bit 6 gates i_contention_en, ports included (zxnext.vhd:4481).
+	if !m.ContentionEnabled || m.TStates == nil || m.contentionDisabledNow() {
 		return false
 	}
 	// +2A/+3 timing has no ULA port contention
@@ -973,6 +997,8 @@ func New(romPath string, model roms.SpectrumModel) (*Memory, error) {
 		nextTiming:        0x03,
 		nextTimingPending: 0x03,
 		p3FloatByte:       0xFF,
+		nr03Type:          0x03, // zxnext.vhd:1100
+		nr03Top:           1,
 	}
 
 	// Initialize RAM pages. Classic models allocate banks 0..7

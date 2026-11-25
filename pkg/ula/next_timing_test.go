@@ -93,3 +93,27 @@ func TestNextPlus3FloatingBusHoldsTheLastContendedAccess(t *testing.T) {
 		t.Errorf("after a contended access of $3C: %#02x, want $3C", v)
 	}
 }
+
+// port_ff_reg, the Timex register port $FF reads back with NR$08 bit 2, is
+// also written by NextReg: NR$69 bits 5:0 into bits 5:0, NR$22 bit 2 and the
+// inverse of NR$C4 bit 0 into bit 6 (zxnext.vhd:3611-3621).
+func TestPortFFRegisterMirrorsNextRegs(t *testing.T) {
+	u, _, _, d := newNextTimingULA(t, 0x03)
+	d.Store(0x08, 0x04)
+	u.WritePort(0x00FF, 0x80)
+	u.NextRegWritten(0x69, 0xC6) // bits 5:0 = 06
+	if v, _ := u.ReadPort(0x00FF); v != 0x86 {
+		t.Errorf("after NR$69=$C6: %#02x, want $86", v)
+	}
+	u.NextRegWritten(0x22, 0x04)
+	if v, _ := u.ReadPort(0x00FF); v != 0xC6 {
+		t.Errorf("after NR$22=$04: %#02x, want $C6", v)
+	}
+	u.NextRegWritten(0xC4, 0x01)
+	if v, _ := u.ReadPort(0x00FF); v != 0x86 {
+		t.Errorf("after NR$C4=$01: %#02x, want $86", v)
+	}
+	if got := u.timexVideoMode; got != 0x86 {
+		t.Errorf("Timex mode %#02x, want $86: it is the same register", got)
+	}
+}

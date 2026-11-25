@@ -468,21 +468,21 @@ func WireMachineType(d *nextregs.Dispatcher, mem *memory.Memory) {
 	//   nr_03_machine_type   = "011" (= $03)
 	//   nr_03_config_mode    = '1'   (initial = config mode on)
 	//   nr_03_user_dt_lock   = '0'
-	// The machine-timing field lives in memory (SetNextMachineTiming), the
-	// one copy the video, contention and state capture read.
-	var (
-		machineType byte = 0x03
-		userDTLock  byte
-		topBit      byte = 1 // mirrors nr_palette_sub_idx; default 1
-	)
+	// The register's fields live in memory, which captures them: the machine
+	// timing (SetNextMachineTiming) and the rest (NR03Fields).
+	machineType, userDTLock, topBit := mem.NR03Fields()
+	store := func() { mem.SetNR03Fields(machineType, userDTLock, topBit) }
+	load := func() { machineType, userDTLock, topBit = mem.NR03Fields() }
 	// Reconstruct the byte the way zxnext.vhd:5894 does.
 	read := func() byte {
+		load()
 		return (topBit&1)<<7 |
 			(mem.NextMachineTimingWritten()&0x07)<<4 |
 			(userDTLock&1)<<3 |
 			(machineType & 0x07)
 	}
 	d.SetOnWrite(0x03, func(disp *nextregs.Dispatcher, val byte) {
+		load()
 		bootromActive := mem.FPGABootROMActive()
 		// Machine_timing: per zxnext.vhd:5124, only updated when
 		// bit 7 set AND user_dt_lock == 0 AND bit 3 of write == 0.
@@ -533,6 +533,7 @@ func WireMachineType(d *nextregs.Dispatcher, mem *memory.Memory) {
 		}
 		// Store the reconstructed byte so plain `Raw()` / debug
 		// queries see the post-write value as a real machine would.
+		store()
 		disp.Store(0x03, read())
 	})
 	// Read handler so explicit nextreg-read returns the reconstructed
@@ -615,7 +616,7 @@ func WireContentionDisable(d *nextregs.Dispatcher, mem *memory.Memory) {
 	d.SetOnWrite(0x08, func(disp *nextregs.Dispatcher, val byte) {
 		// Per zxnext.vhd:5176, contention disable is BIT 6 ($40),
 		// not bit 1. Bit 1 ($02) is PSG TurboSound enable.
-		mem.RAMContentionDisabled = val&0x40 != 0
+		mem.SetRAMContentionDisable(val&0x40 != 0)
 		// Bit 7 = 1 clears the $7FFD paging lock (zxnext.vhd:
 		// 3654-3656: nr_08_we and dat(7) → port_7ffd_reg(5) <= '0').
 		// Bit 7 = 0 leaves the lock untouched — NextZXOS's staging

@@ -1129,6 +1129,9 @@ func wireNextSubsystems(e *emulator) error {
 			return fmt.Errorf("next: FPGA bootrom load: %w", err)
 		}
 	}
+	// refreshLineInt re-derives the line interrupt's offset without an NR$22
+	// write, which would also reach port_ff_reg; set once Wire has run.
+	refreshLineInt := func() {}
 	clipWindows, resetControl := next.Wire(next.WireOpts{
 		Dispatcher:  disp,
 		Memory:      mem,
@@ -1154,18 +1157,33 @@ func wireNextSubsystems(e *emulator) error {
 			// The line-interrupt scheduler pre-computes a frame-relative
 			// offset from the raster line count; re-run its NR$22 handler
 			// so a mid-run 50/60 Hz switch takes effect.
-			disp.WriteReg(0x22, disp.ReadReg(0x22))
+			refreshLineInt()
 		},
 	})
 	cpu.NextRegs = disp
 	u.SetNextRegs(disp)
+	if h := disp.OnWriteFn(0x22); h != nil {
+		refreshLineInt = func() { h(disp, disp.Raw(0x22)) }
+	}
+	// NR$69, NR$22 and NR$C4 also write port_ff_reg (zxnext.vhd:3611-3621).
+	for _, reg := range []byte{0x69, 0x22, 0xC4} {
+		reg, prev := reg, disp.OnWriteFn(reg)
+		disp.SetOnWrite(reg, func(dd *nextregs.Dispatcher, v byte) {
+			if prev != nil {
+				prev(dd, v)
+			} else {
+				dd.Store(reg, v)
+			}
+			u.NextRegWritten(reg, v)
+		})
+	}
 	// A change of NR$03 machine timing, latched at the frame sync, moves the
 	// frame INT's pulse width (zxnext.vhd:2014-2033) and the line interrupt's
 	// offset from the frame interrupt. The sprite line budget is set by
 	// frameBudget each frame.
 	mem.OnVideoTimingChange(func() {
 		configureIntTiming(cpu, mem.NextMachineTiming(), e.video60Hz)
-		disp.WriteReg(0x22, disp.ReadReg(0x22))
+		refreshLineInt()
 	})
 	// The +3 floating bus keeps the CPU's last access to contended memory.
 	cpu.CPUAccessHook = mem.NoteCPUAccess
