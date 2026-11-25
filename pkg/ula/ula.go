@@ -122,6 +122,10 @@ type ULA struct {
 	// in123BWrite marks port $123B's own update of NR$69, which is not an
 	// NR$69 write for port_ff_reg (see NextRegWritten).
 	in123BWrite bool
+	// syncAt and syncLen describe a frame whose end a frame sync moved: from
+	// syncAt video T-states the frame is the new timing's run-up to an
+	// interrupt syncLen T-states after the frame's start. 0 when none.
+	syncAt, syncLen int
 
 	// nextLoRes replaces the ULA bitmap when the Next's LoRes/Radastan mode is
 	// on. nil off the Next. loresRow is its per-row scratch, hoisted so 192
@@ -1366,6 +1370,18 @@ func (u *ULA) VideoTStatesInFrame() int {
 		t = 0
 	}
 	t = u.videoTStates(t)
+	frame := u.tStatesPerLine() * u.linesPerFrame()
+	if u.syncLen > 0 && t >= u.syncAt {
+		if t < u.syncLen {
+			// Past the frame sync: the timing changed there, and the frame
+			// ends at the new timing's interrupt, so the beam is that far
+			// before it.
+			return frame - (u.syncLen - t)
+		}
+		// Later frames (the single-step driver does not rebase) sit on a
+		// grid anchored at the moved end.
+		return (t - u.syncLen) % frame
+	}
 	// Wrap at the frame, not at 9 bits. The old `& 0x1FF` bounded the line at
 	// 511, which is not a raster position: a frame is LinesPerFrame lines, and
 	// software polling NextReg $1E/$1F for a scanline is comparing against a
@@ -1376,8 +1392,16 @@ func (u *ULA) VideoTStatesInFrame() int {
 	// flush: with audio disabled, or in a loop that does not render every
 	// frame, the offset grows without bound and the masked version became a
 	// free-running counter with no relation to the beam.
-	return t % (u.tStatesPerLine() * u.linesPerFrame())
+	return t % frame
 }
+
+// SetFrameSyncTransition records that this frame's sync, at video T-state at,
+// changed the timing and moved the frame's end to length. It holds until
+// ClearFrameSyncTransition, which the frame loop calls at the next frame.
+func (u *ULA) SetFrameSyncTransition(at, length int) { u.syncAt, u.syncLen = at, length }
+
+// ClearFrameSyncTransition ends the transition SetFrameSyncTransition set.
+func (u *ULA) ClearFrameSyncTransition() { u.syncAt, u.syncLen = 0, 0 }
 
 // ReadPort handles CPU reads from ULA-controlled ports. The single
 // chokepoint at which the RZX driver intercepts the IN stream:
@@ -2643,6 +2667,9 @@ func (u *ULA) audioFrameTStates() int {
 		return 69888
 	}
 	n := u.FrameTStates()
+	if u.syncLen > 0 {
+		n = u.syncLen // the frame a sync moved the end of
+	}
 	if u.mem.SpeedMultiplier != nil {
 		if m := u.mem.SpeedMultiplier(); m > 0 {
 			n *= m

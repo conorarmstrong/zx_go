@@ -45,26 +45,29 @@ func (e *emulator) timingModel(model roms.SpectrumModel) roms.SpectrumModel {
 	return model
 }
 
-// frameBudget is the frame sync: a pending NR$03 machine timing takes effect
-// (zxnext.vhd:6694-6703), and the frame's length in T-states follows the
-// timing then in force. Every frame loop sizes its frame through here.
+// frameBudget is the length of the frame about to run, in T-states, from the
+// timing in force. On the Next a pending NR$03 machine timing is not applied
+// here: the CPU's frame-sync event applies it inside the frame, at raw (0,0)
+// as on the FPGA, and moves that frame's end (see wireNextSubsystems). Every
+// frame loop sizes its frame through here.
 //
-// The sprite engine's per-line budget follows the line length too. It is set
+// The sprite engine's per-line budget follows the line length. It is set
 // here every frame rather than on a change, so a frame replayed from a
 // checkpoint finds it as the live run did.
 func (e *emulator) frameBudget(model roms.SpectrumModel) int {
 	budget := frameTStatesForModel(e.timingModel(model), e.video60Hz)
-	if e.mem != nil && e.mem.GetCurrentModel() == model {
-		e.mem.LatchVideoTiming()
-		budget = frameTStatesForModel(e.timingModel(model), e.video60Hz)
-		if model == roms.ModelNext {
-			if e.nextSprites != nil {
-				e.nextSprites.SetLineClockBudget(ula.TStatesPerLineFor(e.mem.TimingModel()) * 8)
-			}
-			// The single-step driver (debugger, replay) finds the frame
-			// boundary where ExecuteFrame does.
-			e.cpu.FrameTStates = uint64(budget)
+	if model == roms.ModelNext && e.mem != nil && e.mem.GetCurrentModel() == model {
+		if e.nextSprites != nil {
+			e.nextSprites.SetLineClockBudget(ula.TStatesPerLineFor(e.mem.TimingModel()) * 8)
 		}
+		if e.ula != nil && !e.cpu.InMovedFrame() {
+			// The last frame's transition, now flushed; a frame resumed
+			// part way keeps its own.
+			e.ula.ClearFrameSyncTransition()
+		}
+		// The single-step driver (debugger, replay) finds the frame
+		// boundary where ExecuteFrame does.
+		e.cpu.FrameTStates = uint64(budget)
 	}
 	return budget
 }

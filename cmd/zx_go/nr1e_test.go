@@ -48,11 +48,13 @@ func TestNR1E1FReadTheCopperLineCounter(t *testing.T) {
 	check("+3 timing")
 }
 
-// An NR$03 write selects the Next's machine timing, and everything sized from
-// the line or the frame follows it from the next frame sync
-// (eff_nr_03_machine_timing, zxnext.vhd:6694-6703): the frame length, the
-// frame INT's pulse width (32 on 48K timing, :2014-2033), the line interrupt
-// and NR$1E/$1F. NextZXOS writes $93 (48K timing) to run a 48K snapshot.
+// An NR$03 write selects the Next's machine timing, and it takes effect at the
+// frame sync, raw (0,0) of the timing in force (eff_nr_03_machine_timing,
+// zxnext.vhd:6694-6703). The counters run on from there under the new
+// figures, so the frame that contains the sync ends at the new timing's
+// interrupt. Everything sized from the line or the frame follows: the frame
+// INT's pulse width (:2014-2033), the line interrupt and NR$1E/$1F. NextZXOS
+// writes $93 (48K timing) to run a 48K snapshot.
 func TestNR03MachineTimingTakesEffectAtTheFrameSync(t *testing.T) {
 	emu, err := newEmulator(roms.ModelNext)
 	if err != nil || emu.nextRegs == nil {
@@ -62,17 +64,29 @@ func TestNR03MachineTimingTakesEffectAtTheFrameSync(t *testing.T) {
 	d.WriteReg(0x07, 0x00)
 	d.WriteReg(0x23, 0x00)
 	d.WriteReg(0x22, 0x02) // line interrupt on, target 0
-	if got := emu.frameBudget(emu.model); got != 70908 {
-		t.Fatalf("power-on frame %d, want 70908 (+3 timing)", got)
-	}
+	runOneFrameHeadless(emu, roms.ModelNext)
 	plus3Line := emu.cpu.LineIntOffsetTstates
+	frameEnd := func() uint64 { return emu.cpu.Clock() - emu.cpu.Tstates() }
 
 	d.WriteReg(0x03, 0x93) // timing 001: 48K
 	if got := emu.mem.TimingModel(); got != roms.ModelPlus3 {
 		t.Fatalf("the write took effect before the frame sync: %v", got)
 	}
-	if got := emu.frameBudget(emu.model); got != 69888 {
-		t.Errorf("frame after the sync %d, want 69888 (48K timing)", got)
+	before := frameEnd()
+	runOneFrameHeadless(emu, roms.ModelNext)
+	if got := emu.mem.TimingModel(); got != roms.Model48K {
+		t.Fatalf("after the frame sync the timing is %v, want 48K", got)
+	}
+	// +3 from its interrupt (vc 1, hc 126) to raw (0,1): 141816 - 582 + 1
+	// columns; then 48K from (0,1) to its interrupt (vc 0, hc 116): 115
+	// columns. Together (141816 - 582 + 116)/2 T-states.
+	if got, want := frameEnd()-before, uint64((311*456-(456+126)+116)/2); got != want {
+		t.Errorf("the frame with the sync ran %d T, want %d", got, want)
+	}
+	before = frameEnd()
+	runOneFrameHeadless(emu, roms.ModelNext)
+	if got := frameEnd() - before; got != 69888 {
+		t.Errorf("the next frame ran %d T, want 69888 (48K timing)", got)
 	}
 	if got := emu.cpu.IntPulseTstates; got != 32 {
 		t.Errorf("INT pulse %d T, want 32", got)

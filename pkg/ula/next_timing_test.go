@@ -117,3 +117,31 @@ func TestPortFFRegisterMirrorsNextRegs(t *testing.T) {
 		t.Errorf("Timex mode %#02x, want $86: it is the same register", got)
 	}
 }
+
+// After a frame sync moves the frame's end, the rest of that frame is the
+// new timing's run-up to its interrupt: the beam reads as the end of a frame
+// in the new timing, and the frame's audio is its actual length.
+func TestFrameSyncTransitionMapsTheRestOfTheFrame(t *testing.T) {
+	u, mem, ts, _ := newNextTimingULA(t, 0x01) // now 48K timing (69888)
+	u.SetFrameSyncTransition(70616, 70674)     // a 128K frame synced at (0,1)
+	*ts = 70670
+	if got, want := u.VideoTStatesInFrame(), 69888-4; got != want {
+		t.Errorf("4 T before the moved end: beam %d, want %d", got, want)
+	}
+	*ts = 1000 // before the sync point: the old timing's own position
+	if got := u.VideoTStatesInFrame(); got != 1000 {
+		t.Errorf("before the sync: beam %d, want 1000", got)
+	}
+	if got := u.audioFrameTStates(); got != 70674 {
+		t.Errorf("audio frame %d, want the moved length 70674", got)
+	}
+	*ts = 70674 + 69888 + 100 // the single-step driver, past the moved end
+	if got := u.VideoTStatesInFrame(); got != 100 {
+		t.Errorf("a frame after the moved one: beam %d, want 100 (the grid follows the moved end)", got)
+	}
+	u.ClearFrameSyncTransition()
+	if got := u.audioFrameTStates(); got != 69888 {
+		t.Errorf("after clearing, audio frame %d, want 69888", got)
+	}
+	_ = mem
+}

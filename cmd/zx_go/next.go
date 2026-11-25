@@ -1154,6 +1154,7 @@ func wireNextSubsystems(e *emulator) error {
 			mem.Set60Hz(on)
 			configureIntTiming(cpu, mem.NextMachineTiming(), on)
 			cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), on))
+			cpu.FrameSyncAt = uint64(next.VideoTimingFor(mem.NextMachineTiming(), on).TFromInt(0, 1))
 			// The line-interrupt scheduler pre-computes a frame-relative
 			// offset from the raster line count; re-run its NR$22 handler
 			// so a mid-run 50/60 Hz switch takes effect.
@@ -1181,10 +1182,36 @@ func wireNextSubsystems(e *emulator) error {
 	// frame INT's pulse width (zxnext.vhd:2014-2033) and the line interrupt's
 	// offset from the frame interrupt. The sprite line budget is set by
 	// frameBudget each frame.
+	// The frame sync is raw (0,0) of the timing in force, when
+	// eff_nr_03_machine_timing takes a pending NR$03 timing (zxnext.vhd:
+	// 6694-6703, zxula_timing.vhd:381-391); it lands one 7 MHz column on.
+	syncPoint := func() uint64 {
+		return uint64(next.VideoTimingFor(mem.NextMachineTiming(), e.video60Hz).TFromInt(0, 1))
+	}
 	mem.OnVideoTimingChange(func() {
 		configureIntTiming(cpu, mem.NextMachineTiming(), e.video60Hz)
 		refreshLineInt()
+		cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), e.video60Hz))
+		cpu.FrameSyncAt = syncPoint()
 	})
+	// At the sync a pending timing takes over: the counters run on from (0,0)
+	// under the new figures, so this frame ends at the new timing's interrupt.
+	// Known approximations, each confined to the one frame of a personality
+	// switch: the Pentagon's odd c_int_h leaves the length half a T-state
+	// short; NR$05's 50/60 Hz still applies at once (the FPGA latches it at
+	// this sync too); and the frame renders with the new timing throughout.
+	cpu.FrameSyncAt = syncPoint()
+	cpu.FrameSyncFn = func() uint64 {
+		old := next.VideoTimingFor(mem.NextMachineTiming(), e.video60Hz)
+		at := cpu.FrameSyncAt
+		if !mem.LatchVideoTiming() {
+			return 0
+		}
+		nv := next.VideoTimingFor(mem.NextMachineTiming(), e.video60Hz)
+		cols := old.Lines*old.HC - (old.IntV*old.HC + old.IntH) + (nv.IntV*nv.HC + nv.IntH)
+		u.SetFrameSyncTransition(int(at), cols/2)
+		return uint64(cols / 2)
+	}
 	// The +3 floating bus keeps the CPU's last access to contended memory.
 	cpu.CPUAccessHook = mem.NoteCPUAccess
 	cpu.FrameTStates = uint64(roms.FrameTStatesFor(mem.TimingModel(), e.video60Hz))
@@ -2001,6 +2028,7 @@ func unwireNextSubsystems(e *emulator) {
 	cpu.CPUAccessHook = nil
 	mem.ClearVideoTimingObservers() // they hold the Next's dispatcher and CPU wiring
 	cpu.FrameTStates = 0
+	cpu.FrameSyncAt, cpu.FrameSyncFn = 0, nil
 	cpu.RemovePreFetchHook("divmmc")
 	cpu.RemovePreFetchHook("esxdos")
 
