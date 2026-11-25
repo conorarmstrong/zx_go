@@ -395,13 +395,22 @@ func LoadInstalledROM(filename string) ([]byte, error) {
 	return data, nil
 }
 
-// BootCore reports which core's boot path to model, from ZX_GO_NEXT_CORE:
-// "3.02.05" selects that core's boot loader and its $0000-$1FFF boot ROM
-// window; anything else, or unset, is 3.02.03, the core the rest of the
-// model follows. It returns the loader's file name and whether the window
-// is the narrow one.
+// BootCore reports which core's boot path to model and returns the loader's
+// file name and whether the boot ROM window is the narrow one. By default it
+// is core 3.02.05, the newest public core, whose loader was rebuilt for
+// NextZXOS 2.10 and whose zxnext.vhd shows the boot ROM at $0000-$1FFF only,
+// whenever that loader is installed; it is not bundled (its boot code source
+// is not published beside it), so without it the bundled 3.02.03 loader and
+// its $0000-$3FFF window are used. ZX_GO_NEXT_CORE=3.02.03 or 3.02.05 forces
+// one.
 func BootCore() (loader string, lowOnly bool) {
-	if os.Getenv("ZX_GO_NEXT_CORE") == "3.02.05" {
+	switch os.Getenv("ZX_GO_NEXT_CORE") {
+	case "3.02.05":
+		return FPGABootROM30205, true
+	case "3.02.03":
+		return FPGABootROM, false
+	}
+	if _, err := LoadInstalledROM(FPGABootROM30205); err == nil {
 		return FPGABootROM30205, true
 	}
 	return FPGABootROM, false
