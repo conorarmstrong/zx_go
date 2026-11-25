@@ -366,7 +366,11 @@ type CPU struct {
 	// generic (reg,val) so pkg/z80 needn't depend on the NextReg package;
 	// they are wired to the dispatcher in pkg/next. Matches a faithful
 	// Z80N core (the NMI path writes $C2/$C3; RETN reads them back).
-	NMIStackless     bool
+	NMIStackless bool
+	// CPUAccessHook, if set, sees every memory read and write the CPU makes,
+	// after the access, with its data. DMA and debugger accesses do not pass
+	// through it. The Next's +3 floating bus uses it.
+	CPUAccessHook    func(addr uint16, val byte)
 	StacklessReadNR  func(reg byte) byte
 	StacklessWriteNR func(reg, val byte)
 
@@ -414,7 +418,20 @@ func (m *waitedMemory) Read(addr uint16) byte {
 	if m.c.Variant == VariantZ80N && m.c.speedSelect == 0x03 {
 		m.c.tstates++
 	}
-	return m.Memory.Read(addr)
+	v := m.Memory.Read(addr)
+	if m.c.CPUAccessHook != nil {
+		m.c.CPUAccessHook(addr, v)
+	}
+	return v
+}
+
+// Write is the CPU's memory write: no wait state (zxnext.vhd:3169-3181
+// waits reads only), but CPUAccessHook sees it.
+func (m *waitedMemory) Write(addr uint16, val byte) {
+	m.Memory.Write(addr, val)
+	if m.c.CPUAccessHook != nil {
+		m.c.CPUAccessHook(addr, val)
+	}
 }
 
 // contentionWirer is an optional interface implemented by memory
